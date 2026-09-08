@@ -33,6 +33,31 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace {
+struct RmsHubContributor {
+    uint32_t producer_index;
+    uint32_t producer_scale_slot;
+};
+
+struct RmsHubGroup {
+    uint32_t group_index;
+    uint32_t gathered_slot_base;
+    std::vector<RmsHubContributor> contributors;
+};
+
+struct RmsLocalGroupFragment {
+    uint32_t group_index;
+    uint32_t local_tile_offset;
+    uint32_t tile_count;
+    uint32_t hub_producer_index;
+    uint32_t hub_gathered_slot;
+};
+
+struct RmsProducerTopology {
+    std::vector<RmsLocalGroupFragment> local_fragments;
+    std::vector<RmsHubGroup> hub_groups;
+    uint32_t hub_contributor_slots = 0;
+};
+
 // Ring-gather implementation of FullWidthSharded. Replaces the two-hub gather-then-broadcast
 // with a pipelined ring all-gather on in0. Kept separate from the hub-gather path so we can
 // keep the ENABLE_GLOBAL_CB weight streaming logic on the old path unchanged; the ring-gather
@@ -180,14 +205,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         corerange_to_cores(inputB_core_range_set, std::nullopt, /*row_wise=*/true);
     TT_FATAL(!producer_cores.empty(), "full_width_sharded matmul_decode requires at least one producer core");
     const uint32_t num_producers = producer_cores.size();
-    const CoreCoord rms_hub_logical = producer_cores.front();
-    const CoreCoord rms_hub_phys = device->worker_core_from_logical_core(rms_hub_logical);
-    const CoreRange rms_mcast_bbox = inputB_core_range_set.bounding_box();
-    const CoreCoord rms_mcast_start_phys = device->worker_core_from_logical_core(rms_mcast_bbox.start_coord);
-    const CoreCoord rms_mcast_end_phys = device->worker_core_from_logical_core(rms_mcast_bbox.end_coord);
-    // Core count including the hub: the scale multicast loops back so the hub receives its own copy in
-    // cb_rms_scale. The readiness semaphore excludes the hub and so uses this count minus one.
-    const uint32_t rms_mcast_num_cores = rms_mcast_bbox.size();
 
     log_debug(tt::LogOp, "MatmulDecode: all_compute_cores: {}", all_compute_cores_with_bbox.str());
 
@@ -239,6 +256,117 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             inputB_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
             "Input tensor B must have a width that is divisible by the tile width");
         inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
+    }
+
+    // RMS groups and B shards are both contiguous along N. Intersecting their tile intervals
+    // therefore gives every producer at most one contiguous fragment per group. The first
+    // producer touched by a group is its reduction hub.
+    uint32_t rms_group_tiles = 0;
+    uint32_t rms_num_groups = 0;
+    uint32_t rms_max_local_groups = 0;
+    uint32_t rms_max_hub_groups = 0;
+    uint32_t rms_max_hub_contributors = 0;
+    std::vector<RmsProducerTopology> rms_topology(num_producers);
+    std::vector<RmsProducerTopology> rms_legacy_topology(num_producers);
+    std::vector<CoreCoord> rms_hub_cores;
+    if (rms_norm) {
+        const uint32_t N = static_cast<uint32_t>(operation_attributes.N);
+        const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
+        const uint32_t resolved_group_size =
+            operation_attributes.rms_norm_group_size == 0 ? N : operation_attributes.rms_norm_group_size;
+        rms_group_tiles = resolved_group_size / tt::constants::TILE_WIDTH;
+        rms_num_groups = N_tiles / rms_group_tiles;
+        TT_FATAL(
+            num_producers * inB_N_tiles_per_core == N_tiles,
+            "full_width_sharded fused RMSNorm requires producer shards to cover N exactly: {} producers x {} tiles "
+            "per producer != {} N tiles",
+            num_producers,
+            inB_N_tiles_per_core,
+            N_tiles);
+
+        for (uint32_t group_index = 0; group_index < rms_num_groups; ++group_index) {
+            const uint32_t group_first_tile = group_index * rms_group_tiles;
+            const uint32_t group_end_tile = group_first_tile + rms_group_tiles;
+            const uint32_t first_producer = group_first_tile / inB_N_tiles_per_core;
+            const uint32_t last_producer = (group_end_tile - 1) / inB_N_tiles_per_core;
+            auto& hub_topology = rms_topology[first_producer];
+            RmsHubGroup hub_group{
+                .group_index = group_index,
+                .gathered_slot_base = hub_topology.hub_contributor_slots,
+            };
+
+            for (uint32_t producer = first_producer; producer <= last_producer; ++producer) {
+                const uint32_t producer_first_tile = producer * inB_N_tiles_per_core;
+                const uint32_t producer_end_tile = producer_first_tile + inB_N_tiles_per_core;
+                const uint32_t fragment_first_tile = std::max(group_first_tile, producer_first_tile);
+                const uint32_t fragment_end_tile = std::min(group_end_tile, producer_end_tile);
+                TT_FATAL(
+                    fragment_first_tile < fragment_end_tile,
+                    "full_width_sharded fused RMSNorm derived an empty fragment for group {} and producer {}",
+                    group_index,
+                    producer);
+
+                auto& producer_topology = rms_topology[producer];
+                const uint32_t producer_scale_slot = producer_topology.local_fragments.size();
+                const uint32_t contributor_slot = hub_topology.hub_contributor_slots++;
+                producer_topology.local_fragments.push_back(RmsLocalGroupFragment{
+                    .group_index = group_index,
+                    .local_tile_offset = fragment_first_tile - producer_first_tile,
+                    .tile_count = fragment_end_tile - fragment_first_tile,
+                    .hub_producer_index = first_producer,
+                    .hub_gathered_slot = contributor_slot,
+                });
+                hub_group.contributors.push_back(RmsHubContributor{
+                    .producer_index = producer,
+                    .producer_scale_slot = producer_scale_slot,
+                });
+            }
+            hub_topology.hub_groups.push_back(std::move(hub_group));
+        }
+
+        for (uint32_t producer = 0; producer < num_producers; ++producer) {
+            const auto& topology = rms_topology[producer];
+            TT_FATAL(
+                !topology.local_fragments.empty(),
+                "full_width_sharded fused RMSNorm producer {} does not contribute to any group",
+                producer);
+            rms_max_local_groups =
+                std::max(rms_max_local_groups, static_cast<uint32_t>(topology.local_fragments.size()));
+            rms_max_hub_groups = std::max(rms_max_hub_groups, static_cast<uint32_t>(topology.hub_groups.size()));
+            rms_max_hub_contributors = std::max(rms_max_hub_contributors, topology.hub_contributor_slots);
+            if (!topology.hub_groups.empty()) {
+                rms_hub_cores.push_back(producer_cores[producer]);
+            }
+        }
+
+        // Until Task 3 changes compute to produce and consume one page per group fragment, execute
+        // nonzero group sizes through the legacy full-row topology. Both grouped and active topology
+        // tables are sent to writers below; Task 3 only needs to switch the active metadata offset.
+        RmsHubGroup legacy_hub_group{.group_index = 0, .gathered_slot_base = 0};
+        legacy_hub_group.contributors.reserve(num_producers);
+        for (uint32_t producer = 0; producer < num_producers; ++producer) {
+            rms_legacy_topology[producer].local_fragments.push_back(RmsLocalGroupFragment{
+                .group_index = 0,
+                .local_tile_offset = 0,
+                .tile_count = inB_N_tiles_per_core,
+                .hub_producer_index = 0,
+                .hub_gathered_slot = producer,
+            });
+            legacy_hub_group.contributors.push_back(
+                RmsHubContributor{.producer_index = producer, .producer_scale_slot = 0});
+        }
+        rms_legacy_topology[0].hub_contributor_slots = num_producers;
+        rms_legacy_topology[0].hub_groups.push_back(std::move(legacy_hub_group));
+
+        log_debug(
+            tt::LogOp,
+            "MatmulDecode fused RMSNorm topology: group_tiles={}, groups={}, max_local_groups={}, "
+            "max_hub_groups={}, max_hub_contributors={}",
+            rms_group_tiles,
+            rms_num_groups,
+            rms_max_local_groups,
+            rms_max_hub_groups,
+            rms_max_hub_contributors);
     }
 
     const uint32_t k_block_tiles = K_tiles / operation_attributes.global_cb_k_blocks;
@@ -434,9 +562,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             "size {}",
             rms_tile_size,
             rms_reduce_tile_size);
+        // Compute remains on the legacy full-row reduction until Task 3.
         rms_packed_tiles_per_row = num_producers;
-        const CoreRangeSet rms_hub_core({CoreRange(rms_hub_logical, rms_hub_logical)});
-        const CoreRangeSet rms_mcast_cores(rms_mcast_bbox);
+        const CoreRangeSet rms_hub_core(rms_hub_cores);
 
         desc.cbs.push_back(CBDescriptor{
             .total_size = M_tiles * inB_N_tiles_per_core * out_tile_size,
@@ -466,7 +594,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             });
         }
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_tile_size,
+            .total_size = M_tiles * rms_max_local_groups * rms_tile_size,
             .core_ranges = inputB_core_range_set,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = rms_local_cb_index,
@@ -476,8 +604,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_packed_tiles_per_row * rms_reduce_tile_size,
-            // Producers derive the hub destination from their local write pointer, so this packed
+            .total_size = M_tiles * std::max(rms_max_hub_contributors, num_producers) * rms_reduce_tile_size,
+            // Producers derive each hub destination from their local write pointer, so this gathered
             // buffer needs one uniform allocation across the transport grid.
             .core_ranges = inputB_core_range_set,
             .format_descriptors = {{CBFormatDescriptor{
@@ -502,10 +630,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         // Full reduction tiles, like the gathered input and the scaler: this is where
         // ``compute_kernel_lib::reduce`` packs, and it requires every buffer it touches to hold a
         // whole 32x32 page (``is_valid_dfb_tile_page_size``). The narrow ``output_tile`` page this
-        // used to carry tripped that PACK-side assert on the hub under watcher. Only the hub
+        // used to carry tripped that PACK-side assert on the hub under watcher. Only group hubs
         // allocates it, and only ``[0, 0]`` of each tile is ever read, so the wider page is free.
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_reduce_tile_size,
+            .total_size = M_tiles * rms_max_hub_groups * rms_reduce_tile_size,
             .core_ranges = rms_hub_core,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = rms_reduced_cb_index,
@@ -518,7 +646,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         // multicasts out of here into cb_rms_scale, so the hub never has to consume the destination CB
         // that its own compute is waiting on.
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_tile_size,
+            .total_size = M_tiles * rms_max_hub_groups * rms_tile_size,
             .core_ranges = rms_hub_core,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = rms_scale_src_cb_index,
@@ -527,12 +655,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 .tile = rms_tile_desc,
             }}},
         });
-        // Allocate over the producer bounding box so every multicast target
-        // has the same L1 destination address, including any holes in a sparse
-        // CoreRangeSet. Only producer compute kernels consume these slots.
+        // Every hub unicasts scales into contributor-local slots. A uniform allocation over the
+        // producer set lets a hub derive each remote destination from its own CB write pointer.
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_tile_size,
-            .core_ranges = rms_mcast_cores,
+            .total_size = M_tiles * rms_max_local_groups * rms_tile_size,
+            .core_ranges = inputB_core_range_set,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = rms_scale_cb_index,
                 .data_format = rms_data_format,
@@ -595,15 +722,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     constexpr uint32_t rms_arrival_sem_id = 4;
     constexpr uint32_t rms_scale_ready_sem_id = 5;
     if (rms_norm) {
-        const CoreRangeSet rms_mcast_cores(rms_mcast_bbox);
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = rms_arrival_sem_id,
-            .core_ranges = rms_mcast_cores,
+            .core_ranges = inputB_core_range_set,
             .initial_value = 0,
         });
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = rms_scale_ready_sem_id,
-            .core_ranges = rms_mcast_cores,
+            .core_ranges = inputB_core_range_set,
             .initial_value = 0,
         });
     }
@@ -782,6 +908,52 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         operation_attributes.M,
         inputA_tile_height);
 
+    // Runtime RMS topology layout:
+    //   [local_group_count, hub_group_count, hub_contributor_count]
+    //   local group: [local_tile_offset, tile_count, hub_x, hub_y, hub_gathered_slot, hub_row_stride]
+    //   hub group:   [contributor_count, gathered_slot_base,
+    //                 contributor_x, contributor_y, contributor_scale_slot, contributor_row_stride, ...]
+    // Group and contributor lists are contiguous in global-N order, so indices need not be sent.
+    auto rms_topology_runtime_args = [&](const std::vector<RmsProducerTopology>& topology_by_producer,
+                                         const std::optional<uint32_t>& producer_index) {
+        KernelDescriptor::CoreRuntimeArgs args;
+        if (!producer_index.has_value()) {
+            args = {0, 0, 0};
+            return args;
+        }
+        const auto& topology = topology_by_producer[*producer_index];
+        args.reserve(
+            3 + 6 * topology.local_fragments.size() + 2 * topology.hub_groups.size() +
+            4 * topology.hub_contributor_slots);
+        args.push_back(static_cast<uint32_t>(topology.local_fragments.size()));
+        args.push_back(static_cast<uint32_t>(topology.hub_groups.size()));
+        args.push_back(topology.hub_contributor_slots);
+        for (const auto& fragment : topology.local_fragments) {
+            const CoreCoord hub_phys =
+                device->worker_core_from_logical_core(producer_cores[fragment.hub_producer_index]);
+            args.push_back(fragment.local_tile_offset);
+            args.push_back(fragment.tile_count);
+            args.push_back(hub_phys.x);
+            args.push_back(hub_phys.y);
+            args.push_back(fragment.hub_gathered_slot);
+            args.push_back(topology_by_producer[fragment.hub_producer_index].hub_contributor_slots);
+        }
+        for (const auto& hub_group : topology.hub_groups) {
+            args.push_back(static_cast<uint32_t>(hub_group.contributors.size()));
+            args.push_back(hub_group.gathered_slot_base);
+            for (const auto& contributor : hub_group.contributors) {
+                const CoreCoord contributor_phys =
+                    device->worker_core_from_logical_core(producer_cores[contributor.producer_index]);
+                args.push_back(contributor_phys.x);
+                args.push_back(contributor_phys.y);
+                args.push_back(contributor.producer_scale_slot);
+                args.push_back(
+                    static_cast<uint32_t>(topology_by_producer[contributor.producer_index].local_fragments.size()));
+            }
+        }
+        return args;
+    };
+
     log_debug(
         tt::LogOp,
         "MatmulDecode: M_tiles: {}, K_tiles: {}, inB_N_tiles_per_core: {}, inA_K_tiles_per_core: {}",
@@ -848,15 +1020,21 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
         }
         compute_kernel_desc.named_compile_time_args.emplace_back("rms_packed_tiles_per_row", rms_packed_tiles_per_row);
+        compute_kernel_desc.named_compile_time_args.emplace_back("rms_group_tiles", rms_group_tiles);
+        compute_kernel_desc.named_compile_time_args.emplace_back("rms_num_groups", rms_num_groups);
+        compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_local_groups", rms_max_local_groups);
+        compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_hub_groups", rms_max_hub_groups);
+        compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_hub_contributors", rms_max_hub_contributors);
         const uint32_t inv_n_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(operation_attributes.N));
         const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon);
         const uint32_t gamma_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_gamma.value_or(1.0F));
         compute_kernel_desc.runtime_args.reserve(producer_cores.size());
-        for (const auto& core : producer_cores) {
-            compute_kernel_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(core == rms_hub_logical), inv_n_bits, epsilon_bits, gamma_bits});
+        for (uint32_t producer = 0; producer < producer_cores.size(); ++producer) {
+            auto args = KernelDescriptor::CoreRuntimeArgs{
+                static_cast<uint32_t>(producer == 0), inv_n_bits, epsilon_bits, gamma_bits};
+            auto topology_args = rms_topology_runtime_args(rms_topology, producer);
+            args.insert(args.end(), topology_args.begin(), topology_args.end());
+            compute_kernel_desc.runtime_args.emplace_back(producer_cores[producer], std::move(args));
         }
     }
     desc.kernels.push_back(std::move(compute_kernel_desc));
@@ -870,13 +1048,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         {"rms_arrival_sem", rms_arrival_sem_id},
         {"rms_scale_ready_sem", rms_scale_ready_sem_id},
         {"rms_m_tiles", M_tiles},
-        {"rms_num_producers", num_producers},
         {"rms_local_tile_size",
          output_tile.get_tile_size(rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
         {"rms_reduce_tile_size",
          tt::tt_metal::Tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH})
              .get_tile_size(rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
-        {"rms_packed_tiles_per_row", rms_packed_tiles_per_row},
     };
     std::map<CoreCoord, uint32_t> rms_producer_id_by_core;
     for (uint32_t id = 0; id < producer_cores.size(); ++id) {
@@ -884,21 +1060,23 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     }
     auto rms_runtime_args = [&](const CoreCoord& core) {
         const auto producer_it = rms_producer_id_by_core.find(core);
-        KernelDescriptor::CoreRuntimeArgs args = {
-            static_cast<uint32_t>(core == rms_hub_logical),
-            static_cast<uint32_t>(rms_hub_phys.x),
-            static_cast<uint32_t>(rms_hub_phys.y),
-            static_cast<uint32_t>(rms_mcast_start_phys.x),
-            static_cast<uint32_t>(rms_mcast_start_phys.y),
-            static_cast<uint32_t>(rms_mcast_end_phys.x),
-            static_cast<uint32_t>(rms_mcast_end_phys.y),
-            rms_mcast_num_cores,
-            producer_it == rms_producer_id_by_core.end() ? 0u : producer_it->second,
-        };
-        for (const auto& producer_core : producer_cores) {
-            const auto producer_phys = device->worker_core_from_logical_core(producer_core);
-            args.push_back(producer_phys.x);
-            args.push_back(producer_phys.y);
+        const std::optional<uint32_t> producer =
+            producer_it == rms_producer_id_by_core.end() ? std::nullopt : std::optional<uint32_t>{producer_it->second};
+        auto grouped_args = rms_topology_runtime_args(rms_topology, producer);
+        KernelDescriptor::CoreRuntimeArgs args;
+        if (rms_num_groups == 1) {
+            // [grouped_offset=1, active/grouped topology]
+            args.reserve(1 + grouped_args.size());
+            args.push_back(1);
+            args.insert(args.end(), grouped_args.begin(), grouped_args.end());
+        } else {
+            // Keep Task 1's grouped validation smoke executable with legacy compute. Writers still
+            // receive the grouped table after the active legacy table so Task 3 can switch offsets.
+            auto legacy_args = rms_topology_runtime_args(rms_legacy_topology, producer);
+            args.reserve(1 + legacy_args.size() + grouped_args.size());
+            args.push_back(1 + legacy_args.size());
+            args.insert(args.end(), legacy_args.begin(), legacy_args.end());
+            args.insert(args.end(), grouped_args.begin(), grouped_args.end());
         }
         return args;
     };
