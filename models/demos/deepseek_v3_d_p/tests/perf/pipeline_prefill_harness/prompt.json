@@ -1,0 +1,1 @@
+[{"prompt": "Explain, in detail, how pipeline parallelism differs from tensor parallelism when serving a large mixture-of-experts language model, and what the device-to-device transport cost is between stages."}]
