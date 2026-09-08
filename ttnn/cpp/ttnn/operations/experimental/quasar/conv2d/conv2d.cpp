@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include <tt-metalium/allocator.hpp>  // Allocator::get_bank_size (real L1 bank, not nominal l1_size_per_core)
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
 #include <tt_stl/assert.hpp>
@@ -713,7 +714,10 @@ Result conv2d_L1(
         // Program A's resident output = per-core tilized activation [per_core_M, full_K] tiles.
         const uint64_t tilized_act_bytes =
             static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
-        const uint64_t l1_bank = device->l1_size_per_core();
+        // [#54488] Use the REAL allocator L1 bank, NOT l1_size_per_core(): the latter reports the nominal arch
+        // L1 (>= 4 MB) even on the reduced-SRAM Quasar variant (~2.68 MB bank), so this guard never fired there
+        // and the split-program tilized activation OOMed at create_output_tensors.
+        const uint64_t l1_bank = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
         // Ceiling on the per-core tilized activation: L1 fit. The tilized-activation output alone crowds the
         // bank, so reserve ~20 % for the resident halo input, weights, matmul CBs and allocator fragmentation.
         // (A former uint16_t DFB ring-extent cap of ~1 MB -- Program A's borrowed DFB_OUT holds the WHOLE
@@ -722,7 +726,12 @@ Result conv2d_L1(
         // ring_size field to uint32_t, so the ring extent is no longer binding and only L1 fit matters. This
         // also keeps such convs off the DRAM slice path, whose slice_write can't consume the per-core
         // tile-padding a height-sharded conv output carries for non-tile-aligned per-core heights.)
-        const uint64_t fit_threshold = (l1_bank * 80) / 100;
+        // [#54488] Small banks have far less headroom for the tilized activation alongside the halo input,
+        // weights, matmul CBs and allocator fragmentation, so slice more aggressively (60%) there; full-size
+        // banks keep the validated ~80% ceiling. (60% of ~2.68 MB ~= 1.6 MB, below the ~1.7 MB layer1 conv2
+        // tilized activation, so it now DRAM-slices instead of OOMing 31 KB short.)
+        const bool small_bank = l1_bank < (3ull * 1024 * 1024);
+        const uint64_t fit_threshold = small_bank ? (l1_bank * 60) / 100 : (l1_bank * 80) / 100;
         if (tilized_act_bytes > fit_threshold) {
             // Number of output-height slices so each slice's tilized activation ((per_core_M/num_slices)*full_K)
             // stays under half the bank, leaving ample room for the slice's halo input, weights and matmul CBs.
@@ -1053,8 +1062,17 @@ Result conv2d_L1(
                     // K-spill when full-K weights EXCEED 512 tiles, and when spilling keep the resident block well
                     // under (<=256 tiles) by picking the largest divisor of full_K with in0_block_w*N <= 256.
                     uint32_t in0_blk_w_mm = full_k_ntiles_mm;
-                    constexpr uint32_t kSingleBlockFitTiles = 512;
-                    constexpr uint32_t kSpillTargetTiles = 256;
+                    // [#54488] On a small-L1 bank (e.g. the 3 MB Quasar SRAM variant, ~2.68 MB) the matmul's
+                    // weights + activation CBs, sized by in0_block_w, alongside the resident tilized activation
+                    // overflow / clash with L1 (validate_dataflow_buffer_region: static DFBs overlap an L1
+                    // buffer). Spill harder there -- lower single-block ceiling AND smaller resident K-block --
+                    // to shrink the matmul CB footprint below the bank. NOTE: more K-blocks = more DRAM-weights
+                    // K-spill-accumulate steps (watch for the 0x10000 tile-counter HW race, though layer4
+                    // already K-spills fine). Full-size banks keep the validated 512/256 tuning.
+                    const bool small_bank_mm =
+                        device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) < (3ull * 1024 * 1024);
+                    const uint32_t kSingleBlockFitTiles = small_bank_mm ? 256u : 512u;
+                    const uint32_t kSpillTargetTiles = small_bank_mm ? 64u : 256u;
                     if (n_ntiles_mm * full_k_ntiles_mm > kSingleBlockFitTiles) {
                         uint32_t k_blk = full_k_ntiles_mm;
                         while (k_blk > 1 &&
@@ -1162,9 +1180,13 @@ Result conv2d_L1(
         // block, unchanged and still passing.
         if (kernel_size[0] == 1 && kernel_size[1] == 1) {
             const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
+            // [#54488] Same small-bank spill as the split-path Program B above: on a ~2.68 MB Quasar bank the
+            // wide 1x1 weights CB (conv3 256->1024 / 512->2048, downsample) clashes with L1, so spill harder.
+            const bool small_bank_mm =
+                device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) < (3ull * 1024 * 1024);
+            const uint32_t kSingleBlockFitTiles = small_bank_mm ? 256u : 512u;
+            const uint32_t kSpillTargetTiles = small_bank_mm ? 64u : 256u;
             auto kspill_in0_bw = [&](uint32_t per_core_n) -> uint32_t {
-                constexpr uint32_t kSingleBlockFitTiles = 512;
-                constexpr uint32_t kSpillTargetTiles = 256;
                 if (per_core_n == 0 || per_core_n * full_k_mm <= kSingleBlockFitTiles) {
                     return full_k_mm;
                 }
