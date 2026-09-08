@@ -27,7 +27,20 @@ KERNEL = "unified_kernels/matmul_mcast.cpp"
 TILE = 32
 
 
-def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in1_thread=0, seed=0, fidelity=None):
+def run(
+    device,
+    grid_h=2,
+    grid_w=2,
+    rt=2,
+    ct=2,
+    kt=2,
+    k_blocks=1,
+    mode="dst",
+    in1_thread=0,
+    in0_thread=0,
+    seed=0,
+    fidelity=None,
+):
     torch.manual_seed(seed)
     # K blocks per core row / column, laid out block-major as r*K + k and c*K + k.
     a_blocks = [(torch.rand([1, 1, rt * TILE, kt * TILE]) - 0.5).to(torch.bfloat16) for _ in range(grid_h * k_blocks)]
@@ -66,6 +79,9 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
             ("MM_K_BLOCKS", str(k_blocks)),
             # 1 on hardware for a second NOC; ttsim cannot multicast on NOC 1.
             ("MM_IN1_THREAD", str(in1_thread)),
+            # Swapping these two swaps which broadcast DIRECTION rides which NOC, which is
+            # how the RHS-on-NOC-1 penalty gets attributed to a direction or to a size.
+            ("MM_IN0_THREAD", str(in0_thread)),
         ]
         + ([("MM_ACC_L1", "1")] if mode == "l1" else []),
         # So a benchmark can pin this to the same fidelity it pins ttnn to; the spec's
@@ -75,7 +91,7 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
 
     logger.info(
         f"running unified matmul mcast: grid={grid_h}x{grid_w} rt={rt} ct={ct} kt={kt} "
-        f"k_blocks={k_blocks} mode={mode}"
+        f"k_blocks={k_blocks} mode={mode} in0_thread={in0_thread} in1_thread={in1_thread}"
     )
     run_unified_spec(device, spec, {"in0": ta, "in1": tb, "out": tout})
     out = tout
@@ -109,13 +125,23 @@ def main(argv=None):
     p.add_argument("--k-blocks", type=int, default=1, help="k-blocks each core accumulates over")
     p.add_argument("--mode", choices=["dst", "l1"], default="dst")
     p.add_argument("--in1-thread", type=int, default=0, choices=[0, 1], help="DM thread for the RHS broadcast")
+    p.add_argument("--in0-thread", type=int, default=0, choices=[0, 1], help="DM thread for the LHS broadcast")
     p.add_argument("--pcc", type=float, default=0.99)
     args = p.parse_args(argv)
 
     device = ttnn.open_device(device_id=0)
     try:
         got, want = run(
-            device, args.grid_h, args.grid_w, args.rt, args.ct, args.kt, args.k_blocks, args.mode, args.in1_thread
+            device,
+            args.grid_h,
+            args.grid_w,
+            args.rt,
+            args.ct,
+            args.kt,
+            args.k_blocks,
+            args.mode,
+            args.in1_thread,
+            args.in0_thread,
         )
     finally:
         ttnn.close_device(device)
