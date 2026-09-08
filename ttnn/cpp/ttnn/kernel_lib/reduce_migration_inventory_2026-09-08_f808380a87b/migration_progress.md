@@ -251,3 +251,9 @@ Validation: SM055/SM056/SM057 passed (`reduce-migration-96kgms4k`). Full T074/T0
 The interleaved variance implementation uses a compressed planned seed/repeat/final sequence with a separate accumulator buffer and a final-only sqrt callback. The sharded implementation describes its local aliased input and the centered-square buffer as independent planned reductions. Both readers use host auxiliary recipes. Exposed the existing KernelAdvancedOptions.compile_time_varargs field to Python so ProgramSpec factories can serialize descriptors.
 
 Validation: native build passed (`/tmp/reduce-toy-variance-build-20260908.log`); SM058 and SM059 passed (`reduce-migration-9dm1kocp`). Full T079 remains scheduled to check wider blocks and BF16 accumulation.
+
+## SDPA auxiliary recipes and DiT Welford scratch
+
+All standard SDPA and decode writers now materialize explicit host auxiliary recipes. Their raw compute kernels retain their existing reduction algorithms. The experimental ring writer advances its fabric argument offset past the serialized recipe. Removed an obsolete reader-produced scaler from DiT Welford: that buffer is compute-owned transpose scratch.
+
+Validation: native build passed (`/tmp/reduce-sdpa-auxiliary-build-20260908.log`). SM054/SM060/SM061/SM062 all passed (`reduce-migration-htyz2h8l`). Sparse Blackhole and large-ring topologies cannot be exercised on this N300.

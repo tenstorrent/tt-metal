@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "sdpa_decode_device_operation.hpp"
 
 #include <bit>
@@ -728,6 +729,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         original_block_size,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {tt::CBIndex::c_5, {{1.0F, ttnn::kernel_lib::host::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(writer_compile_time_args_common);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,

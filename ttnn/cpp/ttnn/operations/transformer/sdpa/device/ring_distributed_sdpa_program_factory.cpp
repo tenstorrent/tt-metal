@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ring_distributed_sdpa_device_operation.hpp"
 #include "sdpa_interleaved_cb_ids.hpp"
 #include "sdpa_subblock_utils.hpp"
@@ -479,6 +480,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
         writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {cb_ids.identity_scale_in, {{1.0F, ttnn::kernel_lib::host::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(writer_compile_time_args);
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
