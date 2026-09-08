@@ -8,6 +8,7 @@ import torch
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.pack_node import PackNode
 from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import PackerReluType
@@ -46,10 +47,13 @@ class PackUntilize(Packer):
     ) -> str:
         full_ct_dim = pack_node.output.tile_count_x
         block_ct_dim = block.block_tiles_x
-        buf_desc_id = pack_node.output.buf_desc_id
         tensor_shape = pack_node.output.tile_shape.cpp_value
 
-        return f"_llk_pack_untilize_init_<{full_ct_dim}, {block_ct_dim}>({buf_desc_id}, {tensor_shape});\n"
+        return (
+            pack_node.output.bfd_alloc_and_program(BfdResource.PACK0)
+            + f"_llk_pack_untilize_init_<{full_ct_dim}, {block_ct_dim}>"
+            f"({bfd_current(BfdResource.PACK0)}, {tensor_shape});\n"
+        )
 
     def pack(
         self,

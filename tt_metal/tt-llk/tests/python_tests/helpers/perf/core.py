@@ -16,12 +16,12 @@ import pandas as pd
 import pytest
 
 from ..chip_architecture import ChipArchitecture
-from ..counters import print_counters, read_counters
+from ..counters import read_counters
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from ..logger import logger
-from ..metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
@@ -40,6 +40,7 @@ from .schema import (
     stat_prefix,
     text_size_column,
 )
+from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
@@ -272,58 +273,6 @@ class PerfReport:
         frame[mask].to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
 
 
-def dump_scatter(testname: str, report: PerfReport):
-    # FIXME: was broken by the new pandas implementation (https://github.com/tenstorrent/tt-llk/issues/857)
-
-    # generate a scatter plot using plotly.graph_objects (no pandas required)
-
-    if not report.sweep_names or not report.stat_names:
-        # This is possible on CI when the whole split of the test is skipped
-        return
-
-    dir = create_benchmark_dir(testname)
-    output_path = dir / f"{testname}.html"
-
-    # x: sweep values, y: stat values per (run_type × stat). Names look like mean(L1_TO_L1).
-    fig = go.Figure()
-
-    mean_columns = [
-        (name, i) for i, name in enumerate(report.stat_names) if name.startswith("mean")
-    ]
-
-    hover = [
-        ", ".join(f"{name}={val}" for name, val in zip(report.sweep_names, sweep))
-        for sweep in report.sweep_values
-    ]
-
-    # For each stat column (run type), plot all points
-    for stat_name, stat_idx in mean_columns:
-        y_vals = [stat[stat_idx] for stat in report.stat_values]
-
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(report.sweep_values))),
-                y=y_vals,
-                mode="markers+lines",
-                name=stat_name,
-                text=hover,
-                hoverinfo="text+y",
-            )
-        )
-
-    # X-axis label
-    xaxis_title = "Sweep index (see hover for values)"
-
-    fig.update_layout(
-        title=f"Performance Scatter Plot: {testname}",
-        xaxis_title=xaxis_title,
-        yaxis_title="Cycles / Tile",
-        legend_title="Run Type / Stat",
-    )
-
-    fig.write_html(str(output_path))
-
-
 def get_unique_base_names(input_dir: Path):
     """
     Extract unique base filenames from files matching *.gw*.csv pattern.
@@ -423,6 +372,53 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
         "A single test is emitting inconsistent columns across its sweep, or two "
         "tests with different schemas share this file — split them into separate "
         "files (one schema per file)."
+    )
+
+
+# Run mode, not a test parameter: identical for every test, and carried by the CSV
+# and DB_SCHEMA but deliberately not by the per-test catalog.
+NON_CATALOG_KEY_COLUMNS = frozenset({"speed_of_light"})
+
+
+def _assert_matches_catalog(frame: pd.DataFrame, base_name: str, label: str):
+    """Fail unless the CSV a run wrote carries exactly its catalog columns.
+
+    test_perf_header_gate.py checks the catalog against the test *source*, using
+    the reader that generated the catalog, so a blind spot makes both sides agree.
+    This reads what the run actually produced instead.
+
+    The catalog-column-absent direction is safe under pytest-split because
+    _assert_combined_schema already refuses a test whose cases emit different
+    columns, so any shard's CSV carries the test's full column set.
+    """
+    if frame.empty or MARKER not in frame.columns:
+        return
+
+    # getattr: CHIP_ARCH is set by TestConfig.setup_arch(), which a unit test
+    # exercising this function directly has no reason to have run.
+    quasar = getattr(TestConfig, "CHIP_ARCH", None) == ChipArchitecture.QUASAR
+    catalog = PERF_TEST_SCHEMAS_QSR if quasar else PERF_TEST_SCHEMAS
+    # A base name with no entry is already a merge-gate failure (the static gate
+    # reports "found in source but missing from the catalog"), and combine globs
+    # whatever CSVs are on disk, so skip rather than fail a partial local run.
+    entry = catalog.get(base_name)
+    if entry is None:
+        return
+
+    produced = set(frame.columns[: frame.columns.get_loc(MARKER) + 1])
+    produced -= NON_CATALOG_KEY_COLUMNS
+    unrecorded = sorted(produced - set(entry["columns"]))
+    absent = sorted(set(entry["columns"]) - produced)
+    if not (unrecorded or absent):
+        return
+    raise PerfSchemaError(
+        f"{label}: the CSV this run produced does not match catalog entry "
+        f"'{base_name}' (version {entry['version']})."
+        + (f" In the CSV but not the catalog: {unrecorded}." if unrecorded else "")
+        + (f" In the catalog but not the CSV: {absent}." if absent else "")
+        + " Update PERF_TEST_SCHEMAS in helpers/perf/test_schemas.py and raise its "
+        "version. If test_perf_header_gate.py still passes, its source reader "
+        "cannot see the construct that produced the column — fix the reader too."
     )
 
 
@@ -635,6 +631,7 @@ def combine_perf_reports():
             combined_regular = _reject_duplicate_keys(
                 combined_regular, f"{base_name}.csv"
             )
+            _assert_matches_catalog(combined_regular, base_name, f"{base_name}.csv")
             combined_regular = combined_regular.sort_values(
                 by=combined_regular.columns.tolist()
             ).reset_index(drop=True)
@@ -951,10 +948,6 @@ class PerfConfig(TestConfig):
                         if counter_results is not None and not counter_results.empty:
                             counter_results["run_index"] = run_index
                             variant_counter_results.append(counter_results)
-                            if TestConfig.DUMP_RAW_COUNTERS:
-                                print_counters(counter_results)
-                            if TestConfig.DUMP_RAW_METRICS:
-                                print_metrics(counter_results)
                     except Exception as e:
                         logger.warning("Error reading counters: {}", e)
 
@@ -984,8 +977,6 @@ class PerfConfig(TestConfig):
                 )
 
                 computed = compute_metrics(all_counters)
-                if TestConfig.DUMP_RAW_METRICS:
-                    print_metrics(all_counters)
 
                 # Export efficiency metrics (percentages only) to the main CSV
                 csv_df = export_metrics(
@@ -998,7 +989,7 @@ class PerfConfig(TestConfig):
 
                 # Export raw counter values to the separate counters CSV
                 if (
-                    TestConfig.DUMP_CSV_COUNTERS
+                    TestConfig.DUMP_PERF_COUNTERS
                     and PerfConfig.COUNTER_REPORT is not None
                 ):
                     counter_csv_df = export_counters(

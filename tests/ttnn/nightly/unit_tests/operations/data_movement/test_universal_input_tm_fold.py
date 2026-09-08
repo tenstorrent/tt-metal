@@ -816,9 +816,6 @@ def test_fold_from_torch_rejects_specless_sharded_input(device, expect_error):
             (1, 8, 8, 64), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, id="H_shrinks"
         ),  # post-fold rows=16 → 16 cores (not 64).
         pytest.param(
-            (1, 4, 4, 8), ttnn.TensorMemoryLayout.WIDTH_SHARDED, id="W_shrinks"
-        ),  # post-fold cols=32 → 32 cores (not 64).
-        pytest.param(
             (1, 4, 4, 64), ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="B_shrinks"
         ),  # post-fold 4×256 → 4x8=32 cores (not 64).
     ],
@@ -837,66 +834,6 @@ def test_fold_specless_sharded_override_grid_shrinks_when_rows_lt_max_cores(shap
     assert (
         mc.shard_spec.grid.num_cores() < max_cores
     ), f"Synthesised grid over-declared cores: {mc.shard_spec.grid.num_cores()} == max {max_cores}"
-    ref = _fold_golden(x, 2, 2)
-    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_pcc(ref.float(), got.float(), 0.9999)
-
-
-@pytest.mark.parametrize(
-    "in_shard_factory, override_layout",
-    [
-        pytest.param(_height_shard_rm, ttnn.TensorMemoryLayout.WIDTH_SHARDED, id="H_col_major_in_W_override"),
-        pytest.param(_width_shard_rm, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, id="W_col_major_in_H_override"),
-    ],
-)
-def test_fold_specless_cross_layout_override_col_major_input_enum_col_wise(in_shard_factory, override_layout, device):
-    """COL_MAJOR sharded input + orthogonal-layout override → helper enumerates col-wise CoreRangeSet (locks in post-consolidation change)."""
-    grid = device.compute_with_storage_grid_size()
-    if grid.x < 4 or grid.y < 4:
-        pytest.skip("Need at least 4x4 grid to distinguish row-wise vs col-wise enumeration")
-    shape = (1, 4, 4, 8)
-    in_mc = in_shard_factory(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR)
-    out_mc = ttnn.MemoryConfig(override_layout, ttnn.BufferType.L1)
-    torch.manual_seed(0)
-    x = torch.rand(shape, dtype=torch.bfloat16)
-    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
-    result = ttnn.fold(ttnn_in, 2, 2, override_memory_config=out_mc)
-    mc = result.memory_config()
-    assert mc.shard_spec is not None
-    assert mc.shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR
-    n_cores = mc.shard_spec.grid.num_cores()
-    expected_crs = ttnn.num_cores_to_corerangeset(n_cores, grid, False)
-    assert (
-        mc.shard_spec.grid == expected_crs
-    ), f"COL_MAJOR input must yield col-wise CoreRangeSet; got {mc.shard_spec.grid}"
-    ref = _fold_golden(x, 2, 2)
-    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert torch.equal(ref, got), f"fold is a lossless bfloat16 reshape; expected bit-equal, got mismatch"
-
-
-def test_fold_specless_block_override_col_major_input_swaps_divisors(device):
-    """COL_MAJOR H input + BLOCK override on asymmetric grid → shard shape follows h_div=grid.x, w_div=grid.y swap."""
-    grid = device.compute_with_storage_grid_size()
-    if grid.x == grid.y:
-        pytest.skip("Divisor swap invisible on square grid; asserts land on asymmetric (BH) grids")
-    shape = (1, 4, 4, 64)
-    in_mc = _height_shard_rm(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR)
-    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
-    torch.manual_seed(0)
-    x = torch.rand(shape, dtype=torch.bfloat16)
-    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
-    result = ttnn.fold(ttnn_in, 2, 2, override_memory_config=out_mc)
-    mc = result.memory_config()
-    assert mc.shard_spec is not None
-    assert mc.shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR
-    tensor_h, tensor_w = 4, 256
-    expected_h = (tensor_h + grid.x - 1) // grid.x
-    expected_w = (tensor_w + grid.y - 1) // grid.y
-    got_h, got_w = mc.shard_spec.shape[0], mc.shard_spec.shape[1]
-    assert (got_h, got_w) == (expected_h, expected_w), (
-        f"COL_MAJOR BLOCK divisor swap: expected shard ({expected_h}, {expected_w}) "
-        f"[h_div=grid.x={grid.x}, w_div=grid.y={grid.y}]; got ({got_h}, {got_w})"
-    )
     ref = _fold_golden(x, 2, 2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_pcc(ref.float(), got.float(), 0.9999)

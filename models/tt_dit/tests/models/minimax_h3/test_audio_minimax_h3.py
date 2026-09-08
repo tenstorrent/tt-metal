@@ -34,6 +34,7 @@ from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
     remap_amp_activations,
 )
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
+from ....models.audio_vae.vocoder_ltx import TILE_HEIGHT
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
@@ -466,23 +467,37 @@ MESH = [
             "l1_small_size": 65536,
         },
         id="mesh4x8",
-    )
+    ),
+    # One Galaxy opened as a 32-wide line: the length of the quad Galaxy's inter-host axis, so the
+    # opt-in factor 32 is exercised on a single machine.
+    pytest.param(
+        (1, 32),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+        },
+        id="mesh1x32",
+    ),
 ]
-# (t_factor, mesh_axis). Axis 1 is the 8-wide axis of the 4x8 Galaxy, axis 0 the 4-wide one.
+# (t_factor, mesh_axis) per mesh shape. The factor must equal the length of the axis it shards: factor=2
+# or 4 on an 8-wide axis dies in `_partition_t` ("height begin index aligned to tiles"), because the
+# partition indexes by the device's coordinate along the axis and assumes it covers it.
 #
-# The factor must equal the length of the axis it shards: factor=2 or factor=4 on the 8-wide axis 1
-# both die in `_partition_t` at slice_device_operation.cpp:164 ("height begin index aligned to tiles"),
-# because the partition indexes by the device's coordinate along the axis and assumes it covers it.
-# That is why this list is (4, axis 0) and (8, axis 1) rather than a scan.
-#
-# `KNOWN_BROKEN` is deliberately empty; an entry silences the PSNR assert, which is the only thing
-# separating a speedup from a fast wrong answer. It formerly held (8, 1) at -6.3 dB, blamed on one tile
-# per shard -- the wrong suspect, since every factor was wrong and the cause was `conv_pre` returning
-# uninitialized memory when sharded. Both factors now measure 83.4 dB against the unsharded path
-# (1.87x at axis 0, 2.20x at axis 1), and `cpu_vs_device.py` scores sharded at the same PSNR as single
-# device (81.89 vs 81.99 dB at the constructed defaults): sharding buys latency, not accuracy.
-FACTORS = [(1, 1), (4, 0), (8, 1)]
+# KNOWN_BROKEN must stay empty -- an entry silences the per-factor PSNR assert, the only guard against a
+# fast wrong answer. Short clips work via `Vocoder._upload_BCT`'s per-shard tile-floor.
+FACTORS_BY_MESH = {(4, 8): [(1, 1), (4, 0), (8, 1)], (1, 32): [(1, 1), (32, 1)]}
 KNOWN_BROKEN: set[tuple[int, int]] = set()
+# 207 is the production short clip. 192 (T mod 32 == 0) puts the last real row on the final row of its
+# shard with no pad buffer before the next shard: the layout where a fully-padded shard's garbage tail
+# reached real audio while the global PSNR still read 50 dB. Hence the separate tail gate below.
+T_PARALLEL_FRAMES = [207, 192]
+TAIL_ROWS = 32  # latent rows of the trailing suffix checked on its own
+
+
+def _shards_pad(num_latent_frames: int, factor: int) -> bool:
+    """True when `Vocoder._upload_BCT` pads T for this factor (per-shard rows are floored to a tile)."""
+    return max(-(-num_latent_frames // factor), TILE_HEIGHT) * factor > num_latent_frames
 
 
 def _build(mesh_device, config, converted, parallel_config, ccl_manager):
@@ -564,9 +579,10 @@ def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
 
 
 # ~14 min: three decoder builds plus a decode per factor, against `pytest.ini`'s 300 s default.
-@pytest.mark.timeout(2400)
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("num_latent_frames", T_PARALLEL_FRAMES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
-def test_audio_decode_t_parallel(mesh_device):
+def test_audio_decode_t_parallel(mesh_device, num_latent_frames):
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
@@ -583,12 +599,16 @@ def test_audio_decode_t_parallel(mesh_device):
     converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
 
     torch.manual_seed(2)
-    latents = torch.randn(2, config["latent_channels"], NUM_LATENT_FRAMES) * 0.1
+    latents = torch.randn(2, config["latent_channels"], num_latent_frames) * 0.1
+    factors = FACTORS_BY_MESH[(mesh_device.shape[0], mesh_device.shape[1])]
+    # Only sharded factors that pad exercise the tail path; one that pads nothing (e.g. 4 at 192 latents,
+    # 48 rows/shard) decodes bit-identically to unsharded and would only add a cold compile.
+    factors = [(f, a) for f, a in factors if f == 1 or _shards_pad(num_latent_frames, f)]
 
     baseline_out = None
     baseline_s = None
     results = []
-    for factor, axis in FACTORS:
+    for factor, axis in factors:
         pc = None if factor <= 1 else ParallelFactor(factor=factor, mesh_axis=axis)
         ccl = None if pc is None else CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
         try:
@@ -600,36 +620,39 @@ def test_audio_decode_t_parallel(mesh_device):
             # recording it as unsupported let factor 4 break while factor 8 kept the test green, since
             # the asserts below need only *some* factor to run. Optional layouts go in KNOWN_BROKEN.
             logger.warning(f"t_factor={factor} axis={axis} FAILED: {str(exc)[:160]}")
-            results.append((factor, axis, None, None))
+            results.append((factor, axis, None, None, None))
             if (factor, axis) not in KNOWN_BROKEN:
                 raise
             continue
 
         if baseline_out is None:
             baseline_out, baseline_s = out, seconds
-            psnr_db = float("inf")
+            psnr_db = tail_db = float("inf")
         else:
             assert out.shape == baseline_out.shape, f"factor {factor}: {out.shape} != {baseline_out.shape}"
             # `psnr_db`, not `psnr`: binding the float to `psnr` shadows the imported helper, so the
             # first factor's `float("inf")` makes the second factor's call a TypeError.
             psnr_db = psnr(baseline_out, out)
-        results.append((factor, axis, seconds, psnr_db))
+            # The global PSNR averages a corrupt tail away (50.6 dB overall hid a 33.8 dB last 4 rows).
+            n_tail = min(out.shape[-1], TAIL_ROWS * HOP_LENGTH)
+            tail_db = psnr(baseline_out[..., -n_tail:], out[..., -n_tail:])
+        results.append((factor, axis, seconds, psnr_db, tail_db))
         logger.info(
             f"PERF audio_decode t_factor={factor} axis={axis}: {seconds:.4f} s "
-            f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr_db:.1f} dB"
+            f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr_db:.1f} dB, last {TAIL_ROWS} rows {tail_db:.1f} dB"
         )
         if psnr_db < 40.0 and out is not baseline_out:
             _localize_divergence(baseline_out.float(), out.float(), factor=factor, logger=logger)
         del decoder
 
     logger.info("=== audio decode T-parallel summary ===")
-    for factor, axis, seconds, psnr_db in results:
+    for factor, axis, seconds, psnr_db, tail_db in results:
         if seconds is None:
             logger.info(f"  t_factor={factor:2d} axis={axis}: unsupported")
         else:
             logger.info(
                 f"  t_factor={factor:2d} axis={axis}: {seconds:.4f} s  {baseline_s / seconds:5.2f}x  "
-                f"PSNR {psnr_db:6.1f} dB"
+                f"PSNR {psnr_db:6.1f} dB  tail {tail_db:6.1f} dB"
             )
 
     # The baseline must have run, or there is nothing to compare against and every other factor was
@@ -637,7 +660,7 @@ def test_audio_decode_t_parallel(mesh_device):
     # observed once on a device left dirty by an unrelated crash, where all three factors raised
     # TT_FATAL, each was swallowed as "unsupported", and the run reported green. A gate that cannot
     # fail is worse than no gate.
-    baseline_ran = any(seconds is not None and factor == 1 for factor, _, seconds, _ in results)
+    baseline_ran = any(seconds is not None and factor == 1 for factor, _, seconds, _, _ in results)
     assert baseline_ran, (
         "the single-device baseline did not run, so nothing was compared. If this follows a crashed "
         "run, reset the device (`tt-smi -glx_reset`) -- an allocator TT_FATAL here is usually a dirty "
@@ -652,11 +675,16 @@ def test_audio_decode_t_parallel(mesh_device):
         f"factor 1 must be the baseline, but the first result that ran was {results[0][:2] if results else None}; "
         "a later factor has been promoted to baseline and is being compared against itself"
     )
-    ran = [(f, a) for f, a, seconds, _ in results if seconds is not None and f != 1]
+    ran = [(f, a) for f, a, seconds, _, _ in results if seconds is not None and f != 1]
     assert ran, "no parallel factor ran at all; the T-parallel path is entirely unavailable"
 
-    # Any factor that ran must agree with the single-device path; a fast wrong answer fails.
-    for factor, axis, seconds, psnr_db in results:
+    # Any factor that ran must agree with the single-device path; a fast wrong answer fails. The tail is
+    # gated on its own because the global number passed at 50.6 dB with the last rows at 33.8 dB.
+    for factor, axis, seconds, psnr_db, tail_db in results:
         if seconds is None or (factor, axis) in KNOWN_BROKEN:
             continue
         assert psnr_db > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr_db:.1f} dB"
+        assert tail_db > 40.0, (
+            f"t_factor={factor} axis={axis}: last {TAIL_ROWS} latent rows diverge from 1-device: {tail_db:.1f} dB "
+            f"(global {psnr_db:.1f} dB) -- a shard's tail pad is being filled from the wrong row"
+        )

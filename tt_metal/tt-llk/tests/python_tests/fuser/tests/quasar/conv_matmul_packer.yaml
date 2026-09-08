@@ -15,8 +15,8 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "activations"
-        src_b: "weights"
+        in0: "activations"
+        in1: "weights"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"

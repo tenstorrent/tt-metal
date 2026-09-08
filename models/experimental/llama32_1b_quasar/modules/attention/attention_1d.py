@@ -550,7 +550,7 @@ class Attention1D(LightweightModule):
         # - Non-paged + Chunked: chunked_sdpa requires page_table
         # - sliding_window + Chunked: chunked_sdpa does not implement window masking
         if chunk_start_idx is not None:
-            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+            attn_output = ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention(
                 input_tensor_q=q_heads_sdpa,
                 input_tensor_k=keys,
                 input_tensor_v=values,
@@ -563,7 +563,7 @@ class Attention1D(LightweightModule):
             # Batched: q/k/v are [B, n_heads, per_user_seq_len, head_dim]; is_causal masks each row to
             # its own sequence (device-verified: kernel probe C, pcc 0.9998, row0 independent). The
             # program config keys on the per-user seq len, not the folded length.
-            attn_output = ttnn.transformer.scaled_dot_product_attention(
+            attn_output = ttnn.experimental.quasar.transformer.scaled_dot_product_attention(
                 q_heads_sdpa,
                 k_heads_cache_dtype,
                 v_heads_cache_dtype,

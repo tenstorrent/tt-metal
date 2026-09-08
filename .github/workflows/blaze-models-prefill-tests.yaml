@@ -12,7 +12,7 @@ on:
           Empty or "all" runs every stage. Groups: "module" runs every stage,
           "sdpa_perf" runs ring-joint SDPA and high-bandwidth all-gather.
           Valid stages: dsa_mla_glm, glm_chunked, glm_chunked_accuracy, glm_moe, glm_prefill_block, hca_chunked, hca_perf, high_bw_all_gather_perf, k3_mla, k3_mla_perf, k3_mla_trace, kimi_chunked, kimi_chunked_padded, kimi_dflash, kimi_k3_moe, kimi_moe, kimi_moe_perf, kv_cache_table, minimax_prefill_kv_pcc, minimax_prefill_perf, mla_chunked, moe_gate, prefill_block_determinism, prefill_runner, prefill_runner_kv_pcc, prefill_transformer_determinism, ring_joint_sdpa_perf.
-          Tags (each runs every matching stage): block, ccl, determinism, dflash, dsv4_flash, gate, glm_5_2, hca, kimi_k2_6, kimi_k2_7, kimi_k3, kv_cache, minimax_m3, mla, moe, runner, sdpa, transformer.
+          Tags (each runs every matching stage): block, ccl, determinism, dflash, dsv4_flash, gate, glm_5_2, hca, kimi_k2_7, kimi_k3, kv_cache, minimax_m3, mla, moe, runner, sdpa, transformer.
         required: false
         type: string
         default: "all"

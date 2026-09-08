@@ -370,14 +370,22 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
             {1, kPageSize / sizeof(uint32_t)})};
 
     // Unclaimed, it is just a core the allocator knows nothing about.
-    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+    auto create_buffer = [&] {
+        return Buffer::create(
+            config.device,
+            config.size,
+            config.page_size,
+            config.buffer_type,
+            BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+    };
+    EXPECT_ANY_THROW(create_buffer());
 
     MetalContext::instance().get_service_core_manager().claim(device, {core});
-    EXPECT_NO_THROW(tt::tt_metal::CreateBuffer(config));
+    EXPECT_NO_THROW(create_buffer());
     MetalContext::instance().get_service_core_manager().release(device, {core});
 
     // Released, it is rejected again -- the exception is the claim, not the coordinate.
-    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+    EXPECT_ANY_THROW(create_buffer());
 }
 
 // The same exception reached through MeshBuffer::create(), which is how every socket path actually

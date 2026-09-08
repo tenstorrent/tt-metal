@@ -388,10 +388,11 @@ GlobalSemaphore CreateGlobalSemaphore(
 *
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config);
 
 // clang-format off
 /**
@@ -401,11 +402,12 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
 *
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
 *  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address);
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address);
 
 // clang-format off
 /**
@@ -415,11 +417,12 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, Devi
 *
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
 *  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id);
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id);
 
 // clang-format off
 /**
@@ -432,6 +435,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubD
 *  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
 
 // clang-format off
@@ -446,6 +450,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
 *  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address);
 
 // clang-format off
@@ -460,6 +465,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
 *  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id);
 
 // clang-format off
@@ -473,6 +479,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 *  | buffer   | The buffer to deallocate from device | Buffer & |             | Yes      |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 void DeallocateBuffer(Buffer& buffer);
 
 // clang-format off

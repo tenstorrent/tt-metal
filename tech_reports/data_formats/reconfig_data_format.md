@@ -60,8 +60,6 @@ The following DataFormat reconfigurations are currently supported:
 - `reconfig_data_format` API should be used to reconfigure the hardware between calls to operations that use CBs of different DataFormats.
 - `pack_reconfig_data_format` API is called independently of `reconfig_data_format`, when the output CB changes DataFormats
 - Programmers should always use the API calls providing both the old and the new operand CB index, as this enables faster reconfiguration and dynamic checks for eligible conversions.
-- Both configurations are sticky hardware state, not scoped to the call that follows. A kernel that retargets the packer at an intermediate CB — an LLK broadcast destination, an activation staging buffer — must hand it back to the output CB before packing its result, or the result is packed in the intermediate CB's format. Where those formats happen to agree the corruption is invisible, so it surfaces only once a caller changes the output dtype.
-- When passing both operands, the old index must be the CB the hardware is actually configured for. The two-operand calls skip the reconfiguration when the two formats match, so a stale or guessed old index silently does nothing.
 
 ## Examples:
 TO DO

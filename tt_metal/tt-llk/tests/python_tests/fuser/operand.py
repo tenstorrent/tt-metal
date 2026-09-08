@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import ClassVar, List, Optional, Tuple
+from enum import Enum
+from typing import List, Optional, Tuple
 
 import torch
 from helpers.device_io import read_from_device, write_to_device
@@ -23,11 +24,23 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
 
 
+class BfdResource(Enum):
+    UNP0 = "ckernel::trisc::BfdResource::Unp0"
+    UNP1 = "ckernel::trisc::BfdResource::Unp1"
+    PACK0 = "ckernel::trisc::BfdResource::Pack0"
+
+
+class L1AccessMode(Enum):
+    CONTINUOUS = "ckernel::trisc::L1AccessMode::Continuous"
+    STRIDED = "ckernel::trisc::L1AccessMode::Strided"
+
+
+def bfd_current(engine: BfdResource) -> str:
+    return f"ckernel::trisc::bfd_current<{engine.value}>()"
+
+
 @dataclass
 class Operand:
-    _next_buf_desc_id: ClassVar[int] = 0
-    MAX_OPERANDS_NUM: ClassVar[int] = 32
-
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
@@ -51,15 +64,8 @@ class Operand:
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
-    buf_desc_id: Optional[int] = None
 
     def __post_init__(self):
-        self.buf_desc_id = Operand._next_buf_desc_id
-        if self.buf_desc_id >= Operand.MAX_OPERANDS_NUM:
-            raise ValueError(
-                f"buf_desc_id {self.buf_desc_id} exceeds maximum of {Operand.MAX_OPERANDS_NUM - 1} for operand '{self.name}'"
-            )
-        Operand._next_buf_desc_id += 1
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
         self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
         self.tile_count = self.tile_count_x * self.tile_count_y
@@ -213,10 +219,6 @@ class Operand:
     def cpp_name(self) -> str:
         return f"{self.name}_buffer"
 
-    @property
-    def cpp_desc_name(self) -> str:
-        return f"{self.name}_desc"
-
     def cpp_value(self, dest_acc: bool) -> str:
         buffer_size = calculate_tile_size_bytes(
             data_format=self.data_format,
@@ -230,25 +232,22 @@ class Operand:
         )
         return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
-    def cpp_buf_desc_decl(self) -> str:
+    def bfd_alloc_and_program(
+        self,
+        engine: BfdResource,
+        mode: L1AccessMode = L1AccessMode.CONTINUOUS,
+    ) -> str:
         return (
-            f"buffer_descriptor_u {self.cpp_desc_name} = "
-            f"ckernel::trisc::construct_buf_desc("
+            f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
             f"{self.data_format.cpp_underlying_value});\n"
         )
 
-    def emit_buf_desc_table_entry(self) -> str:
-        if self.buf_desc_id is None:
-            return ""
-        return f"ckernel::trisc::_configure_buf_desc_table_({self.buf_desc_id}, {self.cpp_desc_name});\n"
-
 
 class OperandRegistry:
     def __init__(self):
         self.operands: dict[str, Operand] = {}
-        Operand._next_buf_desc_id = 0
 
     def create(
         self,
@@ -411,14 +410,6 @@ class OperandRegistry:
             )
 
             output._raw_data = raw_tensor
-
-    @staticmethod
-    def emit_operand_init(operands: list[Operand]) -> str:
-        code = ""
-        for op in operands:
-            code += op.cpp_buf_desc_decl()
-            code += op.emit_buf_desc_table_entry()
-        return code
 
     def generate_cpp(self, dest_acc: bool):
         code = "// Inputs\n"
