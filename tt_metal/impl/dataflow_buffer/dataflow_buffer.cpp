@@ -1014,7 +1014,7 @@ std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
     TT_FATAL(
         count <= remaining,
         "TxnIdAllocator exhausted: requested {} IDs but only {} remain in DFB pool [{}, {}] "
-        "(user kernels own [0, {}]; id 0 is NOC_V2_TRID_STATIC)",
+        "(user kernels own [0, {}]; id 0 is NOC_OVERLAY_TRID_STATIC)",
         count,
         remaining,
         DFB_TXN_ID_BASE,
