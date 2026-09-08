@@ -26,6 +26,7 @@ from .operations import (
     chunked_prefill_sdpa_sliding,
     concat_heads,
     effective_block_size,
+    o_proj_input_memcfg,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
@@ -842,9 +843,10 @@ def _prefill_forward_single(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=act_mc)
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     # o_proj + allreduce need DRAM activations (CCL / matmul CB pressure).
-    if act_mc == ttnn.L1_MEMORY_CONFIG:
+    if concat_mc == ttnn.L1_MEMORY_CONFIG:
         tt_out_l1 = tt_out
         tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
         tt_out_l1.deallocate(True)
@@ -1129,8 +1131,9 @@ def prefill_forward(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=act_mc)
-    if act_mc == ttnn.L1_MEMORY_CONFIG:
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
+    if concat_mc == ttnn.L1_MEMORY_CONFIG:
         tt_out_l1 = tt_out
         tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
         tt_out_l1.deallocate(True)

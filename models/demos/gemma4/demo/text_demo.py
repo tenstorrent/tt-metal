@@ -54,6 +54,7 @@ from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
+    maybe_auto_enable_chunked_prefill_trace,
     resolve_gemma4_bounded_sliding,
     resolve_gemma4_demo_long_context,
     should_auto_enable_chunked_bounded,
@@ -618,6 +619,12 @@ def _run_generation_via_generator(
     page_table = _create_tt_page_table(batch_size, paged_attention_config)
 
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path)
+    maybe_auto_enable_chunked_prefill_trace(
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        prefill_chunk=lc["prefill_chunk"],
+        bounded_sliding=bounded_sliding,
+    )
     # Prefer caller-resolved bounded (same helper) but log the full runtime cutover.
     logger.info(
         f"Loading Gemma4 via Generator (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "

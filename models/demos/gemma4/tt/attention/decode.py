@@ -36,6 +36,15 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 
+def _qkv_norm_island_memcfg(batch, use_embedding_rope):
+    """L1 staging for the supported batch-1 embedding-RoPE decode path."""
+    if os.environ.get("GEMMA4_DECODE_QKV_L1", "1").lower() in ("0", "false", "no"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    if batch != 1 or not use_embedding_rope:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
+
+
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
     affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
@@ -94,29 +103,63 @@ def decode_forward(
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # 1. Fused QKV projection. Land the output straight in L1: the only consumer
+    # is ``nlp_create_qkv_heads_decode``, which needs an L1 input anyway (see
+    # split_qkv_heads_decode). Writing DRAM and copying back cost one extra
+    # CopyDeviceOperation per layer (60 ops / ~0.18 ms per decode step on 31B)
+    # plus a full DRAM round-trip of the fused QKV. At decode M=32 the tensor is
+    # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
+    xqkv = apply_qkv_projection(
+        hidden_states,
+        weights,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        decode=True,
+    )
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms. Batch-1 embedding RoPE keeps the staging island in L1;
+    # unsupported rotation paths retain the prior DRAM placement.
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    island_mem = _qkv_norm_island_memcfg(
+        batch=int(tt_q.shape[1]),
+        use_embedding_rope=bool(rope_presliced or len(cos_cache.shape) == 2),
+    )
+    island_is_l1 = island_mem.buffer_type == ttnn.BufferType.L1
+    tt_q = ttnn.to_memory_config(tt_q, island_mem)
+    tt_q = apply_per_head_norm(
+        tt_q,
+        weights.q_norm_weight,
+        config.rms_norm_eps,
+        with_scale=True,
+        memory_config=island_mem,
+    )
 
     if is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        tt_k = ttnn.to_memory_config(tt_k, island_mem)
+        tt_v = ttnn.to_memory_config(tt_v, island_mem)
         # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = apply_per_head_norm(
+            tt_k,
+            weights.k_norm_weight,
+            config.rms_norm_eps,
+            with_scale=True,
+            memory_config=island_mem,
+        )
+        tt_v = apply_per_head_norm(
+            tt_v,
+            None,
+            config.rms_norm_eps,
+            with_scale=False,
+            memory_config=island_mem,
+        )
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -143,9 +186,9 @@ def decode_forward(
             cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
             sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
-        def _rope(t):
+        def _rope(t, memory_config=None):
             if batch == 1:
-                return apply_rope(t, cos_pos, sin_pos, token_index=0)
+                return apply_rope(t, cos_pos, sin_pos, token_index=0, memory_config=memory_config)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
@@ -154,9 +197,11 @@ def decode_forward(
         # trace replay it regressed throughput (~3%): host dispatch is already
         # free under replay, so it only added concat+split device kernels while
         # removing one tiny rope kernel. Keep separate rotations.
-        tt_q = _rope(tt_q)
+        # Decode SDPA requires unsharded Q in DRAM. K can remain in the L1
+        # island until it is restored to the cache-update shard layout.
+        tt_q = _rope(tt_q, memory_config=ttnn.DRAM_MEMORY_CONFIG if island_is_l1 else None)
         if not is_kv_shared:
-            tt_k = _rope(tt_k)
+            tt_k = _rope(tt_k, memory_config=island_mem if island_is_l1 else None)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -339,7 +384,7 @@ def decode_forward(
     tt_out = concat_heads(
         tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
     )
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     return tt_out
@@ -836,6 +881,6 @@ def packed_decode_forward(
     tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
     tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_sdpa)
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
     return tt_out

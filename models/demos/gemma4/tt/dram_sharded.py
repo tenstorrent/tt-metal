@@ -16,6 +16,8 @@ helpers are adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 import math
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.utility_functions import is_blackhole
 
@@ -126,8 +128,86 @@ def prefill_max_cols_default(mesh_device=None):
 # This keeps per_core_M tiny AND avoids the memory blow-up of a chunk+concat
 # (which would need source chunks + a full-size destination simultaneously).
 _PREFILL_CUTOFF = 512 if is_blackhole() else 1024
+# The tuned o_proj path is shape-specific: it helps 31B but regresses 12B.
+_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
+
+
+def in_prefill_l1_matmul_band(m: int) -> bool:
+    return TILE_SIZE < int(m) <= _PREFILL_CUTOFF
+
+
+def prefill_matmul_lofi_enabled(m: int) -> bool:
+    """LoFi tall-prefill matmuls are opt-in after long-context regressions."""
+    enabled = os.environ.get("GEMMA4_PREFILL_MATMUL_LOFI", "0").lower() in ("1", "true", "yes")
+    return enabled and int(m) > _PREFILL_CUTOFF
+
+
+def prefill_lofi_ckc():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _prefill_hifi2_ckc():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _prefill_hifi4_ckc():
+    """Short-prefill tuned paths must not silently inherit LoFi."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+_L1_FALLBACK_SHAPES: set[tuple[int, int, int]] = set()
+
+
+def matmul_rows(x):
+    rows = 1
+    for i in range(len(x.shape) - 1):
+        rows *= int(x.shape[i])
+    return rows
+
+
+def linear_l1_safe(x, weight, *, program_config=None, memory_config=None, compute_kernel_config=None):
+    """Use a tuned config when it fits, caching auto fallback on L1 overflow."""
+    if program_config is None:
+        return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+    key = (matmul_rows(x), int(x.shape[-1]), int(weight.shape[-1]))
+    if key not in _L1_FALLBACK_SHAPES:
+        try:
+            return ttnn.linear(
+                x,
+                weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+        except RuntimeError as error:
+            if "circular buffer" not in str(error).lower():
+                raise
+            _L1_FALLBACK_SHAPES.add(key)
+            logger.warning(f"Gemma4 tuned matmul {key} exceeded L1; using ttnn auto for this shape")
+    return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+
+def should_prefill_long_2d(m: int) -> bool:
+    enabled = os.environ.get("GEMMA4_PREFILL_LONG_2D", "1").lower() not in ("0", "false", "no")
+    return enabled and int(m) > _PREFILL_CUTOFF and int(m) % _PREFILL_CUTOFF == 0
 
 
 def weight_memcfg(k, n):
@@ -188,6 +268,46 @@ def decode_progcfg(m, k, n, dtype=None):
         per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
         fused_activation=None,
     )
+
+
+def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
+    """Tuned narrow-N decode config; wide shapes retain ttnn auto."""
+    if os.environ.get("GEMMA4_QKV_DECODE_PROGCFG", "1").lower() in ("0", "false", "no"):
+        return None
+    if k % TILE_SIZE or n % TILE_SIZE or m > TILE_SIZE:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    grid_cores = grid.x * grid.y
+    k_tiles, n_tiles = k // TILE_SIZE, n // TILE_SIZE
+    if n_tiles >= 2 * grid_cores:
+        return None
+    cap = min(grid_cores, n_tiles // 2)
+    cores = next((c for c in range(cap, 0, -1) if n_tiles % c == 0), 0)
+    if cores < 2:
+        return None
+    rows = next((y for y in range(1, grid.y + 1) if cores % y == 0 and cores // y <= grid.x), None)
+    if rows is None:
+        return None
+    per_core_n = n_tiles // cores
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cores // rows, rows),
+        in0_block_w=_find_largest_divisor(k_tiles, max_div=4),
+        out_subblock_h=1,
+        out_subblock_w=_find_largest_divisor(per_core_n, max_div=4),
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return program_config, compute_kernel_config
 
 
 def activation_memcfg(k, n):
@@ -294,6 +414,217 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+
+
+def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
+    """Reshape tall matmuls so their program's circular buffers stay cutoff-sized."""
+    out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    x_shape = [int(x.shape[i]) for i in range(len(x.shape))]
+    orig_leading = x_shape[:-1]
+    n_in = x_shape[-1]
+    m = matmul_rows(x)
+    n_out = int(weight.shape[-1])
+    flat = [1, 1, m, n_in]
+    x_work = x if x_shape == flat else ttnn.reshape(x, flat)
+
+    def restore(out):
+        wanted = (*orig_leading, int(out.shape[-1]))
+        actual = tuple(int(out.shape[i]) for i in range(len(out.shape)))
+        return out if actual == wanted else ttnn.reshape(out, wanted)
+
+    if not should_prefill_long_2d(m):
+        return restore(ttnn.linear(x_work, weight, memory_config=out_mc))
+
+    batch = m // _PREFILL_CUTOFF
+    reshaped = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
+    program_config = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
+    compute_kernel_config = prefill_lofi_ckc() if prefill_matmul_lofi_enabled(m) else _prefill_hifi2_ckc()
+    output = linear_l1_safe(
+        reshaped,
+        weight,
+        program_config=program_config,
+        memory_config=out_mc,
+        compute_kernel_config=compute_kernel_config,
+    )
+    return restore(ttnn.reshape(output, (1, 1, m, int(output.shape[-1]))))
+
+
+def interleaved_prefill_config(m, k, n):
+    """Shape-gated QKV prefill config for an interleaved weight."""
+    if not in_prefill_l1_matmul_band(m):
+        return None, None, None
+    return prefill_progcfg(m, k, n), ttnn.DRAM_MEMORY_CONFIG, _prefill_hifi4_ckc()
+
+
+def _out_subblock_hw(per_core_n, per_core_m):
+    best = (1, 1)
+    for height in range(1, min(per_core_m, 4) + 1):
+        if per_core_m % height:
+            continue
+        for width in range(1, min(per_core_n, 4 // height) + 1):
+            if per_core_n % width == 0 and height * width > best[0] * best[1]:
+                best = (height, width)
+    return best
+
+
+def _factor_1d_grid(cores, grid_x, grid_y):
+    cols = min(grid_x, cores)
+    while cols > 1 and cores % cols:
+        cols -= 1
+    rows = cores // cols
+    return (cols, rows) if 1 <= rows <= grid_y else None
+
+
+def _pick_1d_cores(n_tiles, grid_x, grid_y, prefer=42):
+    candidates = [
+        cores
+        for cores in range(8, grid_x * grid_y + 1)
+        if n_tiles % cores == 0 and _factor_1d_grid(cores, grid_x, grid_y) is not None
+    ]
+    if not candidates:
+        return None
+    if prefer in candidates:
+        return prefer
+    return max(candidates, key=lambda cores: (-abs(cores - prefer), cores))
+
+
+def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fuse_batch=False):
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    grid_x, grid_y = grid_size
+    m_tiles, k_tiles, n_tiles = math.ceil(m / TILE_SIZE), math.ceil(k / TILE_SIZE), math.ceil(n / TILE_SIZE)
+    cores = cores or _pick_1d_cores(n_tiles, grid_x, grid_y)
+    if cores is None or n_tiles % cores:
+        return None
+    factored = _factor_1d_grid(cores, grid_x, grid_y)
+    if factored is None:
+        return None
+    cols, rows = factored
+    in0_block_w = in0_block_w or _find_largest_divisor(k_tiles, max_div=4)
+    if k_tiles % in0_block_w:
+        return None
+    per_core_n = n_tiles // cores
+    out_h, out_w = _out_subblock_hw(per_core_n, m_tiles)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_h,
+        out_subblock_w=out_w,
+        per_core_M=m_tiles,
+        per_core_N=per_core_n,
+        fuse_batch=fuse_batch,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet(set()),
+        num_global_cb_receivers=0,
+        untilize_out=False,
+    )
+
+
+def _interleaved_mlp_prefill_config(m, k, n):
+    if os.environ.get("GEMMA4_PREFILL_1D_MLP", "0").lower() not in ("1", "true", "yes"):
+        return None, None, None
+    if not in_prefill_l1_matmul_band(m):
+        return None, None, None
+    # Swept for TP-sharded widths (31B TP=8 → n=5376). Full-width TP=1
+    # fused gate+up (n≈43k) overflows Wormhole L1 CBs and falls back dirty.
+    if int(n) > 8192:
+        return None, None, None
+    program_config = prefill_progcfg_1d(m, k, n)
+    if program_config is None:
+        return None, None, None
+    output_bytes = int(m) * int(n) * 2
+    out_memcfg = ttnn.L1_MEMORY_CONFIG if output_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+    return program_config, out_memcfg, _prefill_hifi4_ckc()
+
+
+def interleaved_gate_up_prefill_config(m, k, n):
+    return _interleaved_mlp_prefill_config(m, k, n)
+
+
+def interleaved_down_proj_prefill_config(m, k, n):
+    return _interleaved_mlp_prefill_config(m, k, n)
+
+
+def _program_grid(program_config):
+    grid = program_config.compute_with_storage_grid_size
+    return (int(grid.x), int(grid.y)) if hasattr(grid, "x") else (int(grid[0]), int(grid[1]))
+
+
+def _out_shard_matches_program(out_memcfg, program_config):
+    if out_memcfg is None or not out_memcfg.is_sharded():
+        return True
+    spec = out_memcfg.shard_spec
+    if spec is None:
+        return False
+    box = spec.grid.bounding_box().grid_size()
+    grid_x, grid_y = _program_grid(program_config)
+    shard_h, shard_w = int(spec.shape[0]), int(spec.shape[1])
+    return (
+        int(box.x) <= grid_x
+        and int(box.y) <= grid_y
+        and shard_h == program_config.per_core_M * TILE_SIZE
+        and shard_w == program_config.per_core_N * TILE_SIZE
+    )
+
+
+def l1_block_sharded_memcfg(rows, cols, grid=None):
+    grid_x, grid_y = grid or prefill_grid_default()
+    row_tiles, col_tiles = math.ceil(rows / TILE_SIZE), math.ceil(cols / TILE_SIZE)
+    shard_rows = [value for value in range(1, grid_y + 1) if row_tiles % value == 0]
+    shard_cols = [value for value in range(1, grid_x + 1) if col_tiles % value == 0]
+    if not shard_rows or not shard_cols:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.create_sharded_memory_config(
+        shape=(rows, cols),
+        core_grid=ttnn.CoreGrid(x=max(shard_cols), y=max(shard_rows)),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def interleaved_o_proj_prefill_config(m, k, n, grid=None):
+    """Shape-gated o_proj tuning; deliberately opt-in per safety follow-up."""
+    if not _OPROJ_TUNED or not in_prefill_l1_matmul_band(m):
+        return None, None, None
+    grid = grid or prefill_grid_default()
+    program_config = prefill_progcfg(m, k, n, grid_size=grid)
+    out_memcfg = l1_block_sharded_memcfg(m, n, grid=grid)
+    if not _out_shard_matches_program(out_memcfg, program_config):
+        return None, None, None
+    return program_config, out_memcfg, _prefill_hifi2_ckc()
+
+
+def lm_head_decode_config(mesh_device, m, k, n):
+    """Tuned last-token LM head with safe HiFi3 + fp32 destination accumulation."""
+    if max(1, math.ceil(m / TILE_SIZE)) > 1 or n > 64 * 1024:
+        return None, None, None
+    grid = mesh_device.compute_with_storage_grid_size()
+    program_config = prefill_progcfg_1d(
+        m,
+        k,
+        n,
+        cores=grid.x * grid.y,
+        in0_block_w=1,
+        grid_size=(grid.x, grid.y),
+    )
+    if program_config is None:
+        return None, None, None
+    mode = os.environ.get("GEMMA4_LM_HEAD_FIDELITY", "hifi3_destacc").lower()
+    if mode == "hifi4":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
+    elif mode == "hifi4_destacc":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, True
+    else:
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=dest_acc,
+        packer_l1_acc=True,
+    )
+    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
 
 
 class DramShardedLinear:
@@ -426,3 +757,49 @@ class DramShardedLinear:
         for o in outs:
             o.deallocate(True)
         return _restore(out)
+
+
+def decode_in0_l1_enabled() -> bool:
+    """Un-shard decode matmul in0 into L1 rather than DRAM. Default ON."""
+    return os.environ.get("GEMMA4_DECODE_IN0_L1", "1").lower() not in ("0", "false", "no")
+
+
+def width_shard_core_count(memcfg):
+    if memcfg is None or not memcfg.is_sharded() or memcfg.shard_spec is None:
+        return None
+    box = memcfg.shard_spec.grid.bounding_box().grid_size()
+    return int(box.x) * int(box.y)
+
+
+def width_shard_matches_1d_progcfg(memcfg, program_config) -> bool:
+    """True when a width-sharded in0's core grid equals the 1D matmul grid."""
+    if memcfg is None or program_config is None or not memcfg.is_sharded():
+        return False
+    spec = memcfg.shard_spec
+    if spec is None:
+        return False
+    box = spec.grid.bounding_box().grid_size()
+    pc_x, pc_y = _program_grid(program_config)
+    return int(box.x) == pc_x and int(box.y) == pc_y
+
+
+def prefill_progcfg_1d_for_width_sharded_in0(m, k, n, in0_memcfg, grid_size=None):
+    """1D progcfg whose core grid matches ``in0_memcfg``, or ``None`` if impossible.
+
+    Prefers the sharded-in0 core count (LN island) over the interleaved sweep
+    winner. ``fuse_batch=True`` is required when in0 is sharded. ``in0_block_w``
+    must divide per-core K tiles, not full ``kt``.
+    """
+    cores = width_shard_core_count(in0_memcfg)
+    if cores is None:
+        return None
+    kt = math.ceil(k / TILE_SIZE)
+    if kt % cores:
+        return None
+    in0_block_w = _find_largest_divisor(kt // cores, max_div=4)
+    program_config = prefill_progcfg_1d(
+        m, k, n, cores=cores, grid_size=grid_size, fuse_batch=True, in0_block_w=in0_block_w
+    )
+    if program_config is None or not width_shard_matches_1d_progcfg(in0_memcfg, program_config):
+        return None
+    return program_config

@@ -8,6 +8,7 @@ import os
 import torch
 from loguru import logger
 
+from models.demos.gemma4.tt.model import GEMMA4_31B_HIDDEN_SIZE
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -102,6 +103,26 @@ def chunked_prefill_trace_enabled() -> bool:
     :func:`can_gemma4_enable_prefill_trace`.
     """
     return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
+
+
+def maybe_auto_enable_chunked_prefill_trace(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    prefill_chunk: int,
+    bounded_sliding: bool,
+) -> bool:
+    """Auto-enable multi-chunk trace replay for unbounded batch-1 demos."""
+    if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
+        return chunked_prefill_trace_enabled()
+    if batch_size == 1 and not bounded_sliding and max_seq_len > int(prefill_chunk):
+        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        logger.info(
+            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1)"
+        )
+        return True
+    return False
 
 
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,
@@ -911,12 +932,24 @@ def warmup_gemma4_batched_prefill_traces(
             # sizes (batched_prefill_padded_batch) and hit the warmed keys.
             warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= min(user_cap, max_batch_size))
 
+    warmup_specs = [(batch, None, batch) for batch in warmup_batch_sizes]
+    chunk_spans_env = os.environ.get("GEMMA4_WARMUP_CHUNK_SPANS")
+    auto_hidden = getattr(generator.model[0], "hidden_size", None)
+    auto_chunk_spans = chunk_spans_env is None and auto_hidden == GEMMA4_31B_HIDDEN_SIZE and max_batch_size >= 32
+    chunk_spans_mode = ("all" if auto_chunk_spans else (chunk_spans_env or "0")).lower()
+    if chunk_spans_mode not in ("0", "false", "no"):
+        reachable = [span for span in SUPPORTED_PREFILL_BATCH_SIZES if user_cap < span <= max_batch_size]
+        if chunk_spans_mode not in ("all", "every"):
+            reachable = reachable[:1]
+        warmup_specs += [(user_cap, list(range(span - user_cap, span)), span) for span in reachable]
+
     if warmup_batch_sizes == (1,):
         logger.info(
             "Using batch-1-only traced prefill warmup; runtime batched prefill "
-            "remains enabled. Trace ISLs={} (user_cap={})",
+            "remains enabled. Trace ISLs={} (user_cap={}, chunk row spans={})",
             sorted(trace_isls),
             user_cap,
+            [span for _, slots, span in warmup_specs if slots is not None],
         )
     else:
         logger.info(
@@ -937,18 +970,19 @@ def warmup_gemma4_batched_prefill_traces(
             if model_id != 0 and (supported_length not in trace_isls or not enable_trace):
                 continue
 
-            for batch_size in warmup_batch_sizes:
-                if batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
+            for warmup_users, warmup_slots, row_span in warmup_specs:
+                if row_span * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
                     logger.info(
-                        "Skipping batched prefill trace warmup for batch_size={}, seq_len={}: "
-                        "exceeds {} token limit",
-                        batch_size,
+                        "Skipping batched prefill trace warmup for row_span={}, seq_len={}: " "exceeds {} token limit",
+                        row_span,
                         supported_length,
                         MAX_BATCHED_PREFILL_SEQ_LEN,
                     )
                     continue
 
-                warmup_args = generator._mock_tokens(batch_size, supported_length, kv_cache, model_id)
+                warmup_args = generator._mock_tokens(warmup_users, supported_length, kv_cache, model_id)
+                if warmup_slots is not None:
+                    warmup_args["empty_slots"] = list(warmup_slots)
 
                 if warmup_args["page_table"] is None and max_prefill_chunk_size_cutoff(
                     supported_length, model_args.max_prefill_chunk_size
@@ -972,8 +1006,8 @@ def warmup_gemma4_batched_prefill_traces(
                     # Greedy (no-penalty) warmup is the only valid b=1 sweep.
                     sampling_params = generator._create_sampling_params(
                         can_sample_on_device=can_sample_on_device,
-                        greedy_only=greedy_only or batch_size == 1,
-                        batch_size=batch_size,
+                        greedy_only=greedy_only or warmup_users == 1,
+                        batch_size=warmup_users,
                     )
                 else:
                     sampling_params = [None]
@@ -981,25 +1015,27 @@ def warmup_gemma4_batched_prefill_traces(
                 capture_trace = apply_gemma4_prefill_trace_policy(
                     enable_trace,
                     supported_length,
-                    batch_size,
+                    row_span,
                     generator.model[model_id],
                 )
 
                 for param in sampling_params:
                     if capture_trace:
                         logger.info(
-                            "Warming up prefill trace for sequence length: {} batch size: {} "
+                            "Warming up prefill trace for sequence length: {} users: {} rows: {} "
                             "with sampling params: {}",
                             supported_length,
-                            batch_size,
+                            warmup_users,
+                            row_span,
                             param,
                         )
                     else:
                         logger.info(
-                            "Warming up prefill (trace off) for sequence length: {} batch size: {} "
+                            "Warming up prefill (trace off) for sequence length: {} users: {} rows: {} "
                             "with sampling params: {}",
                             supported_length,
-                            batch_size,
+                            warmup_users,
+                            row_span,
                             param,
                         )
                     prefill_forward(

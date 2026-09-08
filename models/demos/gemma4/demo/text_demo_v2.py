@@ -58,8 +58,12 @@ from models.demos.gemma4.demo.sampling_utils import (
     log_sampling_mode,
     model_can_sample_on_device,
 )
+from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
+from models.demos.gemma4.tt.generator_trace import (
+    maybe_auto_enable_chunked_prefill_trace,
+    resolve_gemma4_demo_long_context,
+)
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
@@ -247,19 +251,11 @@ def _device_params():
     # tighter, but 30 MB is not enough for the 31B/26B decode+prefill traces on
     # T3K (WH-T3K nightly EngineCore OOM). Honour GEMMA4_TRACE_REGION_SIZE on
     # both arches; only the default differs.
-    default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
+    default_trace_region = 256_000_000 if is_blackhole() else 192_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
-    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
-    if pkt_env is None:
-        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
-    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
-        pkt_bytes = None
-    else:
-        pkt_bytes = max(4352, int(pkt_env))
-    if pkt_bytes is not None:
-        router = ttnn.FabricRouterConfig()
-        router.max_packet_payload_size_bytes = pkt_bytes
+    router = fabric_router_config_from_env()
+    if router is not None:
         params["fabric_router_config"] = router
     return params
 
@@ -529,6 +525,12 @@ def test_demo_text(
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
+    maybe_auto_enable_chunked_prefill_trace(
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        prefill_chunk=lc["prefill_chunk"],
+        bounded_sliding=bounded_sliding,
+    )
 
     if batch_size <= 1 or configured_blocks is None:
         page_max_num_blocks = needed_blocks
@@ -674,43 +676,74 @@ def test_demo_text(
     iteration = 0
     users_decoding = True
 
-    logger.info("Starting decode loop...")
+    pipeline_reads = device_sampling_params is not None and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    pending_reads = []
+
+    def _fold_tokens(tokens):
+        tokens = tokens.long().view(batch_size, -1)
+        keep_decoding = True
+        for user in range(batch_size):
+            token = int(tokens[user, 0])
+            if token not in tokenizer.stop_tokens and not user_done[user]:
+                all_outputs[user].append(token)
+            elif stop_at_eos:
+                user_done[user] = True
+                if all(user_done):
+                    keep_decoding = False
+        if not is_ci_env:
+            for user in range(batch_size):
+                generated = tokenizer.decode(all_outputs[user][prefill_lens[user] :])
+                generated = ("..." + generated[-97:]) if len(generated) > 100 else generated
+                logger.info(f"[User {user}] {generated.replace(chr(10), ' ')}")
+        return keep_decoding
+
+    def _consume_tokens(host_output, read_events):
+        for event in read_events:
+            ttnn.event_synchronize(event)
+        tokens, _ = generator.process_decode_output_host(host_output, is_tokens=True)
+        return _fold_tokens(tokens)
+
+    logger.info(f"Starting decode loop... (pipelined token reads: {pipeline_reads})")
     profiler.start("inference_decode")
     while users_decoding:
-        profiler.start(f"inference_decode_time_{iteration}")
-        decode_out, _ = generator.decode_forward(
+        step = iteration
+        profiler.start(f"inference_decode_time_{step}")
+        decode_result = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=enable_trace,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            read_from_device=not pipeline_reads,
         )
-        if device_sampling_params is not None:
-            out_tok = decode_out.long().view(batch_size, 1)
+        if pipeline_reads:
+            host_output, read_events = generator.read_decode_output(decode_result, async_read=True)
+            pending_reads.append((host_output, read_events))
         else:
-            out_tok = _host_sample(decode_out, temperature, top_p)
-        profiler.end(f"inference_decode_time_{iteration}")
+            decode_out, _ = decode_result
+            if device_sampling_params is not None:
+                out_tok = decode_out.long().view(batch_size, 1)
+            else:
+                out_tok = _host_sample(decode_out, temperature, top_p)
 
         current_pos += 1
-        for user in range(batch_size):
-            tok = int(out_tok[user, 0].item())
-            if tok not in tokenizer.stop_tokens and not user_done[user]:
-                all_outputs[user].append(tok)
-            elif stop_at_eos:
-                user_done[user] = True
-                if all(user_done):
-                    users_decoding = False
-
-        if not is_ci_env:
-            for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                text = ("..." + text[-97:]) if len(text) > 100 else text
-                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
-
         iteration += 1
+        if pipeline_reads:
+            if len(pending_reads) > 1:
+                users_decoding = _consume_tokens(*pending_reads.pop(0))
+        else:
+            users_decoding = _fold_tokens(out_tok)
+        profiler.end(f"inference_decode_time_{step}")
         if iteration >= max_generated_tokens:
             users_decoding = False
+    for pending_read in pending_reads:
+        _consume_tokens(*pending_read)
+    pending_reads.clear()
     profiler.end("inference_decode")
     profiler.end("run")
 

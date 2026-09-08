@@ -1038,13 +1038,25 @@ class SpeculativeDecoder:
         tr["vhidden"] = vh
         self._fused_trace = tr
 
-    def _hidden_row_to_device(self, row):
-        """Read the verify hidden, slice row `row`, and copy it into tr["h"].
+    def _device_seed_enabled(self):
+        return os.environ.get("GEMMA4_SPEC_DEVICE_SEED", "1").lower() not in ("0", "false", "no")
 
-        Host round-trip for the recurrent seed: small ([1,1,1,backbone]) and
-        allocation-free on device (copy_host_to_device into the persistent buffer),
-        so it stays trace-safe (no device clone/slice that could alias trace
-        scratch on a re-replay)."""
+    def _hidden_row_to_device(self, row):
+        """Copy the recurrent verify-hidden seed entirely on device."""
+        if not self._device_seed_enabled():
+            return self._hidden_row_to_device_host(row)
+        tr = self._fused_trace
+        verify_hidden = tr["vhidden"]
+        selected = ttnn.slice(
+            verify_hidden,
+            [0, 0, row, 0],
+            [1, 1, row + 1, int(verify_hidden.shape[-1])],
+        )
+        ttnn.copy(selected, tr["h"])
+        selected.deallocate(True)
+
+    def _hidden_row_to_device_host(self, row):
+        """Fallback recurrent-seed host round trip."""
         tr = self._fused_trace
         vh = tr["vhidden"]
         vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
@@ -1372,7 +1384,26 @@ class SpeculativeDecoder:
 
     def _hidden_rows_to_device_batched(self, rows_b):
         """Shift-seed: gather packed-verify hidden row ``b*P+rows_b[b]`` per user
-        into the persistent batched recurrent buffer tr["h"] (host round-trip)."""
+        into the persistent batched recurrent buffer on device."""
+        if not self._device_seed_enabled():
+            return self._hidden_rows_to_device_batched_host(rows_b)
+        tr = self._fused_trace_batched
+        batch, packed = tr["B"], tr["P"]
+        verify_hidden = tr["vhidden"]
+        backbone = int(verify_hidden.shape[-1])
+        selected = []
+        for user in range(batch):
+            row = user * packed + rows_b[user]
+            selected.append(ttnn.slice(verify_hidden, [0, 0, row, 0], [1, 1, row + 1, backbone]))
+        combined = ttnn.concat(selected, dim=2) if batch > 1 else selected[0]
+        ttnn.copy(combined, tr["h"])
+        for tensor in selected:
+            tensor.deallocate(True)
+        if batch > 1:
+            combined.deallocate(True)
+
+    def _hidden_rows_to_device_batched_host(self, rows_b):
+        """Fallback batched recurrent-seed host round trip."""
         tr = self._fused_trace_batched
         B, P = tr["B"], tr["P"]
         vh = tr["vhidden"]

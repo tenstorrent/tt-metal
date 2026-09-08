@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
@@ -23,13 +23,7 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import (
-    Mode,
-    get_block_size,
-    get_max_prefill_chunk_size,
-    get_padded_prefill_len,
-    num_blocks_in_seq,
-)
+from models.tt_transformers.tt.common import Mode, get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -47,6 +41,33 @@ GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 # vLLM token-chunked continuations can land on unaligned start_pos (e.g. 48);
 # align down and re-prefill the prefix (Galaxy SDPA_CHUNK_ALIGN pattern).
 SDPA_CHUNK_ALIGN = 128
+
+# Keep host page-table widths aligned with captured prefill buffers. Reuse an
+# already-wide table rather than concatenating a fresh padding tensor at every
+# multi-chunk seam.
+_PAGE_TABLE_WIDTH_ALIGN = 8
+
+
+def _align_page_table_blocks(n: int) -> int:
+    n = max(0, int(n))
+    return ((n + _PAGE_TABLE_WIDTH_ALIGN - 1) // _PAGE_TABLE_WIDTH_ALIGN) * _PAGE_TABLE_WIDTH_ALIGN
+
+
+def ensure_page_table_width(table: torch.Tensor | None, target_blocks: int, *, fill: int = 0) -> torch.Tensor:
+    """Return an aligned page table at least ``target_blocks`` columns wide."""
+    aligned = _align_page_table_blocks(target_blocks)
+    if table is None:
+        return torch.full((1, aligned), fill, dtype=torch.int32)
+    if table.dim() == 1:
+        table = table.unsqueeze(0)
+    width = int(table.shape[1])
+    if width == aligned:
+        return table
+    if width > aligned:
+        return table[:, :aligned]
+    out = torch.full((int(table.shape[0]), aligned), fill, dtype=torch.int32)
+    out[:, :width] = table.to(dtype=torch.int32)
+    return out
 
 
 def align_num_cached_tokens_to_sdpa(num_cached_per_user: list[int]) -> list[int]:
@@ -919,19 +940,9 @@ class ChunkedPrefillPageTableGuardMixin:
         needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
         if page_table_user.shape[1] > needed_blocks:
             page_table_user = page_table_user[:, :needed_blocks]
-        num_padding_blocks = needed_blocks - page_table_user.shape[1]
         # Extra columns pad with 0 (vLLM null block). Fill skip is valid_seq_len,
         # not page-table -1.
-        if num_padding_blocks > 0:
-            page_table_user_padded = torch.cat(
-                [
-                    page_table_user,
-                    torch.zeros((1, num_padding_blocks), dtype=torch.int32),
-                ],
-                dim=-1,
-            )
-        else:
-            page_table_user_padded = page_table_user
+        page_table_user_padded = ensure_page_table_width(page_table_user, needed_blocks)
         CHUNK_USER_ID = 0
 
         logger.info(
@@ -1032,18 +1043,14 @@ class ChunkedPrefillPageTableGuardMixin:
             chunk_grid_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
             if page_table_user.shape[1] > needed_blocks:
                 page_table_user = page_table_user[:, :needed_blocks]
-            num_padding_blocks = max(0, chunk_grid_blocks - page_table_user.shape[1])
-            if num_padding_blocks > 0:
-                page_table_user_padded = torch.cat(
-                    [
-                        page_table_user,
-                        torch.zeros((1, num_padding_blocks), dtype=torch.int32),
-                    ],
-                    dim=-1,
-                )
-            else:
-                page_table_user_padded = page_table_user
+            page_table_user_padded = ensure_page_table_width(page_table_user, chunk_grid_blocks)
             CHUNK_USER_ID = 0
+            hoist_page_table = os.environ.get("GEMMA4_PREFILL_PT_HOIST", "1").lower() not in ("0", "false", "no")
+            page_table_device = (
+                self.model[model_id]._page_table_torch_to_ttnn(page_table_user_padded)
+                if hoist_page_table and not kwargs.get("trace_enabled", False)
+                else page_table_user_padded
+            )
 
             # Inject an expanded last start when adjust moves it off the chunk grid.
             last_abs = num_cached_tokens + last_chunk_start
@@ -1091,7 +1098,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
-                    page_table=page_table_user_padded,
+                    page_table=page_table_device,
                     chunk_page_table=chunk_page_table,
                     batch_size=batch_size,
                     user_id=CHUNK_USER_ID,
@@ -1615,6 +1622,36 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
+    _DECODE_READ_SHARD_MIN_ELEMS = 32 * 1024
+
+    def _decode_read_shard(self, tensor, model_id: int = 0):
+        """Skip redundant mesh-shard DMA for large replicated decode outputs."""
+        if not isinstance(tensor, ttnn.Tensor):
+            return tensor
+        if os.environ.get("GEMMA4_DECODE_READ_SHARD", "1").lower() in ("0", "false", "no"):
+            return tensor
+        model = self.model[model_id]
+        mesh_config = getattr(model, "mesh_config", None)
+        if mesh_config is None or getattr(mesh_config, "tp", 1) <= 1 or getattr(model, "users_row_sharded", False):
+            return tensor
+        elements = 1
+        for dim in tensor.shape:
+            elements *= int(dim)
+        if elements < self._DECODE_READ_SHARD_MIN_ELEMS:
+            return tensor
+        shards = ttnn.get_device_tensors(tensor)
+        return shards[0] if len(shards) > 1 else tensor
+
+    def read_decode_output(self, tt_out, async_read=False):
+        trimmed = []
+        for index, output in enumerate(tt_out):
+            model_id = index if index < len(self.model) else 0
+            if isinstance(output, tuple):
+                trimmed.append((self._decode_read_shard(output[0], model_id), *output[1:]))
+            else:
+                trimmed.append(self._decode_read_shard(output, model_id))
+        return super().read_decode_output(trimmed, async_read=async_read)
+
     def warmup_model_prefill(
         self,
         kv_cache,
@@ -1659,7 +1696,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             num_cached_per_user = align_num_cached_tokens_to_sdpa(num_cached_per_user)
             start_pos = num_cached_per_user
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
+            get_gemma4_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006

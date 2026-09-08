@@ -90,8 +90,10 @@ def create_tt_model(
     if is_mesh and num_devices > 1:
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
         # all-reduces (the dominant ~31% of prefill device time) use full
-        # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        # inter-device bandwidth. is_moe selects the topology default: Ring is
+        # ~2.2 ms/step faster on a 1x8 WH mesh but tanks MoE PCC — see
+        # ccl.default_ccl_topology.
+        ccl_manager = CCLManager(mesh_device, is_moe=bool(getattr(model_args, "enable_moe_block", False)))
     else:
         ccl_manager = None
 
@@ -237,3 +239,21 @@ def create_assistant_model(
         max_local_batch_size=max_local_batch_size,
     )
     return assistant_args, model
+
+
+def get_gemma4_padded_prefill_len(seq_len: int) -> int:
+    """Pad prefill ISL to the next kernel bucket (default: tt_transformers policy).
+
+    Opt into shorter buckets with ``GEMMA4_SHORT_PREFILL_BUCKETS=96,128`` only
+    when those lengths are also listed in ``GEMMA4_TRACE_PREFILL_SEQ_LENS``.
+    """
+    seq_len = int(seq_len)
+    override = os.environ.get("GEMMA4_SHORT_PREFILL_BUCKETS")
+    if override:
+        buckets = tuple(int(x.strip()) for x in override.split(",") if x.strip())
+        for bucket in buckets:
+            if seq_len <= bucket:
+                return bucket
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    return get_padded_prefill_len(seq_len)
