@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include <internal/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -78,7 +79,8 @@ private:
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
-    friend class MeshWorkload;
+    friend std::unordered_set<SubDeviceId> tt::tt_metal::internal::get_mesh_workload_sub_device_ids(
+        MeshWorkload& mesh_workload, MeshDevice* mesh_device);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
 

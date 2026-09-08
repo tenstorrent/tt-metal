@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/mesh_workload.hpp>
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/fmt.hpp>
@@ -453,10 +454,6 @@ const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_progra
     return pimpl_->get_programs();
 }
 
-std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevice* mesh_device) {
-    return pimpl_->determine_sub_device_ids(mesh_device);
-}
-
 // For testing purposes only
 void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     pimpl_->set_last_used_command_queue_for_testing(mesh_cq);
@@ -485,3 +482,8 @@ uint32_t MeshWorkload::get_cb_size(
 }
 
 }  // namespace tt::tt_metal::distributed
+
+std::unordered_set<tt::tt_metal::SubDeviceId> tt::tt_metal::internal::get_mesh_workload_sub_device_ids(
+    distributed::MeshWorkload& mesh_workload, distributed::MeshDevice* mesh_device) {
+    return mesh_workload.impl().determine_sub_device_ids(mesh_device);
+}

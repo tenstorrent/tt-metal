@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
+#include <internal/mesh_workload.hpp>
 #include <tt_metal/impl/version.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
@@ -602,7 +603,7 @@ void track_mesh_workload_execution(
 
     // Same invariant FDMeshCommandQueue::enqueue_mesh_workload enforces, which has already run by
     // the time we get here.
-    const auto sub_device_ids = workload.determine_sub_device_ids(mesh_device);
+    const auto sub_device_ids = tt::tt_metal::internal::get_mesh_workload_sub_device_ids(workload, mesh_device);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     const auto sub_device_id = *sub_device_ids.begin();
     const auto worker_core_ranges =
