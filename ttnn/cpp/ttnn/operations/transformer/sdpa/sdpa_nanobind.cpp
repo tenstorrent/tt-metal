@@ -381,6 +381,9 @@ void bind_sdpa(nb::module_& mod) {
 
         Keyword args:
             kv_format (SparseKVFormat): explicit physical/logical format of `kv`.
+            attention_sink (ttnn.Tensor, optional): [1, H, 1, 1] tiled DRAM tensor, BF16/BFP8/BFP4.
+                One scalar per head, shared across tokens. As in classic SDPA, the sink is multiplied by
+                scale and contributes only to the softmax denominator. Defaults to None.
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
@@ -413,7 +416,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("attention_sink") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

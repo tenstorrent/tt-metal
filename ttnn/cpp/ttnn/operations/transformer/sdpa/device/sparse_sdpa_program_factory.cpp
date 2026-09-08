@@ -34,19 +34,21 @@ enum SparseCB : uint32_t {
     cb_sum_b,
     cb_out_a,  // running out ping-pong [Sqt, vDHt] (single-buffered for L1 accumulation)
     cb_out_b,
-    cb_corr,           // exp(prev_max - cur_max) correction [Sqt, 1]
-    cb_out_im,         // fixed pre-untilize copy of the final out [Sqt, vDHt]
-    cb_out_rm,         // untilized row-major out (compute -> writer)
-    cb_idx,            // reader-internal: one token's index row (uint32)
-    cb_ctrl,           // reader -> compute: [active chunk count (=ceil(valid_keys/k_chunk)), valid_keys] per token
-    cb_col_identity,   // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
-    cb_recip_scratch,  // 1-tile reciprocal scratch for normalize_row_streaming
-    cb_kreq,           // reader->writer K-gather handoff (dual-NoC split)
-    cb_kack,           // writer->reader ack that its half of the chunk landed in cb_k_rm
-    cb_k_rope_rm,      // scaled FP8 only: format-only BF16 view of one packed row slab
-    cb_k_scale_bcast,  // scaled FP8 only: one FP32 per-row broadcast tile per scale block
-    cb_k_latent_tile,  // scaled FP8 only: one TILE_HEIGHT-row BFP8 latent slab
-    cb_k_rope_tile,    // scaled FP8 only: one K chunk's BF16 RoPE tiles
+    cb_corr,            // exp(prev_max - cur_max) correction [Sqt, 1]
+    cb_out_im,          // fixed pre-untilize copy of the final out [Sqt, vDHt]
+    cb_out_rm,          // untilized row-major out (compute -> writer)
+    cb_idx,             // reader-internal: one token's index row (uint32)
+    cb_ctrl,            // reader -> compute: [active chunk count (=ceil(valid_keys/k_chunk)), valid_keys] per token
+    cb_col_identity,    // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
+    cb_recip_scratch,   // 1-tile reciprocal scratch for normalize_row_streaming
+    cb_kreq,            // reader->writer K-gather handoff (dual-NoC split)
+    cb_kack,            // writer->reader ack that its half of the chunk landed in cb_k_rm
+    cb_k_rope_rm,       // scaled FP8 only: format-only BF16 view of one packed row slab
+    cb_k_scale_bcast,   // scaled FP8 only: one FP32 per-row broadcast tile per scale block
+    cb_k_latent_tile,   // scaled FP8 only: one TILE_HEIGHT-row BFP8 latent slab
+    cb_k_rope_tile,     // scaled FP8 only: one K chunk's BF16 RoPE tiles
+    cb_attention_sink,  // persistent first-column vector: one sink scalar per head
+    cb_sink_scratch,    // reader scratch for gathering tiled sink scalars
     cb_count
 };
 
@@ -54,6 +56,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t, Tensor& output) {
     tt::tt_metal::ProgramDescriptor desc;
 
+    const bool use_attention_sink = t.attention_sink.has_value();
     const uint32_t H = t.q.logical_shape()[1];  // head count, from the tensor (any multiple of TILE_HEIGHT)
     const uint32_t S = t.q.logical_shape()[2];
     const uint32_t topk = t.indices.logical_shape()[3];
@@ -171,6 +174,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
     }
 
+    if (use_attention_sink) {
+        cb(cb_attention_sink, tile_bytes, Sqt, bf);
+        cb(cb_sink_scratch, tile_bytes, 1, bf);
+    }
+
     // ---- compile-time args ----
     // CB ids are passed to each kernel as compile-time args (the SparseCB enum is the single source).
     // Keep each block's order in sync with the kernel's reads. Layout: scalars, then CB ids, then the
@@ -204,6 +212,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_ct.insert(
         reader_ct.end(),
         {static_cast<uint32_t>(scaled_kv), v_dim, cb_k_scale_bcast, packed_page_bytes, cb_kreq, cb_kack});
+    reader_ct.insert(reader_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink, cb_sink_scratch});
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -216,6 +225,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
+        .append_to(reader_ct, reader_crt);
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
@@ -299,6 +310,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_ct.push_back(static_cast<uint32_t>(math_approx));
     compute_ct.push_back(qsb);
     compute_ct.push_back(packed_page_bytes);
+    compute_ct.insert(compute_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink});
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");
@@ -336,7 +348,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
+        reader_desc.emplace_runtime_args(
+            core,
+            {q_buf,
+             kv_buf,
+             idx_buf,
+             tok_start,
+             tok_count,
+             kv_batch_page_offset,
+             use_attention_sink ? t.attention_sink->buffer() : nullptr});
         writer_desc.emplace_runtime_args(core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
@@ -368,6 +388,7 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
         r[1] = kv;
         r[2] = idx;
         r[5] = offset;
+        r[6] = t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
         w[0] = out;
         w[3] = kv;
         w[4] = offset;

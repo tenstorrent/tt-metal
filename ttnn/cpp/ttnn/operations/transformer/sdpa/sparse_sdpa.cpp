@@ -7,6 +7,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <cmath>
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::transformer {
 
@@ -22,7 +23,8 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -82,8 +84,39 @@ ttnn::Tensor sparse_sdpa(
         /*default_fp32_acc=*/any_fp8,
         /*default_l1_acc=*/false);
 
+    // Match classic SDPA's sink contract. Convert block-float sinks once per invocation so the
+    // sparse reader can gather their scalars into a BF16 column (one row per head).
+    std::optional<ttnn::Tensor> sink = attention_sink;
+    if (sink.has_value()) {
+        TT_FATAL(
+            sink->storage_type() == StorageType::DEVICE && sink->buffer() != nullptr,
+            "Attention sink tensor must be on device");
+        TT_FATAL(sink->device() == q.device(), "Attention sink must be on the same device as Q");
+        TT_FATAL(sink->layout() == Layout::TILE, "Attention sink must be tilized");
+        TT_FATAL(sink->memory_config().buffer_type() == BufferType::DRAM, "Attention sink must be in DRAM");
+        TT_FATAL(
+            sink->logical_shape() == ttnn::Shape({1, q.logical_shape()[1], 1, 1}),
+            "Attention sink must have shape [1, H, 1, 1] matching Q heads");
+        TT_FATAL(
+            sink->dtype() == DataType::BFLOAT16 || sink->dtype() == DataType::BFLOAT8_B ||
+                sink->dtype() == DataType::BFLOAT4_B,
+            "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
+        if (sink->dtype() != DataType::BFLOAT16) {
+            sink = ttnn::typecast(sink.value(), DataType::BFLOAT16);
+        }
+    }
     return ttnn::prim::sparse_sdpa(
-        q, kv, indices, resolved_scale, v_dim, kv_format, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
+        q,
+        kv,
+        indices,
+        resolved_scale,
+        v_dim,
+        kv_format,
+        k_chunk_size,
+        kernel_config,
+        cache_batch_idx,
+        block_cyclic,
+        sink);
 }
 
 }  // namespace ttnn::transformer

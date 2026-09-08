@@ -560,3 +560,121 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
     tt_q_tile = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)  # same shape+dtype (same hash) but wrong layout -> HIT
     with expect_error(RuntimeError, "ROW_MAJOR"):
         ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("sink_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_sparse_sdpa_attention_sink(device, sink_dtype):
+    # One multi-chunk shape covers masks, head/face boundaries, and all accepted sink dtypes.
+    H, S, T, TOPK, dim, kc, scale = 128, 4, 256, 128, 64, 32, 0.125
+    q, kv, indices = make_inputs(H, S, T, TOPK, dim, lambda s: [1, 31, 65, TOPK][s])
+    tt_q = to_dev(q, device, ttnn.bfloat16)
+    tt_kv = to_dev(kv, device, ttnn.bfloat16)
+    tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    sinks = torch.linspace(-32, 64, H).reshape(1, H, 1, 1)
+    tt_sink = ttnn.from_torch(sinks, dtype=sink_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_indices, dim, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, attention_sink=tt_sink
+    )
+    expected = golden(
+        ttnn.to_torch(tt_q).float(),
+        ttnn.to_torch(tt_kv).float(),
+        indices,
+        scale,
+        dim,
+        attention_sink=ttnn.to_torch(tt_sink).float(),
+    )
+    actual = ttnn.to_torch(out).float()
+    # Correlation alone would miss the sink's suppression of the output magnitude.
+    torch.testing.assert_close(actual, expected, atol=0.035, rtol=0.08)
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_attention_sink_cache(device):
+    device.clear_program_cache()
+    grid = device.compute_with_storage_grid_size()
+    H, S, dim, scale = 64, grid.x * grid.y + 1, 64, 0.25
+    # Zero scores and unit values give the exact output nv / (nv + exp(scale * sink)).
+    tt_q = to_dev(torch.zeros(1, H, S, dim), device, ttnn.bfloat16)
+    tt_kv = to_dev(torch.ones(1, 1, 32, dim), device, ttnn.bfloat16)
+    indices = torch.arange(32).reshape(1, 1, 1, 32).expand(1, 1, S, 32).contiguous()
+    tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    sink_tensors = []  # keep allocations alive to guarantee distinct addresses on cache hits
+    for value in (None, 0.0, 16.0, -32.0, None):
+        sink = None
+        if value is not None:
+            sink = ttnn.from_torch(
+                torch.full((1, H, 1, 1), value), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            sink_tensors.append(sink)
+        out = ttnn.transformer.sparse_sdpa(
+            tt_q, tt_kv, tt_indices, dim, kv_format=BF16_KV, scale=scale, k_chunk_size=32, attention_sink=sink
+        )
+        expected = 1.0 if value is None else 32 / (32 + torch.exp(torch.tensor(scale * value)).item())
+        torch.testing.assert_close(
+            ttnn.to_torch(out).float(), torch.full((1, H, S, dim), expected), atol=0.012, rtol=0.01
+        )
+        assert device.num_program_cache_entries() == (1 if not sink_tensors else 2)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("invalid", ["heads", "layout", "memory", "dtype"])
+def test_sparse_sdpa_attention_sink_validation(device, expect_error, invalid):
+    q, kv, indices = make_inputs(32, 1, 64, 32, 64, lambda s: 32)
+    sink = ttnn.from_torch(
+        torch.zeros(1, 64 if invalid == "heads" else 32, 1, 1),
+        dtype=ttnn.float32 if invalid == "dtype" else ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT if invalid == "layout" else ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG if invalid == "memory" else ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Attention sink"):
+        ttnn.transformer.sparse_sdpa(
+            to_dev(q, device, ttnn.bfloat16),
+            to_dev(kv, device, ttnn.bfloat16),
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            64,
+            kv_format=BF16_KV,
+            k_chunk_size=32,
+            attention_sink=sink,
+        )
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_attention_sink_dense_parity(device):
+    # Selecting every key must match classic SDPA, including its sink scaling convention.
+    H, S, T, dim, scale = 64, 32, 32, 64, 0.25
+    torch.manual_seed(0)
+    q = torch.randn(1, H, S, dim, dtype=torch.bfloat16)
+    kv = torch.randn(1, 1, T, dim, dtype=torch.bfloat16)
+    indices = torch.arange(T).reshape(1, 1, 1, T).expand(1, 1, S, T).contiguous()
+    sink = ttnn.from_torch(
+        torch.linspace(-16, 32, H).reshape(1, H, 1, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    sparse = ttnn.transformer.sparse_sdpa(
+        to_dev(q, device, ttnn.bfloat16),
+        to_dev(kv, device, ttnn.bfloat16),
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        dim,
+        kv_format=BF16_KV,
+        scale=scale,
+        k_chunk_size=T,
+        attention_sink=sink,
+    )
+    tiled_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiled_kv = ttnn.from_torch(kv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dense = ttnn.transformer.scaled_dot_product_attention(
+        tiled_q,
+        tiled_kv,
+        tiled_kv,
+        is_causal=False,
+        scale=scale,
+        attention_sink=sink,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=S, k_chunk_size=T
+        ),
+    )
+    torch.testing.assert_close(ttnn.to_torch(sparse).float(), ttnn.to_torch(dense).float(), atol=0.035, rtol=0.08)

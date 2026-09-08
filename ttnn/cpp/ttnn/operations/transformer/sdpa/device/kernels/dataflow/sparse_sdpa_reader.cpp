@@ -62,6 +62,10 @@ void kernel_main() {
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KACK);
 
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_ATTENTION_SINK);
+    constexpr uint32_t cb_sink_scratch = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_SINK_SCRATCH);
+
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
     constexpr auto q_args = TensorAccessorArgs<sparse_sdpa::reader_ct_arg::END, 0>();
@@ -95,6 +99,37 @@ void kernel_main() {
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
+
+    if constexpr (use_attention_sink) {
+        if (tok_count > 0) {
+            constexpr auto sink_args = TensorAccessorArgs<
+                idx_args.next_compile_time_args_offset(),
+                idx_args.next_common_runtime_args_offset()>();
+            const auto sink = TensorAccessor(sink_args, get_arg_val<uint32_t>(6));
+            experimental::CB sink_cb(cb_attention_sink), scratch(cb_sink_scratch);
+            constexpr uint32_t sink_tiles = H / tt::constants::TILE_HEIGHT;
+            const uint32_t tile_bytes = get_tile_size(cb_attention_sink);
+            constexpr uint32_t faces_per_row = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
+            sink_cb.reserve_back(sink_tiles);
+            scratch.reserve_back(1);
+            noc.async_write_zeros(sink_cb, sink_tiles * tile_bytes);
+            noc.write_zeros_l1_barrier();
+            auto* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sink_cb.get_write_ptr());
+            auto* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
+            for (uint32_t h = 0; h < H; ++h) {
+                // [1,H,1,1] TILE stores each head in a separate tile. Read the first aligned
+                // segment, then put its scalar in the head's row of a packed first-column tile.
+                noc.async_read(sink, scratch, NOC_DRAM_READ_ALIGNMENT_BYTES, {.page_id = h}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                const uint32_t row = h % tt::constants::TILE_HEIGHT;
+                const uint32_t offset = (h / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HW +
+                                        (row / tt::constants::FACE_HEIGHT) * faces_per_row * tt::constants::FACE_HW +
+                                        (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+                dst[offset] = src[0];
+            }
+            sink_cb.push_back(sink_tiles);  // reused by every token on this core
+        }
+    }
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
         // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.

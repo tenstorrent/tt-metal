@@ -34,6 +34,7 @@ struct SparseSDPAInputs {
     Tensor q;        // [1, H, S, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
     Tensor kv;       // Plain [B,1,T,K_DIM] or packed scaled-FP8 rows; format is explicit in SparseSDPAParams
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
+    std::optional<Tensor> attention_sink;  // [1, H, 1, 1] tiled BF16; scaled like QK, as in classic SDPA
 };
 
 }  // namespace ttnn::prim

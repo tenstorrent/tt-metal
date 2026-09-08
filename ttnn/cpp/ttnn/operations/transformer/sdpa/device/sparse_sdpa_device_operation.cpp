@@ -27,6 +27,20 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const auto& idx = t.indices;
     TT_FATAL(
         q.device() == kv.device() && q.device() == idx.device(), "sparse_sdpa: all inputs must be on the same device");
+    if (t.attention_sink.has_value()) {
+        const auto& sink = t.attention_sink.value();
+        TT_FATAL(
+            sink.storage_type() == StorageType::DEVICE && sink.buffer() != nullptr,
+            "Attention sink tensor must be on device");
+        TT_FATAL(sink.device() == q.device(), "Attention sink must be on the same device as Q");
+        TT_FATAL(
+            sink.layout() == Layout::TILE && sink.dtype() == DataType::BFLOAT16,
+            "Sparse SDPA device attention sink must be tiled BF16");
+        TT_FATAL(sink.memory_config().buffer_type() == BufferType::DRAM, "Attention sink must be in DRAM");
+        TT_FATAL(
+            sink.logical_shape() == ttnn::Shape({1, q.logical_shape()[1], 1, 1}),
+            "Attention sink must have shape [1, H, 1, 1] matching Q heads");
+    }
     // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
     for (const Tensor* tp : {&q, &idx}) {
         TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
@@ -250,7 +264,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
-        t.indices.dtype());
+        t.indices.dtype(),
+        t.attention_sink);
 }
 
 Tensor sparse_sdpa(
@@ -263,7 +278,8 @@ Tensor sparse_sdpa(
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    const std::optional<Tensor>& attention_sink) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -279,6 +295,7 @@ Tensor sparse_sdpa(
             .q = q,
             .kv = kv,
             .indices = indices,
+            .attention_sink = attention_sink,
         });
 }
 

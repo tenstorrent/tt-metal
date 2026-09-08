@@ -90,6 +90,8 @@ ALWI void tilize_packed_field() {
 }
 
 void kernel_main() {
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_ATTENTION_SINK);
     constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::H);
     constexpr uint32_t DHt = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::DHT);
     constexpr uint32_t vDHt = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::V_DHT);
@@ -498,7 +500,10 @@ void kernel_main() {
                     cb_col_identity,
                     cb_recip_scratch,
                     cb_out_im,
-                    scale_fp32>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt);
+                    scale_fp32,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    /*sink_per_row=*/true>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt, max_cur.get_cb_id());
                 max_cur.pop_front(Sqt);  // running max no longer needed
             }
 
