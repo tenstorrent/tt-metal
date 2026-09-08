@@ -41,7 +41,9 @@
     "33710037838",
     "33799208648",
     "33946342890",
-    "34085742089"
+    "34085742089",
+    "34182246734",
+    "34079232201"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -342,10 +344,20 @@
       "workflow": "models-t3-e2e-tests.yaml",
       "dispatched_validation_workflow": "models-t3-e2e-tests.yaml",
       "dispatched_ref": "silencer/gemma4-register-batched-prefill-marker",
+      "status": "resolved",
+      "reported": true,
+      "note": "PytestUnknownMarkWarning for gemma4_batched_prefill (and sibling markers) fixed by moving pytest_configure marker registration from tests/conftest.py to parent conftest.py so demo/text_demo.py collection also sees it. Awaiting validation run before commenting/marking ready for review. | Reconciled 2026-09-08: validation run 34207858635 completed/failure (unrelated Gemma-4-E4B PCC assertion failure in test_model.py, not the fix). Grepped job 102003932683 log for PytestUnknownMarkWarning: 0 occurrences; text_demo.py collected 2 items and ran cleanly. Confirmed fixed. Outcome commented (/codeowners ping) and PR #55701 marked ready for review.",
+      "run_id_checked": "34207858635"
+    },
+    {
+      "title": "Warn once for tilize legacy shard-spec fallback",
+      "branch": "silencer/tilize-warn-once-shard-spec",
       "status": "dispatched",
       "reported": false,
-      "note": "PytestUnknownMarkWarning for gemma4_batched_prefill (and sibling markers) fixed by moving pytest_configure marker registration from tests/conftest.py to parent conftest.py so demo/text_demo.py collection also sees it. Awaiting validation run before commenting/marking ready for review."
+      "category": 6,
+      "note": "Opened as draft PR (unverified, no docker in sandbox). Gates ttnn::tilize legacy shard-spec fallback warning (tilize_device_operation.cpp:257) with std::once_flag; source: models-t2-e2e-tests run 34079232201 job 101612490125 (Qwen3-32B wh_llmbox_perf), 192 occurrences in last-5000-line sample.",
+      "validation_dispatched": "models-t2-e2e-tests.yaml (model=qwen3-32b, sku=wh_llmbox_perf) dispatched this run"
     }
   ],
-  "backlog_cursor": "Phase B target for 2026-09-08 was PR 'Register gemma4 pytest markers in parent conftest' (branch silencer/gemma4-register-batched-prefill-marker), sourced from models-t3-e2e-tests run 34085742089 (job 101632226384, category 6: demote/fix unknown-mark warning). Next run: reconcile this PR + its dispatched validation run first (Phase A), then continue rotation sampling workflows not recently sampled: galaxy-integration-tests, blackhole-sanity-tests, models-t2-e2e-tests. Also noted but not yet actioned this run (candidates for future targets): 'Active test combo model=X, sku=Y is missing in centralized targets' GHA warning (.github/scripts/utils/validate_perf_targets.py, 96 occurrences across residue/gha channel in run 34085742089 \u2014 likely needs a data fix in models/model_targets.yaml rather than a code fix, or batching into one aggregated warning instead of one per combo); '-Wunused-but-set-variable' in matmul reader/writer kernels (reader_writer_bmm_tile_layout_in1.cpp / reader_bmm_tile_layout_in0.cpp, in0_args/out_args) already tracked in noise_ledger (PR #54732, reported-inconclusive) so not re-targeted."
+  "backlog_cursor": "Rotated through galaxy-integration-tests (34182246734: warning/critical lines were real fatal hw errors in a failing job, not noise - skipped) and models-t2-e2e-tests (34079232201: found tilize shard-spec warning spam, fixed, PR opened branch silencer/tilize-warn-once-shard-spec). Next rotation: blackhole-sanity-tests, then continue models-t2/t3-e2e-tests."
 }
