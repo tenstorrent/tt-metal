@@ -90,8 +90,8 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                         case 0:
                             if (params.is_fw) {
                                 // TT_METAL_FW_SRC_BRISC names a BRISC firmware source to build instead of the
-                                // in-tree one (absolute, or relative to TT_METAL_HOME). Needs
-                                // TT_METAL_DISABLE_PRECOMPILED_FW=1 to be JIT-built at all.
+                                // in-tree one (absolute, or relative to TT_METAL_HOME). It also disables the
+                                // precompiled firmware.
                                 const char* custom_fw = std::getenv("TT_METAL_FW_SRC_BRISC");
                                 srcs.push_back(
                                     (custom_fw != nullptr && *custom_fw != '\0')

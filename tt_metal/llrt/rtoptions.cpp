@@ -250,6 +250,7 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware source to JIT-build instead of the in-tree one
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
@@ -1773,6 +1774,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
+
+        // TT_METAL_FW_SRC_BRISC
+        // Build the BRISC firmware from this source instead of tt_metal/hw/firmware/src/tt-1xx/brisc.cc
+        // (absolute, or relative to TT_METAL_HOME). A non-empty value also disables the precompiled firmware.
+        // Default: unset
+        // Usage: export TT_METAL_FW_SRC_BRISC=/path/to/brisc.cc
+        case EnvVarID::TT_METAL_FW_SRC_BRISC:
+            if (value != nullptr && *value != '\0') {
+                this->fw_src_brisc = value;
+                this->set_disable_precompiled_fw(true);
+            }
+            break;
 
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
