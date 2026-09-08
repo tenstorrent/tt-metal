@@ -48,12 +48,14 @@ case "${MODEL}" in
     NUM_USERS_DEFAULT=28
     # KV-dedup default for this leg (#51968 / #55458); main's value, kept as-is.
     TP_SHARD_KV_DEFAULT=1
-    # UNTRACED on this leg. traced + tp_shard_kv needs the full-mesh snake KV gather; SC4's per-rank
-    # sub-mesh cannot close that ring, so it falls back to the two-stage gather, where the metadata path
-    # is refused (see _gather_kvpe_prefix_tp_sharded_high_bw). Enabling trace here produced KVPE 0.44-0.65
-    # across the four ranks before that refusal was restored. Traced TP IS validated bit-exact on a
-    # snake-capable mesh (8x4 galaxy, 0.998829/0.999756); this leg simply is not one.
-    RUNNER_ENV=""
+    # Traced. traced + tp_shard_kv needs the full-mesh snake KV gather: the two-stage fallback refuses
+    # the metadata path (see _gather_kvpe_prefix_tp_sharded_high_bw), and pinning its extents to make it
+    # run produced KVPE 0.44-0.65 across the four ranks. Traced TP IS bit-exact where the snake runs
+    # (8x4 galaxy: 0.998829/0.999756), so the question is why SC4's mesh refuses it --
+    # _can_full_mesh_gather_kvpe now logs the reason. If the blocker is the declared dim-2 shard factor
+    # (a deduped cache still declaring the legacy kv-head-on-TP layout), it is fixable and this leg can
+    # keep trace; if it is the mesh geometry, this goes back to untraced.
+    RUNNER_ENV="export PREFILL_USE_TRACE=1;"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
     # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.

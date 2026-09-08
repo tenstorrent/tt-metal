@@ -1955,28 +1955,40 @@ class ttMLA:
 
         Every condition here mirrors a hard TT_FATAL in high_bw_all_gather, so the guard degrades to the
         two-stage route instead of crashing. The op does not fail softly on any of them."""
-        if self._sparse_kv_gather_buffer is None:
+        def _no(reason):
+            # Which condition rejected the snake decides whether traced TP is possible at all on this
+            # mesh (the two-stage fallback has no metadata path), so name it rather than silently
+            # degrading. INFO: this fires once per MLA layer construction, not per chunk.
+            logger.info(f"[kvpe gather] full-mesh snake unavailable, using two-stage TP gather: {reason}")
             return False
+
+        if self._sparse_kv_gather_buffer is None:
+            return _no("no persistent sparse-KV gather buffer")
         # The snake lands the gather in mesh row-major order, which equals the sp*tp order only for the
         # (sp_axis=0, tp_axis=1) layout this path already asserts.
         if self.sp_axis != 0 or self.tp_axis != 1:
-            return False
+            return _no(f"needs (sp_axis=0, tp_axis=1); got ({self.sp_axis}, {self.tp_axis})")
         # The snake linearizes the COMPLETE 2D mesh, so it needs both axes populated, and a boustrophedon
         # cycle exists only when some lane count is even.
         shape = tuple(self.mesh_device.shape)
         if len(shape) != 2 or shape[0] < 2 or shape[1] < 2:
-            return False
+            return _no(f"mesh shape {shape} is not 2D with both extents >= 2")
         if not (shape[0] % 2 == 0 or shape[1] % 2 == 0):
-            return False
+            return _no(f"mesh shape {shape} has no even lane count (no boustrophedon cycle)")
         # An even lane count is necessary but not sufficient: the ring still has to CLOSE on a direct hop.
         # On 8x4 that needs a torus; on 8x2 the Column snake closes across an extent-2 axis without one.
         if not _snake_ring_can_close(shape):
-            return False
+            return _no(f"snake ring cannot close on shape {shape} (needs a torus on 8x4)")
         # The op requires the input's DECLARED dim-2 shard factor to span every device: a full-mesh gather
         # is only sound if the metadata says the sequence really is split sp*tp ways. A TP-deduped KVPE
         # cache that still declares the legacy kv-head-on-TP layout (Shard(2), Shard(1)) reports 8, not 32.
-        if self._declared_seq_shard_factor(cache_storage) != self.sp_factor * self.tp_factor:
-            return False
+        declared = self._declared_seq_shard_factor(cache_storage)
+        if declared != self.sp_factor * self.tp_factor:
+            return _no(
+                f"cache declares dim-2 shard factor {declared}, expected sp*tp="
+                f"{self.sp_factor * self.tp_factor} (a deduped cache still declaring the legacy "
+                "kv-head-on-TP layout reports sp only)"
+            )
         # The op requires input and output on the same mesh handle. MeshDevice binds no __eq__, so `==`
         # on the wrappers is object identity and .device() need not return the same wrapper twice --
         # compare the device id. An unallocated tensor reports .device() None; treat that as a mismatch
@@ -1984,8 +1996,10 @@ class ttMLA:
         buffer_device = self._sparse_kv_gather_buffer.device()
         cache_device = cache_storage.device()
         if buffer_device is None or cache_device is None:
-            return False
-        return buffer_device.id() == cache_device.id()
+            return _no("gather buffer or cache reports no device")
+        if buffer_device.id() != cache_device.id():
+            return _no("gather buffer and cache are on different mesh handles")
+        return True
 
     @staticmethod
     def _declared_seq_shard_factor(t) -> int:
