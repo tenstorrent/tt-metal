@@ -361,6 +361,22 @@ class CodePredictor(LightweightModule):
             _rows_gu, _cols_gu = _dram_grid(_k_tiles_gu, _n_tiles_gu, min_k_per_core=2)
         else:
             _rows_gu, _cols_gu = find_grid_k_n(_k_tiles_gu, _n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
+        # A DRAM-sharded matmul at M=1 tile reads from the 12 DRAM banks regardless of how
+        # many WORKER cores it is given, so extra workers add contention, not bandwidth.
+        # Measured in isolation on the CP decode gate/up shape (32x1024x1536, bfp8_b):
+        #   4 cores 12.8 us (130 GB/s) | 8 cores 14.4 | 16 cores (auto) 19.5 us (86 GB/s)
+        # o_proj already lands on 4 cores via find_grid_k_n and is the most efficient of the
+        # five CP matmuls, which is the same effect seen from the other side.
+        # QWEN3_TTS_CP_GU_CORES / _DOWN_CORES override the auto grid (total cores, 1 row).
+        # In-model the optimum is 8, NOT the 4 that wins in isolation: gate/up's in0 grid is
+        # also the post-attention norm's output grid (see the _ln_mlp_memcfg assert below),
+        # so cutting to 4 cripples that norm and costs more than the matmul saves --
+        # cp_trace 25.50 -> 26.46 at 4 cores against 25.13 at 8 (PERF_NOTES 3.ab).
+        if self._n300_cp_opt and _k_tiles_gu % 8 == 0 and _n_tiles_gu % 8 == 0:
+            _rows_gu, _cols_gu = 1, 8
+        _gu_ov = os.environ.get("QWEN3_TTS_CP_GU_CORES", "")
+        if _gu_ov.isdigit() and int(_gu_ov) > 0:
+            _rows_gu, _cols_gu = 1, int(_gu_ov)
         self._cp_gate_up_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=H, n=_n_pad_gu, num_cores=_rows_gu * _cols_gu
         )
@@ -372,6 +388,14 @@ class CodePredictor(LightweightModule):
         _k_tiles_d = _local_intermediate // 32
         _n_tiles_d = _n_pad_d // 32
         _rows_d, _cols_d = find_grid_k_n(_k_tiles_d, _n_tiles_d, max_rows=_cg.y, max_cols=_cg.x)
+        # Same effect on down (32x1536x1152): 6 cores 13.7 us (137 GB/s) against 12 cores
+        # (auto) 16.8 us (112 GB/s).
+        # down has no norm coupling, so it just takes the faster grid.
+        if self._n300_cp_opt and _k_tiles_d % 6 == 0 and _n_tiles_d % 6 == 0:
+            _rows_d, _cols_d = 1, 6
+        _d_ov = os.environ.get("QWEN3_TTS_CP_DOWN_CORES", "")
+        if _d_ov.isdigit() and int(_d_ov) > 0:
+            _rows_d, _cols_d = 1, int(_d_ov)
         self._cp_down_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=_local_intermediate, n=_n_pad_d, num_cores=_rows_d * _cols_d
         )

@@ -1444,6 +1444,70 @@ shortlist saves nothing, because everything on the shortlist has to be re-run an
 
 ---
 
+## 3.ab CP DRAM-sharded matmul grids: 8 and 6 cores, not `find_grid_k_n`'s 16 and 12
+
+`find_grid_k_n` maximises the worker-core count. That is the wrong objective for a
+**DRAM-sharded matmul at M=1 tile**, which reads from the **12 DRAM banks whatever worker
+grid it is given** — so extra workers add contention, not bandwidth. Measured in isolation
+(device time, N300, bfp8_b weights, 20 reps):
+
+| gate/up `32x1024x1536` | us | GB/s | | down `32x1536x1152` | us | GB/s |
+|---|--:|--:|---|---|--:|--:|
+| 4 cores | **12.8** | **130** | | 3 cores | 14.0 | 134 |
+| 8 cores | 14.4 | 116 | | **6 cores** | **13.7** | **137** |
+| 16 cores (`find_grid_k_n`) | 19.5 | 86 | | 12 cores (`find_grid_k_n`) | 16.8 | 112 |
+| plain interleaved matmul | 21.6 | 77 | | | | |
+
+The existing perf table corroborates this from the other side: o_proj already lands on
+**4** cores via `find_grid_k_n` and is the most efficient of the five CP matmuls (125 GB/s),
+while gate/up on 16 was the worst (86 GB/s).
+
+### In-model the optimum is 8, not the 4 that wins in isolation
+
+| arm (`cp_trace`, medians, N300) | ms | vs auto | md5 |
+|---|--:|--:|---|
+| auto (gate/up 16, down 12) | 25.50 | — | `97b0f70deb` |
+| gate/up **4** | 26.46 | **+0.96** | `a13966e854` |
+| gate/up 4 + down 6 | 26.12 | +0.62 | `e82bfa9b80` |
+| down 6 only | 25.326 | -0.17 | `fecc5cee3d` |
+| gate/up 8 only | 25.445 | -0.055 | `ac6e676f8f` |
+| gate/up 8 + down 3 | 25.216 | -0.28 | `045fe7f559` |
+| **gate/up 8 + down 6 (now default)** | **25.13** | **-0.37 (-1.45 %)** | `045fe7f559` |
+
+**gate/up=4 is the fastest matmul in isolation and the worst config in the model.**
+gate/up's in0 grid is also the post-attention norm's *output* grid (the `_ln_mlp_memcfg ==
+_cp_gate_up_in0_memcfg` assert), so cutting it to 4 cores cripples that norm and costs more
+than the matmul saves. 8 keeps the norm wide enough while still cutting matmul contention.
+
+The two halves are **superadditive** — -0.17 and -0.055 alone, -0.37 together — because the
+gate/up -> down reshard also shrinks (8 -> 6 instead of 16 -> 12).
+
+`down=3` is within noise of `down=6` in isolation (14.0 vs 13.7) but loses in-model
+(25.216 vs 25.13), so 6 it is. `QWEN3_TTS_CP_GU_CORES` / `QWEN3_TTS_CP_DOWN_CORES` override
+both for re-checks.
+
+### NOT bit-exact — audio gated
+
+Changing the grid reorders matmul accumulation, so every arm above has a distinct md5.
+Gated the same way as 3.z:
+
+| | SIM (gate >0.80) | WER (gate <10 %) |
+|---|--:|--:|
+| auto | 0.9016 | **0.0 %** (sub 0, del 0, ins 0) |
+| gate/up 8 + down 6 | 0.8905 | **0.0 %** (sub 0, del 0, ins 0) |
+
+WER 0.0 % with zero substitutions/deletions/insertions on both. The -0.0111 SIM difference
+is inside section 2.9's variance baseline (sd 0.0421 / 0.0085, per-seed range 0.8473-0.9495).
+
+### Rejected: fusing gate and up into one N=3072 matmul
+
+One matmul instead of two, at `find_grid_k_n(K=32, N=96)` = 32 cores: **43.2 us against
+2 x 19.5 = 39.0 us**, and at *worse* bandwidth (77 vs 86 GB/s) — doubling workers does not
+add DRAM banks. Slower before even counting the two slices needed to re-split the output for
+the SiLU-multiply. Do not retry.
+
+---
+
 ## 4. Measurement methodology — read before comparing reports
 
 **A per-op ratio identifies a candidate; only a frame measurement prices it.** Two
@@ -1466,6 +1530,14 @@ The shared mistake is treating a *ratio* as a *constraint*. Specifically:
   (60-210 us of gap per op), which is not present in a captured trace.
 
 Use per-op captures to *rank* and to A/B one op against itself. Quote frame numbers.
+
+**Isolation can be measured correctly and still mislead, when the config propagates.**
+The CP gate/up matmul is genuinely fastest on 4 cores in isolation (12.8 us vs 19.5) and is
+the *worst* choice in the model (+0.96 ms/frame), because that matmul's in0 grid is also the
+preceding norm's output grid. The measurement was right; the boundary was wrong. Before
+trusting a per-op sweep, check whether the parameter being swept is shared with a neighbour
+-- here an `assert` in `__init__` ties the two together, which is exactly the kind of link an
+isolated harness cannot see.
 
 **In a traced replay every extra op costs ~1 us of dispatch, whatever its device time.**
 This is the third distinct way a per-op capture misled a prediction here, and the only one
