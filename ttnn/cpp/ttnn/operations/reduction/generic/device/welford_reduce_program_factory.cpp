@@ -332,6 +332,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         reader_rta_names = {"num_tiles", "start_id"};
     }
 
+    reader_ct_args.emplace("reduce_output_tiles", 1U);
+    const auto auxiliary_args =
+        ttnn::kernel_lib::host::ReduceAuxiliaryArgs({0, {{0.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::Zero, 0}}})
+            .get_compile_time_args();
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = reader_source,
@@ -362,6 +366,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     });
 
     // --- Writer kernel ---

@@ -152,6 +152,34 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     spec.name = rm_path ? "reduce_multi_core_h_dense_rm"
                         : (use_width_sharding ? "reduce_multi_core_h_width_sharded" : "reduce_multi_core_h");
 
+    namespace rh = ttnn::kernel_lib::host;
+    const bool planned_sfpu =
+        use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
+    const auto planned_fp32_mode = planned_sfpu && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en
+                                       ? ReduceFp32Mode::Accurate
+                                       : ReduceFp32Mode::Fast;
+    // These kernels use the legacy double-buffered DEST configuration.
+    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()};
+    auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
+        return make_generic_reduce_sequence(
+            a.tensor_spec(),
+            output.tensor_spec(),
+            operation_attributes.math_op,
+            ReduceOpDim::H,
+            operation_attributes.scaler,
+            planned_fp32_mode,
+            reduce_hardware,
+            local_ht,
+            local_wt,
+            local_nc,
+            operation_attributes.negate || planned_sfpu,
+            rm_path ? &plan : nullptr);
+    };
+    const auto reduce_unit = make_unit(rm_path ? slice_Ht : Ht, num_cols_per_core_group_1, 1);
+    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    scaler_cb_data_format = auxiliary_cb->data_format;
+    scaler_single_tile_size = auxiliary_cb->page_size;
+
     // ---- Dataflow buffers ----
     if (rm_path) {
         // Buffer entries are per-row (see make_rm_plan); hold 2 slabs worth of rows so the reader can
@@ -225,7 +253,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_unit.auxiliary.tiles.size()),
         .data_format_metadata = scaler_cb_data_format,
     });
 
@@ -469,6 +497,10 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         reader_tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}};
     }
 
+    if (!rm_path) {
+        reader_ct_args.emplace("reduce_output_tiles", use_fpu_negate ? (fp32_dest_acc_en ? 4U : 8U) : 1U);
+    }
+
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = reader_source,
@@ -478,6 +510,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
 
     // ---- Writer kernel ----
@@ -713,6 +746,9 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .compile_time_args = std::move(ct_args),
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
             .hw_config = compute_hw,
+            .advanced_options =
+                {.compile_time_varargs =
+                     make_unit(rm_path ? slice_Ht : Ht, group_compute_Wt, group_compute_NC).get_compile_time_args()},
         };
     };
 

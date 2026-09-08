@@ -152,6 +152,35 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
+    namespace rh = ttnn::kernel_lib::host;
+    const bool planned_sfpu =
+        use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
+    const auto planned_fp32_mode = planned_sfpu && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en
+                                       ? ReduceFp32Mode::Accurate
+                                       : ReduceFp32Mode::Fast;
+    // These kernels use the legacy double-buffered DEST configuration.
+    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()};
+    auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
+        return make_generic_reduce_sequence(
+            a.tensor_spec(),
+            output.tensor_spec(),
+            operation_attributes.math_op,
+            ReduceOpDim::W,
+            operation_attributes.scaler,
+            planned_fp32_mode,
+            reduce_hardware,
+            local_ht,
+            local_wt,
+            local_nc,
+            operation_attributes.negate || planned_sfpu,
+            rm_path ? &plan : nullptr);
+    };
+    const auto reduce_unit = make_unit(
+        rm_path ? tt::div_up(num_rows_per_core_group_1, plan.rm_rows_per_tile) : num_rows_per_core_group_1, Wt, 1);
+    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    scaler_cb_data_format = auxiliary_cb->data_format;
+    scaler_single_tile_size = auxiliary_cb->page_size;
+
     // ---- Dataflow buffers ----
     if (rm_path) {
         // Buffer entries are per-row (see make_rm_plan); hold 2 slabs worth of rows so the reader can
@@ -210,7 +239,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_unit.auxiliary.tiles.size()),
         .data_format_metadata = scaler_cb_data_format,
     });
 
@@ -360,6 +389,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
 
     // ---- Writer kernel ----
@@ -580,6 +610,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = std::move(ct_args),
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = make_unit(ht_per_core_group, Wt, 1).get_compile_time_args()},
         };
     };
 

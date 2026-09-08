@@ -162,3 +162,11 @@ audit.
 Both factories now plan and serialize their MAX/SUM calls and the auxiliary tile recipes. Compute binds those calls to its existing intermediate buffers; dataflow materializes the planned auxiliary tiles. Top-k masking, temperature scaling, and the Tensix synchronization workaround remain in place.
 
 Validation: `cmake --build build --target ttnn unit_tests_ttnn --parallel 8` passed. Sanity SM004/SM017 passed (2 cases; `reduce-migration-eikab75a`). Full groups T018/T019 passed all 28 cases (`reduce-migration-ihxzaarz`). Tests ran through `run_safe_pytest.sh` on Wormhole N300.
+
+## Generic tiled, sharded, and row-major reductions
+
+The W, H, and single-core HW factories now serialize their reduce calls and auxiliary recipes. The H readers stream independent columns in the order described by the plan. Dense row-major compute keeps its tilization and identity padding, then uses planned seed/repeat/final calls; per-tile consumption keeps circular-buffer pointers balanced across short chunks. Existing external post-scaling and raw fused-negate kernels are retained. Welford's shared readers receive an explicit auxiliary recipe.
+
+Fixed the host planner's SFPU H output-slot calculation: reserve the work register before limiting by tensor width. Added 12 numerical regression cases for one/three columns, two batches, INT32/accurate FLOAT32, and SUM/MAX/MIN (T173).
+
+Validation: native build passed (`cmake --build build --target ttnn unit_tests_ttnn --parallel 8`). All five generic sanity selections passed (`reduce-migration-peko34_v`). Full T003/T012/T160 completed 641 cases: **589 passed, 52 upstream skips**, no failures (`reduce-migration-2272a4vn`). All 12 new SFPU cases passed (`reduce-migration-u_niosd1`).

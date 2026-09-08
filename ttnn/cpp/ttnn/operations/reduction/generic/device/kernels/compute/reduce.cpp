@@ -12,29 +12,14 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
-    uint32_t Ht = get_arg(args::Ht);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t NC = get_arg(args::NC);
-    // Accurate fp32: the host sets enable_fp32_sfpu to route Float32 through the SFPU (full fp32)
-    // vs the FPU (tf32).
-    constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, 0>, dfb::in0, dfb::scaler, dfb::out>;
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
 
-    compute_kernel_lib::reduce<
-        REDUCE_OP,
-        REDUCE_DIM,
-        dfb::in0,
-        dfb::scaler,
-        dfb::out,
-        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT,
-        fp32_mode>(
-        compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
-        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-        compute_kernel_lib::NoAccumulation{},
+    compute_kernel_lib::reduce<Call>(
 #ifdef REDUCE_POST_MUL
         // GMPOOL only respects the scaler's exponent for MAX/MIN and SFPU reduce ignores the
         // scaler buffer entirely, so both paths apply the user scalar here per output tile.
@@ -53,8 +38,5 @@ void kernel_main() {
 #endif
     );
 
-    // The reduce helper waits on the scaler buffer but never pops it (the single scaler tile is
-    // reused for the whole reduction). Pop it here so the buffer is left balanced.
-    DataflowBuffer dfb_scaler(dfb::scaler);
-    dfb_scaler.pop_front(1);
+    DataflowBuffer(dfb::scaler).pop_front(Call::auxiliary_tile_count);
 }

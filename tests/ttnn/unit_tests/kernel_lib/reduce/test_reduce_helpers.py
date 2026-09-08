@@ -926,3 +926,29 @@ def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
             atol=0.1,
             msg=case.name,
         )
+
+
+@pytest.mark.parametrize("dtype", ["int32", "fp32"])
+@pytest.mark.parametrize("pool", ["SUM", "MAX", "MIN"])
+@pytest.mark.parametrize("cols", [1, 3])
+def test_reduce_helpers_narrow_sfpu(device, dtype, pool, cols):
+    """A narrow H reduction must still have a separate SFPU work register."""
+    if "QUASAR" in str(device.arch()).upper():
+        pytest.skip("The reduce helper rejects SFPU reduce paths on Quasar")
+    case = ReduceCase(
+        name=f"narrow-sfpu-{dtype}-{pool}-cols{cols}",
+        family="shape-boundaries",
+        dim="REDUCE_COL",
+        rows=3,
+        cols=cols,
+        batches=2,
+        pool=pool,
+        input_dtype=dtype,
+        output_dtype=dtype,
+        fp32_mode="Accurate" if dtype == "fp32" else "Fast",
+    )
+    actual, expected = _run_case(device, case)
+    if dtype == "int32":
+        torch.testing.assert_close(actual.to(torch.int64), expected, rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(actual.to(torch.float64), expected, rtol=1e-5, atol=1e-5)
