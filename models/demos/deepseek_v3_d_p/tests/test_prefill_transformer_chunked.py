@@ -247,16 +247,25 @@ UNTRACED_PERF_MARGIN = 0.05
 #
 # Do NOT expect a Kimi-shaped ramp. Kimi's traced baseline climbs 0.519 -> 0.855 s (+65%) because chunk c
 # attends to KV[0:c*CHUNK]. GLM's DSA indexer selects a FIXED top-k capacity regardless of prefix length,
-# so tracing shows up mostly as a uniform shift. "Mostly", not entirely: the first CI traced run still
-# ramps 0.639 -> 0.702 s (+10%) monotonically from chunk 1, since the indexer must still SCORE the whole
+# so tracing shows up mostly as a uniform shift. "Mostly", not entirely: the CI traced run still
+# ramps 0.583 -> 0.644 s (+10%) monotonically from chunk 1, since the indexer must still SCORE the whole
 # prefix before the fixed-capacity top-k selects from it -- only the attention that follows is
 # depth-independent. A future GLM curve that is dead flat, or that ramps like Kimi's, is the surprise.
 #
 # Recalibrate from the per-chunk median across several independent green Galaxy runs, not from one run.
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). Per-chunk medians of run 33743294300 / job 100612454484 verbatim, over the 9
-    # post-warmup iterations.
+    # (55k / code_debug). Per-chunk medians of run 34242927566 attempt 2 / job 102145433961 verbatim, over
+    # the 9 post-warmup iterations.
+    #
+    # RE-CENTERED from the previous table (0.641 0.639 0.655 0.649 0.664 0.664 0.662 0.668 0.684 0.689
+    # 0.702, run 33743294300 / job 100612454484). That table's own instruction was to re-center if the next
+    # green run disagreed by more than ~1%; every one of the 11 chunks came in 8.3-8.8% BELOW its band, so
+    # the two-sided 3% gate failed on a speedup. The shift is uniform across all 11 chunks and this run's
+    # per-chunk stddev is again 0.000-0.002 s, so it is a systematic change in the traced path, not drift:
+    # a per-chunk-varying or noise-shaped delta would look nothing like this. What is NOT established is
+    # which change earned it -- this branch rebased onto a main that moved underneath it, so attributing
+    # the 8.5% to any single commit here would be a guess. Treat the cause as unmeasured.
     #
     # ONE run, which the file's own guidance says to avoid -- accepted here for the same reason the Kimi
     # traced table was cut from one run: a traced replay's only noise source is the device, and this run's
@@ -267,17 +276,17 @@ GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     # Faster than the local pre-CI measurements quoted above (0.738-0.759 s/chunk): those were a single
     # galaxy on plain FABRIC_2D, this is the torus-xy CI config.
     (78, 11, 10): [
-        0.641,
-        0.639,
-        0.655,
-        0.649,
-        0.664,
-        0.664,
-        0.662,
-        0.668,
-        0.684,
-        0.689,
-        0.702,
+        0.585,
+        0.583,
+        0.598,
+        0.593,
+        0.608,
+        0.607,
+        0.605,
+        0.611,
+        0.627,
+        0.632,
+        0.644,
     ],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose. It existed as an all-zero placeholder that
