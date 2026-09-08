@@ -982,7 +982,11 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             if is_last_chunk:
                 last_token_idx_for_trace = last_token_idx_in_chunk
-                return self.model[model_id].process_logits_after_prefill_trace(tt_out, last_token_idx_for_trace)
+                return self.model[model_id].process_logits_after_prefill_trace(
+                    tt_out,
+                    last_token_idx_for_trace,
+                    allow_sharded=bool(kwargs.get("allow_sharded_prefill_logits", False)),
+                )
             del tt_out
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
 

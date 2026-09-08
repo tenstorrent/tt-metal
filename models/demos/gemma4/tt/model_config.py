@@ -354,8 +354,18 @@ class Gemma4ModelArgs:
         ``trace_prefill_supported_seq_lens`` is empty).
         """
         trace_lens = list(getattr(self, "trace_prefill_supported_seq_lens", []) or [])
-        seq_lens = sorted({32, 128, 512, *trace_lens})
-        return [s for s in seq_lens if s <= self.max_seq_len]
+        seq_lens = [s for s in sorted({32, 128, 512, *trace_lens}) if s <= self.max_seq_len]
+        # Short-prefill L1 island (M<=128) leaves width-sharded activations
+        # allocated for the 128 trace. Tall-prefill matmul CBs overlap that
+        # L1 and TT_FATAL at the next warmup ISL. Keep one family per process:
+        # island bucket only for short demos, taller buckets for long-context.
+        from models.demos.gemma4.tt.rms_norm import prefill_mlp_island_enabled
+
+        if prefill_mlp_island_enabled(128):
+            if self.max_seq_len <= 1024:
+                return [s for s in seq_lens if s <= 128]
+            return [s for s in seq_lens if s > 128]
+        return seq_lens
 
     @staticmethod
     def resolve_model_cache_path(model_path):

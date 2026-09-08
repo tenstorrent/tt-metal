@@ -354,6 +354,7 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
             return None
         from models.demos.gemma4.tt.rms_norm import (
             activation_physical_height,
+            prefill_mlp_island_enabled,
             sharded_norm_enabled,
             width_shard_input_memcfg,
         )
@@ -361,9 +362,11 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
         if not sharded_norm_enabled():
             return None
         padded_height = activation_physical_height(shape)
-        # Prefill-height L1 gather hung T3K warmup at ISL=128; keep the
-        # decode-only island (one tile) that the residual stream consumes.
-        if padded_height != ttnn.TILE_SIZE:
+        # Decode always gathers into the one-tile residual island. Short
+        # prefill (M<=128) does the same when the LN/residual island is on —
+        # the pair the source branch uses for batch-1 TTFT. Broader
+        # height<=1024 gather without the island hung T3K warmup.
+        if padded_height != ttnn.TILE_SIZE and not prefill_mlp_island_enabled(padded_height):
             return None
         return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)
     except (AttributeError, RuntimeError, TypeError, ValueError) as error:

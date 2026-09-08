@@ -57,6 +57,26 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
+def _prefill_park_l1_interleaved_only(tensor):
+    """Move interleaved L1 activations to DRAM before input_layernorm.
+
+    Width-sharded L1 from the prior layer's post-MLP island stays in place.
+    Interleaved L1 (post-embed Tilize) parks so sharded-norm CBs are not
+    competing with a second L1 buffer before QKV.
+    """
+    if tensor is None:
+        return tensor
+    try:
+        buf = tensor.memory_config().buffer_type
+    except (AttributeError, RuntimeError):
+        return tensor
+    if buf != ttnn.BufferType.L1 or tensor.is_sharded():
+        return tensor
+    parked = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    tensor.deallocate(True)
+    return parked
+
+
 class Gemma4DecoderLayer:
     def __init__(
         self,
@@ -266,6 +286,10 @@ class Gemma4DecoderLayer:
         shard_stream = (
             stream_memcfg is not None and hidden_states.is_sharded() and hidden_states.memory_config() == stream_memcfg
         )
+        if not is_decode:
+            parked = _prefill_park_l1_interleaved_only(hidden_states)
+            if parked is not hidden_states:
+                hidden_states = parked
 
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states

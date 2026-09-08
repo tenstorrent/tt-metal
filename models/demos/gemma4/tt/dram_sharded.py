@@ -523,9 +523,14 @@ def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fu
 
 
 def _interleaved_mlp_prefill_config(m, k, n):
-    if os.environ.get("GEMMA4_PREFILL_1D_MLP", "0").lower() not in ("1", "true", "yes"):
+    env = os.environ.get("GEMMA4_PREFILL_1D_MLP", "1").lower()
+    if env in ("0", "false", "no"):
         return None, None, None
     if not in_prefill_l1_matmul_band(m):
+        return None, None, None
+    # Default covers the 12B batch-1 TTFT band (M<=128). 31B hung mid-decode
+    # after short-prefill 1D (K>=5376); opt in with GEMMA4_PREFILL_1D_MLP=all.
+    if env not in ("all", "full") and (int(m) > 128 or int(k) >= 5376):
         return None, None, None
     # Swept for TP-sharded widths (31B TP=8 → n=5376). Full-width TP=1
     # fused gate+up (n≈43k) overflows Wormhole L1 CBs and falls back dirty.

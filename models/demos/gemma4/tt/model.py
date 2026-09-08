@@ -202,6 +202,10 @@ class Gemma4Model:
     # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
     # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
+    # Caller-gated: skip the 262k vocab all-gather on last-token prefill when
+    # the generator will device-sample the TP-sharded logits. Host-sample
+    # warmup must still gather (do not key this on ``self.sampling`` alone).
+    supports_sharded_prefill_logits = True
     # On-device greedy at B=sampling_max (#48037, mirrors qwen3_vl / qwen25_vl):
     # Gemma4 only captures the sampling *trace* at sampling_max (B=32). Replaying
     # that trace freezes ``all_gather_async`` semaphores from capture time, so the
@@ -1129,9 +1133,10 @@ class Gemma4Model:
             )
             if is_decode and keep_sharded_for_sampling and self._sampling_logits_in_dram and out_memcfg is not None:
                 out_memcfg = ttnn.DRAM_MEMORY_CONFIG
-            if not is_decode and out_memcfg is not None:
+            if not is_decode and out_memcfg is not None and not keep_sharded_for_sampling:
                 # Prefill last-token lm_head runs after a live prefill trace
-                # capture; L1 writeback + vocab AG hung T3K warmup.
+                # capture; L1 writeback + vocab AG hung T3K warmup. Device
+                # sampling skips the gather and can keep the sharded L1 out.
                 out_memcfg = ttnn.DRAM_MEMORY_CONFIG
             from models.demos.gemma4.tt.attention.operations import hoist_prefill_matmul_in0_if_needed
 
@@ -1854,13 +1859,14 @@ class Gemma4Model:
             self._g4_retired_dev_tensors = lst
         lst.append(t)
 
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx, allow_sharded=False):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
         ``_prefill_trace_mode`` is set (lm_head skipped inside the trace).
         Slice the 32-row tile containing ``last_token_idx`` and run lm_head +
-        softcap on those rows only.
+        softcap on those rows only. ``allow_sharded=True`` skips the vocab
+        all-gather when the caller will device-sample the TP shards.
 
         If the last dim is already vocab-sized (legacy / batched path that ran
         lm_head inside the trace), only slice and return.
@@ -1889,7 +1895,7 @@ class Gemma4Model:
         if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
-            logits = self._apply_lm_head(sliced, is_decode=False)
+            logits = self._apply_lm_head(sliced, is_decode=False, keep_sharded_for_sampling=bool(allow_sharded))
             if batched and logits is not sliced:
                 sliced.deallocate(True)
         else:

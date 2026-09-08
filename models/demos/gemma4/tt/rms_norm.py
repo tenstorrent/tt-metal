@@ -27,7 +27,7 @@ def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enabl
     """Width-sharded AR→LN island for short prefill (M<=128). Disabled for MoE and batched prefill."""
     if enable_moe or batch_size > 1:
         return False
-    if os.environ.get("GEMMA4_PREFILL_ISLAND", "0").lower() not in ("1", "true", "yes"):
+    if os.environ.get("GEMMA4_PREFILL_ISLAND", "1").lower() in ("0", "false", "no"):
         return False
     if not sharded_norm_enabled() or not norm_keep_sharded_enabled():
         return False
