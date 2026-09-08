@@ -45,7 +45,7 @@ head_dim to GPT-OSS's values, which Gemma4 does not match.
 from dataclasses import dataclass
 
 import ttnn
-from models.demos.gemma4.tt.ccl import cp_degree
+from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_DIM
 

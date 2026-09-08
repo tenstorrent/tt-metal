@@ -3,7 +3,7 @@
 
 from types import SimpleNamespace
 
-from models.demos.gemma4.tt.runners import kv_caches
+from models.demos.gemma4_d_p.tt.runners import kv_caches
 
 
 def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
@@ -42,7 +42,7 @@ def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
 
 
 def test_chunk_locations_match_user_head_major_nd_shards():
-    from models.demos.gemma4.tt.runners.kv_chunk_table import iter_cache_chunk_locations
+    from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import iter_cache_chunk_locations
 
     locations = list(
         iter_cache_chunk_locations(
@@ -65,7 +65,7 @@ def test_chunk_locations_match_user_head_major_nd_shards():
 
 
 def test_migration_config_ids_are_decode_stream_order():
-    from models.demos.gemma4.tt.runners.kv_chunk_table import CONFIG_NAMES
+    from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
 
     assert len(CONFIG_NAMES) == 36
     assert CONFIG_NAMES[0] == "00_global_h0"

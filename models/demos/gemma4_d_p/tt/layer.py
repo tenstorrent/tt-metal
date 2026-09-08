@@ -42,13 +42,13 @@ Forward flow (matching HF exactly):
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
-from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
-from models.demos.gemma4.tt.moe import MoEBlock
-from models.demos.gemma4.tt.rms_norm import RMSNorm
-from models.demos.gemma4.tt.shared_mlp import SharedMLP
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
-from models.demos.gemma4.utils.substate import substate
+from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.gemma4_attention_config import get_attention_program_config
+from models.demos.gemma4_d_p.tt.moe import MoEBlock
+from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
+from models.demos.gemma4_d_p.tt.shared_mlp import SharedMLP
+from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
+from models.demos.gemma4_d_p.utils.substate import substate
 
 
 class Gemma4DecoderLayer:
@@ -69,6 +69,10 @@ class Gemma4DecoderLayer:
         experts_dtype=None,
         router_dtype=None,
         bounded_sliding_kv_cache: bool = False,
+        ring_prefill_chunk_size=None,
+        ring_kv_cache=None,
+        ring_layer_idx=0,
+        ring_num_layers=1,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
@@ -138,6 +142,11 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+            ring_prefill_chunk_size=ring_prefill_chunk_size,
+            ring_kv_cache=ring_kv_cache,
+            ring_layer_idx=ring_layer_idx,
+            ring_num_layers=ring_num_layers,
+            max_seq_len=max_seq_len,
         )
 
         # Shared/dense MLP (HF key: "mlp")
@@ -216,6 +225,8 @@ class Gemma4DecoderLayer:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        packed_global_rope=None,
+        packed_sliding_rope=None,
     ):
         """
         Decoder layer forward pass.
@@ -261,6 +272,8 @@ class Gemma4DecoderLayer:
             packed=packed,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            packed_global_rope=packed_global_rope,
+            packed_sliding_rope=packed_sliding_rope,
         )
 
         if isinstance(attn_output, torch.Tensor):
@@ -317,7 +330,7 @@ class Gemma4DecoderLayer:
         # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
             residual_pli = hidden_states
-            from models.demos.gemma4.tt.compute_config import gelu_variant
+            from models.demos.gemma4_d_p.tt.compute_config import gelu_variant
 
             gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
             gated = ttnn.gelu(gated, variant=gelu_variant())

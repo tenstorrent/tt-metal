@@ -5,7 +5,8 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.attention.global_kv_cache import (
+from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
     GLOBAL_HEAD_DIM,
     GLOBAL_PACKED_DIM,
     GLOBAL_ROTARY_DIM,
@@ -189,7 +190,7 @@ def test_sliding_projection_order_matches_canonical_rope():
     )
 
 
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@parametrize_mesh_with_fabric()
 def test_device_packed_global_transforms_match_reference(mesh_device):
     torch.manual_seed(1)
     shape = (1, 1, 32, GLOBAL_HEAD_DIM)

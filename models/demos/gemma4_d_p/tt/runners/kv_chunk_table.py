@@ -10,9 +10,9 @@ import zlib
 
 import ttnn
 from models.demos.common.prefill.runners.migration import get_num_dram_banks, serialize_prebuilt_kv_chunk_table
-from models.demos.gemma4.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
-from models.demos.gemma4.tt.attention.ring_prefill import TILE_HEIGHT, PackedRingKVCache
-from models.demos.gemma4.tt.runners.kv_caches import Gemma4KvCaches
+from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import TILE_HEIGHT, PackedRingKVCache
+from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 
 _BFP8_TILE_BYTES = 1088
 GLOBAL_CHUNK_BYTES = GLOBAL_PACKED_DIM // ttnn.TILE_SIZE * _BFP8_TILE_BYTES

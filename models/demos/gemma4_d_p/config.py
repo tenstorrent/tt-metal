@@ -1,15 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-This module defines the MeshConfig class which manages parallelization strategies
-across a mesh of devices for the Gemma4 MoE model.
-"""
+"""Parallelism configuration for Gemma4 prefill on one Galaxy."""
 
 from dataclasses import dataclass
 from enum import Enum
 
 import ttnn
+
+GALAXY_MESH_SHAPES = ((8, 4), (4, 8))
+
+
+def validate_galaxy_mesh(mesh_shape):
+    """Require a full 32-device Galaxy with CP rows and TP columns."""
+    if tuple(mesh_shape) not in GALAXY_MESH_SHAPES:
+        raise ValueError(f"Gemma4 P/D requires a Galaxy mesh {GALAXY_MESH_SHAPES}, got {tuple(mesh_shape)}")
 
 
 class Mode(Enum):
@@ -42,6 +47,9 @@ class MeshConfig:
         prefill: ModeConfig = None,
         tp_axis: int = 1,
     ):
+        validate_galaxy_mesh(mesh_shape)
+        if tp_axis != 1:
+            raise ValueError("Galaxy prefill uses CP on rows and TP on columns")
         self.mesh_shape = tuple(mesh_shape)
         self.tp_axis = tp_axis
         self.ep_axis = 0 if tp_axis == 1 else 1
@@ -50,7 +58,13 @@ class MeshConfig:
         self.total_devices = mesh_shape[0] * mesh_shape[1]
 
         self.decode = decode
+        # Rows carry sequence-parallel (context-parallel) prefill by default
         self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
+
+        if self.prefill.sp != mesh_shape[0] or self.prefill.tp != mesh_shape[1] or self.prefill.ep != 1:
+            raise ValueError("Prefill must use all Galaxy rows for CP and columns for TP")
+        if decode.tp != mesh_shape[1] or decode.ep != 1:
+            raise ValueError("Weight TP must match Galaxy columns")
 
         self._validate_config(self.decode, Mode.DECODE)
         self._validate_config(self.prefill, Mode.PREFILL)

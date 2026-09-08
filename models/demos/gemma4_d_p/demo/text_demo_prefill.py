@@ -15,11 +15,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.config import MeshConfig, ModeConfig
-from models.demos.gemma4.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
-from models.demos.gemma4.tt.common import create_tt_model
-from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
-from models.demos.gemma4.utils.partial_weights import load_cache_completion_state
+from models.demos.gemma4_d_p.config import MeshConfig, ModeConfig
+from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
+from models.demos.gemma4_d_p.tt.common import create_tt_model
+from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4_d_p.utils.partial_weights import load_cache_completion_state
 
 try:
     from tracy import signpost
@@ -131,7 +131,7 @@ def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None, seq
 
 def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
     """Create a CP sharding mapper for ``seq_dim``, or a replication mapper."""
-    from models.demos.gemma4.tt.ccl import cp_degree
+    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     if mesh_config is not None and cp_degree(mesh_config) > 1:
         shard_dims = (seq_dim, None) if mesh_config.sp_axis == 0 else (None, seq_dim)
@@ -195,7 +195,7 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
 
     Falls back to device 0 alone when CP is off, matching ``_first_device_torch``.
     """
-    from models.demos.gemma4.tt.ccl import cp_degree
+    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     shards = ttnn.get_device_tensors(tensor)
     cp = cp_degree(mesh_config) if mesh_config is not None else 1
@@ -278,7 +278,7 @@ def test_prefill_long_context_traced(
     mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
 ):
     """Measure all prefill chunks using one replayed ring-attention trace."""
-    from models.demos.gemma4.tt.ccl import cp_degree
+    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
@@ -498,9 +498,9 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Ring caches are initialized with random values before measurement.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
-    from models.demos.gemma4.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
-    from models.demos.gemma4.tt.attention.ring_prefill import PackedRingKVCache
-    from models.demos.gemma4.tt.ccl import cp_degree
+    from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import PackedRingKVCache
+    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)

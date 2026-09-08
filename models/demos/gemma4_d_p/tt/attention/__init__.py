@@ -17,12 +17,14 @@ import os
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.config import MeshConfig, Mode
+from models.demos.gemma4_d_p.config import MeshConfig, Mode
+from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
-from .decode import decode_forward, packed_decode_forward
+from .operations import build_cp_prefill_mask
 from .prefill import flush_deferred_bounded_fills, prefill_forward
+from .ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
 
 
 class Gemma4AttentionConfig:
@@ -82,6 +84,10 @@ class Gemma4Attention:
         max_seq_len=131072,
         weight_dtype=ttnn.bfloat16,
         bounded_sliding_kv_cache: bool = False,
+        ring_prefill_chunk_size=None,
+        ring_kv_cache=None,
+        ring_layer_idx=0,
+        ring_num_layers=1,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -122,6 +128,46 @@ class Gemma4Attention:
             )
         else:
             self.kv_cache = None
+
+        # Ring cache for cross-chunk prefill under context parallelism. Contiguous and
+        # CP-sharded along the sequence, which is what ring_joint reads (it takes the
+        # cache directly, with no page table). Allocated only when multi-chunk CP
+        # prefill is actually in play; the paged cache above is untouched.
+        self.ring_kv_cache = ring_kv_cache
+        self.ring_layer_idx = ring_layer_idx
+        self.ring_num_layers = ring_num_layers
+        self.ring_max_seq_len = max_seq_len if ring_kv_cache is not None else None
+        # Deliberately NOT gated on create_kv_cache. Gemma4Model builds the paged
+        # cache itself after constructing the layer and assigns it to
+        # ``self_attn.kv_cache``, so this constructor always sees create_kv_cache
+        # False on the model path — gating on it left the ring cache unallocated and
+        # every cross-chunk read silently fell back to the mask path.
+        if self.ring_kv_cache is None and cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
+            num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
+            if self.weights.is_global:
+                self.ring_kv_cache = init_packed_ring_kv_cache(
+                    mesh_device=mesh_device,
+                    mesh_config=mesh_config,
+                    num_local_kv_heads=num_local_kv_heads,
+                    max_seq_len=max_seq_len,
+                    num_layers=1,
+                    num_users=max_batch_size,
+                )
+            else:
+                self.ring_kv_cache = init_ring_kv_cache(
+                    mesh_device=mesh_device,
+                    mesh_config=mesh_config,
+                    num_local_kv_heads=num_local_kv_heads,
+                    head_dim=config.head_dim,
+                    max_seq_len=max_seq_len,
+                    num_layers=1,
+                    num_users=max_batch_size,
+                )
+            self.ring_max_seq_len = max_seq_len
+
+        # Fallback CP mask cache for callers that pass no ccl_manager; the shared
+        # one on CCLManager is preferred so a 60-layer stack holds two masks, not 60.
+        self._cp_mask_cache_local = {}
 
         # Persistent hot-block staging for the packed-verify loop-free KV write.
         # Allocated lazily by the spec-decode driver (see tt/spec_decode.py);
@@ -204,7 +250,7 @@ class Gemma4Attention:
         position_idx=None,
         page_table=None,
         kv_cache=None,
-        is_decode=True,
+        is_decode=False,
         token_index=None,
         shared_kv=None,
         keep_kv=False,
@@ -218,6 +264,8 @@ class Gemma4Attention:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        packed_global_rope=None,
+        packed_sliding_rope=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -240,106 +288,90 @@ class Gemma4Attention:
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
 
-        # Do NOT release the sliding prefill tail on decode. Under vLLM
-        # ``async_scheduling``, another request's decode can interleave between
-        # APC continuation prefills of a different request; wiping the single
-        # per-layer stash here drops ``sliding_tail_in`` for ``chunk_start>0``
-        # (shield QB2: ``chunk_start=384 without sliding_tail_in``). Tails are
-        # released when a new prefill starts at ``chunk_start_idx==0`` (below)
-        # or when the generator explicitly clears them around trace capture.
-
-        if is_decode and packed is not None:
-            return packed_decode_forward(
-                hidden_states=hidden_states,
-                cos_cache=cos_cache,
-                sin_cache=sin_cache,
-                weights=self.weights,
-                kv_cache=cache,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                position_idx=packed["position_idx"],
-                kv_write_idxs=packed.get("kv_write_idxs"),
-                attn_mask=packed["attn_mask"],
-                packed_p=packed["packed_p"],
-                page_table=page_table,
-                ccl_manager=self.ccl_manager,
-                is_kv_shared=is_kv_shared,
-                rope_packed=packed.get("rope_packed"),
-                kv_staging=self.kv_staging,
-                embed_idx=packed.get("embed_idx"),
-                hot_pt=packed.get("hot_pt"),
-            )
-
         if is_decode:
-            return decode_forward(
-                hidden_states=hidden_states,
-                cos_cache=cos_cache,
-                sin_cache=sin_cache,
-                weights=self.weights,
-                kv_cache=cache,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                position_idx=position_idx,
-                token_index=token_index,
-                page_table=page_table,
-                ccl_manager=self.ccl_manager,
-                is_kv_shared=is_kv_shared,
-                position_idx_cache=position_idx_cache,
-                sequential_kv_write=sequential_kv_write,
-                rope_presliced=rope_presliced,
-            )
-        else:
-            # Sliding-window layers under generator-level chunked prefill carry a
-            # rolling K/V window tail across chunks (stored on this per-layer
-            # instance). Reset it at the start of a prefill (single-chunk, or the
-            # first generator chunk with chunk_start_idx==0). Traced multi-chunk
-            # passes a device tensor offset — the generator resets tails before
-            # the first chunk; do not int()-cast the tensor here.
-            # Cross-chunk sliding tails are PER REQUEST: under vLLM, chunks of
-            # different requests interleave through this layer in scheduler
-            # order (and rows are re-ordered between rounds — plugin PR #68's
-            # "mutable live-batch indexing" lesson), so a single per-layer slot
-            # hands one request's window tail to another request's continuation
-            # (fluent nondeterministic corruption of the victim's final chunk,
-            # measured at conc3/9k). Key the stash by the request's stable
-            # identity — its first global block id — set by the generator via
-            # ``config._g4_active_req_key``; None (demo / non-vLLM paths) keys a
-            # single legacy slot.
-            _req_key = getattr(self.config, "_g4_active_req_key", None)
-            if isinstance(chunk_start_idx, ttnn.Tensor):
-                pass
-            elif chunk_start_idx is None or int(chunk_start_idx) == 0:
-                # First chunk of THIS request: drop only this request's stale
-                # tail — releasing the shared slot here wiped tails other
-                # requests still needed (second victim mode of the same bug).
-                self._release_sliding_prefill_tail(req_key=_req_key)
-            tt_out, kept_kv, sliding_tail_out = prefill_forward(
-                hidden_states=hidden_states,
-                cos_cache=cos_cache,
-                sin_cache=sin_cache,
-                weights=self.weights,
-                kv_cache=cache,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                page_table=page_table,
-                ccl_manager=self.ccl_manager,
-                shared_kv=shared_kv,
-                keep_kv=keep_kv,
-                batch_size=batch_size,
-                user_id=user_id,
-                valid_seq_len=valid_seq_len,
-                chunk_start_idx=chunk_start_idx,
-                chunk_page_table=chunk_page_table,
-                sliding_tail_in=self._get_sliding_tail(_req_key),
-            )
-            # prefill_forward consumed (deallocated) the incoming tail; stash the
-            # new one for the next chunk under this request's key.
-            self._put_sliding_tail(_req_key, sliding_tail_out)
-            self._last_kv = kept_kv
-            return tt_out
+            raise ValueError("Gemma4 P/D attention only supports prefill")
+
+        # Sliding-window layers under generator-level chunked prefill carry a
+        # rolling K/V window tail across chunks (stored on this per-layer
+        # instance). Reset it at the start of a prefill (single-chunk, or the
+        # first generator chunk with chunk_start_idx==0). Traced multi-chunk
+        # passes a device tensor offset — the generator resets tails before
+        # the first chunk; do not int()-cast the tensor here.
+        # Cross-chunk sliding tails are PER REQUEST: under vLLM, chunks of
+        # different requests interleave through this layer in scheduler
+        # order (and rows are re-ordered between rounds — plugin PR #68's
+        # "mutable live-batch indexing" lesson), so a single per-layer slot
+        # hands one request's window tail to another request's continuation
+        # (fluent nondeterministic corruption of the victim's final chunk,
+        # measured at conc3/9k). Key the stash by the request's stable
+        # identity — its first global block id — set by the generator via
+        # ``config._g4_active_req_key``; None (demo / non-vLLM paths) keys a
+        # single legacy slot.
+        _req_key = getattr(self.config, "_g4_active_req_key", None)
+        if isinstance(chunk_start_idx, ttnn.Tensor):
+            pass
+        elif chunk_start_idx is None or int(chunk_start_idx) == 0:
+            # First chunk of THIS request: drop only this request's stale
+            # tail — releasing the shared slot here wiped tails other
+            # requests still needed (second victim mode of the same bug).
+            self._release_sliding_prefill_tail(req_key=_req_key)
+        tt_out, kept_kv, sliding_tail_out = prefill_forward(
+            hidden_states=hidden_states,
+            cos_cache=cos_cache,
+            sin_cache=sin_cache,
+            weights=self.weights,
+            kv_cache=cache,
+            config=self.config,
+            mesh_config=self.mesh_config,
+            mesh_device=self.mesh_device,
+            page_table=page_table,
+            ccl_manager=self.ccl_manager,
+            shared_kv=shared_kv,
+            keep_kv=keep_kv,
+            batch_size=batch_size,
+            user_id=user_id,
+            valid_seq_len=valid_seq_len,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
+            sliding_tail_in=self._get_sliding_tail(_req_key),
+            cp_attn_mask=self._cp_attn_mask(hidden_states.shape[-2]),
+            ring_kv_cache=self.ring_kv_cache,
+            ring_max_seq_len=self.ring_max_seq_len,
+            ring_layer_idx=self.ring_layer_idx,
+            ring_num_layers=self.ring_num_layers,
+            packed_global_rope=packed_global_rope,
+            packed_sliding_rope=packed_sliding_rope,
+        )
+        # prefill_forward consumed (deallocated) the incoming tail; stash the
+        # new one for the next chunk under this request's key.
+        self._put_sliding_tail(_req_key, sliding_tail_out)
+        self._last_kv = kept_kv
+        return tt_out
+
+    def _cp_attn_mask(self, local_seq_len):
+        """CP-sharded additive prefill mask for ``local_seq_len`` query rows.
+
+        ``None`` when context parallelism is off, which leaves the existing
+        ``is_causal`` / ``sliding_window_size`` SDPA path untouched.
+
+        Cached per local sequence length: the build does host work, so it must
+        happen during the warmup pass and not again inside a trace capture, where
+        the mask has to be the same persistent device tensor every replay.
+        """
+        if cp_degree(self.mesh_config) <= 1:
+            return None
+        window = self.config.sliding_window if self.config.is_sliding else None
+        # Shared across layers when a ccl_manager is available: the mask depends
+        # only on (local_seq_len, window), so a 60-layer stack needs two entries.
+        cache = getattr(self.ccl_manager, "_cp_mask_cache", None)
+        if cache is None:
+            cache = self._cp_mask_cache_local
+        key = (local_seq_len, window)
+        mask = cache.get(key)
+        if mask is None:
+            mask = build_cp_prefill_mask(self.mesh_device, self.mesh_config, local_seq_len, window)
+            cache[key] = mask
+        return mask
 
     # ── per-request sliding-tail stash ─────────────────────────────────────
     _SLIDING_TAIL_MAX_KEYS = 33  # max concurrent requests (32) + legacy None slot

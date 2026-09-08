@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
-from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
-from models.demos.gemma4.tt.attention.ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
+from models.demos.gemma4_d_p.tt.attention import Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
 
 
 @dataclass
