@@ -1,0 +1,110 @@
+# Fish Audio S2 Pro (fishaudio/s2-pro) text-to-speech on Tenstorrent Blackhole — CONTAINER (v5.1) package.
+# Authored from the bring-up on a QB2 (2x p300c = 4 chips), tt-metal branch jashan/fish-s2-pro (base 8e18a76).
+#   tt-model package --container models/autoports/fishaudio_s2_pro/tt-model.yaml --out ~/tt-model-builds
+schema: "5.1"
+repo: jashansinghTT/s2-pro-blackhole
+name: fish-s2-pro
+weights:
+  repo: fishaudio/s2-pro
+  revision: 1de9996b6be38b745688de084d87a5633f714e4e   # main as of 2026-09-08; the repo is not gated
+  ignore_patterns: ["overview.png"]
+kind: tt-dit-server            # uvicorn + our own FastAPI app (no vLLM: a TTS model has no chat/completions API)
+arch: blackhole
+
+source:
+  tt_metal: /home/jashan/tt-metal
+  code:                        # allowlist — exactly what ships; verified by the stage-09 import-closure grep
+    - models/common
+    - models/tt_transformers/tt
+    - models/autoports/fishaudio_s2_pro/__init__.py
+    - models/autoports/fishaudio_s2_pro/config.py
+    - models/autoports/fishaudio_s2_pro/model_params
+    - models/autoports/fishaudio_s2_pro/tt
+    - models/autoports/fishaudio_s2_pro/reference
+    - models/autoports/fishaudio_s2_pro/server
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  app: models.autoports.fishaudio_s2_pro.server.app:app
+  mesh_shape_env: FISH_S2_MESH_SHAPE      # the launcher writes "1x1" / "1x2" / "1x4" / "1x8" here from mesh_device
+  packages:                               # HTTP + audio stack; torch is NOT listed (tt-metal's own pin is inserted)
+    - "fastapi>=0.115,<1"
+    - "uvicorn[standard]>=0.30"
+    - "pydantic>=2.9,<3"
+    - "python-multipart>=0.0.9"
+    - "ormsgpack>=1.5"
+    - "soundfile>=0.12"
+    - "soxr>=0.5"
+    - "numpy>=1.24.4,<2"
+    - "einops"
+    - "safetensors"
+    - "tokenizers"
+    - "huggingface_hub"
+    - "loguru"
+    - "pyyaml"
+    - "transformers"                      # tt_transformers.ModelArgs reads the config/tokenizer with it (pinned by the lock)
+    - "pytest"                            # models/common/utility_functions imports it at module level
+  # lock: requirements.lock              # set after the first successful build
+
+serve:
+  port: 8000
+  env:
+    FISH_S2_WEIGHTS_REVISION: "1de9996b6be38b745688de084d87a5633f714e4e"
+    FISH_S2_MAX_SEQ_LEN: "8192"
+    FISH_S2_CODEC_DEVICE: cpu
+    FISH_S2_FAST_DEVICE: tt
+    FISH_S2_STREAM_CHUNK_FRAMES: "32"
+    FISH_S2_WARMUP: "1"
+    TT_METAL_OPERATION_TIMEOUT_SECONDS: "120.0"
+  args: ["--timeout-keep-alive", "75"]
+
+serve_profiles:
+  - name: p150
+    description: Single Blackhole chip (TP1). Widest compatibility.
+    hardware: p150
+    mesh_device: P150
+    env: {TT_METAL_VISIBLE_DEVICES: "0", FISH_S2_FABRIC_CONFIG: none}
+  - name: p300
+    description: One p300 board, both chips (TP2).
+    hardware: p300
+    mesh_device: P300
+    env: {TT_METAL_VISIBLE_DEVICES: "0,1", FISH_S2_FABRIC_CONFIG: FABRIC_1D}
+  - name: p300x2
+    description: Two p300 boards / QuietBox 2, 4 chips (TP4). Validated on the author's box.
+    hardware: p300x2
+    mesh_device: P300x2
+    env: {FISH_S2_FABRIC_CONFIG: FABRIC_1D}
+  - name: p300x4
+    description: Four p300 boards, 8 chips (TP8). DECLARED ONLY - not validated (author box has 4 chips).
+    hardware: p300x4
+    mesh_device: "(1, 8)"
+    env: {FISH_S2_FABRIC_CONFIG: FABRIC_1D_RING}
+default_profile: p150
+
+verify:
+  - "import models.autoports.fishaudio_s2_pro.server.app as a; assert a.app"
+  - "import models.autoports.fishaudio_s2_pro.tt.slow_model, models.autoports.fishaudio_s2_pro.tt.generator"
+  - "import models.autoports.fishaudio_s2_pro.server.schemas as s; s.ServeTTSRequest(text='x')"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/autoports/fishaudio_s2_pro/reference/modded_dac_vq.yaml').is_file()"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/autoports/fishaudio_s2_pro/model_params/s2-pro/config.json').is_file()"
+  - "import soundfile as sf; assert 'MP3' in sf.available_formats()"
+  - "import ormsgpack, soxr, numpy; assert numpy.__version__.startswith('1.'), numpy.__version__"
+
+card:
+  description: >
+    Fish Audio S2 Pro, a 4.5B dual-autoregressive text-to-speech model (Qwen3-based semantic decoder, 400M
+    codebook decoder, 44.1 kHz DAC codec) on Tenstorrent Blackhole, with a fish-speech-compatible /v1/tts API
+    (streaming WAV, voice cloning via references) and an OpenAI-compatible /v1/audio/speech endpoint.
+    Model code and weights are under the Fish Audio Research License (non-commercial). The p300x4 profile is
+    declared but was not validated.
+  quickstart: |
+    ### Try it
+    ```bash
+    curl -s localhost:20000/v1/health
+    curl -s localhost:20000/v1/tts -H 'Content-Type: application/json' \
+      -d '{"text":"Hello from Tenstorrent.","format":"wav"}' -o hello.wav
+    curl -s localhost:20000/v1/audio/speech -H 'Content-Type: application/json' \
+      -d '{"model":"fishaudio/s2-pro","input":"Hello.","voice":"default","response_format":"mp3"}' -o hello.mp3
+    ```
+    Voice cloning: `POST /v1/references/add` (multipart id / audio / text), then pass `"reference_id"` in `/v1/tts`.
