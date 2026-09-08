@@ -46,11 +46,20 @@ training_config:
     logging_steps: 1
     checkpointing: false              # deferred for the first cut
     checkpoint_interval: 20
-    prompts_to_train: 200             # unused (queue-driven), kept for GRPOConfig compat
+    # Drives the run length via GRPOTrainer._setup:
+    # optimizer_steps = prompts_to_train / generation_batch_prompts * num_iterations
+    #                 = 1000 / 2 * 1 = 500  (DAPO-like horizon)
+    prompts_to_train: 1000
     temperature: 1.0
     max_completion_length: 512
     num_generations: 16
-    warmup_steps: 30
+    warmup_steps: 50                  # 10% of 500 -- matches DAPO reference
+
+    # LR schedule + gradient clipping (DAPO-style; names match HF / TRL).
+    lr_scheduler_type: "cosine"
+    min_lr_rate: 0.0                  # anneal from base_lr down to 0 over the 450 post-warmup steps
+    use_clip_grad_norm: true
+    clip_grad_norm_max_norm: 0.1
 
   # FullyAsyncGRPOTrainer knobs. Run length is derived from
   # ``grpo_config.prompts_to_train`` (see GRPOTrainer._setup); there is no
