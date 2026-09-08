@@ -2098,6 +2098,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         tt_out_trace = []
         trace_ids = {}
+        # Eagerly build any fused-op decode state (e.g. Qwen3.6 GDN packed conv history) before capture: rebuilding it
+        # does host reads that fault inside a trace. No-op for models/paths that do not define it.
+        for i in range(self.data_parallel):
+            sync = getattr(self.model[i], "sync_gdn_decode_state", None)
+            if callable(sync):
+                sync()
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             sampling_trace_enabled = on_device_sampling and sampling_module is not None

@@ -3679,6 +3679,18 @@ class Qwen36Model:
 
     # Generator contract — decode
 
+    def sync_gdn_decode_state(self):
+        """Eagerly (re)build every GDN layer's packed conv history from its conv_states. Must be called from eager
+        (non-traced) code AFTER prefill and BEFORE any decode trace capture, when QWEN36_GDN_DECODE_FUSED=2 is set:
+        the fused decode op reads conv_hist_packed inside the trace, and rebuilding it does host reads that fault
+        during capture. A no-op when the fused-conv decode path is off or the state is already current."""
+        for layer in self.layers:
+            if layer.is_full_attention:
+                continue
+            gdn = layer.attention
+            if getattr(gdn, "_decode_fused_conv", False):
+                gdn._ensure_conv_hist_packed()
+
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_packed, page_table_tt)."""
         from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host

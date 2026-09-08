@@ -596,6 +596,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     signpost("compile_decode")
     _profiler_flush(model)
     profiler.start("compile_decode")
+    model.sync_gdn_decode_state()  # eager: build the fused-op packed conv history before the decode capture
     if not eager:
         gdn_snap = _snapshot_gdn()
         # Eager compile + throwaway capture; restore GDN state and warm argmax kernels before trace

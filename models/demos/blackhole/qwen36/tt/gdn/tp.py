@@ -337,6 +337,22 @@ class TPGatedDeltaNet:
 
         self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
         self._hist_packed_valid = False
+        if self._decode_fused_conv:
+            n_dev = self.mesh.get_num_devices()
+            zeros = ttnn.from_torch(
+                torch.zeros(n_dev * self.B, self.Nv, 4, 32, 32, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            )
+            if self.conv_hist_packed is None:
+                self.conv_hist_packed = zeros
+            else:
+                ttnn.copy(zeros, self.conv_hist_packed)
+                ttnn.deallocate(zeros)
+            self._hist_packed_valid = True
         # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
         if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = ttnn.from_torch(
@@ -854,7 +870,7 @@ class TPGatedDeltaNet:
                 for j in range(self.K - 1):
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
-                    self._hist_packed_valid = False
+                    self._hist_packed_valid = False  # rebuilt eagerly after prefill replay (never under capture)
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -1005,10 +1021,12 @@ class TPGatedDeltaNet:
                 ttnn.copy(conv_states[m], self.conv_states[m])
                 self._hist_packed_valid = False
                 ttnn.deallocate(conv_states[m])
+            self._sync_conv_hist_packed()
         else:
             self.rec_state = rec_batched
             self.conv_states = conv_states
             self._hist_packed_valid = False
+            self._sync_conv_hist_packed()
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -1128,13 +1146,9 @@ class TPGatedDeltaNet:
             convs_dev.append(c_src)
             self._write_index(self.conv_states[m], c_src, slot, dim=1)
         if self.conv_hist_packed is not None and self._hist_packed_valid:
-            # keep the packed history in sync per slot (no full rebuild): pack this user's 4 conv rows
-            rows = [[ttnn.to_torch(d).reshape(-1).float() for d in ttnn.get_device_tensors(c)] for c in convs_dev]
-            packed_slot = self._packed_slot_tensor(rows, slot)
-            self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
-            ttnn.deallocate(packed_slot)
+            self._sync_conv_hist_packed(slot=slot)  # per-slot repack, no full rebuild
         else:
-            self._hist_packed_valid = False
+            self._sync_conv_hist_packed()
 
     def remap_slots(self, remap):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
@@ -1148,6 +1162,8 @@ class TPGatedDeltaNet:
         self._gather_indices(self.rec_state, idx, dim=0)
         if self.conv_hist_packed is not None and self._hist_packed_valid:
             self._gather_indices(self.conv_hist_packed, idx, dim=0)
+        else:
+            self._sync_conv_hist_packed()
         for m in range(self.K):
             self._gather_indices(self.conv_states[m], idx, dim=1)
 
@@ -1306,7 +1322,7 @@ class TPGatedDeltaNet:
         if self._stable_state and self.conv_states is not None:
             for m in range(self.K):
                 ttnn.copy(new_conv[m], self.conv_states[m])
-                self._hist_packed_valid = False
+                self._hist_packed_valid = False  # rebuilt eagerly after prefill replay (never under capture)
                 ttnn.deallocate(new_conv[m])
         else:
             self.conv_states = new_conv
@@ -1436,6 +1452,28 @@ class TPGatedDeltaNet:
                 self._per_device_rows(self.tw["conv_taps"]), both_parities=True
             )
         return self._conv_taps_packed
+
+    def _sync_conv_hist_packed(self, slot=None):
+        """Eagerly bring conv_hist_packed in line with conv_states after they were rewritten (prefill capture, reset,
+        batched assembly, slot writes). Only when the fused-conv decode path is enabled. slot=None rebuilds every slot;
+        an int repacks that slot only. Host round trip -> must be called from eager (non-traced) code, which all
+        conv_states writers are; the decode path itself then never needs to rebuild (reads inside a trace capture fault).
+        """
+        if not self._decode_fused_conv or self.conv_states is None:
+            self._hist_packed_valid = False
+            return
+        if slot is None or self.conv_hist_packed is None:
+            self._hist_packed_valid = False
+            self._ensure_conv_hist_packed()
+            return
+        rows = [
+            [ttnn.to_torch(d).reshape(-1, d.shape[-1])[slot].float() for d in ttnn.get_device_tensors(c)]
+            for c in self.conv_states
+        ]
+        packed_slot = self._packed_slot_tensor(rows, slot)
+        self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
+        ttnn.deallocate(packed_slot)
+        self._hist_packed_valid = True
 
     def _ensure_conv_hist_packed(self):
         """(Re)build the packed history [Bmax, Nv, 4, 32, 32] from conv_states when they changed (prefill, reset,
