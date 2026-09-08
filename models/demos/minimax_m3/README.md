@@ -89,7 +89,7 @@ runtime consume are listed here.
 | Variable | Default | Effect |
 |---|---|---|
 | `TT_MESH_GRAPH_DESC_PATH` | script-picked | Mesh graph descriptor. `FABRIC_1D` runs on `single_bh_galaxy_mesh_graph_descriptor.textproto`; ring / torus fabrics need `single_bh_galaxy_torus_xy_graph_descriptor.textproto` (the scripts pick it). |
-| `M3_FABRIC` | `FABRIC_1D` | `ttnn.FabricConfig` name for `tests/galaxy_prefill_kv_pcc.py` / `scripts/run_prefill_perf.sh`. The MSA `high_bw_all_gather` rings by itself on a ring/torus fabric; measurements in [`docs/ATTENTION_HIGH_BW_ALL_GATHER.md`](docs/ATTENTION_HIGH_BW_ALL_GATHER.md). |
+| `M3_FABRIC` | `FABRIC_1D` | `ttnn.FabricConfig` name for `tests/galaxy_prefill_kv_pcc.py` / `scripts/run_prefill_perf.sh`. The MSA `high_bw_all_gather` rings by itself on a ring/torus fabric (measurements in PR #55668). |
 | `M3_CCL_TOPOLOGY` | `Linear` | `ttnn.Topology` for the legacy CCLs (`all_gather_async`, `reduce_scatter_minimal_async`) in both harnesses. `Ring` needs a ring/torus fabric. |
 | `PROFILE_FABRIC` / `FABRIC` | `1d` | Zone-profiler fabric: `1d`, `1d_ring`, `2d`, `2d_torus_xy` (`tests/perf/profile_prefill.py` / `scripts/run_prefill_profile.sh`). |
 

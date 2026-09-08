@@ -218,7 +218,7 @@ def main():
 
     # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology. Defaults match the production
     # runner (FABRIC_1D, Linear). FABRIC_1D_RING / FABRIC_2D_TORUS_* need the torus_xy mesh graph
-    # descriptor (the wrapper scripts pick it); measurements in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
+    # descriptor (the wrapper scripts pick it); measurements in PR #55668.
     ccl_topology = getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear"))
     ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D")))
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))

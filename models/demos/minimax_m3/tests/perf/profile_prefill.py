@@ -296,7 +296,7 @@ def main():
     # 1d is the default here so stage captures compare like-for-like with the whole-galaxy baseline.
     # 2d / 2d_torus_xy are wired through but not yet validated on a carved sub-mesh (torus also needs the
     # matching *_torus_xy mesh graph descriptor). M3_CCL_TOPOLOGY=Ring puts the legacy CCLs on the ring
-    # (docs/ATTENTION_HIGH_BW_ALL_GATHER.md); high_bw_all_gather derives its own from the fabric.
+    # (measured in PR #55668); high_bw_all_gather derives its own from the fabric.
     ttnn.set_fabric_config(FABRIC_CONFIGS[fabric_name])
     galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
     print(

@@ -317,4 +317,4 @@ one selected slot straight out of the ND-sharded cache with `ttnn.experimental.h
 buffer, so the whole cache-read cost is the two gather zones. The earlier path converted the **whole** cache
 from NdShard to DRAM-interleaved on every sparse layer (`cache_read/{deshard,slice}` zones); that path and
 its zones were removed in #55668, and captures from before it show the zone under `attn/cache_read`.
-Numbers for both are in [docs/ATTENTION_HIGH_BW_ALL_GATHER.md](../../docs/ATTENTION_HIGH_BW_ALL_GATHER.md).
+Numbers for both are in PR #55668.

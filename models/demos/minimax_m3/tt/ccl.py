@@ -11,7 +11,7 @@ class CCLManager:
 
     ``topology`` goes to all_gather_async / reduce_scatter_minimal_async (ring_joint_sdpa hardcodes Linear,
     high_bw_all_gather derives ring vs line from the fabric). The galaxy runtime passes Linear; Ring is
-    measured in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
+    measured in PR #55668.
     """
 
     def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Ring):

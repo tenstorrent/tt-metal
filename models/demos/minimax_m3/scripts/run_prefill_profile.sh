@@ -30,7 +30,7 @@
 #                   production runner; the pipeline runner's intra-galaxy bindings use 2d. Ring/torus
 #                   modes select the torus_xy mesh graph descriptor (see below).      [default 1d]
 #   M3_CCL_TOPOLOGY=Linear|Ring  topology of the legacy CCLs (all_gather_async / reduce_scatter);
-#                   Ring needs a ring/torus FABRIC. See docs/ATTENTION_HIGH_BW_ALL_GATHER.md. [default Linear]
+#                   Ring needs a ring/torus FABRIC (measured in PR #55668).                 [default Linear]
 #   TT_CACHE_PATH   tilized weight-cache root; the sub-mesh shapes need their own
 #                   tensor_cache_bfp8_MeshShape([4, 4]) / ([2, 4]) (see docs/PIPELINE_PREFILL_TESTING.md).
 #   RESULTS_DIR     where finished captures are moved.        [default $TT_METAL_HOME/prefill_profile_results]
