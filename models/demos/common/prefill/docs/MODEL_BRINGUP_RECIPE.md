@@ -150,6 +150,11 @@ and the "worked on one card, broke on the mesh" class of bug disappears entirely
 All PCC tests up to P1 run on **random weights**, identical on both sides. Real checkpoint loading
 is not a dependency of any module test and is deferred to P1.
 
+All references and goldens are **fp16** (`torch.float16`), regardless of the checkpoint dtype and
+of the ttnn dtypes under test: the D1/M1 torch references compute in fp16 (input, weights, cos/sin),
+the per-module goldens they dump are fp16, and the golden trace P1-P3 compare against is written to
+disk as fp16. This is a fixed convention, not a per-model choice. The donors might **not** follow it,
+so when copying a reference or a golden runner, replace its casts rather than carrying them over.
 
 - **E — Exploration**
 
@@ -174,7 +179,7 @@ Decoder bringup stages:
 
 When each stage is finished - goals:
 - D1 goal → Have torch implementation for each building block of model Attn,MLP,Norms,Emb.
-- D2 goal → Have layer.py outline of one decoder layer in high level blocks so we can write PCC tests for each building block and decoder. 
+- D2 goal → Have layer.py outline of one decoder layer in high level blocks so we can write PCC tests for each building block and decoder.
 - D3 goal → Have all building modules of decoder passing PCC tests in isolation (ttnn wherever the math can be composed from ttnn ops; torch CPU only where it cannot). Have one decoder block passing PCC test.
 
 We switch from one stage to next only when the goal is reached.
@@ -323,7 +328,8 @@ stage's log lines are written (§7). No stage is entered before the previous sta
 1. Vendor the model's `config.json`; write the config constants class.
 2. Get a torch reference for the decoder blocks. Import the HF modeling file directly if it imports
    and constructs standalone; otherwise trim and vendor the classes you need, recording upstream
-   line numbers as provenance. The reference imports torch only — no ttnn, no device code.
+   line numbers as provenance. The reference imports torch only — no ttnn, no device code, and
+   computes in fp16 (§4).
 3. Write the golden runner: run the reference and dump each block's inputs/outputs to disk, keyed on
    everything that changes the result. Reuse `ReferenceCacheKey` + `save_/load_reference_cache`.
 4. Create the tests in the Testing table.
