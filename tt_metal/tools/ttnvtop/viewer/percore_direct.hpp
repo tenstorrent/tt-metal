@@ -74,15 +74,12 @@ inline uint32_t telem_dword(const uint8_t* f, uint32_t i) {
 }
 constexpr uint32_t kMinHeaderBytes = 16;
 constexpr uint8_t kFlagSfpu = 1u << 4;
-// The per-core sample's NOC bytes, added by firmware bundle 152, which took the sample
-// from 8 to 10 bytes. They are per-mille DIVIDED BY FOUR so a byte can hold the full
-// range: multiply by kNocScale to compare against the four u16 fields. 0xFF is the u8
-// counterpart of kP1000Invalid -- not a reading, as opposed to a measured zero.
-constexpr uint32_t kOffSampleNocIn = 8;
-constexpr uint32_t kOffSampleNocOut = 9;
-constexpr uint32_t kNocSampleBytes = 10;
-constexpr uint8_t kP250Invalid = 0xFF;
-constexpr uint16_t kNocScale = 4;
+// Slots 2/3 of THIS frame carry NOC in/out instead of sfpu/pack. Bundle 158+.
+// The frame cannot grow to give NOC its own fields: the M3 rejects any WINLEN that is not
+// a multiple of 4, which leaves an 8 B sample as the only one the relay can carry at 64
+// cores. So NOC is bought with rate, and reading slot 2 without checking this bit reports
+// NOC traffic as SFPU occupancy on alternate frames.
+constexpr uint8_t kFlagNoc = 1u << 5;
 
 struct DieDesc {
     uint8_t location;
@@ -166,6 +163,12 @@ inline void noc_xy(uint32_t col, uint32_t row, uint8_t& x, uint8_t& y) {
 struct DieView {
     UtilShmHeader header{};
     std::vector<PerCoreView> cores;
+    // Bundle 158 multiplexes slots 2/3: a frame carries EITHER sfpu+pack OR noc in+out,
+    // never both. Each pair therefore persists across the frames that do not update it,
+    // and these latch whether a pair has ever arrived -- because "not seen yet" must read
+    // as kP1000Invalid, while 0 is a measured idle.
+    bool noc_seen = false;
+    bool sfpu_pack_seen = false;
 };
 
 class Source {
@@ -331,9 +334,18 @@ private:
         // NOC is conditional on the FRAME, not the build: the two bytes only exist on a
         // 10 B sample. Claiming the bit on an 8 B sample would make the viewer render the
         // next core's math counter as this core's NOC traffic.
-        const bool has_noc = (o.sample_bytes >= kNocSampleBytes);
+        // NOC availability is LATCHED on having actually seen an F_NOC frame, not derived
+        // from the sample size and never from the value. A firmware that carries NOC only
+        // announces it on the frames that do, so deriving it per-frame would make the
+        // column flicker in and out at 5 Hz.
+        const bool frame_is_noc = (flags & kFlagNoc) != 0;
+        if (frame_is_noc) {
+            v.noc_seen = true;
+        } else {
+            v.sfpu_pack_seen = true;
+        }
         h.signal_sources = SIGNAL_SRC_COMPUTE | SIGNAL_SRC_ACTIVITY | SIGNAL_SRC_PACK |
-                           (slot3_is_sfpu ? 0u : SIGNAL_SRC_UNPACK) | (has_noc ? SIGNAL_SRC_NOC : 0u);
+                           (slot3_is_sfpu ? 0u : SIGNAL_SRC_UNPACK) | (v.noc_seen ? SIGNAL_SRC_NOC : 0u);
         h.num_cores = o.cores;
         h.collector_pid = static_cast<uint32_t>(::getpid());
         h.aiclk_mhz = static_cast<uint32_t>(f[kOffAiclk8]) * 8u;
@@ -408,6 +420,14 @@ private:
                 const uint16_t u = rd16(s, slot * o.sample_bytes + 4);
                 const uint16_t p = rd16(s, slot * o.sample_bytes + 6);
                 PerCoreView& c = v.cores[slot];
+                // Carry the pair THIS frame does not update. PerCoreView{} would erase it,
+                // and the erased value is not recoverable until the next frame of that
+                // parity -- 200 ms of a column reading zero, which is a measured idle.
+                const uint16_t held_sfpu = c.sfpu_busy_p1000;
+                const uint16_t held_unpack = c.unpack_busy_p1000;
+                const uint16_t held_pack = c.pack_busy_p1000;
+                const uint16_t held_noc_in = c.noc_in_p1000;
+                const uint16_t held_noc_out = c.noc_out_p1000;
                 c = PerCoreView{};
                 noc_xy(col, row, c.noc_x, c.noc_y);
                 c.logical_x = static_cast<uint8_t>(col);
@@ -416,28 +436,29 @@ private:
                 // Set before the early-out below, because PerCoreView{} leaves these at 0
                 // and 0 is a MEASURED idle. A core the sweep could not read, and a frame
                 // with no NOC bytes to read, must both come out as kP1000Invalid.
-                c.noc_in_p1000 = kP1000Invalid;
-                c.noc_out_p1000 = kP1000Invalid;
+                c.noc_in_p1000 = v.noc_seen ? held_noc_in : kP1000Invalid;
+                c.noc_out_p1000 = v.noc_seen ? held_noc_out : kP1000Invalid;
                 const bool invalid = (m == kP1000Invalid);
                 c.dispatched = invalid ? 0 : 1;
                 if (invalid) {
                     continue;
                 }
-                if (has_noc) {
-                    const uint8_t nin = s[slot * o.sample_bytes + kOffSampleNocIn];
-                    const uint8_t nout = s[slot * o.sample_bytes + kOffSampleNocOut];
-                    if (nin != kP250Invalid) {
-                        c.noc_in_p1000 = static_cast<uint16_t>(nin * kNocScale);
-                    }
-                    if (nout != kP250Invalid) {
-                        c.noc_out_p1000 = static_cast<uint16_t>(nout * kNocScale);
-                    }
-                }
                 c.compute_busy_p1000 = m;
                 c.dispatch_busy_p1000 = act;  // ACTIVITY; declared via SIGNAL_SRC_ACTIVITY
-                c.pack_busy_p1000 = p;
-                c.sfpu_busy_p1000 = slot3_is_sfpu ? u : 0;
-                c.unpack_busy_p1000 = slot3_is_sfpu ? 0 : u;
+                // Slots 2 and 3 are whichever pair the header advertises. They are full
+                // per-mille on the same scale as every other field -- not the /4 byte
+                // encoding of the abandoned 10 B sample.
+                if (frame_is_noc) {
+                    c.noc_in_p1000 = u;
+                    c.noc_out_p1000 = p;
+                    c.sfpu_busy_p1000 = v.sfpu_pack_seen ? held_sfpu : 0;
+                    c.unpack_busy_p1000 = v.sfpu_pack_seen ? held_unpack : 0;
+                    c.pack_busy_p1000 = v.sfpu_pack_seen ? held_pack : 0;
+                } else {
+                    c.pack_busy_p1000 = p;
+                    c.sfpu_busy_p1000 = slot3_is_sfpu ? u : 0;
+                    c.unpack_busy_p1000 = slot3_is_sfpu ? 0 : u;
+                }
                 c.samples_seen = epoch;
             }
         }
