@@ -1015,10 +1015,14 @@ class Transformer(LightweightModule):
 
         if mode == Mode.PREFILL:
             # For traced prefill, keep RoPE slicing in-graph and driven by the
-            # on-device chunk_start_idx input.
-            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx, x.shape[2])
+            # on-device chunk_start_idx input. Batched prefill arrives flattened
+            # to [1, 1, batch_size * S_per_user, dim] and each TransformerBlock
+            # restores the batch dimension before attention, so the RoPE slice
+            # width is the per-user length, not the flattened one.
+            prefill_seq_len = x.shape[2] // batch_size
+            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx, prefill_seq_len)
             if rot_mats_local is not None:
-                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx, x.shape[2])
+                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx, prefill_seq_len)
 
         if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
             raise ValueError(

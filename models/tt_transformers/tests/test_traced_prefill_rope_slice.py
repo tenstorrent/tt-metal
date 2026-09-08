@@ -5,6 +5,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
+import pytest
 import torch
 
 import ttnn
@@ -74,12 +75,18 @@ def test_resumed_prefill_rope_slice_matches_trace_length_near_context_limit(devi
     torch.testing.assert_close(ttnn.to_torch(rot_sin), -expected_positions)
 
 
-def test_prefill_forward_passes_trace_length_to_global_and_local_rope_slices():
+@pytest.mark.parametrize(
+    "batch_size, expected_prefill_seq_len",
+    [(1, 8192), (8, 1024)],
+    ids=["single_user", "batched"],
+)
+def test_prefill_forward_passes_per_user_length_to_global_and_local_rope_slices(batch_size, expected_prefill_seq_len):
     model = object.__new__(Transformer)
     model.prefetcher = None
     model.layers = []
     model._slice_prefill_rot_mats = MagicMock(side_effect=lambda rot_mats, *_: rot_mats)
 
+    # Batched prefill hands forward the flattened [1, 1, batch_size * S_per_user, dim] activation.
     x = SimpleNamespace(shape=(1, 1, 8192, 32))
     rot_mats_global = object()
     rot_mats_local = object()
@@ -92,12 +99,13 @@ def test_prefill_forward_passes_trace_length_to_global_and_local_rope_slices():
         rot_mats_local=rot_mats_local,
         mode=Mode.PREFILL,
         chunk_start_idx=chunk_start_idx,
+        batch_size=batch_size,
     )
 
     assert result is x
     assert model._slice_prefill_rot_mats.call_args_list == [
-        call(rot_mats_global, chunk_start_idx, 8192),
-        call(rot_mats_local, chunk_start_idx, 8192),
+        call(rot_mats_global, chunk_start_idx, expected_prefill_seq_len),
+        call(rot_mats_local, chunk_start_idx, expected_prefill_seq_len),
     ]
 
 
