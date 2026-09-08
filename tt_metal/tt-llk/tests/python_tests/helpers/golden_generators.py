@@ -110,6 +110,18 @@ def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     ).to(result.dtype)
 
 
+def _flush_subnormals_of_dtype(result: torch.Tensor) -> torch.Tensor:
+    """Flush values that are subnormal in *result*'s own floating-point dtype to zero.
+
+    Used where the value being modelled still lives in Dest, whose precision the
+    dtype stands in for, rather than in an L1 format.
+    """
+    if not result.dtype.is_floating_point:
+        return result
+    tiny = torch.finfo(result.dtype).tiny
+    return torch.where(result.abs() < tiny, torch.zeros_like(result), result)
+
+
 def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.Tensor:
     """Apply integer saturation during format conversion.
 
@@ -3563,10 +3575,14 @@ class EltwiseBinaryGolden(FidelityMasking):
         if op == MathOperation.Elwmul:
             result = None
             for fidelity_iter in range(fidelity_iter_count + 1):
-                t1, t2 = self._apply_fidelity_masking(
+                # Each phase masks the *original* operands: the phases decompose one
+                # multiply into high/low mantissa halves, so feeding a phase the
+                # already-masked operands zeroes every phase past the first and makes
+                # HiFi2/3/4 silently degrade to LoFi.
+                masked_1, masked_2 = self._apply_fidelity_masking(
                     math_format_for_fidelity, t1, t2, fidelity_iter
                 )
-                phase_result = self.ops[op](t1, t2)
+                phase_result = self.ops[op](masked_1, masked_2)
                 if fidelity_iter == 0:
                     result = phase_result
                 else:
@@ -3765,6 +3781,12 @@ class EltwiseBinaryGolden(FidelityMasking):
             # an extra bfloat16 cast before MX quantization; quantize from the current
             # result dtype so the golden follows the active pack-source path more
             # closely.
+            #
+            # Hardware flushes subnormals where the math unit writes Dest, which is
+            # before the packer's MX conversion. The final _apply_ftz below uses the
+            # MX threshold, so a value that is subnormal for Dest but normal for the
+            # MX block would survive it; flush against Dest's own precision here.
+            result = _flush_subnormals_of_dtype(result)
             result = quantize_mx_tensor_chunked(result, data_format)
         else:
             if data_format.is_integer():
