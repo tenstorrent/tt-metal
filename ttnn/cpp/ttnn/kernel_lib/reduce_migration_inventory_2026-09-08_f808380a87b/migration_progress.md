@@ -43,8 +43,24 @@ audit.
   tiles plus masked-tail accumulation. Removed each factory's mask, accumulator,
   and masked-input buffers. Native build and SM032/SM043 passed (2/2), results
   `generated/test_reports/reduce-migration-bgr8odj8/summary.json`.
-- Sanity selection correction needed: SM033/SM034 used `p=2.5`, which dispatches
-  to abs-pow and sum, bypassing the claimed norm factories. Use `p=0` instead.
+- Corrected SM033/SM034 to use `p=0`: the old `p=2.5` cases dispatched to
+  abs-pow and sum, bypassing the claimed norm factories. The two corrected
+  cases passed with migrated kernels; results
+  `generated/test_reports/reduce-migration-a76yepiy/summary.json`.
+- Full Moreh mean/sum groups T056/T058 passed: 197 passed, 133 upstream skips
+  across 330 collected cases. Results:
+  `generated/test_reports/reduce-migration-4d4e9vf_/summary.json`.
+- Moreh norm H/W (S068/S069, DP014/DP015): transformed inputs now use planned
+  reductions and final-only fused negation. Bounded resident blocks keep a
+  full block with the partial tail so all calls can use AccumulateViaAdd;
+  this avoids the BF16 precision loss found with a tiny last ReduceTile call.
+  Removed manual tile-add/max accumulation and mask/reduced-result buffers.
+  Native build, both corrected sanity cases, and 60 new block-boundary cases
+  passed. Log: `/tmp/reduce-moreh-norm-blocks-20260908-r2.log`.
+- Added the 60 norm regressions and nine planned callback checks to the full
+  manifest (T057/T170): three additional definitions and 69 cases beyond the
+  original base inventory's count.
+- In progress: vector/scalar bias-gradient factories and their kernels.
 
 ## Remaining work
 

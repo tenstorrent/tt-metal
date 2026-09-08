@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -13,23 +14,11 @@ void kernel_main() {
     const auto num_rows_per_core = get_arg(args::num_rows_per_core);
     const auto Wt = get_arg(args::Wt);
     const auto tile_offset = get_arg(args::tile_offset);
-    const auto origin_w = get_arg(args::origin_w);
 
     const auto s = TensorAccessor(tensor::input);
 
-    Scalar one;
-    one.f = 1.0f;
-    DataflowBuffer dfb_one(dfb::one);
-    fill_cb_with_value(dfb_one, one.u);
-
-    constexpr uint32_t TILE_W = 32;
-    const bool do_mask_w = (origin_w % TILE_W) != 0;
-    const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
-
-    if (do_mask_w) {
-        DataflowBuffer dfb_mask_w(dfb::mask_w);
-        generate_mask_w(dfb_mask_w, mask_w);
-    }
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::one>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto start_tile_idx = tile_offset;
 

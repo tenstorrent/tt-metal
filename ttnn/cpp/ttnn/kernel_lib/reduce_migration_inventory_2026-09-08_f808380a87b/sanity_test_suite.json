@@ -887,13 +887,13 @@
       "id": "SM033",
       "full_suite_group": "T057",
       "tests": [
-        "test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-N-p=2.5]"
+        "test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-N-p=0.0]"
       ],
       "kernel_ids": [
         "S068",
         "DP014"
       ],
-      "selection": "BF16 rank-2 [32,32], p=2.5, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
+      "selection": "BF16 rank-2 [32,32], p=0.0, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
       "lane": "common",
       "hardware": "One device; see the test for core-grid requirements.",
       "expected_cases": 1,
@@ -911,13 +911,13 @@
       "id": "SM034",
       "full_suite_group": "T057",
       "tests": [
-        "test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-C-p=2.5]"
+        "test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-C-p=0.0]"
       ],
       "kernel_ids": [
         "S069",
         "DP015"
       ],
-      "selection": "BF16 rank-2 [32,32], p=2.5, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
+      "selection": "BF16 rank-2 [32,32], p=0.0, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
       "lane": "common",
       "hardware": "One device; see the test for core-grid requirements.",
       "expected_cases": 1,
@@ -2251,7 +2251,7 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp:41; ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp:130",
       "case": "SM033",
       "status": "selected",
-      "selection": "BF16 rank-2 [32,32], p=2.5, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
+      "selection": "BF16 rank-2 [32,32], p=0.0, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py:394"
     },
     {
@@ -2264,7 +2264,7 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/moreh_norm_w_kernel.cpp:42; ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/moreh_norm_w_kernel.cpp:129",
       "case": "SM034",
       "status": "selected",
-      "selection": "BF16 rank-2 [32,32], p=2.5, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
+      "selection": "BF16 rank-2 [32,32], p=0.0, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py:394"
     },
     {
@@ -3774,7 +3774,7 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_program_factory_h_other.cpp:155",
       "case": "SM033",
       "status": "selected",
-      "selection": "BF16 rank-2 [32,32], p=2.5, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
+      "selection": "BF16 rank-2 [32,32], p=0.0, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py:394"
     },
     {
@@ -3787,7 +3787,7 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_program_factory_w_other.cpp:160",
       "case": "SM034",
       "status": "selected",
-      "selection": "BF16 rank-2 [32,32], p=2.5, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
+      "selection": "BF16 rank-2 [32,32], p=0.0, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py:394"
     },
     {

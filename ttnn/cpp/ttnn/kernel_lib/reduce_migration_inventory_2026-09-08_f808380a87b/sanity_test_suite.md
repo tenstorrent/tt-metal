@@ -402,20 +402,20 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py::test_moreh_me
 
 Lane: `common`. Primary kernels: `S068`, `DP014`.
 
-BF16 rank-2 [32,32], p=2.5, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.
+BF16 rank-2 [32,32], p=0.0, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.
 
 ```text
-tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-N-p=2.5]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-N-p=0.0]
 ```
 
 ### SM034 — Moreh norm
 
 Lane: `common`. Primary kernels: `S069`, `DP015`.
 
-BF16 rank-2 [32,32], p=2.5, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.
+BF16 rank-2 [32,32], p=0.0, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.
 
 ```text
-tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-C-p=2.5]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-C-p=0.0]
 ```
 
 ### SM035 — Moreh softmax
