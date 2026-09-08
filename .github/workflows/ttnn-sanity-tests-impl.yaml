@@ -394,7 +394,8 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
-            export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+            # Cap xdist chunks: unbounded load hands out huge chunks, so finished workers idle while another lags.
+            export PYTEST_ADDOPTS="-p no:timeout -n 4 --maxschedchunk=16 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
             # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
             # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
             # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
