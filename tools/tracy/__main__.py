@@ -11,7 +11,7 @@ from tracy.common import PROFILER_DEVICE_SIDE_LOG
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 # Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
-# l1_2/3/4 are Blackhole-only (its 2-NOC L1 has more client ports).
+# l1_2 to l1_5 are Blackhole-only (its L1 has more client ports behind the mux).
 PERF_COUNTER_GROUP_BITS = {
     "fpu": 0,
     "pack": 1,

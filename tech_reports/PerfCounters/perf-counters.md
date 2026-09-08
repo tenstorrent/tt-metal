@@ -34,7 +34,7 @@ python -m tracy --profiler-capture-perf-counters=all --perf-counter-multipass \
     -m "pytest your_test.py -x -v"
 ```
 
-Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
 ### Environment Variable
 
@@ -52,7 +52,7 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
 | `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
 
-The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) — FPU | PACK | UNPACK.
+The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) = FPU | PACK | UNPACK.
 
 ```bash
 export TT_METAL_PROFILE_PERF_COUNTERS=7
