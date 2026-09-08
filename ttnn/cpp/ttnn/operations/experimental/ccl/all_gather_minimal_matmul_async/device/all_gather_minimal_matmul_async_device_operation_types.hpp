@@ -147,10 +147,14 @@ struct AllGatherMinimalMatmulAsyncParams {
     }
 };
 
-// attribute_names and attribute_values() are hand-synced: same fields, same order. If they drift a
-// field silently drops out of the program-cache key, reopening the aliasing bug this key guards
-// against. Deliberately excluded from the key: fused_ternary_scalar (a runtime scalar, not a
-// program-structural attribute) and every input tensor (keyed separately by the framework).
+// attribute_names and attribute_values() are hand-synced: same fields, same order. This assert
+// guards arity ONLY (equal element count) — the most common drift, adding/removing a field on one
+// side. Field order and the name-to-value correspondence stay a hand-maintained invariant it cannot
+// check. Runtime-only members (semaphores, fused_ternary_scalar) and the input tensors are out of
+// the key by design (the tensors are keyed separately by the framework). fsdp_topology is a
+// program-structural CT arg that is NOT in the key; it is safe today only because validate TT_FATALs
+// it to Linear whenever FSDP fusion is active, so it cannot vary — relaxing that check would require
+// keying it here.
 static_assert(
     std::tuple_size_v<decltype(AllGatherMinimalMatmulAsyncParams::attribute_names)> ==
         std::tuple_size_v<decltype(std::declval<const AllGatherMinimalMatmulAsyncParams>().attribute_values())>,
