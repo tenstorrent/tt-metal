@@ -33,9 +33,23 @@ The ceiling this sweep does find is L1: the operands are rt*kt and kt*ct tiles, 
 kt against a large rt or ct exhausts the allocator. That is a real limit and is reported
 like any other hole.
 
+MULTICORE IS A SEPARATE TABLE, not another axis on this one. `--grid` sweeps
+unified_kernels/matmul_mcast.cpp, which is a different kernel solving a different problem:
+core (r, c) computes A_block[r] @ B_block[c] with the LHS multicast along each core row and
+the RHS down each column, so rt/ct/kt describe ONE CORE's block and the whole problem is
+(grid_h*rt) x (grid_w*ct) x kt tiles. Keeping it in its own table is deliberate -- the
+single-core table's columns are what unified_perf.py's baseline is keyed on, and the two
+sweeps do not share a shape vocabulary.
+
+What the grid sweep is for is the MULTICAST, which is the part that cannot be measured on one
+core: at 8x8 a single operand block is sent to eight cores at once, and whether that scales
+is a property of the handshake pairs and the NOC rather than of the matmul.
+
     python bench_matmul.py
     python bench_matmul.py --rt 1 2 4 --ct 1 2 4 --kt 4 64
     python bench_matmul.py --bias            # ours vs ttnn.linear
+    python bench_matmul.py --grid 1x1 2x2 4x4 8x8       # the mcast sweep
+    python bench_matmul.py --grid 8x8 --rt 1 2 --ct 1 2 --kt 8
 """
 
 import argparse
@@ -152,6 +166,131 @@ def theirs(device, m, n, k, bias=False, cache={}):
     return cache[key]
 
 
+def ours_mcast(device, mcast, grid_h, grid_w, rt, ct, kt, k_blocks, mode, min_pcc):
+    """The mcast kernel on a grid_h x grid_w grid. rt/ct/kt are ONE CORE's block."""
+    try:
+        got, want = mcast.run(device, grid_h, grid_w, rt, ct, kt, k_blocks=k_blocks, mode=mode, fidelity=HIFI2)
+    except Exception as exc:  # noqa: BLE001 - a refused shape IS the result
+        return None, classify(exc)
+    measured = mcast.pcc(got, want)
+    if measured < min_pcc:
+        return None, f"WRONG (pcc {measured:.4f})"
+    try:
+        us = bench(
+            device,
+            lambda: mcast.run(device, grid_h, grid_w, rt, ct, kt, k_blocks=k_blocks, mode=mode, fidelity=HIFI2),
+            iters=8,
+            warmup=2,
+            match="unified_kernels/matmul_mcast.cpp",
+        )["median_us"]
+    except Exception as exc:  # noqa: BLE001
+        return None, classify(exc)
+    return us, ""
+
+
+def theirs_grid(device, m, n, k, grid_h, grid_w, cache={}):
+    """ttnn.matmul on the same core grid and the same whole-problem shape, at HiFi2."""
+    key = (m, n, k, grid_h, grid_w)
+    if key in cache:
+        return cache[key]
+    kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    a = ttnn.from_torch(torch.randn([1, 1, m, k], dtype=torch.bfloat16), **kw)
+    b = ttnn.from_torch(torch.randn([1, 1, k, n], dtype=torch.bfloat16), **kw)
+    ckc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2)
+    us, why = None, ""
+    try:
+        us = bench(
+            device,
+            lambda: ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=grid_h, x=grid_w), compute_kernel_config=ckc),
+            iters=8,
+            warmup=2,
+            # "operations", not "operations/matmul", for the reason the biased path already
+            # gives: ttnn does not always dispatch a matmul from under that directory, and on
+            # a grid it declined a quarter of the cells with zero records until this was
+            # widened. Only one op runs inside the bench call, so nothing else can match.
+            match="operations",
+        )["median_us"]
+    except Exception as exc:  # noqa: BLE001
+        why = f"ttnn declined: {classify(exc)}"
+    cache[key] = (us, why)
+    return cache[key]
+
+
+def sweep_mcast(device, grids, args):
+    """The mcast table. Returns rows of (grid_h, grid_w, mode, kb, kt, rt, ct, us, ref, note)."""
+    import test_unified_matmul_mcast as mcast
+
+    rows = []
+    # The mcast kernel has no single-shot path: it accumulates over k_blocks either in DST or
+    # through an L1 buffer, so "single" is not one of its modes.
+    modes = [m for m in args.modes if m in ("dst", "l1")] or ["dst"]
+    for grid_h, grid_w in grids:
+        for mode in modes:
+            for kt in args.kt:
+                for rt in args.rt:
+                    for ct in args.ct:
+                        us, note = ours_mcast(device, mcast, grid_h, grid_w, rt, ct, kt, args.k_blocks, mode, args.pcc)
+                        ref, ref_why = (
+                            theirs_grid(
+                                device,
+                                grid_h * rt * TILE,
+                                grid_w * ct * TILE,
+                                kt * args.k_blocks * TILE,
+                                grid_h,
+                                grid_w,
+                            )
+                            if us is not None
+                            else (None, "")
+                        )
+                        rows.append((grid_h, grid_w, mode, args.k_blocks, kt, rt, ct, us, ref, note or ref_why))
+    return rows
+
+
+def report_mcast(rows):
+    logger.info("")
+    logger.info(
+        "MCAST, both sides on the same grid at HiFi2. rt/ct/kt are ONE CORE's block; "
+        "MACs is the WHOLE grid's tile-multiplies (grid_h*rt * grid_w*ct * kt*kb)."
+    )
+    logger.info(
+        f"  {'grid':>5s} {'mode':4s} {'kb':>3s} {'kt':>3s} {'rt':>3s} {'ct':>3s} {'MACs':>6s} "
+        f"{'ours':>9s} {'ttnn':>9s} {'ratio':>6s}  note"
+    )
+    per_core = {}
+    for gh, gw, mode, kb, kt, rt, ct, us, ref, note in rows:
+        macs = gh * rt * gw * ct * kt * kb
+        grid = f"{gh}x{gw}"
+        if us is None:
+            logger.info(
+                f"  {grid:>5s} {mode:4s} {kb:3d} {kt:3d} {rt:3d} {ct:3d} {macs:6d} "
+                f"{'-':>9s} {'-':>9s} {'-':>6s}  {note}"
+            )
+            continue
+        r = us / ref if ref else None
+        logger.info(
+            f"  {grid:>5s} {mode:4s} {kb:3d} {kt:3d} {rt:3d} {ct:3d} {macs:6d} {us:7.2f}us "
+            f"{(f'{ref:7.2f}us' if ref else '        -'):>9s} {(f'{r:.2f}x' if r else '-'):>6s}"
+            f"{'  ' + note if note else ''}"
+        )
+        per_core.setdefault((mode, kb, kt, rt, ct), {})[(gh, gw)] = us
+
+    # WHAT THE GRID SWEEP IS ACTUALLY FOR. The same per-core block on a bigger grid does
+    # proportionally more work, so a kernel whose multicast scales holds its time roughly
+    # flat as the grid grows. Rising time at a fixed per-core block is the mcast not scaling,
+    # and that is the number this table exists to produce.
+    scaling = [(k, v) for k, v in per_core.items() if len(v) > 1]
+    if scaling:
+        logger.info("")
+        logger.info("  mcast scaling at a FIXED per-core block (flat = the broadcast is free):")
+        for (mode, kb, kt, rt, ct), by_grid in sorted(scaling):
+            base = min(by_grid)
+            cells = "  ".join(
+                f"{gh}x{gw}={by_grid[(gh, gw)]:.2f}us ({by_grid[(gh, gw)] / by_grid[base]:.2f}x)"
+                for gh, gw in sorted(by_grid)
+            )
+            logger.info(f"    {mode} kb={kb} kt={kt} {rt}x{ct}:  {cells}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--rt", type=int, nargs="+", default=[1, 2, 4, 8])
@@ -166,12 +305,36 @@ def main(argv=None):
     # subblock loop in dst/single and pays a second pass in l1, and ttnn's is linear rather
     # than matmul -- so it is a mode of the sweep, not another axis crossed with it.
     p.add_argument("--bias", action="store_true", help="sweep matmul WITH a fused bias")
+    # HxW core grids for the mcast sweep, e.g. --grid 1x1 2x2 4x4 8x8. Given, this REPLACES
+    # the single-core sweep rather than adding to it: they are different kernels and the
+    # per-core block means something different in each, so running both in one invocation
+    # would put two shape vocabularies in one report.
+    p.add_argument("--grid", nargs="+", default=None, help="mcast sweep on these HxW grids (e.g. 2x2 8x8)")
     args = p.parse_args(argv)
+
+    grids = None
+    if args.grid:
+        try:
+            grids = [tuple(int(v) for v in g.lower().split("x")) for g in args.grid]
+            assert all(len(g) == 2 and g[0] > 0 and g[1] > 0 for g in grids)
+        except (ValueError, AssertionError):
+            p.error(f"--grid wants HxW values like 2x2 or 8x8, got {args.grid}")
+        if args.bias:
+            p.error("--bias has no mcast counterpart; the mcast kernel takes no bias")
 
     if args.bias:
         import test_unified_matmul_bias as matmul
     else:
         import test_unified_matmul as matmul
+
+    if grids:
+        device = ttnn.open_device(device_id=0)
+        try:
+            rows = sweep_mcast(device, grids, args)
+        finally:
+            ttnn.close_device(device)
+        report_mcast(rows)
+        return 0
 
     device = ttnn.open_device(device_id=0)
     rows = []
