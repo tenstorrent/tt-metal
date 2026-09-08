@@ -94,13 +94,15 @@ _PLANNED_REDUCE_KERNEL = r"""
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace {
 constexpr uint32_t kernel_iters = get_compile_time_arg_val(0);
-constexpr uint32_t reduce_args_offset = 1;
+constexpr bool avg_post_op = get_compile_time_arg_val(1) != 0;
+constexpr uint32_t reduce_args_offset = 2;
 constexpr uint32_t num_calls = get_compile_time_arg_val(reduce_args_offset);
 constexpr uint32_t first_call_args_offset =
     reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
@@ -157,7 +159,12 @@ ALWI void issue_call() {
         Call::input_policy != compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
         arm_input<Call>();
     }
-    compute_kernel_lib::reduce<Call>();
+    compute_kernel_lib::reduce<Call>([](uint32_t dst_index) {
+        if constexpr (avg_post_op) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst_index, 0x40000000u);
+        }
+    });
 }
 
 // This walk belongs to the example kernel, not the reduce library. A fused
@@ -237,15 +244,18 @@ def _scratch_cb(cb_id, data_format, num=1):
     )
 
 
-def _planner_tensor_spec(tensor, logical_shape):
+def _planner_tensor_spec(tensor, logical_shape, *, logical_output=False):
     """Keep native dtype/layout/memory metadata while restoring the logical NC dimension."""
     memory = tensor.memory_config()
     return ttnn.TensorSpec(
         ttnn.Shape(list(logical_shape)),
         tensor.dtype,
         tensor.layout,
-        memory.memory_layout,
-        memory.shard_spec,
+        # Column outputs pack batches side by side in the example's one-core
+        # allocation. The plan describes their logical tile stream, whose
+        # width need not match that allocation's physical shard width.
+        ttnn.TensorMemoryLayout.INTERLEAVED if logical_output else memory.memory_layout,
+        None if logical_output else memory.shard_spec,
         memory.buffer_type,
         tensor.spec.tile,
     )
@@ -329,7 +339,7 @@ def _make_sequence_plan(
     max_input_cb_bytes=None,
 ):
     input_spec = _planner_tensor_spec(input_tensor, _logical_input_shape(dim, Ht, Wt, NC, partial_elems))
-    output_spec = _planner_tensor_spec(output_tensor, _logical_output_shape(dim, Ht, Wt, NC))
+    output_spec = _planner_tensor_spec(output_tensor, _logical_output_shape(dim, Ht, Wt, NC), logical_output=True)
     cap = (
         max_input_cb_bytes
         if max_input_cb_bytes is not None
@@ -361,8 +371,8 @@ def _make_sequence_plan(
     )
 
 
-def _planned_kernels(sequence, *, kernel_iters, fidelity, fp32_dest, compute_cfg=None):
-    compute_compile_time_args = [kernel_iters]
+def _planned_kernels(sequence, *, kernel_iters, fidelity, fp32_dest, compute_cfg=None, avg_post_op=False):
+    compute_compile_time_args = [kernel_iters, int(avg_post_op)]
     sequence.append_to(compute_compile_time_args)
     auxiliary_compile_time_args = []
     sequence.auxiliary.append_to(auxiliary_compile_time_args)
@@ -454,7 +464,7 @@ def create_program_descriptor(
 
     fp32_dest = accum == "fp32"
     local_elements = _mean_n(dim, Ht, Wt, partial_elems)
-    scalar = (2.0 if avg_post_op else 1.0) / local_elements
+    scalar = 1.0 / local_elements
     sequence = _make_sequence_plan(
         input_tensor,
         output_tensor,
@@ -471,7 +481,9 @@ def create_program_descriptor(
         max_input_cb_bytes=max_input_cb_bytes,
     )
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
-    kernels = _planned_kernels(sequence, kernel_iters=kernel_iters, fidelity=fidelity, fp32_dest=fp32_dest)
+    kernels = _planned_kernels(
+        sequence, kernel_iters=kernel_iters, fidelity=fidelity, fp32_dest=fp32_dest, avg_post_op=avg_post_op
+    )
     cbs = _planned_cbs([(CB_IN, input_tensor)], output_tensor, sequence, _dtype_of(accum))
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
@@ -509,6 +521,7 @@ def create_accumulate_program_descriptor(
     reload="copy_pairs",
     acc_unpack_to_dest=False,
     max_input_cb_bytes=None,
+    avg_post_op=False,
 ):
     if dim not in DIMS:
         raise ValueError(f"dim must be one of {DIMS}, got {dim!r}")
@@ -561,6 +574,7 @@ def create_accumulate_program_descriptor(
         fidelity=fidelity,
         fp32_dest=fp32_dest,
         compute_cfg=compute_cfg,
+        avg_post_op=avg_post_op,
     )
     input_bindings = [(cb_id, input_tensor) for cb_id in input_cb_ids]
     cbs = _planned_cbs(input_bindings, output_tensor, sequence, _dtype_of(accum))

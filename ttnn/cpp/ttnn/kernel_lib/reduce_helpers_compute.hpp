@@ -669,11 +669,14 @@ ALWI void reduce(
  * partial handling. The call count exists only so kernel code can locate and
  * walk the ordered calls.
  *
+ * An optional caller post operation runs on each completed output tile after
+ * the plan's post-scaling. Intermediate accumulation calls do not run it.
+ *
  * @tparam Call A constexpr call descriptor such as
  *         ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
  */
-template <typename Call>
-ALWI void reduce();
+template <typename Call, typename PostReduceOp = NoOp>
+ALWI void reduce(PostReduceOp post_reduce_op = PostReduceOp{});
 
 }  // namespace compute_kernel_lib
 
