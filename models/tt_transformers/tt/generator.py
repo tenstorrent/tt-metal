@@ -2137,6 +2137,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         device_inputs = prepared["device_inputs"]
         kv_cache = prepared["kv_cache"]
         on_device_sampling = prepared["on_device_sampling"]
+        # Staged batch for this trace. ``tokens`` lives in
+        # _prepare_decode_trace_text, not here (this phase only receives
+        # ``prepared``), so the sampling-trace guard below reads the batch that
+        # phase recorded rather than the token tensors.
+        prepared_batch = prepared.get("batch", 1)
 
         tt_out_trace = []
         trace_ids = {}
@@ -2177,7 +2182,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # must sample eagerly so a prior B=max sampling trace is not
                 # replayed against a different logits allocation.
                 sampling_max = getattr(getattr(sampling_module, "tt_sampling", None), "max_batch_size", None)
-                decode_batch = int(tokens[i].shape[0]) if tokens is not None else None
+                decode_batch = int(prepared_batch)
                 if sampling_max is not None and decode_batch is not None and decode_batch != int(sampling_max):
                     logger.info(
                         "Skipping sampling-trace capture for decode_batch={} "
