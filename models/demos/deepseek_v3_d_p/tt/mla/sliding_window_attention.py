@@ -4,7 +4,7 @@
 """DeepSeek-V4 sliding-only attention (``layer_types[i] == "sliding_attention"``), chunked prefill.
 
 Each chip attends over ``[halo | its own rows]``, where the halo is the ``sliding_window`` rows
-preceding its first query: that is as far back as the window reaches.
+preceding its first query.
 """
 
 import torch
