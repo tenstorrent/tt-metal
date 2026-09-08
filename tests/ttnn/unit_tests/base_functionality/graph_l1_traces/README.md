@@ -19,6 +19,8 @@ pressure profiler built on top of these traces, and
 `L1_profiling_critical_findings.md` for the program-cache pitfall that invalidates the obvious
 `RunMode.NORMAL` measurement design. `PROGRAM_CACHE_BENCHMARK.md` measures the cost of disabling
 the program cache across 50 distinct programs with cold and warm persistent kernel caches.
+`GRADED_RUN_L1_OVERHEAD.md` measures the incremental cost of cache-off capture and peak reduction
+inside the real graded RMSNorm pass.
 
 Tools in this directory:
 
