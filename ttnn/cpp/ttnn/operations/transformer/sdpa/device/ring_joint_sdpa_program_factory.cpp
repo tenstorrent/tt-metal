@@ -134,8 +134,6 @@ ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
         .mesh_rows = ag.mesh_rows,
         .mesh_cols = ag.mesh_cols,
         .ring_size = ag.ring_size,
-        .num_links = ag.num_links,
-        .topology = ag.topology,
         .route_plan_hash = ag.route_plan_hash,
     };
 }
@@ -404,7 +402,7 @@ RingWritePlan build_ring_write_plan(
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         const auto position = ttnn::operations::ccl::common::get_mesh_ring_position(
-            tensor_args.input_q, coord, mesh_ring_plan_from_attributes(ag));
+            tensor_args.input_q, coord, mesh_ring_plan_from_attributes(ag), ag.topology);
         plan.transport_rank = position.transport_rank;
         plan.tensor_rank = position.tensor_rank;
         plan.forward_coord = position.forward_coord;

@@ -28,12 +28,15 @@ struct MeshRingPlan {
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     uint32_t ring_size = 0;
-    uint32_t num_links = 0;
-    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
-    tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
-    std::array<tt::tt_fabric::Topology, 2> axis_topology{
-        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::optional<uint64_t> route_plan_hash;
+};
+
+// What the edge proof concluded about the geometry in `plan`: Ring where the walk closed, Linear
+// where it only resolved as an open path. Deliberately not a field of the plan -- closure is what
+// decides whether the end ranks have a neighbor, so it is passed explicitly rather than defaulted.
+struct ResolvedMeshRoute {
+    MeshRingPlan plan;
+    tt::tt_fabric::Topology topology;
 };
 
 struct MeshRingPosition {
@@ -70,10 +73,13 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
 
 // Resolve an axis line/ring or select the first legal full-mesh snake. For a
 // full mesh, row orientation is preferred and column orientation is the
-// fallback; only orientations with an even lane count are candidates.
+// fallback. The two tiers select differently: a cycle candidate must also have
+// an even lane count in that orientation, because that is what lets the walk
+// return to rank 0, while an open path has no closing edge to place and so
+// tries both orientations.
 //
-// allow_open_path can return a plan whose end ranks lack a neighbor one way -- a schedule assuming a ring will hang.
-std::optional<MeshRingPlan> resolve_mesh_ring_plan(
+// allow_open_path can return a route whose end ranks lack a neighbor one way -- a schedule assuming a ring will hang.
+std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     const ttnn::Tensor& tensor,
     std::optional<uint32_t> cluster_axis,
     uint32_t num_links,
@@ -82,7 +88,12 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
     std::string_view operation_name = "mesh ring",
     bool allow_open_path = false);
 
+// topology is the route the caller's schedule assumes: Ring gives every rank both neighbors, Linear
+// leaves the two end ranks dead one way, as an axis line does.
 MeshRingPosition get_mesh_ring_position(
-    const ttnn::Tensor& tensor, const ttnn::MeshCoordinate& coordinate, const MeshRingPlan& plan);
+    const ttnn::Tensor& tensor,
+    const ttnn::MeshCoordinate& coordinate,
+    const MeshRingPlan& plan,
+    tt::tt_fabric::Topology topology);
 
 }  // namespace ttnn::operations::ccl::common
