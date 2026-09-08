@@ -98,6 +98,10 @@ pre-agent-steps:
       PR_NUMBER: ${{ github.event.issue.number }}
       EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
       PR_DIFF_MAX_LINES: "3000"
+      # Passed as an environment variable, never interpolated into the script body:
+      # the comment is attacker-controlled text and ${{ }} inside `run:` is a shell
+      # injection. Used only to record the *Mandatory selections* opt-out as a fact.
+      COMMENT_BODY: ${{ github.event.comment.body }}
     run: |
       set -euo pipefail
       mkdir -p /tmp/gh-aw/agent
@@ -175,6 +179,20 @@ pre-agent-steps:
       printf '%s\n' "$HEAD_REF" > "$FACTS_DIR/pr-head-ref.txt"
       printf '%s\n' "$IS_FORK"  > "$FACTS_DIR/pr-is-fork.txt"
 
+      # Same reasoning for the changed-file list: the enforcement step derives the
+      # mandatory nightly categories from it, so it must be the host's copy and not
+      # one the agent could have rewritten.
+      cp /tmp/gh-aw/agent/pr-files.txt "$FACTS_DIR/pr-files.txt"
+
+      # The *Mandatory selections* opt-out (`/test skip nightly`) is a prompt rule, so
+      # record whether it was asked for as a fact too — otherwise enforcing the rule
+      # would mean trusting the agent's own account of whether it was waived.
+      if printf '%s' "${COMMENT_BODY:-}" | grep -qiE 'skip[[:space:]]+nightly'; then
+        printf 'true\n' > "$FACTS_DIR/nightly-optout.txt"
+      else
+        printf 'false\n' > "$FACTS_DIR/nightly-optout.txt"
+      fi
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
 # Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
@@ -200,7 +218,7 @@ pre-agent-steps:
 # agent sandbox cannot write (see the pre-agent step): the /tmp/gh-aw copies exist
 # only as model context and are treated as untrusted here.
 post-steps:
-  - name: Enforce PR head ref on dispatch_workflow items
+  - name: Enforce dispatch ref and mandatory nightly categories
     if: always()
     run: |
       set -euo pipefail
@@ -222,7 +240,7 @@ post-steps:
         echo '{"items":[]}' > "$OUT" || true
       }
       finish_ok=0
-      trap '[ "$finish_ok" = 1 ] || { echo "::error::Ref enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
+      trap '[ "$finish_ok" = 1 ] || { echo "::error::Dispatch enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
 
       # gh-aw's placeholder step (which writes '{"items":[]}' when the agent
       # produced nothing) runs before post-steps, so this file normally exists
@@ -274,6 +292,105 @@ post-steps:
       mv "$OUT.tmp" "$OUT"
       echo "dispatch_workflow refs as emitted by the agent: $BEFORE"
       echo "All dispatch_workflow items now target: $HEAD_REF"
+
+      # Deterministic enforcement of *Mandatory selections*. Same failure mode as the
+      # ref rule above: the path -> category table is executed by a model, so a change
+      # under an op directory can still come back with no tt-metal-l2-nightly dispatch
+      # at all, or with one naming only the first category it matched. Recompute the
+      # required set here from the host-owned changed-file list and merge it in, so the
+      # prompt table is a description of what happens rather than a request.
+      FILES_FILE="$FACTS_DIR/pr-files.txt"
+      OPTOUT="$(cat "$FACTS_DIR/nightly-optout.txt" 2>/dev/null || echo unknown)"
+
+      if [ "$OPTOUT" = "true" ]; then
+        echo "Comment asked to skip nightly; leaving tt-metal-l2-nightly selection to the agent."
+      elif [ ! -s "$FILES_FILE" ]; then
+        # An empty list means the pre-agent step changed shape; the diff is never
+        # genuinely empty on a PR. Fail into the EXIT trap rather than conclude
+        # "no categories required" from missing data.
+        echo "::error::pr-files.txt is missing or empty; cannot enforce nightly categories." >&2
+        exit 1
+      else
+        # One row per row of the prompt's path -> category table, in the same order.
+        # Emitted in a fixed order so the input string is stable across runs.
+        REQ="$(awk '
+          /^ttnn\/cpp\/ttnn\/operations\/eltwise\//                     { c["eltwise"]=1 }
+          /^tests\/ttnn\/(nightly\/)?unit_tests\/operations\/eltwise\// { c["eltwise"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/(data_movement|copy|index_fill|point_to_point)\// { c["data_movement"]=1 }
+          /^tests\/ttnn\/(nightly\/)?unit_tests\/operations\/(data_movement|point_to_point)\// { c["data_movement"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/(conv|sliding_window)\//        { c["conv"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/conv\//       { c["conv"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/matmul\//                       { c["matmul"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/matmul\//     { c["matmul"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/pool\//                         { c["pool"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/pool\//       { c["pool"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/reduction\//                    { c["reduction"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/reduction\//  { c["reduction"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/normalization\//                { c["fused"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/fused\//      { c["fused"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/transformer\/sdpa/              { c["sdpa"]=1; next }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/sdpa\//       { c["sdpa"]=1; next }
+          /^ttnn\/cpp\/ttnn\/operations\/(transformer|kv_cache)\//       { c["transformers"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/transformers\// { c["transformers"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/ccl\//                          { c["ccl"]=1 }
+          /^tests\/(ttnn\/unit_tests\/operations|nightly\/tg)\/ccl\//   { c["ccl"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/moreh\//                        { c["moreh"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/moreh\//      { c["moreh"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/experimental\//                 { c["experimental"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/experimental\// { c["experimental"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/(rand|randn|uniform|bernoulli)\// { c["misc"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/(rand|ssm)\// { c["misc"]=1 }
+          /^ttnn\/cpp\/ttnn\/kernel_lib\//                                { c["kernel_lib"]=1 }
+          /^tests\/ttnn\/unit_tests\/kernel_lib\//                        { c["kernel_lib"]=1 }
+          END {
+            n = split("eltwise data_movement conv matmul pool reduction fused transformers sdpa ccl moreh experimental misc kernel_lib", order, " ")
+            out = ""
+            for (i = 1; i <= n; i++) if (order[i] in c) out = out (out == "" ? "" : ",") order[i]
+            print out
+          }' "$FILES_FILE")"
+
+        if [ -z "$REQ" ]; then
+          echo "No changed path maps to an l2-nightly op category; nothing to enforce."
+        else
+          BEFORE_CATS="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | (.inputs.additional_test_categories // "MISSING")] | @json' "$OUT")"
+          # Merge rather than overwrite: the agent may legitimately have added a
+          # category the table does not cover (docs_examples, cpp_accessor, ...).
+          # `unique` also collapses a duplicated or reordered list to one canonical form.
+          jq --arg ref "$HEAD_REF" --arg cats "$REQ" '
+            def merged(existing):
+              ((existing // "") | split(",") | map(select(length > 0)))
+              + ($cats | split(","))
+              | unique | join(",");
+            if ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")] | length) > 0
+            then .items = [ .items[]?
+                   | if .type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly"
+                     then .inputs = ((.inputs // {}) + {additional_test_categories: merged(.inputs.additional_test_categories)})
+                     else . end ]
+            else .items += [{type: "dispatch_workflow", workflow_name: "tt-metal-l2-nightly", ref: $ref,
+                             inputs: {additional_test_categories: ($cats | split(",") | unique | join(","))}}]
+            end' "$OUT" > "$OUT.tmp"
+          mv "$OUT.tmp" "$OUT"
+
+          # The cap is applied at ingestion, which has already run — an injected item
+          # can therefore push the count to 9. Trim the agent's own selection rather
+          # than the mandatory one, keeping its order, and say which ones went.
+          DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
+          if [ "$DISPATCHES" -gt 8 ]; then
+            DROPPED="$(jq -c '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly") | .workflow_name][7:]' "$OUT")"
+            echo "::warning::Mandatory tt-metal-l2-nightly dispatch pushed the selection to ${DISPATCHES}; dropped ${DROPPED} to stay within the cap of 8."
+            jq '
+              ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly")][:7]) as $others
+              | ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")]) as $required
+              | .items = ([.items[]? | select(.type != "dispatch_workflow")] + $others + $required)' "$OUT" > "$OUT.tmp"
+            mv "$OUT.tmp" "$OUT"
+          fi
+
+          echo "Required nightly categories from changed paths: $REQ"
+          echo "additional_test_categories as emitted by the agent: $BEFORE_CATS"
+          echo "additional_test_categories after enforcement: $(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | .inputs.additional_test_categories] | @json' "$OUT")"
+        fi
+      fi
+
       finish_ok=1
 
 safe-outputs:
@@ -480,6 +597,13 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    in the comment that names other hardware (e.g. `/test blackhole`) narrows the *rest* of
    your selection, not this rule; only an explicit `/test skip nightly` (or equivalent)
    opts out, and say so in the comment.
+
+   This rule is enforced deterministically after you run, for the same reason as *The ref
+   rule*: a post-step recomputes the required categories from the changed-file list and
+   merges them into your `tt-metal-l2-nightly` item, adding the item outright if you
+   omitted it. Apply the table anyway — an injected dispatch can push the selection over
+   the cap of 8 and silently drop the last pipeline you chose, and your summary comment
+   will not match what actually ran.
 
 5. **Narrow each survivor to the relevant platforms _and suites_** via its inputs (next
    section). Running `runtime-unit-tests` across every SKU when only Blackhole code
