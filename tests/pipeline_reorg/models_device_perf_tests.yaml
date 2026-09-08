@@ -118,6 +118,19 @@
     export MESH_DEVICE=TG
     # Device timings come from CSV; omit the large device-event stream from Tracy.
     export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1
+    python3 - <<'PYDIAG'
+    import pathlib
+    import tracy
+    init = pathlib.Path(tracy.__file__)
+    print(f"Diagnostic Tracy module: {init}", flush=True)
+    text = init.read_text()
+    assert text.count("if verbose:") == 1
+    init.write_text(text.replace("if verbose:", "if True:"))
+    main = init.with_name("__main__.py")
+    text = main.read_text()
+    assert text.count("captureProcess.communicate(timeout=15)") == 1
+    main.write_text(text.replace("captureProcess.communicate(timeout=15)", "captureProcess.communicate(timeout=120)"))
+    PYDIAG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest --timeout=1200 models/demos/deepseek_v3/demo/test_decode_demo_perf.py
   model: deepseek-v3-tg
