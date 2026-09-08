@@ -48,7 +48,7 @@ class _DfCounterView:
         return counter_name in self._names
 
     def is_blackhole(self) -> bool:
-        from ..chip_architecture import ChipArchitecture, get_chip_architecture
+        from .chip_architecture import ChipArchitecture, get_chip_architecture
 
         return get_chip_architecture() == ChipArchitecture.BLACKHOLE
 
