@@ -345,7 +345,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.arange">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">arange</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">ttnn.bfloat16</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device:</span> <span class="pre">ttnn.Device</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">ttnn.DRAM_MEMORY_CONFIG</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">ttnn.ROW_MAJOR</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.arange" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">arange</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">ttnn.bfloat16</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device:</span> <span class="pre">ttnn.Device</span> <span class="pre">|</span> <span class="pre">ttnn.MeshDevice</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">ttnn.DRAM_MEMORY_CONFIG</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">ttnn.ROW_MAJOR</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.arange" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Creates a tensor with values ranging from <cite>start</cite> (inclusive) to <cite>end</cite> (exclusive) with a specified <cite>step</cite> size. The data type, device, layout and memory configuration of the resulting tensor can be specified.</p>
@@ -357,18 +357,43 @@
 <li><p><span class="tt-api-param-name"><strong>start</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The start of the range. Defaults to 0.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>end</strong> (<em>int</em>)</span><span class="tt-api-param-desc">The end of the range (exclusive).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>step</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The step size between consecutive values. Defaults to 1.</span></p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The data type of the tensor. Defaults to <cite>ttnn.bfloat16</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.Device</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The device where the tensor will be allocated. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The device where the tensor will be allocated. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The memory configuration for the tensor. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The tensor layout. Defaults to <cite>ttnn.ROW_MAJOR</cite>.</span></p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
-<dd class="field-even">
+<dd class="field-odd">
 <p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">A tensor containing evenly spaced values within the specified range.</span></p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, UINT16, UINT32, INT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p><cite>step</cite> must be non-zero, and its sign must match the direction from <cite>start</cite> to <cite>end</cite>.</p>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">

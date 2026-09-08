@@ -345,7 +345,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.rand">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">rand</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device:</span> <span class="pre">ttnn.Device</span> <span class="pre">|</span> <span class="pre">ttnn.MeshDevice</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">ttnn.bfloat16</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">ttnn.TILE_LAYOUT</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">ttnn.DRAM_MEMORY_CONFIG</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mesh_mapper:</span> <span class="pre">ttnn.MeshMapperConfig</span> <span class="pre">|</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.rand" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">rand</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Device</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn.MeshDevice</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.bfloat16</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Layout</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.TILE_LAYOUT</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.DRAM_MEMORY_CONFIG</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mesh_mapper</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MeshMapperConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.rand" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Generates a tensor with the given shape, filled with random values from a uniform distribution.
@@ -374,18 +374,20 @@ uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.</p>
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>shape</strong> (<em>list</em><em>[</em><em>int</em><em>]</em>) – </p>
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>shape</strong> (<em>list</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">A list of integers defining the shape of the output tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em>)</span><span class="tt-api-param-desc">The device on which the tensor will be allocated.</span></p></li>
+</ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The device on which the tensor will be allocated. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The data type of the tensor. Defaults to ttnn.bfloat16.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The data type of the tensor. Defaults to <cite>ttnn.bfloat16</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The layout of the tensor. Defaults to <cite>ttnn.TILE_LAYOUT</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>low</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The lower bound of the range (inclusive).</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>high</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The upper bound of the range (exclusive).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>low</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The lower bound of the range (inclusive). Defaults to 0.0.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>high</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The upper bound of the range (exclusive). Defaults to 1.0.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">An optional seed to initialize the random number generator
 for reproducible results. Defaults to 0.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>mesh_mapper</strong> (<em>ttnn.MeshMapperConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Distribution strategy for multi-device tensors.
@@ -401,6 +403,25 @@ all devices produce the same values. Defaults to <cite>None</cite>.</span></p></
 <p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">A tensor with specified shape, dtype, and layout containing random values.</span></p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT8, INT32, UINT16, UINT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.</p>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
