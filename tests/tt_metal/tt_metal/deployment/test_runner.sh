@@ -156,15 +156,16 @@ run_logged() {
 	rc="$(cat "$RCFILE")"
 }
 
-# run_reset <message>: reset the boards, aborting the run if the reset fails.
+# run_reset <message>: reset the boards and return its exit status.
 run_reset() {
 	emit_section "$1"
 	run_logged $RESET_CMD
 	if [ "$rc" -ne 0 ]
 	then
 		emit "Reset failed (exit code $rc)"
-		exit "$rc"
+		return "$rc"
 	fi
+	return 0
 }
 
 # run_test <label> <command...>: runs a test once and records its result.
@@ -235,6 +236,7 @@ emit "$(printf '%-12s %s' 'Run log:' "$RUN_LOG")"
 emit "$RULE_HEAVY"
 
 iteration_failures=0
+reset_failures=0
 iterations_run=0
 eth_pass=0
 dram_pass=0
@@ -244,11 +246,24 @@ pcie_write_pass=0
 for iteration in $(seq 1 "$ITERATIONS")
 do
 	emit_banner "ITERATION $iteration/$ITERATIONS"
+	reset_ok=1
 	if [ "$SKIP_RESET" -eq 0 ]
 	then
-		run_reset "Resetting boards ($RESET_CMD)..."
+		if ! run_reset "Resetting boards ($RESET_CMD)..."
+		then
+			reset_ok=0
+			reset_failures=$((reset_failures + 1))
+		fi
 	fi
-	if run_tests
+	if [ "$reset_ok" -eq 0 ]
+	then
+		last_eth_ok=0
+		last_dram_ok=0
+		last_pcie_read_ok=0
+		last_pcie_write_ok=0
+		iteration_failures=$((iteration_failures + 1))
+		emit_banner "ITERATION $iteration FAILED (reset failed)"
+	elif run_tests
 	then
 		emit_banner "ITERATION $iteration PASSED"
 	else
@@ -270,6 +285,7 @@ done
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
 emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
 emit "$RULE_LIGHT"
+emit "$(printf '%-20s %s' 'Reset failures:'   "$reset_failures/$iterations_run iterations failed")"
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
