@@ -48,20 +48,12 @@ case "${MODEL}" in
     NUM_USERS_DEFAULT=28
     # KV-dedup default for this leg (#51968 / #55458); main's value, kept as-is.
     TP_SHARD_KV_DEFAULT=1
-    # Traced prefill, as the kimi27 leg above runs it. The sparse/DSA indexer ops read their per-chunk
-    # scalars (chunk start, cache slot, top-k bound, gather extent) on-device from the metadata tensors,
-    # so ONE captured forward replays for every chunk -- which is what makes this leg the end-to-end gate
-    # on that path: the KV write is metadata-driven either way, so a frozen host runtime argument would
-    # show up here as a wrong-slot or short-prefix READ, and the PCC gate below is what catches it.
-    #
-    # TRACE ONLY. PREFILL_LAYER_ACK_D2H=1 (which main sets here) is NOT combined with it:
-    # capture_trace()'s D2H warm pass fires warmup_ack_count() real records that prefill_runner then
-    # drains, and that drain spins forever on a traced GLM run -- verified locally, the runner sits in
-    # read_metadata() at 100% CPU after a clean capture. Confirmed in CI too: the kimi27 leg above was
-    # briefly given main's both-flags form and its SC4 job came back "Status: TIMEOUT / hang triaged",
-    # so the incompatibility is the COMBINATION, not something GLM-specific. Both legs stay trace-only
-    # until the warm-pass drain is fixed.
-    RUNNER_ENV="export PREFILL_USE_TRACE=1;"
+    # UNTRACED on this leg. traced + tp_shard_kv needs the full-mesh snake KV gather; SC4's per-rank
+    # sub-mesh cannot close that ring, so it falls back to the two-stage gather, where the metadata path
+    # is refused (see _gather_kvpe_prefix_tp_sharded_high_bw). Enabling trace here produced KVPE 0.44-0.65
+    # across the four ranks before that refusal was restored. Traced TP IS validated bit-exact on a
+    # snake-capable mesh (8x4 galaxy, 0.998829/0.999756); this leg simply is not one.
+    RUNNER_ENV=""
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
     # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
