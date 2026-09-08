@@ -14,12 +14,17 @@
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
 auto check_board_is_n300() {
     return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
+}
+
+auto check_has_at_least_two_chips() {
+    return tt::umd::Cluster::create_cluster_descriptor()->get_number_of_chips() >= 2U;
 }
 
 // Reference: standard cross-entropy loss = mean_over_positions( log_normalizer − target_logit )
@@ -139,6 +144,20 @@ xt::xarray<float> cross_entropy_grad_reference_per_position(
     return grad;
 }
 
+auto to_xtensor_with_tile_padding(const ttnn::Tensor& tensor) {
+    const auto& padded_shape = tensor.padded_shape();
+    auto physical_view = ttnn::reshape(
+        tensor,
+        padded_shape,
+        padded_shape,
+        /*memory_config=*/std::nullopt,
+        /*pad_value=*/std::nullopt,
+        ttnn::TileReshapeMapMode::CACHE,
+        /*sub_core_grid=*/std::nullopt,
+        /*skip_padding_fill=*/true);
+    return ttml::core::to_xtensor<float>(physical_view, ttml::core::IdentityComposer{});
+}
+
 }  // namespace
 
 class ShardedCrossEntropyLossTest : public ::testing::Test {
@@ -146,6 +165,22 @@ protected:
     void SetUp() override {
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
+        }
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+class TwoChipCrossEntropyLossTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!check_has_at_least_two_chips()) {
+            GTEST_SKIP() << "Skipping test that requires at least two chips";
         }
         ttml::ttnn_fixed::distributed::enable_fabric(2U);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
@@ -246,6 +281,111 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardSmall) {
 
     EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
     EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+}
+
+TEST_F(TwoChipCrossEntropyLossTest, BackwardNonAlignedSequencePreservesPadding) {
+    SKIP_FOR_WATCHER();
+
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t B = 1U, S = 33U;
+    const uint32_t local_V = 64U;
+    const uint32_t full_V = local_V * 2U;
+
+    std::mt19937 gen(19);
+    xt::xarray<float> logits_xt = xt::empty<float>({B, 1U, S, full_V});
+    std::uniform_real_distribution<float> dist(-3.0F, 3.0F);
+    for (auto& value : logits_xt) {
+        value = dist(gen);
+    }
+
+    xt::xarray<uint32_t> targets_xt = xt::zeros<uint32_t>({B, S});
+    for (uint32_t s = 0; s < S; ++s) {
+        targets_xt(0, s) = (s % 2U == 0U) ? (s % local_V) : (local_V + (s % local_V));
+    }
+
+    auto shard_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto logits_dev =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(logits_xt, device, ttnn::Layout::TILE, shard_mapper.get());
+
+    auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto targets_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        targets_xt, device, ttnn::Layout::ROW_MAJOR, replicate_mapper.get());
+
+    auto logits_ptr = autograd::create_tensor(logits_dev, true);
+    auto targets_ptr = autograd::create_tensor(targets_dev, false);
+    const auto logits_physical_before = to_xtensor_with_tile_padding(logits_ptr->get_value());
+
+    auto loss = ops::distributed::vocab_parallel_cross_entropy_loss(logits_ptr, targets_ptr);
+    auto loss_xt = core::to_xtensor<float>(loss->get_value(), core::IdentityComposer{});
+    const float expected_loss = cross_entropy_loss_reference(logits_xt, targets_xt);
+    EXPECT_NEAR(loss_xt[0](0, 0, 0, 0), expected_loss, 5e-2F);
+    EXPECT_NEAR(loss_xt[1](0, 0, 0, 0), expected_loss, 5e-2F);
+
+    const auto logits_physical_after = to_xtensor_with_tile_padding(logits_ptr->get_value());
+    ASSERT_EQ(logits_physical_after.size(), logits_physical_before.size());
+    for (size_t shard = 0; shard < logits_physical_before.size(); ++shard) {
+        EXPECT_TRUE(xt::allclose(logits_physical_after[shard], logits_physical_before[shard], 0.0F, 0.0F));
+    }
+
+    xt::xarray<float> grad_ones = xt::ones<float>({1U, 1U, 1U, 1U});
+    auto grad_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        grad_ones, device, ttnn::Layout::TILE, replicate_mapper.get());
+    loss->set_grad(grad_dev);
+    loss->backward();
+
+    ASSERT_TRUE(core::is_tensor_initialized(logits_ptr->get_grad()));
+    auto grad_xtensors = core::to_xtensor<float>(logits_ptr->get_grad(), core::IdentityComposer{});
+    auto expected_grad = cross_entropy_grad_reference(logits_xt, targets_xt);
+    auto expected_shard0 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
+    auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
+    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+
+    const auto grad_physical = to_xtensor_with_tile_padding(logits_ptr->get_grad());
+    for (const auto& shard : grad_physical) {
+        for (uint32_t s = S; s < shard.shape(2); ++s) {
+            for (uint32_t v = 0; v < local_V; ++v) {
+                EXPECT_TRUE(std::isfinite(shard(0, 0, s, v)));
+                EXPECT_EQ(shard(0, 0, s, v), 0.0F);
+            }
+        }
+    }
+
+    const auto logits_physical_after_backward = to_xtensor_with_tile_padding(logits_ptr->get_value());
+    ASSERT_EQ(logits_physical_after_backward.size(), logits_physical_before.size());
+    for (size_t shard = 0; shard < logits_physical_before.size(); ++shard) {
+        EXPECT_TRUE(xt::allclose(logits_physical_after_backward[shard], logits_physical_before[shard], 0.0F, 0.0F));
+    }
+
+    // NONE exposes a [B,1,S,1] tensor, whose implicit width and sequence padding
+    // must also be clean after the final typecast. Reusing the same input exercises
+    // the cached reduction/clone path after the MEAN forward and backward above.
+    auto loss_none = ops::distributed::vocab_parallel_cross_entropy_loss(
+        logits_ptr, targets_ptr, /*cluster_axis=*/std::nullopt, ops::ReduceType::NONE);
+    const auto loss_none_xt = core::to_xtensor<float>(loss_none->get_value(), core::IdentityComposer{});
+    const auto expected_none = cross_entropy_loss_reference_per_position(logits_xt, targets_xt);
+    EXPECT_TRUE(xt::allclose(loss_none_xt[0], expected_none, 3e-2F, 5e-2F));
+    EXPECT_TRUE(xt::allclose(loss_none_xt[1], expected_none, 3e-2F, 5e-2F));
+
+    const auto loss_none_physical = to_xtensor_with_tile_padding(loss_none->get_value());
+    for (const auto& shard : loss_none_physical) {
+        for (uint32_t s = 0U; s < shard.shape(2); ++s) {
+            for (uint32_t v = 0U; v < shard.shape(3); ++v) {
+                if (s >= S || v >= 1U) {
+                    EXPECT_TRUE(std::isfinite(shard(0, 0, s, v)));
+                    EXPECT_EQ(shard(0, 0, s, v), 0.0F);
+                }
+            }
+        }
+    }
+
+    const auto logits_physical_after_none = to_xtensor_with_tile_padding(logits_ptr->get_value());
+    ASSERT_EQ(logits_physical_after_none.size(), logits_physical_before.size());
+    for (size_t shard = 0; shard < logits_physical_before.size(); ++shard) {
+        EXPECT_TRUE(xt::allclose(logits_physical_after_none[shard], logits_physical_before[shard], 0.0F, 0.0F));
+    }
 }
 
 TEST_F(ShardedCrossEntropyLossTest, BackwardBatch) {
