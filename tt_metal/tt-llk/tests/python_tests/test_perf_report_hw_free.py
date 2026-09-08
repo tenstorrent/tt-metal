@@ -426,6 +426,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     monkeypatch.setenv("CHIP_ARCH", "wormhole")
     monkeypatch.setenv("GITHUB_SHA", "testsha")
     monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)  # -> pipeline "nightly"
 
     # one raw per-worker CSV (the .gw* pattern combine globs for)
