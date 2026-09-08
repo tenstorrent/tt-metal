@@ -1533,7 +1533,15 @@ class TPGatedDeltaNet:
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
 
-        if self._decode_fused_conv and B == 1 and self._fuse_ab and getattr(self.args, "proj_1d_decode", False):
+        # Fused paths are single-sequence only: decode width 1 AND a single-slot state (Bmax == 1). Under bucketed
+        # serving with max_num_seqs > 1 the width-1 bucket still carries [Bmax, Nv, Dk, Dv] state -> fall back.
+        if (
+            self._decode_fused_conv
+            and B == 1
+            and self.B == 1
+            and self._fuse_ab
+            and getattr(self.args, "proj_1d_decode", False)
+        ):
             self._ensure_conv_hist_packed()
             qkvzab = tpc.matmul_1d_decode(
                 x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
@@ -1593,7 +1601,7 @@ class TPGatedDeltaNet:
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
-        if (self._decode_fused or self._decode_kda) and B == 1:
+        if (self._decode_fused or self._decode_kda) and B == 1 and self.B == 1:
             gated = (
                 self._decode_fused_step(conv, z, a, b) if self._decode_fused else self._decode_kda_step(conv, z, a, b)
             )
