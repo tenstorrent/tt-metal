@@ -8,14 +8,6 @@ from dataclasses import dataclass
 
 import ttnn
 
-_DTYPE_ELEMENT_BYTES = {
-    ttnn.bfloat16: 2,
-    ttnn.float32: 4,
-    ttnn.uint16: 2,
-    ttnn.uint32: 4,
-    ttnn.int32: 4,
-}
-
 
 @dataclass(frozen=True)
 class OverlappedTensorSpec:
@@ -26,9 +18,10 @@ class OverlappedTensorSpec:
     byte size.  Each spec carries the core range, logical tensor shape,
     dtype, and tile dimensions needed to pack its portion of the shard.
 
-    Tile byte sizes for BFP formats are computed from ``tile_h`` and
-    ``tile_w`` rather than stored as constants, so non-standard tile
-    shapes (e.g. 1x32, 16x32) are handled automatically.
+    Tile byte sizes come from ``ttnn.Tile.get_tile_size``, so they match
+    the host packer for any tile shape (e.g. 1x32, 16x32).  For BFP
+    formats that include L1-aligned exponents and trailing DRAM
+    alignment padding after the mantissa section.
 
     Shape tuples follow (height, width) convention.
 
@@ -65,14 +58,7 @@ class OverlappedTensorSpec:
     name: str = ""
 
     def _tile_bytes(self) -> int:
-        num_elements = self.tile_h * self.tile_w
-        if self.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-            _L1_ALIGNMENT = 16
-            num_exponents = num_elements // 16
-            exponent_bytes = (num_exponents + _L1_ALIGNMENT - 1) // _L1_ALIGNMENT * _L1_ALIGNMENT
-            mantissa_bytes = num_elements if self.dtype == ttnn.bfloat8_b else num_elements // 2
-            return exponent_bytes + mantissa_bytes
-        return num_elements * _DTYPE_ELEMENT_BYTES[self.dtype]
+        return ttnn.Tile([self.tile_h, self.tile_w]).get_tile_size(self.dtype)
 
     def _dim_tp(self, tensor_dim: int, mesh_shape: tuple[int, int]) -> int:
         """TP factor for a single tensor dimension (0=height, 1=width)."""
