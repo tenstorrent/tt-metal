@@ -932,6 +932,80 @@ def test_div_inf_nan_cases(device):
     assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
 
 
+def _int32_div_by_zero_numerators():
+    # Every int32 magnitude binade in both signs (2**k, 2**k - 1, 2**k + 1), the
+    # extremes, zero, and a deterministic random fill: one 32x32 tile, all
+    # lanes divided by zero.
+    special = [0, 2147483647, -2147483648]
+    for k in range(31):
+        for m in (2**k, 2**k - 1, 2**k + 1):
+            special += [m, -m]
+    special = sorted({v for v in special if -2147483648 <= v <= 2147483647})
+    generator = torch.Generator().manual_seed(55323)
+    fill = torch.randint(-2147483648, 2147483647, (1024 - len(special),), dtype=torch.int64, generator=generator)
+    return torch.cat([torch.tensor(special, dtype=torch.int64), fill]).to(torch.int32).reshape(1, 1, 32, 32)
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+@pytest.mark.parametrize("scalar_divisor", [False, True])
+def test_div_int32_by_zero(rounding_mode, scalar_divisor, device):
+    # No int32 quotient exists for a zero divisor; the kernel saturates the way
+    # the float path's +inf/-inf/NaN would: INT32_MAX, INT32_MIN, or 0 for 0/0.
+    torch_input_tensor_a = _int32_div_by_zero_numerators()
+    expected = torch.where(
+        torch_input_tensor_a > 0,
+        torch.tensor(2147483647, dtype=torch.int32),
+        torch.where(
+            torch_input_tensor_a < 0, torch.tensor(-2147483648, dtype=torch.int32), torch.tensor(0, dtype=torch.int32)
+        ),
+    )
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+    if scalar_divisor:
+        input_tensor_b = 0
+    else:
+        input_tensor_b = ttnn.from_torch(
+            torch.zeros_like(torch_input_tensor_a), dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT
+        )
+
+    output_tensor = ttnn.to_torch(ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode))
+
+    assert output_tensor.dtype == torch.int32
+    assert_equal(expected, output_tensor)
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_div_int32_zero_divisor_lanes_do_not_disturb_neighbours(rounding_mode, device):
+    # Zero and non-zero divisors interleaved in one tile: the zero lanes saturate,
+    # every other lane still matches the golden integer quotient.
+    torch_input_tensor_a = _int32_div_by_zero_numerators()
+    generator = torch.Generator().manual_seed(55323)
+    torch_input_tensor_b = torch.randint(
+        -1000, 1000, torch_input_tensor_a.shape, dtype=torch.int32, generator=generator
+    )
+    torch_input_tensor_b[torch_input_tensor_b == 0] = 1
+    torch_input_tensor_b[..., ::3] = 0
+
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    safe_b = torch.where(torch_input_tensor_b == 0, torch.tensor(1, dtype=torch.int32), torch_input_tensor_b)
+    expected = golden_function(torch_input_tensor_a, safe_b, rounding_mode=rounding_mode, device=device)
+    saturated = torch.where(
+        torch_input_tensor_a > 0,
+        torch.tensor(2147483647, dtype=torch.int32),
+        torch.where(
+            torch_input_tensor_a < 0, torch.tensor(-2147483648, dtype=torch.int32), torch.tensor(0, dtype=torch.int32)
+        ),
+    )
+    expected = torch.where(torch_input_tensor_b == 0, saturated, expected)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    output_tensor = ttnn.to_torch(ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode))
+
+    assert_equal(expected, output_tensor)
+
+
 def test_div_exact_quotient_cases(device):
     pairs = [
         (28, 14),

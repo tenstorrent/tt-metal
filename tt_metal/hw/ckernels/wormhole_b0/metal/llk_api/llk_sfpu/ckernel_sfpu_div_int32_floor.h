@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -161,6 +164,18 @@ sfpi_inline void calculate_div_int32_body(
             v_if(r != 0) { result -= 1; }
             v_endif;
         }
+    }
+    v_endif;
+
+    // Division by zero: no integer quotient exists, and without this guard the
+    // reciprocal above overflows and the result is a plausible-looking ~65536.
+    // Saturate instead, mirroring the +inf/-inf/NaN of the float path:
+    // INT32_MAX for a > 0, INT32_MIN for a < 0, and 0 for 0 / 0.
+    v_if(b_s == 0) {
+        result = 0;
+        v_if(a_s > 0) { result = std::numeric_limits<std::int32_t>::max(); }
+        v_elseif(a_s < 0) { result = std::numeric_limits<std::int32_t>::min(); }
+        v_endif;
     }
     v_endif;
 
