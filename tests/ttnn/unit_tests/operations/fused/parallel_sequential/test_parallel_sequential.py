@@ -1429,7 +1429,7 @@ class TestCrossOpCompilation:
 
     KERNEL_PATHS = {
         "layernorm": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
-        "rmsnorm_post": "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp",
+        "fused_distributed_rmsnorm_post": "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp",
         "matmul": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         "batchnorm": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
         "untilize": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
@@ -1529,7 +1529,7 @@ class TestCrossOpCompilation:
             pytest.param(("layernorm", "matmul"), id="ln_matmul"),
             pytest.param(("layernorm", "batchnorm"), id="ln_batchnorm"),
             pytest.param(("layernorm", "untilize"), id="ln_untilize"),
-            pytest.param(("rmsnorm_post", "layernorm"), id="rms_ln"),
+            pytest.param(("fused_distributed_rmsnorm_post", "layernorm"), id="rms_ln"),
             pytest.param(("matmul", "batchnorm"), id="matmul_batchnorm"),
             pytest.param(("layernorm", "eltwise_sfpu"), id="ln_sfpu"),
             pytest.param(("layernorm", "typecast"), id="ln_typecast"),

@@ -79,7 +79,7 @@ def run_test_FalconSoftmax_inference(
             block_w=seqlen // 32,
         ),
         "BFLOAT16_DTYPE": ttnn.bfloat16,
-        "ATTN_MASK_DTYPE": ttnn.bfloat16,
+        "ATTN_MASK_DTYPE": ttnn.bfloat8_b,
     }
     input_torch = (torch.rand(input_shape) * 2) - 1
     input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.bfloat16)

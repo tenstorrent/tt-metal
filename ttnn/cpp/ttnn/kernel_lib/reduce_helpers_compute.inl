@@ -450,6 +450,7 @@ ALWI void reduce_accumulate_via_add(
         }
     };
 
+    configure_output_mask();
     if constexpr (grouped_col) {
         // The COL reader emits N, W-group, H, W-within-group order. Keep the complete output group in DEST,
         // synchronize one row chunk at a time, and fold each column independently. Unlike WaitAndPopPerTile,
@@ -554,7 +555,6 @@ ALWI void reduce_accumulate_via_add(
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                configure_output_mask();
                 for (uint32_t out = 0; out < current_outputs; ++out) {
                     output_dfb.reserve_back(1);
                     pack_tile(out, output_dfb_id);
@@ -836,7 +836,6 @@ ALWI void reduce_accumulate_via_add(
 
         tile_regs_commit();
         tile_regs_wait();
-        configure_output_mask();
         if constexpr (reserves_output_per_tile) {
             // Input-popping policies naturally stream outputs. Accumulating no-pop calls also use this path so
             // an intermediate call can pop and replace each tile of an in-place accumulator without first

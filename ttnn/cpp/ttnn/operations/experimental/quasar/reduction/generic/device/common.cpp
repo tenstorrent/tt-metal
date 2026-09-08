@@ -57,8 +57,6 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
             w = dim == ReduceOpDim::W ? chunk_tiles * tile_w : tile_w;
             batches = 1;
         } else if (dim == ReduceOpDim::H) {
-            batches *= Wt;
-            w = tile_w;
             if (!identity_padded) {
                 h = input.logical_shape()[input.logical_shape().rank() - 2];
             }
@@ -79,6 +77,29 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
                 row_major ? std::optional<std::size_t>{} : 2 * tt::tt_metal::tile_size(input.data_type())});
     }
     auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
+    if (dim == ReduceOpDim::H && !row_major) {
+        // The existing H reader streams individual tiles through a two-tile FIFO,
+        // interleaving independent columns in DEST. A grouped wait would require
+        // the complete row group resident in L1. Keep native per-tile consumption
+        // and describe the actual rectangle instead of serializing its columns.
+        auto& plan = sequence.calls.front().plan;
+        TT_FATAL(
+            plan.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile,
+            "The two-tile H input stream requires native per-tile reduction");
+        plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+        const uint32_t dest_tiles =
+            hardware.dst_full_sync_en ? (hardware.fp32_dest_acc_en ? 8U : 16U) : (hardware.fp32_dest_acc_en ? 4U : 8U);
+        const bool sfpu_work_tile = input.data_type() == DataType::INT32 ||
+                                    (input.data_type() == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
+        plan.chunk.output_tiles = std::min(Wt, dest_tiles - (sfpu_work_tile ? 1U : 0U));
+    }
+    for (auto& call : sequence.calls) {
+        // The kernel starts with its output format configured. Row-major mixed
+        // output formats must also restore the packer after tilize.
+        call.plan.reconfig_mode = input.data_type() == output.data_type()
+                                      ? compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT
+                                      : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+    }
     if (row_major) {
         for (auto& call : sequence.calls) {
             // Tilize pushes tiles individually. Pop the same way so a short final

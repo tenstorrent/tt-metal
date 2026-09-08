@@ -3495,11 +3495,26 @@
       "notes": [
         "Four cases cover standard/streaming compute with/without partial runtime KV masks."
       ]
+    },
+    {
+      "id": "T178",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/operations/reduce/test_reduce_migration_height.py",
+      "family": "Generic height reduction reader/compute contract",
+      "factories": [
+        "F098"
+      ],
+      "tests": [
+        "test_reduce_height_column_groups"
+      ],
+      "notes": [
+        "42 cases: full/half DEST sync, BF16/FP32/INT32, FPU negate, unequal core groups, repeated width-sharded batches and partial height tiles."
+      ]
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 13,
-    "added_collected_cases": 350,
+    "added_test_definitions": 14,
+    "added_collected_cases": 392,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }

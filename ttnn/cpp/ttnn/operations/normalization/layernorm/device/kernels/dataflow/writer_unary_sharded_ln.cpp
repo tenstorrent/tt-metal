@@ -75,8 +75,8 @@ void kernel_main() {
 #endif
 
         if constexpr (is_all_to_all_worker) {
-            // Packed BF16 identity marks cores that must not apply the global scale twice.
-            if (get_arg(args::scalar_c) == 0x3f803f80U) {
+            // The host marks workers whose input statistics already include the global scale.
+            if (get_arg(args::skip_global_scale) != 0) {
                 using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<IdentityArgs, dfb::scaler_global>;
                 dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
             } else {

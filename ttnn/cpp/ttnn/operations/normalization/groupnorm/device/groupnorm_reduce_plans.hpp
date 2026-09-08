@@ -54,6 +54,11 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
             ReduceFp32Mode::Fast,
             hardware);
         plan.input_policy = policy;
+        // Native calls retain the caller-owned format state. Add consumes two
+        // input operands instead of input/scaler, so it must configure that pair.
+        plan.reconfig_mode = plan.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile
+                                 ? compute_kernel_lib::ReduceDataFormatReconfigMode::NONE
+                                 : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
         const rh::ReduceCallPlan call{
             .input_cb_id = 0,
             .auxiliary_cb_id = 1,
@@ -90,6 +95,7 @@ inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
     const GroupNormPadCorrection& pad,
     tt::tt_metal::DataType dtype,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
+    TT_FATAL(num_out_blocks > 0 && block_h >= num_out_blocks, "Groupnorm reduction blocks must contain rows");
     const uint32_t normal_rows = block_h / num_out_blocks;
     uint32_t last_rows = normal_rows;
     uint32_t padded_blocks = num_out_blocks;
@@ -98,6 +104,9 @@ inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
         padded_blocks += residual / normal_rows + 1;
         last_rows = residual % normal_rows;
     }
+    TT_FATAL(
+        last_rows <= normal_rows && (last_rows > 0 || block_h % num_out_blocks != 0),
+        "Groupnorm final reduction block must match its full/tail/empty dispatch");
     const uint32_t global_tiles =
         (padded_blocks * num_cores * dfb_ex_external_slot_pitch_bytes + single_tile_size - 1) / single_tile_size;
     const float divisor =

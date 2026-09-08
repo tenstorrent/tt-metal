@@ -206,7 +206,7 @@ Validation: native build passed. All five attention sanity selections passed (`w
   buffer; otherwise the old implicit format assumption corrupts variance.
   SM009/SM044/SM045 passed with temporary diagnostics removed
   (`reduce-migration-6f4vbtkm`). Distributed uneven/two-stage boundary selection
-  T026 passed 24 cases (`reduce-migration-ugdiw030`).
+  T026 passed 14 cases with 10 upstream skips (`reduce-migration-ugdiw030`).
 - Groupnorm (S079/S080, DF035/DF036): all three factories now provide local and
   global calls plus auxiliary recipes. Full and tail blocks are independent
   local reductions; existing two-dimensional group/padding masks stay in place.
@@ -221,7 +221,7 @@ Validation: native build passed. All five attention sanity selections passed (`w
   Build logs: `/tmp/reduce-gn-interleaved-build-20260908.log` and
   `/tmp/reduce-gn-sharded-build-20260908.log`.
 - Additional completed checks: T031 uneven, row-major, and two-stage sharded
-  widths passed 46/46; together with T026 this is 70/70
+  widths passed 46/46; together with T026 this is 60 passed and 10 upstream skips
   (`reduce-migration-ugdiw030`). T160/T170/T173 passed 48/48 across C++ reduction
   smoke tests, final-only callbacks, and narrow SFPU cases
   (`reduce-migration-5zis0zdd`).
@@ -270,7 +270,7 @@ Validation: native build passed (`/tmp/reduce-ccl-final-build-20260908.log`). De
 
 ## Quasar reductions and SDPA
 
-Quasar W/H/HW and dense row-major factories now serialize planned calls and auxiliary recipes. The H reader streams one complete column per planned batch. Welford's shared readers receive a harmless explicit zero recipe, and the three Metal2 SDPA writers receive their identity recipe through varargs. Removed the Quasar sharded H reader, which has no factory references (the H factory rejects width sharding).
+Quasar W/H/HW and dense row-major factories now serialize planned calls and auxiliary recipes. The initial H adapter streamed one column per batch; review round 1 restores grouped column accumulators with the existing per-tile FIFO (see review_round_01.md). Welford's shared readers receive a harmless explicit zero recipe, and the three Metal2 SDPA writers receive their identity recipe through varargs. Removed the Quasar sharded H reader, which has no factory references (the H factory rejects width sharding).
 
 Validation: the native build compiled the Quasar factory objects and linked successfully (`/tmp/reduce-quasar-build-20260908.log`). On-device Quasar compilation/numerics cannot be verified on Wormhole. Full toy variance T079 also passed all 41 cases (`reduce-migration-if_f43wa`).
 
@@ -293,3 +293,32 @@ Final static scan: no calls to any of the three old dataflow helper APIs remain 
 `python3 scripts/run_reduce_migration_sanity.py --lane common --lane wormhole --lane wormhole-n300` passed **all 61 selected cases**, with no skips/failures (`reduce-migration-6tq5gd6d`). The remaining 14 sanity cases require unavailable Quasar, Blackhole, T3K/Galaxy, or 1x4 fabric environments. Additional T072 `-k n300` passed all four combinations of fused residual addition and FP32 destination accumulation (`reduce-migration-l8ewz2id`). These are targeted/pre-review checks; the full prepared regression has not yet run.
 
 The static caller audit at source commit `7d4229a0b76` is saved in `generated/reduce_migration_reviews/caller_audit_20260908_7d4229a0b76.json`. It accounts for all 220 candidates including the two optional library files, with five retired kernels and two unchanged Welford factories. It found no remaining old consumer calls.
+
+## First Claude review and corrections
+
+A fresh Claude Opus 5 session at high effort reviewed the complete branch and
+returned CHANGES REQUIRED. The findings and their resolutions are recorded in
+`review_round_01.md`; the original review is preserved under
+`generated/reduce_migration_reviews/round_01_20260908/`.
+
+Fixed runtime installation of three device headers, H reduction reader/compute
+grouping for full-sync and sharded negate paths, explicit format-reconfiguration
+modes, and worker-role flags for auxiliary selection. Added host shape contracts,
+hoisted output-mask setup, corrected the unused row-mask alias, and restored the
+Falcon test's BF8 attention mask. T178 adds 42 cases spanning column grouping,
+full-sync, partial heights, repeated width-sharded batches, and float/integer paths.
+The full manifest now contains 178 groups, 998 definitions, and 18,844 known cases.
+
+Validation: native build passed; an isolated runtime install contains the three
+headers. The complete available sanity suite passed **61/61**
+(`reduce-migration-mvkrxglb`). Targeted review checks passed **219 cases**, with
+**10 upstream skips**: T178 (42), T175 (111), T026/T031 (60 plus 10 skips),
+T072 (4), T152 (1), and T176 (1). Corrected earlier journal entries that had
+mistakenly counted the T026 skips as passes.
+
+Blackhole mock JIT checks compiled KDA, indexer, sparse SDPA, the helper matrix,
+attn-res, and DiT fused kernels without compiler errors. These checks provide
+compilation evidence only. Quasar mock attempts stopped before compilation on
+existing setup/factory restrictions; Quasar and non-N300 numerical coverage
+remain unavailable. Exact logs and mock-plugin limitations are in the review
+resolution report. A fresh second review and the full regression run remain due.

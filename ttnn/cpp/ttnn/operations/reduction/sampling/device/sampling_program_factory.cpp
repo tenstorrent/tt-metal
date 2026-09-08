@@ -206,6 +206,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         values_spec, result_spec, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
     auto sum_plan = rh::make_reduce_plan(
         values_spec, result_spec, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    max_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+    sum_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
     max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
     sum_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
     const auto& max_aux = *max_plan.find_cb(rh::ReduceCbRole::Auxiliary);

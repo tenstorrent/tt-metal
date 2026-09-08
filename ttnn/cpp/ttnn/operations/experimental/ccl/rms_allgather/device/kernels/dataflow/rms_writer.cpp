@@ -82,11 +82,11 @@ void kernel_main() {
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<LocalAuxiliary>();
 
     if constexpr (is_all_to_all_worker) {
-        const uint32_t scalar_c_bits = get_arg_val<uint32_t>(arg_idx++);
-        if (scalar_c_bits == 0x3f800000U) {
-            dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<FirstStageAuxiliary>();
-        } else {
+        const bool is_second_stage_reader = get_arg_val<uint32_t>(arg_idx++) != 0;
+        if (is_second_stage_reader) {
             dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SecondStageAuxiliary>();
+        } else {
+            dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<FirstStageAuxiliary>();
         }
         dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<PostAuxiliary>();
     } else {
