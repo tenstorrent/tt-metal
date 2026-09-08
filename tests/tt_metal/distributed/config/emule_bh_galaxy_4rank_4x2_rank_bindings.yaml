@@ -1,0 +1,39 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,4,5,12,13,8,9"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,20,21,28,29,24,25"
+
+  - rank: 2
+    mesh_id: 2
+    env_overrides:
+      TT_VISIBLE_DEVICES: "18,19,22,23,30,31,26,27"
+
+  - rank: 3
+    mesh_id: 3
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3,6,7,14,15,10,11"
+
+global_env:
+  # NOT set here on purpose. These name a build tree and a sibling tt-emule checkout, which are
+  # properties of the machine, not of this topology, and hardcoding one developer's paths made this
+  # file unusable anywhere else. tt-run forwards TT_-prefixed variables from its own environment, so
+  # export these before launching:
+  #   TT_METAL_MOCK_CLUSTER_DESC_PATH  <tt-emule>/cluster_descriptors/<board>.yaml
+  #   TT_EMULE_JIT_INCLUDE_DIR         <tt-emule>/include/jit_hw
+  #   TT_EMULE_SHM_JOB_ID              unique PER INVOCATION, identical across ranks -- two
+  #                                    concurrent runs sharing one id attach the same chip segments
+  # LD_LIBRARY_PATH and PYTHONPATH are derived by tt-run from TT_METAL_HOME; point that at the
+  # ENABLE_DISTRIBUTED=ON build tree, or override them in the launcher.
+  TT_METAL_EMULE_MODE: "1"
+  TT_METAL_SLOW_DISPATCH_MODE: "1"
+  TT_EMULE_CHIP_SHM: "1"
+  EMULE_FABRIC8: "1"
+  TT_EMULE_FIBER_WORKERS: "32"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_single_galaxy_4x2_line_4stage_ring_mesh_graph_descriptor.textproto"

@@ -1,0 +1,14 @@
+# Two-rank Blackhole P150 loudbox mesh: one 2x4 mesh split by COLUMN, so each rank owns a 2x2
+# submesh at offsets (0,0) and (0,2). That offset pair is what BigMeshDualRankTest.LocalRankBinding
+# asserts, so the existing upstream test validates this config. Both halves close into a 4-ring of
+# the board's 3-cube ({0,1,4,5} and {2,3,6,7}), so neither rank's fabric walks dead-end.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 4 ], dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
