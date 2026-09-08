@@ -5,6 +5,6 @@
 #include "full_width_rms_norm_transport.hpp"
 
 void kernel_main() {
-    // Runtime arg 0 stores the grouped-table offset; the currently active topology begins at 1.
-    run_full_width_rms_norm_transport(1);
+    const uint32_t grouped_metadata_arg_base = get_arg_val<uint32_t>(0);
+    run_full_width_rms_norm_transport(grouped_metadata_arg_base);
 }

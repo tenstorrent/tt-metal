@@ -16,12 +16,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 valid_tile_heights = [1, 2, 4, 8, 16, 32]
 
 
-def make_width_sharded_gamma(torch_gamma, core_grid, device, n, num_cores):
+def make_width_sharded_gamma(torch_gamma, core_grid, device, n, num_cores, dtype=ttnn.bfloat16):
     """WIDTH_SHARDED TILE 1x32 gamma on the weight grid, shard [1, N/num_cores]."""
     return ttnn.from_torch(
         torch_gamma.reshape(1, n),
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         tile=ttnn.Tile((1, 32)),
         device=device,
         memory_config=ttnn.create_sharded_memory_config(
@@ -539,6 +539,108 @@ def test_matmul_decode_rms_norm_group_size_valid_accepts(device, m, k, n, group_
         rms_norm_epsilon=1e-5,
         rms_norm_group_size=group_size,
     )
+
+
+@pytest.mark.parametrize(
+    "m, k, n, group_size,vector_gamma_dtype",
+    [
+        (3, 1024, 768, 32, None),  # multiple groups inside every producer shard
+        (3, 1024, 768, 64, None),  # groups equal producer shards
+        (3, 1024, 768, 96, None),  # unaligned groups span shards; producers contribute to multiple groups
+        (3, 1024, 768, 192, None),  # three contributors per group exercises odd-count reduction
+        (3, 1024, 768, 96, "bfloat16"),  # custom-MM scale followed by the local vector-gamma shard
+        (3, 1024, 768, 96, "float32"),  # custom-MM with an FP32 vector-gamma shard
+        (3, 1056, 768, 96, None),  # fallback path uses FP32 statistics and scales
+        (3, 1056, 768, 96, "bfloat16"),  # fallback FP32 statistics followed by BF16 vector gamma
+        (3, 1056, 768, 96, "float32"),  # fallback FP32 statistics followed by FP32 vector gamma
+    ],
+)
+def test_matmul_decode_grouped_rms_norm_pcc(device, m, k, n, group_size, vector_gamma_dtype):
+    """Grouped RMSNorm normalizes each contiguous output group independently."""
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    scalar_gamma = 0.75
+    a, weight, num_inputB_cores, producer_grid = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    torch_a = ttnn.to_torch(a)[:m]
+    torch_b = ttnn.to_torch(weight)
+    if torch_b.ndim == 4:
+        torch_b = torch_b.reshape(-1, torch_b.shape[-1])
+    # Deliberately give each group a different magnitude. A legacy full-row scale
+    # then produces a materially different direction, so PCC detects missing grouping.
+    magnitude_cycle = torch.tensor([0.25, 0.5, 1.0, 2.0, 4.0], dtype=torch.float32)
+    group_scales = magnitude_cycle[torch.arange(n // group_size) % magnitude_cycle.numel()]
+    torch_b = (
+        (torch_b.float().reshape(k, n // group_size, group_size) * group_scales.reshape(1, -1, 1))
+        .reshape(k, n)
+        .to(torch.bfloat16)
+    )
+    weight = ttnn.from_torch(
+        torch_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            (k, n // num_inputB_cores),
+            core_grid=producer_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    mm = torch_a.float() @ torch_b.float()
+    grouped_mm = mm.reshape(*mm.shape[:-1], n // group_size, group_size)
+    use_vector_gamma = vector_gamma_dtype is not None
+    torch_gamma_dtype = torch.float32 if vector_gamma_dtype == "float32" else torch.bfloat16
+    ttnn_gamma_dtype = ttnn.float32 if vector_gamma_dtype == "float32" else ttnn.bfloat16
+    torch_gamma = torch.randn((n,), dtype=torch_gamma_dtype) if use_vector_gamma else scalar_gamma
+    ref = grouped_mm * torch.rsqrt(grouped_mm.square().mean(dim=-1, keepdim=True) + epsilon)
+    ref = ref.reshape_as(mm) * (torch_gamma.float() if use_vector_gamma else torch_gamma)
+    gamma_arg = (
+        make_width_sharded_gamma(torch_gamma, producer_grid, device, n, num_inputB_cores, dtype=ttnn_gamma_dtype)
+        if use_vector_gamma
+        else scalar_gamma
+    )
+
+    out = ttnn.experimental.matmul_decode(
+        a,
+        weight,
+        rms_norm=True,
+        rms_norm_gamma=gamma_arg,
+        rms_norm_epsilon=epsilon,
+        rms_norm_group_size=group_size,
+    )
+    got = ttnn.to_torch(out).float()
+    assert_with_pcc(ref, got, 0.99)
+    got_groups = got.reshape(*got.shape[:-1], n // group_size, group_size)
+    ref_groups = ref.reshape(*ref.shape[:-1], n // group_size, group_size)
+    group_norm_ratios = got_groups.norm(dim=-1) / ref_groups.norm(dim=-1)
+    assert torch.all(
+        (0.95 < group_norm_ratios) & (group_norm_ratios < 1.05)
+    ), f"grouped RMSNorm group norm ratios {group_norm_ratios.tolist()} are not close to 1"
+
+
+def test_matmul_decode_grouped_rms_norm_output_mcast(device):
+    """Grouped normalization completes before the existing full-output multicast."""
+    m, k, n, group_size = 1, 1024, 768, 96
+    torch.manual_seed(0)
+    a, weight, _, producer_grid = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    torch_a = ttnn.to_torch(a)[:m]
+    torch_b = ttnn.to_torch(weight).reshape(k, n)
+    mm = torch_a.float() @ torch_b.float()
+    grouped_mm = mm.reshape(m, n // group_size, group_size)
+    ref = (grouped_mm * 0.75 * torch.rsqrt(grouped_mm.square().mean(dim=-1, keepdim=True) + 1e-5)).reshape_as(mm)
+
+    out = ttnn.experimental.matmul_decode(
+        a,
+        weight,
+        output_core_grid=producer_grid,
+        rms_norm=True,
+        rms_norm_gamma=0.75,
+        rms_norm_epsilon=1e-5,
+        rms_norm_group_size=group_size,
+    )
+    got = ttnn.to_torch(out).float()
+    for replica in got.reshape(got.shape[-2] // m, m, n):
+        assert_with_pcc(ref, replica, 0.99)
 
 
 @pytest.mark.parametrize("m, k, n", [(1, 4096, 1024)])
