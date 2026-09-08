@@ -419,11 +419,9 @@ void TestContext::compile_programs() {
                 continue;
             }
 
-            // Report the channel recorded on the ConnectionKey
             std::string eth_info;
             for (const auto& [core, sender] : senders) {
                 for (const auto& [cfg, keys] : sender.get_configs()) {
-                    // One entry per connection
                     for (const auto& key : keys) {
                         if (!eth_info.empty()) {
                             eth_info += ", ";

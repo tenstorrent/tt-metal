@@ -35,18 +35,10 @@ using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric::fabric_tests {
 
-// Ceiling on the copies a multicast root injects: the codec names at most one output edge each of
-// E/W/N/S/Z. Kernels clamp their own copy to the connection array size; builds without Z links size
-// for four and also never produce a fifth direction.
+// Maximum E/W/N/S/Z outputs from one multicast root.
 inline constexpr std::size_t MAX_MCAST_INJECTIONS = 5;
 
-// ConnectionKey identifies a unique physical fabric connection from this src device.
-// (direction, link_idx) maps 1:1 to a specific eth channel (eth_chan); we store eth_chan
-// directly to make the dedup intent explicit. The first-hop neighbor through this link is
-// stored on the Connection (Connection::next_hop_dst), not on the key. Multiple traffic
-// configs whose final destinations all route through the same eth chan + VC dedup to one
-// ConnectionKey here. Parallel lanes to the same logical neighbor remain distinct because
-// they have different (link_idx, eth_chan) values.
+// Identifies one physical first-hop fabric connection.
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
@@ -82,10 +74,7 @@ struct ConnectionKeyHash {
 enum class TestWorkerType : uint8_t { SENDER, RECEIVER, SYNC, MUX };
 
 struct Connection {
-    // Representative first-hop neighbor through this fabric connection. Used as the dst
-    // when calling append_fabric_(vc2_)connection_rt_args / mux rt-args. For NESW this is
-    // the direction's unique neighbor; for Z this is the actual peer chip on the other end
-    // of the eth chan (resolved via the control plane).
+    // Peer used to build this connection's runtime arguments.
     FabricNodeId next_hop_dst{MeshId{0}, 0};
 
     std::set<tt::tt_metal::CoreCoord> sender_cores;           // Data senders (full-size channels)
@@ -257,9 +246,7 @@ public:
     tt::tt_metal::CoreCoord get_core() const { return logical_core_; }
     uint64_t get_total_packets() const;  // Defined out-of-line
 
-    // stores traffic config and the fabric connection keys it injects into. All but express multicast
-    // have exactly one; a multi-output multicast root has one per canonical output, in encoder order.
-    // Managed by TestDevice::connection_manager_
+    // Multi-output 2D multicast configs carry one key per canonical root output.
     std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>> configs_;
 };
 
@@ -280,7 +267,6 @@ public:
     void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    // stores traffic config and the fabric connection keys
     std::vector<std::pair<TestTrafficSyncConfig, std::vector<ConnectionKey>>> configs_;
 };
 
@@ -423,21 +409,14 @@ private:
     void create_sync_kernel();
     void create_mux_kernels();
 
-    // Helper: Common connection registration logic for senders and receivers.
-    // Registers a fabric connection for the specified direction, link, and VC. The eth chan
-    // and the first-hop neighbor (used as the dst when calling the fabric API later) are
-    // derived internally from (src, direction, link_idx) — the caller's final dst is not
-    // part of the dedup key, so multiple traffic configs with different final dsts that
-    // share the same physical link collapse to one ConnectionKey. final_dst narrows the
-    // candidate channels when a direction reaches out to more than one peer chip
+    // Registers a connection and resolves its physical channel and peer.
     ConnectionKey register_fabric_connection(
         tt::tt_metal::CoreCoord logical_core,
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
         uint32_t link_idx,
-        uint8_t vc_id = 0,
-        std::optional<FabricNodeId> final_dst = std::nullopt);
+        uint8_t vc_id = 0);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;

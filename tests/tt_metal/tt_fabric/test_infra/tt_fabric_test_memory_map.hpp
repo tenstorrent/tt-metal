@@ -380,11 +380,7 @@ struct ReceiverMemoryMap {
         current_addr += ATOMIC_COUNTER_BUFFER_SIZE;
         atomic_counters = BaseMemoryRegion(atomic_counter_base, ATOMIC_COUNTER_BUFFER_SIZE);
 
-        // Credit headers - one credit-return packet header per config on the core. Sized from
-        // num_configs rather than fixed: payload_chunks follows immediately, so a core holding more
-        // configs than a fixed region fits would place headers in payload memory, and the
-        // kernel-side bound in get_credit_header_address is an ASSERT that release kernels compile
-        // out.
+        // One credit-return header per config; payload storage follows this region.
         uint32_t credit_header_base = current_addr;
         uint32_t credit_header_size_total = MAX_PACKET_HEADER_SIZE_BYTES * num_configs;
         current_addr += credit_header_size_total;

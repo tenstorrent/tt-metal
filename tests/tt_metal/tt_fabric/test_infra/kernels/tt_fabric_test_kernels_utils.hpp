@@ -19,23 +19,20 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-// Maximum number of fabric connections supported per kernel.
-// This is used to size FabricConnectionArray storage without template proliferation.
+// Fixed per-core connection storage shared by all kernel configurations.
 #ifdef ARCH_BLACKHOLE
-static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 5;  // N, S, E, W, Z
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 5;
 #else
-static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;  // N, S, E, W
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;
 #endif
 
 struct LocalArgsBuffer {
     uint32_t base_address = 0;
     uint32_t buffer_size = 0;
-    uint32_t end_address = 0;
 
     void init(uint32_t base_addr, uint32_t buf_size) {
         base_address = base_addr;
         buffer_size = buf_size;
-        end_address = base_address + buffer_size;
     }
 
     template <typename T>
@@ -43,7 +40,7 @@ struct LocalArgsBuffer {
         static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
 
         uint32_t current_offset = arg_idx * sizeof(T);
-        ASSERT(current_offset + sizeof(T) <= buffer_size);  // Check bounds
+        ASSERT(current_offset + sizeof(T) <= buffer_size);
 
         tt_l1_ptr T* local_args_ptr = reinterpret_cast<tt_l1_ptr T*>(base_address);
         return local_args_ptr[arg_idx];
@@ -403,7 +400,7 @@ struct NocUnicastScatterWriteFields {
 
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
-    fabric_set_mcast_route(
+    (void)fabric_set_2d_mcast_route(
         (T*)packet_header_address,
         mcast_fields.dst_device_id,
         mcast_fields.dst_mesh_id,
@@ -724,16 +721,8 @@ struct FabricConnectionArray {
     }
 };
 
-// Line sync for each fabric connection (used by SyncKernelConfig)
-// Can have up to MAX_MCAST_INJECTIONS connections per sync config in express link scenarios
-
-// A canonical multicast root injects one copy per output edge, and the codec names at most one edge
-// each of E/W/N/S/Z. Clamped to the array size because a config cannot claim connections the core
-// does not hold; only Z-capable builds size for the fifth, and only they can produce a Z output.
-constexpr uint8_t MAX_MCAST_INJECTIONS = MAX_NUM_FABRIC_CONNECTIONS < 5 ? MAX_NUM_FABRIC_CONNECTIONS : 5;
-static_assert(
-    MAX_MCAST_INJECTIONS <= MAX_NUM_FABRIC_CONNECTIONS,
-    "a single traffic config cannot claim more connections than the core's whole array holds");
+// Maximum root outputs a 2D multicast config can inject into.
+constexpr uint8_t MAX_MCAST_INJECTIONS = MAX_NUM_FABRIC_CONNECTIONS;
 
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct LineSyncConfig {
@@ -746,7 +735,6 @@ struct LineSyncConfig {
         connection_manager_(connection_array), num_connections_(num_connections), line_sync_val(line_sync_val) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
-        // Cache connection pointers during initialization
         ASSERT(num_connections_ > 0 && num_connections_ <= MAX_MCAST_INJECTIONS);
         for (uint8_t i = 0; i < num_connections_; i++) {
             const uint8_t idx = connection_indices[i];
@@ -761,11 +749,9 @@ struct LineSyncConfig {
 
     template <bool IS_2D_FABRIC, ChipSendType CHIP_SEND_TYPE>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        // setup header fields. 2 rt args for 1D
         ChipSendTypeHandler<CHIP_SEND_TYPE, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
-        // set up noc fields, 4 rt args
         auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
         line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
 
@@ -1003,8 +989,6 @@ struct SenderKernelTrafficConfig {
         payload_buffer_(nullptr) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
-        // Cache connection pointers during initialization. Usually one; an express multicast root that
-        // leaves on several edges gets one per edge and every packet goes out all of them.
         ASSERT(num_connections_ > 0 && num_connections_ <= MAX_MCAST_INJECTIONS);
         for (uint8_t i = 0; i < num_connections_; i++) {
             const uint8_t idx = connection_indices[i];
@@ -1661,8 +1645,7 @@ struct SenderKernelConfig {
 
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
-    // Connections per traffic config, laid out MAX_MCAST_INJECTIONS-strided so config i owns
-    // [i * MAX_MCAST_INJECTIONS, i * MAX_MCAST_INJECTIONS + count). Only the first `count` are valid.
+    // Per-config connection indices use fixed MAX_MCAST_INJECTIONS strides.
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_connection_counts;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS * MAX_MCAST_INJECTIONS> traffic_config_to_fabric_connection_map;
 
@@ -2308,8 +2291,7 @@ struct SyncKernelConfig {
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
-    // Connections per sync config, laid out MAX_MCAST_INJECTIONS-strided so config i owns
-    // [i * MAX_MCAST_INJECTIONS, i * MAX_MCAST_INJECTIONS + count).
+    // Per-config connection indices use fixed MAX_MCAST_INJECTIONS strides.
     std::array<uint8_t, NUM_SYNC_CONFIGS> sync_config_connection_counts;
     std::array<uint8_t, NUM_SYNC_CONFIGS * MAX_MCAST_INJECTIONS> sync_config_to_fabric_connection_map;
 
