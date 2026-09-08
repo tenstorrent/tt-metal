@@ -809,6 +809,16 @@ class DFlashDrafter:
 
         h = self._rms(x, self.final_norm_w)
         x.deallocate(True)
+        # Row-dropping slice on a possibly-sharded activation: the current ttnn
+        # core validates shard alignment strictly and TT_FATALs
+        # (tensor_layout.cpp shard_align_error) when the sliced row count no
+        # longer maps cleanly onto per-core shards. Park in DRAM interleaved
+        # first -- same fix as attention/prefill.py's _ensure_dram_interleaved
+        # and block_forward_cached's identical h[:, :, 1:, :] tail.
+        if h.is_sharded():
+            h_interleaved = ttnn.sharded_to_interleaved(h, ttnn.DRAM_MEMORY_CONFIG)
+            h.deallocate(True)
+            h = h_interleaved
         h_drafts = h[:, :, 1:, :]
         h.deallocate(True)
         n_draft_rows = int(h_drafts.shape[2])
