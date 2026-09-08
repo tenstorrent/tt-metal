@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/moreh/moreh_reduce.hpp"
+
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -110,6 +112,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     const DFBSpecName DYADD{"dyadd"};    // Add[dy]
     const DFBSpecName YDYADD{"ydyadd"};  // Add[y * dy]
     const DFBSpecName XMM{"xmm"};        // x - mean
+    const DFBSpecName REDUCE_DY{"reduce_dy"};
+    const DFBSpecName REDUCE_YDY{"reduce_ydy"};
     const DFBSpecName DYCOPY{"dycopy"};  // dycopy
     // mask_w is deliberately absent: this op's do_mask_w is compile-time false (is_groupnorm is
     // false), so it never allocated that buffer. moreh_group_norm_backward, which shares the compute
@@ -129,7 +133,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     const uint32_t in1_t = 1;                  // input(==x)
     const uint32_t in2_t = 1;                  // mean
     const uint32_t in3_t = 1;                  // rstd
-    const uint32_t in4_t = 1;                  // scaler
     const uint32_t in5_t = do_mask_h ? 1 : 0;  // mask_h
 
     // The descriptor factory allocated these two unconditionally, leaving a buffer nothing touched
@@ -147,6 +150,16 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     auto intermed_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const bool reduce_grad_tiles = is_lastdim_layer_norm;
+    auto reduction = make_moreh_reduce_blocks(
+        reduce_grad_tiles ? num_outer : 1U,
+        ReduceOpDim::H,
+        (fp32_dest_acc_en ? DataType::FLOAT32 : output_grad.dtype()),
+        output_grad.dtype(),
+        {arch, fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()});
+    const auto& auxiliary =
+        *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
+    const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
 
     Group<DataflowBufferSpec> dfbs;
 
@@ -167,7 +180,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     push_dfb(X, in1_t, data_format);
     push_dfb(MEAN, in2_t, data_format);
     push_dfb(RSTD, in3_t, data_format);
-    push_dfb(SCALER, in4_t, data_format);
+    push_dfb(SCALER, in4_t, auxiliary.data_format);
     push_dfb(MASK_H, in5_t, data_format);
     push_dfb(DGAMMA, out0_t, data_format);
     push_dfb(DBETA, out1_t, data_format);
@@ -177,6 +190,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     push_dfb(YDYADD, im3_t, intermed_format);
     push_dfb(XMM, im4_t, intermed_format);
     push_dfb(DYCOPY, im5_t, intermed_format);
+    push_dfb(REDUCE_DY, reduce_grad_tiles && beta_grad_has_value ? reduction.buffer_tiles : 0, intermed_format);
+    push_dfb(REDUCE_YDY, reduce_grad_tiles && gamma_grad_has_value ? reduction.buffer_tiles : 0, intermed_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -186,10 +201,10 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     // generated header, and a C++-level `if constexpr` would still name-look-up the discarded branch.
     KernelSpec::CompilerOptions::Defines reader_defines{};
     KernelSpec::CompilerOptions::Defines writer_defines{};
-    KernelSpec::CompilerOptions::Defines compute_defines{
-        {"REDUCE_OP", "PoolType::SUM"},
-        {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
-    };
+    KernelSpec::CompilerOptions::Defines compute_defines{};
+    if (reduce_grad_tiles) {
+        compute_defines["REDUCE_GRAD_TILES"] = "1";
+    }
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
         compute_defines["FP32_DEST_ACC_EN"] = "1";
@@ -252,6 +267,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
                      "mean_rstd_width"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
     Group<DFBBinding> writer_dfb_bindings{};
@@ -310,6 +326,18 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
         compute_dfb_bindings.push_back(
             DFBBinding{.dfb_spec_name = MASK_H, .accessor_name = "mask_h", .endpoint_type = DFBEndpointType::CONSUMER});
     }
+    if (reduce_grad_tiles && beta_grad_has_value) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = REDUCE_DY, .accessor_name = "reduce_dy", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = REDUCE_DY, .accessor_name = "reduce_dy", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+    if (reduce_grad_tiles && gamma_grad_has_value) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     if (gamma_grad_has_value) {
         compute_dfb_bindings.push_back(
             DFBBinding{.dfb_spec_name = DGAMMA, .accessor_name = "dgamma", .endpoint_type = DFBEndpointType::PRODUCER});
@@ -347,6 +375,9 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
             .compile_time_args =
                 {
                     {"num_cols_per_core", num_cols_per_core},
+                    {"reduce_block_tiles", MorehReduceBlocks::tiles_per_block},
+                    {"reduce_buffer_tiles", reduction.buffer_tiles},
+                    {"reduce_aux_tiles", in4_t},
                     {"origin_H", origin_H},
                     {"origin_W", origin_W},
                     {"NCHt", num_outer},
@@ -355,6 +386,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
                     {"is_groupnorm", static_cast<uint32_t>(is_groupnorm)},
                 },
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = reduction.sequence.get_compile_time_args()},
         };
     };
 

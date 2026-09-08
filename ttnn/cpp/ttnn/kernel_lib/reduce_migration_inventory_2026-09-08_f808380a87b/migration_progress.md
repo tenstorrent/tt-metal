@@ -113,14 +113,38 @@ audit.
   `generated/test_reports/reduce-migration-yj0k8o8w/summary.json`. Original
   full-suite skips remain visible. The full runner now contains six added test
   definitions and 217 added parameterized cases beyond the base inventory.
-- Shared Moreh layer/group normalization input gradients (S060/S062,
-  DP005/DP007/DP010/DP012): both small and large paths now reduce transformed
+- Shared Moreh layer/group normalization input gradients (S060/S061,
+  DP005/DP006/DP010/DP011): both small and large paths now reduce transformed
   dy and y*dy blocks through host plans, replacing their manual tile-add loops.
   Factories account for bounded resident blocks and planned auxiliary formats;
   readers materialize the shared recipe. Retained masks around fused transforms.
   Native build and all four backward sanity cases passed (SM024/25/28/29).
-  Full T053/T054 backward selections passed; results in
+  Full T053/T054 backward selections passed (86 passed, 75 upstream skips); results in
   `generated/test_reports/reduce-migration-qz31vai7/summary.json`.
+- Shared Moreh layer/group normalization parameter gradients
+  (S062, DP007/DP012). Both SUM reductions now use planned transformed blocks;
+  the layer-norm path that only sums across batches retains its elementwise
+  accumulation because it does not reduce inside tiles. Group-norm parameter
+  reductions need FP32 destination and partial buffers to preserve cancellation
+  over long HW reductions; an existing 500x500 case caught BF16 accumulation
+  error and passes with the wider path.
+- Corrected SM028 to width normalization with affine gradients: its old case
+  reached the parameter factory but bypassed the actual reduce branch. The
+  corrected case passed; results
+  `generated/test_reports/reduce-migration-3dky0k8w/summary.json`.
+- Added four layer-norm gradient boundary cases to T172. The full-precision
+  elementwise assertion was too strict for the BF16 destination option: the
+  legacy parameter kernel also fails it (maximum failing delta 1.8145 versus
+  1.3659 after migration). Its standalone baseline run is preserved in
+  `generated/test_reports/reduce-migration-efk7jb53/summary.json`. The legacy
+  source was restored only for that comparison and then replaced by the
+  migrated source. BF16 parameter gradients use a 2% relative L2 error bound;
+  dx and FP32 parameter gradients retain elementwise checks. Wider L1-only
+  partials and larger blocks did not improve BF16 results and were reverted.
+  Native build and final T053/T054/T172 backward selections passed: 90 passed,
+  75 upstream skips across 165 collected cases. Results:
+  `generated/test_reports/reduce-migration-49t6sox0/summary.json`.
+  Full runner additions now total seven definitions and 221 parameterized cases.
 
 ## Remaining work
 

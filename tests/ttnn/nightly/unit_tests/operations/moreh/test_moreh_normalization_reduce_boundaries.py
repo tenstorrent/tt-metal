@@ -89,3 +89,47 @@ def test_moreh_layer_norm_reduce_boundaries(device, shape, normalized_dims, affi
     torch.testing.assert_close(ttnn.to_torch(output).float(), expected, rtol=0.08, atol=0.05)
     torch.testing.assert_close(ttnn.to_torch(mean).float(), expected_mean, rtol=0.08, atol=0.01)
     torch.testing.assert_close(ttnn.to_torch(rstd).float(), expected_rstd, rtol=0.08, atol=0.01)
+
+
+@pytest.mark.parametrize("shape", [(2, 769, 45), (2, 1025, 257)])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_moreh_layer_norm_backward_reduce_boundaries(device, shape, fp32_dest_acc_en):
+    """Repeated parameter-gradient accumulation across batches with partial H/W tiles."""
+    torch.manual_seed(42)
+    x = torch.randn(shape).to(torch.bfloat16).float().requires_grad_()
+    dy = torch.randn(shape).to(torch.bfloat16).float()
+    weight = (torch.rand(shape[-1]) + 0.5).to(torch.bfloat16).float().requires_grad_()
+    bias = torch.randn(shape[-1]).to(torch.bfloat16).float().requires_grad_()
+    F.layer_norm(x, shape[-1:], weight, bias, 1e-5).backward(dy)
+    mean = x.detach().mean(-1)
+    rstd = torch.rsqrt(x.detach().var(-1, unbiased=False) + 1e-5)
+
+    def to_device(value):
+        tensor = ttnn.from_torch(value.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn.fill_implicit_tile_padding(tensor, 42)
+        return tensor
+
+    dx, dgamma, dbeta = ttnn.operations.moreh.layer_norm_backward(
+        to_device(dy),
+        to_device(x.detach()),
+        to_device(mean),
+        to_device(rstd),
+        1,
+        gamma=to_device(weight.detach()),
+        input_grad=to_device(torch.full_like(x, float("nan"))),
+        gamma_grad=to_device(torch.full_like(weight, float("nan"))),
+        beta_grad=to_device(torch.full_like(bias, float("nan"))),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest_acc_en
+        ),
+    )
+    torch.testing.assert_close(ttnn.to_torch(dx).float(), x.grad, rtol=0.08, atol=0.05)
+    for actual, expected in ((ttnn.to_torch(dgamma).float(), weight.grad), (ttnn.to_torch(dbeta).float(), bias.grad)):
+        if fp32_dest_acc_en:
+            torch.testing.assert_close(actual, expected, rtol=0.1, atol=0.5)
+        else:
+            # Long BF16 sums contain cancellation. The legacy kernel also
+            # exceeds the elementwise bound near zero, so check relative L2
+            # error while retaining elementwise checks for dx and FP32 sums.
+            relative_error = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
+            assert relative_error < 0.02, f"BF16 parameter-gradient relative error: {relative_error}"
