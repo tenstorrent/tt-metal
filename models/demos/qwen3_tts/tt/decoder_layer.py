@@ -187,9 +187,50 @@ class DecoderLayer(LightweightModule):
                     setattr(self, attr, _build_sharded_rmsnorm_configs(device, hidden_size, cores, m=32))
                 except Exception:
                     setattr(self, attr, None)
-        self._prefill_ln_configs = {
-            m: _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m) for m in PREFILL_SEQS
-        }
+        # Prefill RMSNorm grid. `ln_num_cores` above takes the LARGEST core count dividing
+        # dim_tiles (64 for hidden=2048), which drives block_w to (2048/64)/32 = 1 and
+        # subblock_w to 1 — the same "most cores, thinnest block" shape that cost the
+        # matmuls 34 us each. Swept at the model's shapes
+        # (test_qwen3_tts_prefill_trio_sweep.py, median of 4 steady launches):
+        #
+        #   m=64   c64 bw=1 13.3 us | c32 bw=2 12.3  <- best | c16 13.3 | c8 15.5 | c4 21.0
+        #   m=128  c64 bw=1 17.5 us | c32 bw=2 16.8  <- best | c16 19.0 | c8 24.5 | c4 36.6
+        #
+        # The bigger reason for 32 is that it is ALSO the MLP gate/up in0 grid, so the
+        # post-attention norm emits gate/up's layout directly and the Reshard between them
+        # disappears — one op per layer. Decode already does exactly this via
+        # `_decode_ln_mlp`; prefill had no equivalent, which is why the reshard was there.
+        # The two specs are identical by construction: the norm's width shard is
+        # (m, hidden/32) on 8x4 and `width_sharded_l1_memcfg(m/32, 64, 8, 4)` is the same.
+        #
+        # DEFAULT OFF, and the reason is a loose end rather than a measurement.
+        #
+        # The norm itself is BIT-IDENTICAL at the buckets the demo replays — 0 of 131072
+        # elements differ at m=64, 0 of 65536 at m=32 — and only diverges at m>=96
+        # (1118/196608 elements at m=96) where the block change reorders the reduction.
+        # So switching the demo's own bucket to 32 cores should have been transparent.
+        # It is not: the demo audio md5 moves cac10fbd31 -> b2fa912a03, and
+        # QWEN3_TTS_PREFILL_LN_CORES=0 restores cac10fbd31 exactly, so this is the cause.
+        #
+        # The norm is not where the difference enters. Changing this grid also changes the
+        # spec the residual adds write and the spec attention receives, and some consumer
+        # downstream takes a different branch on it (attention compares the incoming
+        # memory_config against its own specs to decide whether to reshard). Until that is
+        # pinned down and run through the SIM/WER gate, shipping it would be trading
+        # unexplained numerics for -1 op and 0-3 us, which is inside the +-5 us noise of
+        # the window. Not worth it.
+        #
+        # Set QWEN3_TTS_PREFILL_LN_CORES=32 to take the op reduction and the faster norm.
+        _pf_ln_env = os.environ.get("QWEN3_TTS_PREFILL_LN_CORES")
+        _pf_ln_cores = ln_num_cores if not _pf_ln_env or _pf_ln_env == "0" else int(_pf_ln_env)
+        if dim_tiles % _pf_ln_cores or _pf_ln_cores > ln_num_cores:
+            _pf_ln_cores = ln_num_cores
+        self._prefill_ln_configs = {}
+        for m in PREFILL_SEQS:
+            try:
+                self._prefill_ln_configs[m] = _build_sharded_rmsnorm_configs(device, hidden_size, _pf_ln_cores, m=m)
+            except Exception:
+                self._prefill_ln_configs[m] = _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m)
 
     def forward(
         self,
