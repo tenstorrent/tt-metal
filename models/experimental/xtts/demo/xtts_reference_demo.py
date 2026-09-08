@@ -151,6 +151,13 @@ def _sample(logits, seen, *, temperature, top_k, top_p, rep, suppress=()):
     """Sample one token id from logits with repetition penalty, top-k, and top-p."""
     L = logits.detach().float().reshape(-1).clone()
 
+    # Suppress BEFORE shaping: a masked token must not hold a top-k/top-p slot, or the nucleus
+    # can collapse onto it and leave every candidate at -inf (softmax -> NaN -> multinomial
+    # raises). -inf survives the positive penalty and temperature scalings below unchanged, so
+    # nothing can rescale it back.
+    for token in suppress:
+        L[token] = -float("inf")
+
     if rep != 1.0 and seen:
         idx = torch.tensor(sorted(seen), dtype=torch.long)
         v = L[idx]
@@ -159,10 +166,15 @@ def _sample(logits, seen, *, temperature, top_k, top_p, rep, suppress=()):
     if temperature > 0.0 and temperature != 1.0:
         L = L / temperature
 
-    if top_k and 0 < top_k < L.shape[0]:
-        vals, _ = torch.topk(L, top_k)  # descending
+    # Sorted candidate window the cutoffs are computed over. top-k sets it; with top-k disabled
+    # (0, or >= vocab) a requested top_p must still be honoured, so the window becomes the whole
+    # vocabulary and the kth threshold falls out inert.
+    nucleus = 0.0 < top_p < 1.0
+    window = top_k if (top_k and 0 < top_k < L.shape[0]) else (L.shape[0] if nucleus else 0)
+    if window:
+        vals, _ = torch.topk(L, window)  # descending
         thr = vals[-1]
-        if 0.0 < top_p < 1.0:
+        if nucleus:
             # Keep the shortest prefix of the sorted window whose cumulative probability first
             # exceeds top_p (the token that crosses is kept); its smallest logit is the nucleus
             # threshold, combined with the top-k threshold by max().
@@ -170,9 +182,6 @@ def _sample(logits, seen, *, temperature, top_k, top_p, rep, suppress=()):
             keep = (torch.cumsum(probs, dim=-1) - probs) < top_p
             thr = torch.maximum(vals[keep].min(), thr)
         L = torch.where(L >= thr, L, torch.full_like(L, -float("inf")))
-
-    for token in suppress:  # applied AFTER shaping so temperature cannot rescale it back
-        L[token] = -float("inf")
 
     if temperature <= 0.0:
         return int(L.argmax().item())
