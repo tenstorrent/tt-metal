@@ -57,26 +57,8 @@ def test_sigmoid_accurate(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_hardswish(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.hardswish)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log_sigmoid(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.log_sigmoid)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_mish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.mish, ulp=3)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_relu6(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.relu6)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -176,12 +158,6 @@ def test_gelu_bfloat16_accuracy(device):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_hardsigmoid(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.hardsigmoid)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_sigmoid(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.sigmoid)
 
@@ -190,18 +166,6 @@ def test_sigmoid(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_sign(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.sign)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_softsign(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.softsign)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_swish(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.swish)
 
 
 def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, pcc=0.99):
@@ -294,12 +258,6 @@ def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_tanhshrink(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.tanhshrink, pcc_check=True)
-
-
 def test_tanhshrink_ulp(device):
     """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
 
@@ -307,8 +265,9 @@ def test_tanhshrink_ulp(device):
     cancels in bf16 (the original kernel returned 0 -> Max ULP ~254) even though the
     true value is a normal bf16 number. torch's golden cancels there too, so use an
     mpmath reference. Points span the cancellation region, the |x|~1 crossover, and
-    saturation. The dedicated op measures Max ULP = 1; gate at 2. (test_tanhshrink
-    above stays on PCC because its torch golden cancels near zero.)
+    saturation. The dedicated op measures Max ULP = 1; gate at 2. (The exhaustive
+    bfloat16 coverage in test_unary_category2_bfloat16.py::test_tanhshrink stays on
+    PCC because its torch golden cancels near zero the same way bf16 hardware does.)
     """
     from mpmath import mp, tanh as mp_tanh
 
