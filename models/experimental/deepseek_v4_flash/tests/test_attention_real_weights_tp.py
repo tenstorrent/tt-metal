@@ -34,6 +34,7 @@ from models.experimental.deepseek_v4_flash.tt.attention import (
     int32_pos_tensor,
     make_rope_table,
 )
+from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
@@ -54,6 +55,17 @@ def _to_tt_replicated(tensor: torch.Tensor, device) -> ttnn.Tensor:
         layout=ttnn.TILE_LAYOUT,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
+def _to_tt_width_sharded(tensor: torch.Tensor, device, num_cores: int = 64) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        memory_config=width_sharded_l1_config(tensor.shape[-2], tensor.shape[-1], device, num_cores=num_cores),
     )
 
 
@@ -161,7 +173,7 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
                 cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh, batch
             )
             output = attn.decode(
-                _to_tt_replicated(hidden[:, pos : pos + 1].reshape(batch, 1, 1, cfg.hidden_size), submesh),
+                _to_tt_width_sharded(hidden[:, pos : pos + 1].reshape(batch, 1, 1, cfg.hidden_size), submesh),
                 cos,
                 sin,
                 neg_sin,
