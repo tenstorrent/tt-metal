@@ -68,10 +68,9 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
     ``lidar2img`` overrides the dataset rig with a ``[batch_size, num_cams, 4, 4]``
     stack, so a diagnostic can hold everything but the camera geometry fixed.
 
-    Geometry that the encoder now bakes into the layer at construction
-    (``spatial_shapes``, ``bev_shape``, ``bev_reference_points``) is passed there
-    rather than on ``forward``. The SCA rebatch plan is built once here, the same
-    way the encoder hoists it out of the per-layer path.
+    Geometry the encoder bakes in at construction (``spatial_shapes``,
+    ``bev_shape``) is passed there. ``bev_reference_points`` is batch-dependent,
+    so it rides on ``forward`` with the SCA rebatch plan — same as the encoder.
     """
     dataset_config = config.dataset_config
     model_config = config.model_config
@@ -143,7 +142,6 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
         params=preprocess_bevformer_layer_parameters(ref_model, device=device, dtype=dtype),
         spatial_shapes=spatial_shapes,
         bev_shape=bev_shape,
-        bev_reference_points=bev_reference_points,
         **layer_kwargs,
     )
 
@@ -169,6 +167,7 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
         "prev_bev": None,
         "reference_points_cam": tt_points_cam,
         "bev_mask": tt_bev_mask,
+        "bev_reference_points": bev_reference_points,
         "rebatch_plan": build_rebatch_plan(tt_points_cam, tt_bev_mask, embed_dims, device),
     }
     tt_inputs["value"] = tt_inputs["key"]
