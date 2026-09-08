@@ -111,6 +111,20 @@ void expect_subprocess_success(int status) {
     EXPECT_EQ(WEXITSTATUS(status), 0) << "subprocess exited with code " << WEXITSTATUS(status);
 }
 
+// Proof that the child compiled into its isolated TT_METAL_CACHE rather than an inherited one. An
+// explicitly-set TT_METAL_CACHE of "<X>" normalizes to a cache root of "<X>/tt-metal-cache" (no
+// trailing slash), and JitBuildEnv concatenates the build_key as a *suffix*: "<X>/tt-metal-cache<bk>/".
+// So the isolated tree is a "tt-metal-cache"-prefixed entry, never a bare "tt-metal-cache" directory.
+bool isolated_cache_populated(const fs::path& cache_dir) {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(cache_dir, ec)) {
+        if (entry.is_directory(ec) && entry.path().filename().string().rfind("tt-metal-cache", 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 class IsolatedKernelCacheMeshDeviceFixture : public MeshDeviceFixture {
 protected:
     void SetUp() override {
@@ -682,7 +696,8 @@ TEST(KernelPrewarmIsolationTest, OfflinePrewarmReflectsEditedKernelBody) {
                 {"TT_METAL_KERNEL_PREWARM", "1"},
                 {"TT_METAL_SLOW_DISPATCH_MODE", "1"},
             });
-        EXPECT_TRUE(fs::exists(tree_path / "cache" / "tt-metal-cache"));
+        EXPECT_TRUE(isolated_cache_populated(tree_path / "cache"))
+            << "child did not compile into the isolated cache under " << (tree_path / "cache");
     }
     EXPECT_FALSE(fs::exists(tree_path));
     expect_subprocess_success(status);
@@ -737,7 +752,8 @@ TEST(KernelPrewarmIsolationTest, EditedKernelBodyForcesRecompileNotStaleCacheHit
                 {"TT_METAL_KERNEL_PREWARM", "1"},
                 {"TT_METAL_SLOW_DISPATCH_MODE", "1"},
             });
-        EXPECT_TRUE(fs::exists(tree_path / "cache" / "tt-metal-cache"));
+        EXPECT_TRUE(isolated_cache_populated(tree_path / "cache"))
+            << "child did not compile into the isolated cache under " << (tree_path / "cache");
     }
     EXPECT_FALSE(fs::exists(tree_path));
     expect_subprocess_success(status);
