@@ -832,7 +832,8 @@ async def main():
         args = [f"--gtest_filter={filters}"]
 
         env = os.environ.copy()
-        env["ETH_TEST_EXPECTED_LINKS"] = str(10)
+        # Per-chip expected counts come from ETH_TEST_EXPECTED_LINKS_MAP (FSD-derived).
+        # Do not invent a global ETH_TEST_EXPECTED_LINKS=10.
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
