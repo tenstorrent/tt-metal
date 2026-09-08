@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "chlkc_list.h"
+// Do not include chlkc_list.h here: it pulls the generated per-kernel body into this shared header
 #include "ckernel.h"
 #ifndef ARCH_QUASAR
 #include "ckernel_globals.h"

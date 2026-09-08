@@ -6,7 +6,7 @@
 
 #define ALWI inline __attribute__((always_inline))
 
-#include "chlkc_list.h"
+// Do not include chlkc_list.h here: it pulls the generated per-kernel body into this shared header
 #include "ckernel.h"
 #include "internal/firmware_common.h"
 #include "ckernel_include.h"
