@@ -71,6 +71,9 @@ public:
         const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
         return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
     }
+    uint32_t GetProgramCoreCountForRuntimeId(uint16_t runtime_id) const noexcept {
+        return runtime_id_to_core_count_[runtime_id].load(std::memory_order_acquire);
+    }
     // Register a callback to be invoked when real-time profiler data arrives.
     // Returns a handle that can be used to unregister the callback.
     tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
@@ -115,7 +118,9 @@ private:
     mutable std::mutex kernel_source_mutex_;
     std::unordered_set<std::string> unique_kernel_sources_;
     std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
+    std::unordered_map<uint64_t, uint32_t> program_id_to_core_count_;
     std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
+    std::array<std::atomic<uint32_t>, kRuntimeIdSlots> runtime_id_to_core_count_{};
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;

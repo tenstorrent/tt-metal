@@ -47,6 +47,7 @@ def profile_realtime_program(
                 {
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
+                    "core_count": int(record.core_count),
                     "duration_ns": (end_timestamp - start_timestamp) / frequency,
                     "kernel_sources": tuple(str(source) for source in record.kernel_sources),
                 }
@@ -118,8 +119,12 @@ def profile_realtime_program_merged(
         runtime_id = record["runtime_id"]
         if not runtime_id:
             continue
-        entry = per_program.setdefault(runtime_id, {"duration_ns": 0.0, "kernel_sources": record["kernel_sources"]})
+        entry = per_program.setdefault(
+            runtime_id,
+            {"duration_ns": 0.0, "core_count": 0, "kernel_sources": record["kernel_sources"]},
+        )
         entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
+        entry["core_count"] = max(entry["core_count"], record["core_count"])
 
     assert per_program, "real-time profiler returned no valid program records for the measured region"
     return result, per_program
