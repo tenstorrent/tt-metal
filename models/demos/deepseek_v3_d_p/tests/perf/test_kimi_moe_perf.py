@@ -86,28 +86,31 @@ class _MoEPerfCase:
 
 # K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Re-centred 2026-09-03: device time came in at 5,413,674 ns, 9.9% below the old band's lower edge
-# (previous midpoint 6,260,834). Per the repo's rule that is fixed by lowering the midpoint, never by
-# widening the margin. ONE sample, from the failing gate run itself.
+# Re-cut 2026-09-08 for #55439, from the MEDIAN of the six runs that measured today's metric rather
+# than from one sample. The previous 5,413,674 was one sample of a number that was bimodal: it came
+# from a run where the dispatch program measured ~0.7 us, while runs of the same commit measured it
+# at ~1.12 ms and read 1.10 ms higher. ``_split_off_dispatch`` now keeps that program out of the
+# gated total, so the two clusters collapse into one and the midpoint describes every run.
 #
-# This drop is an order of magnitude larger than the previous re-centre (13.5% vs 0.8%), so it is a
-# real change in the work rather than drift: it is a SPEEDUP, and this branch reorders the shared
-# expert against dispatch, which is exactly the kind of change that moves this number. If a later
-# run does not reproduce ~5.41 ms, treat that as evidence this sample caught something transient and
-# re-cut from the median of several runs rather than re-lowering again.
+# The six samples that measured the dispatch program async -- and so were already measuring today's
+# metric -- were 5,404,540 / 5,413,674 / 5,443,696 / 5,484,610 / 5,495,657 / 5,512,248 (runs
+# 33787697384, 33871578406, 33871606089, 33871618241, 33946052498). Median 5,464,153, 2.0% peak to
+# peak. Nine local runs of the dispatch-excluded metric agreed at 5,445,011 mean, 0.60% sd.
 #
-# Previous history: re-centred 2026-09-02 to 6,260,834 from 6,574,780 (run 33194039175).
+# Previous history: 5,413,674 from 2026-09-03 (one sample, run 33787697384); 6,260,834 from
+# 2026-09-02; 6,574,780 from run 33194039175.
 #
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_413_674,
+    expected_ns=5_464_153,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
-    # running second on an already-warm device, does not -- five samples on the previous shape spanned
-    # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
-    # property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
+    # running second on an already-warm device, does not. Do NOT tighten this to match K3; the
+    # asymmetry is a property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
+    # The 1.10 ms swing this margin used to be blamed for was the dispatch program, not warm-up, and
+    # is gone -- the remaining spread is 2.0% across the six CI samples above.
     margin=0.04,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -125,6 +128,12 @@ _K2_7 = _MoEPerfCase(
 # over the same 35 programs -- that count is what separates a real drop from a record window closing
 # early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
 # margin below.
+#
+# Unchanged by the #55439 dispatch exclusion. K3 carries the same bimodal dispatch program (measured
+# locally at ~0.74 us async and ~1.55 ms bracketed), but every CI sample of this case has been async:
+# K3 runs SECOND, on a host the K2.7 case has already warmed, and 24 CI samples span 8,166,412 to
+# 8,601,784 with no second cluster. So this midpoint was already measuring the dispatch-excluded
+# number to within the ~0.74 us the exclusion removes.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
@@ -149,6 +158,49 @@ _CASES = [
     pytest.param("kimi_k2_7", _K2_7, id="k2_7"),
     pytest.param("kimi_k3", _K3, id="k3"),
 ]
+
+
+# A dispatch record at or above this is one that waited for its own fabric transfer; a record below
+# it is one that returned before the transfer landed. Measured states are ~0.7 us and ~1.12 ms, so
+# anything in this range is decisive and the exact threshold does not matter.
+_DISPATCH_BRACKETED_NS = 100_000
+
+# The MoE dispatch op's kernels. Matched on the sender writer alone: it is the kernel that owns the
+# fabric writes, and it appears in no other program in this forward.
+_DISPATCH_KERNEL = "writer_sender_dispatch.cpp"
+
+
+def _split_off_dispatch(per_program: dict, label: str) -> tuple[float, float]:
+    """Return (dispatch program ns, summed ns of every other program).
+
+    Why dispatch is not in the gated number (#55439). This metric is a sum of per-program critical
+    paths, and the dispatch program's record does not consistently bracket its own work: its workers
+    hand the payload to the fabric mux and, depending on whether they return before or after the
+    transfer lands, the SAME code measures the program at ~0.7 us or ~1.12 ms. The state is fixed for
+    the life of a process -- five measured passes in one process all agree -- so it cannot be averaged
+    out by sampling, and it moved the gated total between two clusters 1.10 ms apart (5.46 ms vs
+    6.56 ms) with nothing else in the forward changing by more than ~45 us. That is what made this
+    gate flaky, and it is why the midpoint must never be cut from a single sample: 5,413,674 was cut
+    from one run that happened to land in the async state.
+
+    Excluding it leaves the other 23 programs, which are tight: nine runs on one box spanned 1.97%
+    peak to peak (sd 0.60%) against the 3-4% bands here. The dispatch op keeps its own deterministic
+    per-op gate in ``test_dispatch_combine_perf.py``; this gate does not cover it on 8x4.
+    """
+    dispatch = [
+        entry
+        for entry in per_program.values()
+        if any(_DISPATCH_KERNEL in source.replace("\\", "/") for source in entry["kernel_sources"])
+    ]
+    # One match, or the number silently changes meaning: no match would fold nothing out (and put the
+    # bimodality straight back), several would mean this forward no longer has a single dispatch.
+    assert len(dispatch) == 1, (
+        f"{label}: expected exactly one program with {_DISPATCH_KERNEL}, got {len(dispatch)}. The "
+        "gated total excludes that program, so a rename or a second dispatch has to be handled here "
+        "rather than change the number underneath the baseline."
+    )
+    dispatch_ns = dispatch[0]["duration_ns"]
+    return dispatch_ns, sum(entry["duration_ns"] for entry in per_program.values()) - dispatch_ns
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi prefill MoE requires Blackhole")
@@ -219,8 +271,13 @@ def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_pa
     # i.e. the forward was not the thing profiled. Never report green off that.
     assert per_program, f"real-time profiler produced no program records for the {case.label} MoE forward"
 
-    total_ns = sum(entry["duration_ns"] for entry in per_program.values())
+    dispatch_ns, total_ns = _split_off_dispatch(per_program, case.label)
     tag = f"{case.label} moe 8x4 realtime perf ({case.shape_note})"
+    logger.info(
+        f"{tag}: dispatch program {dispatch_ns:,.0f} ns, "
+        f"{'BRACKETED (workers waited for the transfer)' if dispatch_ns >= _DISPATCH_BRACKETED_NS else 'ASYNC (workers returned first)'}"
+        " -- excluded from the gated total, see _split_off_dispatch"
+    )
 
     if case.expected_ns is None:
         logger.warning(
