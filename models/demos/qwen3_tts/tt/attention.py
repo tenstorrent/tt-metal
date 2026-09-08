@@ -27,9 +27,32 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     unpad_dram_sharded_out,
     width_sharded_l1_memcfg,
 )
-from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
+from models.demos.qwen3_tts.tt.linear_1d_program_config import (
+    find_1d_mcast_grid,
+    make_linear_1d_program_config,
+    make_linear_2d_program_config,
+)
 from models.demos.qwen3_tts.tt.model_config import N150_DRAM_PREFILL_SEQS, PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
+
+# Swept prefill o_proj program configs, keyed by the EXACT (seq, K, N) that was measured,
+# so a shape nobody benchmarked can never match. `find_1d_mcast_grid` returns the largest
+# core count whose per_core_N >= 2, which is 32 cores for 2048x2048 — and 32 cores forces
+# in0_block_w = K_tiles/32 = 2. The same "most cores, thinnest K block" trap that cost
+# decode gate/up 34 us/matmul:
+#
+#   seq=64   c32 ibw=2  46.2 us  ->  c16 ibw=4    35.4 us   (-10.8)
+#   seq=128  c32 ibw=2  70.0 us  ->  2D 8x4 ibw=8 51.6 us   (-18.4)
+#
+# At seq=128 the 1D configs run out of room (M is 4 tiles but 1D mcast blocks only over
+# N), so the 2D config — which blocks over M and K as well — wins outright. in0 is
+# L1-interleaved from nlp_concat_heads in both cases, which is what the sweep measured.
+# Numbers from test_qwen3_tts_prefill_mm_sweep_n150.py; QWEN3_TTS_PREFILL_WO_OVERRIDE=0 reverts.
+_PREFILL_WO = {
+    # (seq, K, N): ("1d", num_cores) | ("2d", (grid_x, grid_y))
+    (64, 2048, 2048): ("1d", 16),
+    (128, 2048, 2048): ("2d", (8, 4)),
+}
 
 
 def prepare_fused_sdpa_mask(mask):
@@ -461,6 +484,20 @@ class Attention(LightweightModule):
             for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
+        if os.environ.get("QWEN3_TTS_PREFILL_WO_OVERRIDE", "1") != "0":
+            for _m in list(self._prefill_wo_progcfg):
+                _swept = _PREFILL_WO.get((_m, self._local_hidden, hidden_size))
+                if _swept is None:
+                    continue
+                _kind, _arg = _swept
+                if _kind == "1d":
+                    self._prefill_wo_progcfg[_m] = make_linear_1d_program_config(
+                        _m, self._local_hidden, hidden_size, _grid.x, _grid.y, _fp32_linear, num_cores=_arg
+                    )
+                else:
+                    self._prefill_wo_progcfg[_m] = make_linear_2d_program_config(
+                        _m, self._local_hidden, hidden_size, _arg[0], _arg[1], _fp32_linear
+                    )
 
         # === Decode-only DRAM-sharded QKV / O projections ===
         # qkv_2d rows are reordered into KV-group-interleaved layout so the sharded
@@ -1123,9 +1160,7 @@ class Attention(LightweightModule):
             _explicit_mask = (
                 decode_attn_mask
                 if decode_attn_mask is not None
-                else cp_prefill_mask
-                if cp_prefill_mask is not None
-                else prefill_attn_mask
+                else cp_prefill_mask if cp_prefill_mask is not None else prefill_attn_mask
             )
             _use_causal = _explicit_mask is None and _q_seq == _k_seq_inner and _q_seq > 1
             _explicit_mask, _own_sdpa_mask = prepare_fused_sdpa_mask(_explicit_mask)

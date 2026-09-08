@@ -333,6 +333,33 @@ class MLP(LightweightModule):
             for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
+        # Prefill down: the GRID is already right (find_1d_mcast_grid picks 32 cores, so
+        # in0_block_w = 192/32 = 6). What is wrong is the in0 LAYOUT. `hidden` arrives
+        # L1-INTERLEAVED from the SiLU-mul, so the mcast sender re-reads it out of
+        # interleaved L1 for every K block; a width shard on the matmul's own grid hands
+        # each core its 6 K-tiles up front. Same program config, only the in0 memcfg
+        # changes (test_qwen3_tts_prefill_mm_sweep_n150.py, median of 4 steady launches):
+        #
+        #   m=64   c32 interleaved-in0  85.4 us 156 GB/s -> sharded-in0  72.1 us 185 GB/s
+        #   m=128  c32 interleaved-in0 149.5 us  89 GB/s -> sharded-in0 110.7 us 121 GB/s
+        #
+        # K=6144 is TP=1 only; N300's down is 3072x2048 and was not swept, so it does not
+        # match and keeps the interleaved in0. QWEN3_TTS_PREFILL_DOWN_SHARD_IN0=0 reverts.
+        _PREFILL_DOWN_SHARD_IN0 = {
+            # (seq, K, N): num_cores — must equal the program config's grid
+            (64, 6144, 2048): 32,  # N150 / TP=1
+            (128, 6144, 2048): 32,  # N150 / TP=1
+        }
+        self._prefill_down_in0_memcfg = {}
+        if os.environ.get("QWEN3_TTS_PREFILL_DOWN_SHARD_IN0", "1") != "0":
+            for (_m, _k, _n), _cores in _PREFILL_DOWN_SHARD_IN0.items():
+                if _k != self.local_intermediate or _n != hidden_size or _m not in self._prefill_down_progcfg:
+                    continue
+                if _cores != _down_gx * _down_gy:
+                    continue  # the shard grid must match the config the matmul actually runs
+                self._prefill_down_in0_memcfg[_m] = width_sharded_l1_memcfg(
+                    _m // 32, _k // 32, min(_cores, grid.x), max(1, _cores // grid.x)
+                )
 
         # DRAM-sharded decode path — now supported for TP>1 too.
         # TP=2 benefit: each chip has smaller dimensions (local_intermediate = intermediate // tp)
@@ -606,6 +633,11 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(gate_out)
         ttnn.deallocate(up_out)
+        _down_in0 = self._prefill_down_in0_memcfg.get(seq_len) if not is_decode else None
+        if _down_in0 is not None and hidden.memory_config() != _down_in0:
+            _hidden_sharded = ttnn.to_memory_config(hidden, _down_in0)
+            ttnn.deallocate(hidden)
+            hidden = _hidden_sharded
         output = ttnn.linear(
             hidden,
             self.down_proj,
