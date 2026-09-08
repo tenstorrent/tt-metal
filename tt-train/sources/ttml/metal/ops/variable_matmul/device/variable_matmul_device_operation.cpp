@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -266,6 +267,27 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const uint32_t N_tiles_for_hash = N / tt::constants::TILE_WIDTH;
     const bool transpose_core_grid = logical_M_tiles_for_hash > N_tiles_for_hash;
 
+    // TensorAccessorArgs are baked into the data-movement kernels. Addresses are runtime arguments,
+    // but placement, aligned page size, and any sharding metadata are compile-time state and must
+    // therefore participate in the program key. Hash the generated argument vectors themselves so
+    // this stays in sync when TensorAccessorArgs gains another compile-time field.
+    const auto input_accessor_args = TensorAccessorArgs(*a.buffer()).get_compile_time_args();
+    const auto weight_accessor_args = TensorAccessorArgs(*w.buffer()).get_compile_time_args();
+    const auto offsets_accessor_args = TensorAccessorArgs(*tensor_args.offsets_tensor.buffer()).get_compile_time_args();
+    const auto output_accessor_args =
+        tensor_args.output_tensor.has_value()
+            ? TensorAccessorArgs(*tensor_args.output_tensor->buffer()).get_compile_time_args()
+            : input_accessor_args;
+    // For the normal interleaved TILE path, an automatically allocated output inherits in0's
+    // dtype/memory config and therefore has the same accessor CTA. A sharded output's CTA also
+    // encodes shape/distribution metadata, so conservatively key its derived spec as well. This
+    // keeps cross-M/K cache reuse for the intended interleaved path without aliasing distinct
+    // sharded output accessors admitted by validation.
+    const std::optional<TensorSpec> sharded_auto_output_spec =
+        !tensor_args.output_tensor.has_value() && a.memory_config().is_sharded()
+            ? std::make_optional(compute_output_specs(operation_attributes, tensor_args))
+            : std::nullopt;
+
     // Variable-K: only N must be in the hash (matmul-K is RT-driven, fully variable). N is the
     // padded matmul-N (computed above) so the hash groups calls that share a compiled program.
     return ttsl::hash::hash_objects_with_default_seed(
@@ -288,7 +310,12 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         // Write-at-offset toggles a CTA path. Boolean only (offset value is RT-only).
         tensor_args.output_tensor.has_value(),
         // On-device offsets: different role = different cached program (CTA define).
-        static_cast<uint32_t>(operation_attributes.offsets_role));
+        static_cast<uint32_t>(operation_attributes.offsets_role),
+        input_accessor_args,
+        weight_accessor_args,
+        output_accessor_args,
+        offsets_accessor_args,
+        sharded_auto_output_spec);
 }
 
 }  // namespace ttml::metal::ops::variable_matmul::device
