@@ -592,6 +592,7 @@ def open_ring_joint_sdpa_runtime(
     full_mesh: bool = False,
     num_global_semaphores: int = 3,
     fabric_config: ttnn.FabricConfig = None,
+    sp_outer: bool = False,
 ):
     if full_mesh:
         # The caller asks for a full-mesh gather; the op resolves whether that route closes.
@@ -602,8 +603,11 @@ def open_ring_joint_sdpa_runtime(
         fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
         topology = Topology.Ring if use_ring else Topology.Linear
 
-    sp_axis = 1
-    tp_axis = 0
+    # Default keeps this harness's historical (tp, sp) mesh with SP on axis 1. sp_outer opens the
+    # PRODUCTION orientation instead -- (sp, tp) with SP on axis 0 -- which mla.py asserts and which a
+    # TP-striped KV cache requires, since the striping must be the innermost mesh axis.
+    sp_axis = 0 if sp_outer else 1
+    tp_axis = 1 if sp_outer else 0
 
     if mesh_config.sp_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
@@ -620,7 +624,11 @@ def open_ring_joint_sdpa_runtime(
             ttnn.FabricManagerMode.DEFAULT,
         )
 
-        mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
+        mesh_shape = (
+            ttnn.MeshShape(mesh_config.sp_size, mesh_config.tp_size)
+            if sp_outer
+            else ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
+        )
         # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
         # the trace-replay test asks for one.
         mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
@@ -6031,6 +6039,159 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
         reuse_kv_buffer=reuse_kv_buffer,
     )
 
+
+
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
+@pytest.mark.parametrize("cache_chunks", [8], ids=["depth8"])
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "TP-striped ring_mla is numerically wrong: output PCC 0.9666 vs 0.994, and lane-mates -- which "
+        "run the same Q rows against the same gathered KV and should differ only by ring accumulation "
+        "order -- diverge by up to 0.956 PCC / 17.7 ATOL. The lane dependence points at per-device "
+        "geometry rather than a global mis-mapping. Verified correct for this case by hand: "
+        "kv_region_Nt=2t, split=4, q_ring_size=8, q_start_tile=448+8s, local tile -> c*64 + ring_id*2 + o. "
+        "The op DOES run the striped path end to end, so this pins accuracy, not plumbing."
+    ),
+)
+def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
+    """A TP-deduped KV cache: striped over every device while Q stays sharded over SP alone.
+
+    kv_stripe_split = kv_shards / q_shards = tp, so tp ring shards share each Q rank. The cache is
+    block-cyclic -- device r owns rows [c*C + r*R, +R) of every chunk c -- which is what shrinks the
+    per-device footprint by tp while the ring still transports one shard per device. Only the causal
+    geometry and the local-to-global tile mapping index by the Q rank.
+
+    Q is the FINAL chunk of the prefix, which is where the plain chunked path puts it
+    (q_start = logical_nt - q_local*q_ring_size), so no kv-pad rotation is needed.
+    """
+    if not MESH_CONFIG.is_galaxy:
+        pytest.skip("TP-striped KV accuracy needs the 8x4 Galaxy (sp=8, tp=4)")
+    mesh_config = MESH_CONFIG
+    sp, tp = mesh_config.sp_size, mesh_config.tp_size
+    if sp < 2 or tp < 2:
+        pytest.skip(f"needs a non-degenerate 2D mesh, got {mesh_config}")
+
+    # sp_outer: the production (sp, tp) mesh with SP on axis 0, so the TP striping is innermost.
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config, sp_outer=True)
+    try:
+        mesh_device = runtime.mesh_device
+        ring_size = mesh_device.get_num_devices()
+        assert tuple(mesh_device.shape) == (sp, tp), f"expected an (sp, tp) mesh, got {tuple(mesh_device.shape)}"
+        assert sp * tp == ring_size
+
+        region = 64                      # cache rows per device per chunk -> the striped region
+        chunk_global = region * ring_size  # one chunk across the whole mesh
+        q_local = chunk_global // sp       # Q rows per device: tp regions
+        kv_local = cache_chunks * region   # cache rows per device, across every chunk
+        logical_n = cache_chunks * chunk_global
+        assert q_local < kv_local, f"striping needs the chunked path: q_local={q_local} kv_local={kv_local}"
+
+        b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
+        torch.manual_seed(2026)
+        kv_global = fa_rand(b, nhk, logical_n, d_k)
+        q_start = logical_n - chunk_global           # Q is the final chunk
+        q_global = fa_rand(b, nhq, chunk_global, d_q)
+
+        # Block-cyclic cache: device r holds rows [c*C + r*R, +R) of chunk c, laid out chunk-major.
+        kv_per_dev = torch.zeros(b, ring_size, nhk, kv_local, d_k, dtype=kv_global.dtype)
+        for pos in range(logical_n):
+            chunk = pos // chunk_global
+            within = pos % chunk_global
+            dev = within // region
+            kv_per_dev[:, dev, :, chunk * region + (within % region), :] = kv_global[:, :, pos, :]
+        kv_host = kv_per_dev.permute(0, 2, 1, 3, 4).reshape(b, nhk, ring_size * kv_local, d_k)
+
+        # Q: contiguous per SP rank, so a plain axis-0 shard hands each rank its slab.
+        tt_q = ttnn.from_torch(
+            q_global,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=[2, None]),
+        )
+        tt_kv = ttnn.from_torch(
+            kv_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        )
+        gathered_kv = ttnn.from_torch(
+            torch.zeros(b, nhk, ring_size * kv_local, d_k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        assert tt_q.shape[2] == q_local, f"Q slab {tt_q.shape[2]} != {q_local}"
+        assert tt_kv.shape[2] == kv_local, f"cache slab {tt_kv.shape[2]} != {kv_local}"
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+        tt_out, _ = ttnn.transformer.ring_mla(
+            tt_q,
+            tt_kv,
+            persistent_output_buffer_kv=gathered_kv,
+            head_dim_v=d_v,
+            logical_n=logical_n,
+            program_config=program_config,
+            compute_kernel_config=runtime.compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+            num_links=runtime.num_links,
+            cluster_axis=None,
+            mesh_device=mesh_device,
+            topology=Topology.Ring,
+            subdevice_id=runtime.worker_sub_device_id,
+            ccl_core_grid_offset=(runtime.ccl_column, 0),
+            use_column_major_ccl=True,
+            is_balanced=False,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        # Q ranks own tp consecutive devices, so lane-mates ran identical work; take one per SP rank.
+        shards = [ttnn.to_torch(s) for s in ttnn.get_device_tensors(tt_out)]
+        assert len(shards) == ring_size
+        # Lane-mates compute the same Q rows against the same gathered KV, but their transport ranks
+        # differ, so the ring accumulates in a different order -- close, not bit-equal (bf16 reassociation).
+        for sp_rank in range(sp):
+            for lane in range(1, tp):
+                lane_pass, lane_pcc = comp_pcc(
+                    shards[sp_rank * tp].float(), shards[sp_rank * tp + lane].float(), 0.999
+                )
+                assert lane_pass, (
+                    f"lane-mates diverge at sp_rank={sp_rank}, lane={lane}: PCC={lane_pcc}. Same Q slab and "
+                    f"same gathered KV, so only ring accumulation order should differ"
+                )
+        output = torch.cat([shards[sp_rank * tp] for sp_rank in range(sp)], dim=2)[:, :, :chunk_global, :d_v]
+
+        # Causal reference with Q at its absolute offset in the prefix.
+        qf = q_global.float()
+        kf = kv_global.float()
+        vf = kv_global[:, :, :, :d_v].float()
+        scores = torch.matmul(qf, kf.transpose(-1, -2)) / math.sqrt(d_q)
+        q_pos = torch.arange(chunk_global).unsqueeze(-1) + q_start
+        k_pos = torch.arange(logical_n).unsqueeze(0)
+        scores = scores.masked_fill(k_pos > q_pos, float("-inf"))
+        reference = torch.matmul(torch.softmax(scores, dim=-1), vf).to(output.dtype)
+
+        output_pass, output_pcc = comp_pcc(reference, output, DEFAULT_PCC_THRESHOLD)
+        logger.info(
+            f"TP-striped ring_mla: mesh={tuple(mesh_device.shape)} sp={sp} tp={tp} split={tp} "
+            f"region={region} q_local={q_local} kv_local={kv_local} logical_n={logical_n} PCC={output_pcc}"
+        )
+        assert output_pass, f"TP-striped ring_mla PCC {output_pcc} below {DEFAULT_PCC_THRESHOLD}"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 @pytest.mark.parametrize(
