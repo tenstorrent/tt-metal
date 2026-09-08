@@ -1246,6 +1246,32 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             kv_shards,
             q_shards);
         resolved_kv_stripe_split = kv_shards / q_shards;
+        // The Q rank of transport rank r is r / kv_stripe_split, which holds only while the striping is
+        // the INNERMOST axis of the row-major linearization -- i.e. Q's sequence dim is sharded on mesh
+        // axis 0 and the extra KV striping lives on axis 1. That is the production 8x4 sp_axis=0 /
+        // tp_axis=1 layout. Transposed (sp on axis 1), consecutive ranks differ in SP instead and the Q
+        // rank would be r % sp, so refuse rather than mis-map every diagonal.
+        if (resolved_kv_stripe_split > 1) {
+            const auto& q_topology = input_tensor_q.tensor_topology();
+            const auto& q_placements = q_topology.placements();
+            const uint32_t q_rank_dims = input_tensor_q.logical_shape().rank();
+            TT_FATAL(
+                q_placements.size() == 2,
+                "ring_mla with a TP-striped KV cache expects a 2D tensor distribution, got {} axes",
+                q_placements.size());
+            const bool q_shards_axis0 =
+                ttnn::operations::ccl::common::placement_shards_tensor_dim(q_placements[0], 2, q_rank_dims);
+            const bool q_shards_axis1 =
+                ttnn::operations::ccl::common::placement_shards_tensor_dim(q_placements[1], 2, q_rank_dims);
+            TT_FATAL(
+                q_shards_axis0 && !q_shards_axis1,
+                "ring_mla with a TP-striped KV cache (kv_stripe_split={}) requires Q's sequence dim "
+                "sharded on mesh axis 0 with the striping innermost on axis 1 (the production sp_axis=0, "
+                "tp_axis=1 layout). Got Q sharded on axis0={}, axis1={}",
+                resolved_kv_stripe_split,
+                q_shards_axis0,
+                q_shards_axis1);
+        }
         TT_FATAL(
             resolved_kv_stripe_split == 1 || !is_balanced,
             "ring_mla with a TP-striped KV cache (kv_stripe_split={}) requires is_balanced=false: balancing "

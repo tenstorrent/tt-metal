@@ -6038,14 +6038,17 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
     ids=["torus_xy", "fabric_2d"],
 )
-def test_ring_mla_full_mesh_tp_striped_kv_rejects_flat_cache(fabric_config, expect_error):
-    """A TP-striped KV cache is chunked-prefill-only, and this pins the reason.
+def test_ring_mla_full_mesh_tp_striped_kv_requires_inner_striping(fabric_config, expect_error):
+    """A TP-striped KV cache needs the striping INNERMOST, and this harness proves the check bites.
 
-    kv_stripe_split = kv_shards / q_shards is derived from the mesh, so striping the cache across every
-    device while Q stays on SP gives split = tp. But a striped cache is block-cyclic -- each device owns
-    one narrow region of EVERY chunk, not a contiguous run -- which only the chunked mapping expresses.
-    A one-chunk cache therefore has per-device KV shorter than Q and must be refused, not silently
-    mis-mapped. Accuracy on the chunked path is separate coverage."""
+    kv_stripe_split = kv_shards / q_shards is read off the mesh, so striping the cache across every
+    device while Q stays on one axis gives split = the other axis extent. The Q rank of transport rank r
+    is then r / split, which holds only when the striping is the fastest-varying axis -- Q on mesh axis 0,
+    striping on axis 1, i.e. the production 8x4 sp_axis=0 / tp_axis=1 layout.
+
+    This op harness opens the TRANSPOSE (sp_axis=1, so a (4,8) mesh), where consecutive ranks differ in SP
+    and the Q rank would be r % sp instead. The op must refuse rather than mis-position every diagonal, so
+    striped accuracy coverage belongs on the model path, which uses sp_axis=0."""
     mesh_config = MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
     if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
         pytest.skip(f"TP-striped KV needs a non-degenerate 2D mesh, got {mesh_config}")
@@ -6102,7 +6105,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_rejects_flat_cache(fabric_config, expe
             k_chunk_size=32,
             exp_approx_mode=False,
         )
-        with expect_error(RuntimeError, "Per-device Q seq length must be <= per-device K/V seq length"):
+        with expect_error(RuntimeError, "requires Q's sequence dim sharded on mesh axis 0"):
             ttnn.transformer.ring_mla(
             tt_q,
             tt_kv,
