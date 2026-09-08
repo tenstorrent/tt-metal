@@ -9,6 +9,7 @@ The original `models/demos/gemma4` implementation is independent of this package
 Use the existing checkpoint and tensor-cache configuration:
 
 ```bash
+# TODO: update this to /mnt/models path and update this
 export HF_HUB_OFFLINE=1 \
        HF_HOME=/localdev/svuckovic/huggingface \
        HF_MODEL=google/gemma-4-31B-it \
