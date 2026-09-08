@@ -454,6 +454,7 @@ class LinearDecode(DeepSeekV4Module):
         self.weights_memory_config = None
         self.fused_rms_norm_eps = None
         self.fused_rms_norm_gamma = None
+        self.fused_rms_norm_group_size = 0
         self.output_core_grid = None
         self.cache_file_name = cache_file_name
 
@@ -601,34 +602,38 @@ class LinearDecode(DeepSeekV4Module):
         """
         return self._can_matmul_decode_rm_hs() and self.N % ttnn.TILE_SIZE == 0
 
-    def enable_fused_rms_norm(self, eps: float, gamma) -> bool:
+    def enable_fused_rms_norm(self, eps: float, gamma, group_size: int = 0) -> bool:
         """Normalize this matmul's output in its epilogue. Returns whether it took effect.
 
-        ``gamma`` is the per-channel RMSNorm weight, width-sharded onto this layer's B
-        cores as a TILE 1x32 vector -- the layout ``matmul_decode`` reads in the
-        epilogue. ``gamma`` may be a torch tensor or a thunk, same as any other weight.
+        ``gamma`` may be a scalar, or a per-channel RMSNorm weight width-sharded onto this
+        layer's B cores as a TILE 1x32 vector -- the layout ``matmul_decode`` reads in the
+        epilogue. A vector may be a torch tensor or a thunk, same as any other weight.
         """
         if not self.can_fuse_rms_norm():
             return False
         g = gamma() if callable(gamma) else gamma
-        g = g.reshape(1, -1)
-        if g.shape[-1] != self.N:
-            raise ValueError(f"fused RMSNorm gamma last dim {g.shape[-1]} must equal N {self.N}")
-        # Gamma is already this rank's N. A ShardTensorToMesh mapper on the weight would
-        # cut it again; replicate the local vector onto the mesh instead.
-        mapper = self.mesh_mapper
-        if mapper is not None:
-            mapper = ttnn.ReplicateTensorToMesh(self.device)
-        self.fused_rms_norm_gamma = ttnn.from_torch(
-            g,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            tile=SINGLE_USER_TILE,
-            device=self.device,
-            memory_config=fused_rms_norm_gamma_memory_config(self.N, self.b_core_grid()),
-            mesh_mapper=mapper,
-        )
+        if isinstance(g, torch.Tensor):
+            g = g.reshape(1, -1)
+            if g.shape[-1] != self.N:
+                raise ValueError(f"fused RMSNorm gamma last dim {g.shape[-1]} must equal N {self.N}")
+            # Gamma is already this rank's N. A ShardTensorToMesh mapper on the weight would
+            # cut it again; replicate the local vector onto the mesh instead.
+            mapper = self.mesh_mapper
+            if mapper is not None:
+                mapper = ttnn.ReplicateTensorToMesh(self.device)
+            self.fused_rms_norm_gamma = ttnn.from_torch(
+                g,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                tile=SINGLE_USER_TILE,
+                device=self.device,
+                memory_config=fused_rms_norm_gamma_memory_config(self.N, self.b_core_grid()),
+                mesh_mapper=mapper,
+            )
+        else:
+            self.fused_rms_norm_gamma = g
         self.fused_rms_norm_eps = eps
+        self.fused_rms_norm_group_size = group_size
         return True
 
     def set_output_core_grid(self, grid: ttnn.CoreRangeSet) -> None:
@@ -663,6 +668,7 @@ class LinearDecode(DeepSeekV4Module):
             kwargs["rms_norm"] = True
             kwargs["rms_norm_gamma"] = self.fused_rms_norm_gamma
             kwargs["rms_norm_epsilon"] = self.fused_rms_norm_eps
+            kwargs["rms_norm_group_size"] = self.fused_rms_norm_group_size
         return kwargs
 
     def _is_replicated_rm_hs(self, x: ttnn.Tensor) -> bool:
