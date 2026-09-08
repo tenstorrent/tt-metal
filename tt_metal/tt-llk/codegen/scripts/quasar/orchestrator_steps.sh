@@ -64,7 +64,7 @@ _PIPELINE_STEPS_JSON='[
   {"id":"writer","name":"Write","desc":"Scaffold + fill kernel, compile-check"},
   {"id":"tester","name":"Test","desc":"Write/extend tests, run, internal 5-attempt fix loop"},
   {"id":"refiner","name":"Refine","desc":"Rewrite analysis after writer/tester failure (max 2 refinements)"},
-  {"id":"optimizer","name":"Optimize","desc":"Replay-buffer optimization (success only)"},
+  {"id":"optimizer","name":"Optimize","desc":"Replay-buffer / SFPI optimization; perf loop vs the original kernel when a baseline exists (success only)"},
   {"id":"format","name":"Format","desc":"Run pre-commit formatters on generated files"}
 ]'
 
@@ -428,32 +428,60 @@ execute_step_hide_existing_kernel() {
     ss GUARD_ARMED true --json
     ss SESSION_ID "$_sid"
     echo "  git-guard armed (blind mode) for session $_sid"
-    # Guard: a test source left on the branch that #includes a header we just hid makes the
-    # run's compile fail in a way no agent can repair — worst under LOCK_TESTS, where the
-    # tester may not touch tests. Scan the run's own compile scope (tt-llk tests) and
-    # discount the files execute_step_remove_existing_tests is about to delete in Step 2c.
-    # Warn and proceed: hiding stays in effect so the run is genuinely blind, but the cause
-    # is named here instead of surfacing later as an unexplained compile error.
-    local -a includers=()
+    # A test that #includes a header we just hid would fail to compile, and under LOCK_TESTS
+    # nobody may fix it. Repoint such includes at the generated kernel, or drop the line when
+    # the file already includes it. Only ckernel_sfpu_<op>.h includes are touched, only inside
+    # this arch's tests (other arches spell the same include but resolve their own file), and
+    # the path is matched exactly: "sfpu/x.h" is also a suffix of "llk_sfpu/x.h".
+    local -a includers=() repointed=()
+    local gen_inc=""
     if [ "${#hidden[@]}" -gt 0 ]; then
-        local rt arch_ doomed="" b inc
+        local rt arch_ doomed="" b b_re inc gen_base gen_re
+        local inc_re='^[[:space:]]*#[[:space:]]*include[[:space:]]*"'
         rt="$(sg REMOVE_TESTS 2>/dev/null || echo false)"; arch_="$(sg TARGET_ARCH)"
         [ "$rt" = "true" ] && doomed="$(git -C "$wt" ls-files -- \
             "tt_metal/tt-llk/tests/python_tests/${arch_}/test_*${kn}*_${arch_}.py" \
             "tt_metal/tt-llk/tests/sources/${arch_}/*${kn}*_test.cpp" 2>/dev/null)"
+        local -a scope=("tt_metal/tt-llk/tests/sources/${arch_}" "tt_metal/tt-llk/tests/python_tests/${arch_}" \
+                        "tt_metal/tt-llk/tests/helpers/include/*_${arch_}.h")
+        # How a test spells the generated kernel's include.
+        gen_base="$(basename "$gen")"
+        case "$gen" in */metal/llk_api/*) gen_inc="${gen#*/metal/llk_api/}" ;; *) gen_inc="$gen_base" ;; esac
+        gen_re="$(printf '%s' "$gen_inc" | sed 's/[.]/\\./g')"
         for f in "${hidden[@]}"; do
-            # Match the include as written — last two path components on an #include line.
-            # A bare basename is far too loose: "fill.h" substring-matches
-            # ckernel_sfpu_fill.h, and "ckernel_sfpu_fill.h" alone also matches the BH/WH
-            # helper's `sfpu/` include, which is not the quasar path we hid.
+            # The hidden header as a test includes it (last two path components).
             b="$(printf '%s\n' "$f" | awk -F/ '{print $(NF-1)"/"$NF}')"
+            b_re="$(printf '%s' "$b" | sed 's/[.]/\\./g')"
             while IFS= read -r inc; do
                 [ -n "$inc" ] || continue
                 case "$doomed" in *"$inc"*) continue ;; esac
-                includers+=("$inc includes $b")
-            done < <(git -C "$wt" grep -l -E -e "^[[:space:]]*#[[:space:]]*include.*${b}" \
-                        -- 'tt_metal/tt-llk/tests' 2>/dev/null)
+                if [ -n "$gen" ] && [ "$(basename "$f")" = "$gen_base" ]; then
+                    local note
+                    if grep -qE "${inc_re}${gen_re}\"" "$wt/$inc"; then
+                        sed -i -E "\\|${inc_re}${b_re}\"|d" "$wt/$inc"
+                        note="$inc: dropped include of $b (already includes $gen_inc)"
+                    else
+                        sed -i -E "s|(${inc_re})${b_re}\"|\\1${gen_inc}\"|" "$wt/$inc"
+                        note="$inc: $b -> $gen_inc"
+                    fi
+                    if grep -qE "^[[:space:]]*#[[:space:]]*include[[:space:]]*[\"<]${b_re}[\">]" "$wt/$inc"; then
+                        includers+=("$inc includes $b (could not be repointed)")   # e.g. <angle> include
+                    else
+                        repointed+=("$note")
+                        git -C "$wt" add -- "$inc"
+                    fi
+                else
+                    includers+=("$inc includes $b")
+                fi
+            done < <(git -C "$wt" grep -l -E -e "^[[:space:]]*#[[:space:]]*include[[:space:]]*[\"<]${b_re}[\">]" \
+                        -- "${scope[@]}" 2>/dev/null)
         done
+    fi
+    local joined=""; for inc in "${repointed[@]}"; do joined="${joined}${joined:+ ; }${inc}"; done
+    ss REPOINTED_INCLUDES "$joined"
+    if [ "${#repointed[@]}" -gt 0 ]; then
+        echo "  REPOINTED: test include(s) now target the regenerated kernel (${gen_inc}); part of the locked test from here on:"
+        printf '             %s\n' "${repointed[@]}"
     fi
     if [ "${#includers[@]}" -gt 0 ]; then
         echo "  WARNING: a hidden header is still included by a test source on the branch."
@@ -463,12 +491,25 @@ execute_step_hide_existing_kernel() {
         echo "           HIDE_EXISTING_KERNEL. REMOVE_TESTS only deletes the op's dedicated tests."
     fi
     if [ "$removed" -gt 0 ]; then
-        git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
-            commit -q -m "codegen: hide existing ${kn} implementation for blind regeneration" || true
-        echo "hide_existing_kernel: removed ${removed} file(s), committed on worktree branch"
+        _infra_commit "codegen: hide existing ${kn} implementation for blind regeneration" \
+            && echo "hide_existing_kernel: removed ${removed} file(s), repointed ${#repointed[@]} test include(s), committed on worktree branch" \
+            || echo "hide_existing_kernel: removed ${removed} file(s), repointed ${#repointed[@]} test include(s) — COMMIT FAILED (see ERROR above); the files are gone from the working tree but not from HEAD"
     else
         echo "hide_existing_kernel: no tracked ${kn} files to hide"
     fi
+}
+
+# Commit what is staged, as the codegen user. --no-verify because the repo's pre-commit
+# hook would reformat staged test files and abort these bookkeeping commits.
+_infra_commit() {
+    local out
+    if out="$(git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
+                commit -q --no-verify -m "$1" 2>&1)"; then
+        return 0
+    fi
+    echo "  ERROR: git commit failed on the worktree branch:" >&2
+    printf '%s\n' "$out" | sed 's/^/         /' >&2
+    return 1
 }
 
 # ===========================================================================
@@ -506,9 +547,9 @@ execute_step_remove_existing_tests() {
         done < <(git -C "$wt" ls-files -- "$pat")
     done
     if [ "$removed" -gt 0 ]; then
-        git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
-            commit -q -m "codegen: remove existing ${kn} tests for regeneration" || true
-        echo "remove_existing_tests: removed ${removed} dedicated file(s), committed on worktree branch"
+        _infra_commit "codegen: remove existing ${kn} tests for regeneration" \
+            && echo "remove_existing_tests: removed ${removed} dedicated file(s), committed on worktree branch" \
+            || echo "remove_existing_tests: removed ${removed} dedicated file(s) — COMMIT FAILED (see ERROR above)"
         return 0
     fi
     # No dedicated file — the op registers into a shared unified test. Locate the shared
@@ -546,9 +587,506 @@ execute_step_commit_test_excision() {
         echo "commit_test_excision: no staged changes — nothing to commit"
         return 0
     fi
-    git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
-        commit -q -m "codegen: remove existing ${kn} cases from shared test for regeneration" || true
-    echo "commit_test_excision: committed ${kn} excision on worktree branch"
+    _infra_commit "codegen: remove existing ${kn} cases from shared test for regeneration" \
+        && echo "commit_test_excision: committed ${kn} excision on worktree branch" \
+        || echo "commit_test_excision: ${kn} excision staged — COMMIT FAILED (see ERROR above)"
+}
+
+# ===========================================================================
+# Perf comparison against the original kernel (Steps 2a, 6 and 8).
+#
+# Runs only when HIDE_EXISTING_KERNEL=true and LOCK_TESTS=true (same test for both
+# kernels) and a perf module collects the op. Step 2a measures the original before
+# the hide. The optimizer measures candidates with execute_step_perf_measure and
+# keeps or reverts them; the orchestrator records the verdict with
+# execute_step_perf_finalize. Each measurement is one run_test.sh run; its CSV is
+# moved to $LOG_DIR and compared with perf_eval.py. Callers read one printed line
+# and never touch a CSV.
+# ===========================================================================
+
+# Prints why the perf gate is not met and returns 1; returns 0 when it is met.
+_perf_gate() {
+    local hide lock remove cmp
+    hide="$(sg HIDE_EXISTING_KERNEL 2>/dev/null || echo false)"
+    lock="$(sg LOCK_TESTS 2>/dev/null || echo false)"
+    remove="$(sg REMOVE_TESTS 2>/dev/null || echo false)"
+    cmp="$(sg PERF_COMPARE 2>/dev/null || echo true)"; [ -n "$cmp" ] || cmp=true
+    [ "$cmp" != "false" ]   || { echo "PERF_COMPARE=false"; return 1; }
+    [ "$hide" = "true" ]    || { echo "HIDE_EXISTING_KERNEL=${hide:-unset} (need true)"; return 1; }
+    [ "$lock" = "true" ]    || { echo "LOCK_TESTS=${lock:-unset} (need true)"; return 1; }
+    [ "$remove" != "true" ] || { echo "REMOVE_TESTS=true (the test is regenerated, so nothing is comparable)"; return 1; }
+    return 0
+}
+
+# One perf measurement. Args: <label> <full|variant> [build root].
+# full = the op's whole sweep, variant = the single node id in PERF_TEST_ID.
+# Leaves the CSV path in _PERF_CSV (empty if none); returns run_test.sh's exit code.
+_PERF_CSV=""
+_perf_run() {
+    local label="$1" kind="$2" build_root="${3:-}"
+    local wt arch module k tid llk mod_stem perf_dir rc
+    wt="$(_wt)"; arch="$(sg TARGET_ARCH)"; module="$(sg PERF_MODULE)"; k="$(sg PERF_K)"; tid="$(sg PERF_TEST_ID)"
+    llk="$wt/tt_metal/tt-llk"; mod_stem="${module%.py}"; perf_dir="$llk/perf_data/$mod_stem"
+    local -a sel=()
+    if [ "$kind" = "variant" ] && [ -n "$tid" ]; then sel=(--test-id "$tid")
+    elif [ -n "$k" ]; then sel=(--k "$k"); fi
+    # perf_data/ is gitignored build output. Wipe it before and after so a stale CSV can
+    # never pass as this measurement; the find below handles both harness layouts.
+    rm -rf "$llk/perf_data"
+    _PERF_CSV=""
+    (
+        export QSR_SIM_BACKEND; QSR_SIM_BACKEND="$(sg QSR_SIM_BACKEND)"
+        [ -n "$build_root" ] && export TT_LLK_LOCAL_ARTIFACT_ROOT="$build_root"
+        bash "$llk/.claude/scripts/run_test.sh" run --worktree "$llk" --arch "$arch" \
+            --test "$module" "${sel[@]}" --maxfail 0 --log-dir "$_L/perf_${label}"
+    ); rc=$?
+    local csv
+    csv="$(find "$llk/perf_data" -type f -name "${mod_stem}.post.csv" -printf '%T@ %p\n' 2>/dev/null \
+            | sort -rn | head -1 | cut -d' ' -f2-)"
+    if [ -n "$csv" ] && [ -s "$csv" ]; then
+        if _disk_guard cp "$csv" "$_L/perf_${label}.post.csv"; then
+            _PERF_CSV="$_L/perf_${label}.post.csv"
+            cp "${csv%.post.csv}.csv" "$_L/perf_${label}.raw.csv" 2>/dev/null || true
+        fi
+    fi
+    rm -rf "$llk/perf_data"
+    return "$rc"
+}
+
+# One line from a perf_eval.py result, 11 '|'-separated fields:
+# verdict|median%|worst%|cur_cycles|base_cycles|variants|improved|neutral|regressed|worst_key|verdict_typical
+# verdict = strict any-variant-slower rule (drives the loop); verdict_typical = median (reported).
+_perf_summary() {
+    python - "$1" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("not_measured|||||0|||||"); raise SystemExit(0)
+wv = d.get("worst_variant") or {}
+def f(x):
+    if x is None: return ""
+    return "%.2f" % x if isinstance(x, float) else str(x)
+key = wv.get("key") or {}
+def suf(v): return str(v).split(".")[-1]
+parts = []
+if key.get("formats.input_A"):
+    # sfpu_dst is the op's real output format; formats.output is the packed storage format.
+    parts.append(f"{key['formats.input_A']}->{key.get('formats.sfpu_dst') or key.get('formats.output') or '?'}")
+if key.get("dest_acc"): parts.append("dest_acc=" + suf(key["dest_acc"]))
+if key.get("approx_mode"): parts.append("approx=" + suf(key["approx_mode"]))
+print("|".join([str(d.get("verdict") or "not_measured"), f(d.get("delta_pct_median")),
+                f(d.get("delta_pct_worst")), f(wv.get("current_cycles")),
+                f(wv.get("baseline_cycles")), str(d.get("variants_compared") or 0),
+                str(d.get("variants_improved", "")), str(d.get("variants_neutral", "")),
+                str(d.get("variants_regressed", "")), ",".join(parts),
+                str(d.get("verdict_typical") or "")]))
+PY
+}
+
+# After a full sweep, point PERF_TEST_ID at the least-improved variant so the next attempts
+# measure where the most room is left. Matches the CSV key columns against the collected
+# pytest ids by text, strictest column set first. Arg: <vs_baseline json>.
+_perf_reaim() {
+    local json="$1" collect="$_L/perf_baseline_collect.log" module arch tid
+    module="$(sg PERF_MODULE)"; arch="$(sg TARGET_ARCH)"
+    [ -s "$collect" ] || { echo "  re-aim skipped: no collection log"; return 0; }
+    tid="$(python - "$json" "$collect" "$module" "$arch" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1])); key = (d.get("worst_variant") or {}).get("key") or {}
+module, arch = sys.argv[3], sys.argv[4]
+pat = re.compile(r"^(%s/)?%s::" % (re.escape(arch), re.escape(module)))
+ids = [l.strip() for l in open(sys.argv[2], errors="replace") if pat.match(l.strip())]
+def need(cols):
+    out = []
+    for c in cols:
+        v = key.get(c)
+        if v in (None, ""): continue
+        if c == "formats.input_A": out.append(f"A:{v},")
+        elif c == "formats.input_B": out.append(f"B:{v},")
+        elif c == "formats.sfpu_dst": out.append(f"out:{v}]"); out.append(f"sfpu_dst=<DataFormat.{v}")
+        elif c == "formats.sfpu_src": out.append(f"sfpu_src=<DataFormat.{v}")
+        elif c == "formats.output": out.append(f"out:{v}]")
+        elif c == "unpack_to_dest": out.append(f"unpack_to_dest={v}")
+        elif "." in str(v): out.append(f"<{v}")
+    return out
+for cols in (("mathop", "formats.input_A", "formats.input_B", "formats.sfpu_src", "formats.sfpu_dst",
+              "unpack_to_dest", "dest_acc", "approx_mode", "dest_sync", "implied_math_format"),
+             ("formats.input_A", "formats.sfpu_dst", "dest_acc", "approx_mode"),
+             ("formats.input_A", "formats.output", "dest_acc", "approx_mode"),
+             ("dest_acc", "approx_mode")):
+    n = need(cols)
+    hits = [i for i in ids if n and all(s in i for s in n)]
+    if hits:
+        print(hits[0]); break
+else:
+    print("")
+PY
+)"
+    if [ -n "$tid" ]; then
+        ss PERF_TEST_ID "$tid"
+        echo "  re-aimed: attempts now measure the least-improved variant ($(_perf_summary "$json" | cut -d'|' -f10))"
+    else
+        echo "  re-aim skipped: variant not found among collected ids — attempts keep measuring the current variant"
+    fi
+}
+
+# Record <label> as best-so-far from its vs_baseline summary. Args: <label> <csv> <json> <full>.
+_perf_set_best() {
+    local label="$1" csv="$2" json="$3" full="$4"
+    local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
+    vb="$(_perf_summary "$json")"
+    IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
+    ss PERF_BEST_CSV             "$csv"
+    ss PERF_BEST_LABEL           "$label"
+    ss PERF_BEST_FULL            "$full" --json   # measured with the full sweep
+    ss PERF_BEST_VS_BASELINE     "$vb_verdict"   # strict rule, drives the loop
+    ss PERF_BEST_VERDICT_TYPICAL "$vb_typ"       # median rule, reported
+    ss PERF_BEST_DELTA_MEDIAN_PCT "$vb_med"
+    ss PERF_BEST_DELTA_WORST_PCT  "$vb_worst"
+    ss PERF_BEST_CYCLES          "$vb_cur"
+    ss PERF_BEST_BASELINE_CYCLES "$vb_base"
+    ss PERF_BEST_VARIANTS        "$vb_n"
+    ss PERF_BEST_VARIANTS_IMPROVED  "${vb_imp:-0}"
+    ss PERF_BEST_VARIANTS_NEUTRAL   "${vb_neu:-0}"
+    ss PERF_BEST_VARIANTS_REGRESSED "${vb_reg:-0}"
+    ss PERF_BEST_WORST_KEY       "$vb_key"
+    printf '%s' "$vb"
+}
+
+# Copy the kernel files in the tree to $_L/<prefix>_*. Arg: <prefix>.
+_perf_snapshot() {
+    local prefix="$1" wt algo gen; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
+    [ -f "$wt/$algo" ] && { _disk_guard cp "$wt/$algo" "$_L/${prefix}_$(basename "$algo")" || return $?; }
+    [ "$algo" != "$gen" ] && [ -f "$wt/$gen" ] && { _disk_guard cp "$wt/$gen" "$_L/${prefix}_wrapper_$(basename "$gen")" || return $?; }
+    return 0
+}
+
+# Restore the kernel files in the tree from $_L/<prefix>_*. Arg: <prefix>.
+_perf_restore() {
+    local prefix="$1" wt algo gen; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
+    [ -f "$_L/${prefix}_$(basename "$algo")" ] && cp "$_L/${prefix}_$(basename "$algo")" "$wt/$algo"
+    [ "$algo" != "$gen" ] && [ -f "$_L/${prefix}_wrapper_$(basename "$gen")" ] && cp "$_L/${prefix}_wrapper_$(basename "$gen")" "$wt/$gen"
+    return 0
+}
+
+# Evaluate <current csv> vs <reference csv> with the run's metric and the given
+# regression threshold; writes <json_out>; prints the _perf_summary line.
+_perf_eval() {
+    local cur="$1" ref="$2" out="$3" regress="$4" metric kn
+    metric="$(sg PERF_METRIC)"; kn="$(sg KERNEL_NAME)"
+    python "$_ORCH_SCRIPTS/perf_eval.py" --current "$cur" --baseline "$ref" --op "$kn" \
+        --metric "$metric" --regress-pct "$regress" --improve-pct "$regress" \
+        --goal no_regress --json-out "$out" >/dev/null 2>&1 || true
+    _perf_summary "$out"
+}
+
+# The run.json `perf` object, built from state. Requires $_L.
+_perf_json() {
+    python "$_ORCH_SCRIPTS/state.py" --log-dir "$_L" dump | python -c '
+import json, sys
+s = json.load(sys.stdin)
+def num(k):
+    v = s.get(k)
+    if v in (None, ""): return None
+    try: return float(v)
+    except (TypeError, ValueError): return None
+def s_(k):
+    v = s.get(k); return v if v not in (None, "") else None
+print(json.dumps({"perf": {
+    "enabled": s.get("PERF_ENABLED") is True,
+    "verdict": s_("PERF_VERDICT") or "not_measured",       # follows the median variant
+    "verdict_note": s_("PERF_VERDICT_NOTE"),                # names regressed variants, if any
+    "verdict_worst_case": s_("PERF_BEST_VS_BASELINE"),      # strict any-variant-slower rule
+    "reason": s_("PERF_REASON"),
+    "module": s_("PERF_MODULE"), "k": s_("PERF_K"), "metric": s_("PERF_METRIC"),
+    "regress_pct": num("PERF_REGRESS_PCT"),
+    "best": s_("PERF_BEST_LABEL"),
+    "delta_pct_median": num("PERF_BEST_DELTA_MEDIAN_PCT"),
+    "delta_pct_worst": num("PERF_BEST_DELTA_WORST_PCT"),
+    "current_cycles": num("PERF_BEST_CYCLES"),
+    "baseline_cycles": num("PERF_BEST_BASELINE_CYCLES"),
+    "variants_compared": int(num("PERF_BEST_VARIANTS") or 0),
+    "variants_improved": int(num("PERF_BEST_VARIANTS_IMPROVED") or 0),
+    "variants_neutral": int(num("PERF_BEST_VARIANTS_NEUTRAL") or 0),
+    "variants_regressed": int(num("PERF_BEST_VARIANTS_REGRESSED") or 0),
+    "worst_variant": s_("PERF_BEST_WORST_KEY"),
+    "attempts": int(num("PERF_ATTEMPTS") or 0),
+    "kept": int(num("PERF_KEPT") or 0),
+    "baseline_csv": s_("PERF_BASELINE_CSV"), "best_csv": s_("PERF_BEST_CSV"),
+}}))'
+}
+
+# What the optimizer does after a keep or revert:
+#   attempt N — attempts remain (a variant still slower than the original goes first)
+#   final     — best changed since its last full sweep
+#   done      — attempts used up and best measured with the full sweep
+_perf_next() {
+    local attempts max vb kept full
+    attempts="$(sg PERF_ATTEMPTS)"; max="$(sg PERF_MAX_ATTEMPTS)"; vb="$(sg PERF_BEST_VS_BASELINE)"
+    kept="$(sg PERF_KEPT)"; full="$(sg PERF_BEST_FULL)"
+    if [ "$vb" = "regressed" ] && [ "${attempts:-0}" -lt "${max:-3}" ]; then echo "attempt $((attempts + 1))"
+    elif [ "${kept:-0}" -gt 0 ] && [ "$full" != "true" ]; then echo "final"
+    elif [ "${attempts:-0}" -lt "${max:-3}" ]; then echo "attempt $((attempts + 1))"
+    else echo "done"; fi
+}
+
+# ===========================================================================
+# Step 2a — measure the original kernel's perf before Step 2b hides it.
+# No-op (prints why) unless the perf gate is met and a perf module collects the op.
+# Finds the module (SFPU: the shared unary/binary sweep with -k; others:
+# perf_<op>_<arch>.py), records the first collected node id as the representative
+# variant, runs the full sweep in a throwaway build root and deletes that root so
+# no ELF of the hidden kernel survives. Never fails the run: any problem leaves
+# PERF_ENABLED=false with PERF_REASON set.
+# Run after write_initial_run_json and before hide_existing_kernel.
+# ===========================================================================
+execute_step_perf_baseline() {
+    local _L; _L="$(_LOG)"
+    ss PERF_ENABLED false --json
+    ss PERF_VERDICT  not_measured
+    ss PERF_ATTEMPTS 0 --json
+    ss PERF_KEPT     0 --json
+    local why
+    if ! why="$(_perf_gate)"; then
+        ss PERF_REASON "gate not met: $why"
+        echo "perf_baseline: not applicable ($why) — skipping"
+        return 0
+    fi
+    local wt kn kt arch llk regress max; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; kt="$(sg KERNEL_TYPE)"; arch="$(sg TARGET_ARCH)"
+    llk="$wt/tt_metal/tt-llk"
+    regress="$(sg PERF_REGRESS_PCT)"; [ -n "$regress" ] || { regress=2.0; ss PERF_REGRESS_PCT "$regress" --json; }
+    max="$(sg PERF_MAX_ATTEMPTS)";   [ -n "$max" ]     || { max=3;       ss PERF_MAX_ATTEMPTS "$max" --json; }
+
+    # Candidate "<module>|<-k token>" pairs.
+    local -a cands=()
+    if [ "$kt" = "sfpu" ]; then
+        cands+=("perf_eltwise_unary_sfpu_${arch}.py|$(printf '%s' "$kn" | tr 'A-Z' 'a-z')")
+        cands+=("perf_eltwise_binary_sfpu_${arch}.py|$(printf '%s' "$kn" | tr 'a-z' 'A-Z')")
+    else
+        local f
+        for f in "$llk/tests/python_tests/${arch}"/perf_*"${kn}"*_"${arch}".py; do
+            [ -e "$f" ] && cands+=("$(basename "$f")|")
+        done
+    fi
+    local module="" k="" count=0 cand m t collect="$_L/perf_baseline_collect.log"
+    for cand in "${cands[@]}"; do
+        m="${cand%%|*}"; t="${cand#*|}"
+        [ -f "$llk/tests/python_tests/${arch}/$m" ] || continue
+        local -a sel=(); [ -n "$t" ] && sel=(--k "$t")
+        count="$(bash "$llk/.claude/scripts/run_test.sh" count --worktree "$llk" --arch "$arch" \
+                    --test "$m" "${sel[@]}" 2>"$collect" | tail -1 | tr -dc '0-9')"
+        count="${count:-0}"
+        if [ "$count" -gt 0 ]; then module="$m"; k="$t"; break; fi
+    done
+    if [ -z "$module" ]; then
+        local tried=""; for cand in "${cands[@]}"; do tried="${tried}${tried:+, }${cand%%|*}"; done
+        ss PERF_REASON "no perf test collects ${kn} variants (tried: ${tried:-none})"
+        echo "perf_baseline: no perf test collects ${kn} variants (tried: ${tried:-none}) — perf comparison disabled"
+        return 0
+    fi
+    # Representative variant: the first node id the -k selection collected.
+    local tid; tid="$(grep -m1 -E "^(${arch}/)?${module}::" "$collect" | tr -d '\r' | sed 's/^[[:space:]]*//')"
+    ss PERF_MODULE  "$module"
+    ss PERF_K       "$k"
+    ss PERF_TEST_ID "$tid"
+    rj message --message "Perf baseline: measuring the original ${kn} with ${module} (${count} variants) before the hide"
+
+    local build_root="${TMPDIR:-/tmp}/codegen-perf-baseline-$(sg RUN_ID)" rc
+    rm -rf "$build_root"
+    _perf_run baseline full "$build_root"; rc=$?
+    rm -rf "$build_root"   # no ELF of the hidden kernel may survive
+    if [ "$rc" -ne 0 ] || [ -z "$_PERF_CSV" ]; then
+        ss PERF_REASON "baseline perf run failed (run_test.sh exit ${rc}, csv=${_PERF_CSV:-missing})"
+        echo "perf_baseline: FAILED (run_test.sh exit ${rc}, csv=${_PERF_CSV:-missing}) — perf comparison disabled; log: $_L/perf_baseline/run.log"
+        return 0
+    fi
+    # SFPU work runs on the math thread, so MATH_ISOLATE is the kernel's own cost.
+    local metric="mean(L1_TO_L1)"
+    if [ "$kt" = "sfpu" ] && head -1 "$_PERF_CSV" | grep -q 'mean(MATH_ISOLATE)'; then metric="mean(MATH_ISOLATE)"; fi
+    ss PERF_METRIC       "$metric"
+    ss PERF_BASELINE_CSV "$_PERF_CSV"
+    ss PERF_REASON       ""
+    ss PERF_ENABLED      true --json
+    rj message --message "Perf baseline captured: ${module} --k '${k}' (${count} variants, metric ${metric}) → perf_baseline.post.csv"
+    echo "PERF_BASELINE: module=${module} k='${k}' variants=${count} metric=${metric} regress_pct=${regress} test_id='${tid}' csv=${_PERF_CSV}"
+}
+
+# ===========================================================================
+# Step 6 — measure the kernel in the tree. Args: <label> [full|variant] (default variant).
+# Labels: entry (tester's kernel, full), attempt_N (candidate, variant), final (best, full).
+# Prints one line; the caller acts on its action=keep|neutral|revert|retry field. cur/base are
+# the worst variant's cycles per tile. A failed run prints status=run_failed action=revert; a
+# simulator outage (exit 3) prints status=env_error action=retry.
+# An attempt is judged against best-so-far on its one variant; a final sweep is judged
+# against the last confirmed full sweep (vs_prev) so a change that helped the measured
+# variant but slowed another is reverted.
+# ===========================================================================
+execute_step_perf_measure() {
+    local _L; _L="$(_LOG)"
+    local label="${1:?label required}" kind="${2:-variant}"
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF label=${label} status=disabled ($(sg PERF_REASON)) action=none"; return 0; fi
+    case "$kind" in full|variant) ;; *) echo "PERF label=${label} status=bad_args (kind must be full|variant) action=none"; return 0 ;; esac
+    # Re-measuring the same label (after an env_error) does not consume another attempt.
+    case "$label" in attempt*) [ "$(sg PERF_LAST_LABEL)" = "$label" ] || ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json ;; esac
+    ss PERF_LAST_LABEL "$label"
+    ss PERF_LAST_KIND  "$kind"
+    local rc; _perf_run "$label" "$kind"; rc=$?
+    ss PERF_LAST_RC "$rc" --json
+    if [ "$rc" -eq 3 ]; then
+        # The simulator was unavailable; the kernel is not implicated.
+        echo "PERF label=${label} kind=${kind} status=env_error exit=3 action=retry log=$_L/perf_${label}/run.log"
+        return 0
+    fi
+    if [ "$rc" -ne 0 ] || [ -z "$_PERF_CSV" ]; then
+        ss PERF_LAST_VS_BEST run_failed; ss PERF_LAST_VS_BASELINE run_failed
+        echo "PERF label=${label} kind=${kind} status=run_failed exit=${rc} action=revert log=$_L/perf_${label}/run.log"
+        return 0
+    fi
+    local regress base best metric vb vbest action
+    regress="$(sg PERF_REGRESS_PCT)"; base="$(sg PERF_BASELINE_CSV)"; best="$(sg PERF_BEST_CSV)"; metric="$(sg PERF_METRIC)"
+    vb="$(_perf_eval "$_PERF_CSV" "$base" "$_L/perf_${label}_vs_baseline.json" "$regress")"
+    local vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
+    IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
+    local vbest_verdict="n/a" vbest_med="" vbest_worst="" vbest_cur="" vbest_base="" vbest_n="" _x
+    local vprev_verdict="n/a" vprev_med="" vprev_worst="" vprev_key="" prev; prev="$(sg PERF_FULL_CSV)"
+    case "$label" in
+        entry) action=keep ;;   # nothing to beat yet
+        final)                  # the kept attempt, over all variants, vs the last confirmed full sweep
+            if [ -n "$prev" ] && [ -s "$prev" ]; then
+                vprev="$(_perf_eval "$_PERF_CSV" "$prev" "$_L/perf_${label}_vs_prev.json" 0.5)"
+                IFS='|' read -r vprev_verdict vprev_med vprev_worst _x _x _x _x _x _x vprev_key _x <<<"$vprev"
+            fi
+            case "$vprev_verdict" in improved|neutral|n/a) action=keep ;; *) action=revert ;; esac
+            ;;
+        *)
+            if [ -n "$best" ] && [ -s "$best" ]; then
+                vbest="$(_perf_eval "$_PERF_CSV" "$best" "$_L/perf_${label}_vs_best.json" 0.5)"
+                IFS='|' read -r vbest_verdict vbest_med vbest_worst vbest_cur vbest_base vbest_n _x _x _x _x _x <<<"$vbest"
+            fi
+            # neutral = no measured change on this variant: the optimizer decides (keep only if the
+            # change simplifies the kernel or targets another variant's code path).
+            case "$vbest_verdict" in improved) action=keep ;; neutral) action=neutral ;; *) action=revert ;; esac
+            ;;
+    esac
+    ss PERF_LAST_CSV "$_PERF_CSV"
+    ss PERF_LAST_VS_BASELINE "$vb_verdict"; ss PERF_LAST_VS_BASELINE_DELTA_PCT "$vb_med"
+    ss PERF_LAST_VS_BEST "$vbest_verdict";  ss PERF_LAST_VS_BEST_DELTA_PCT "$vbest_med"
+    ss PERF_LAST_VS_PREV "$vprev_verdict";  ss PERF_LAST_VS_PREV_DELTA_PCT "$vprev_worst"
+    ss PERF_LAST_WORST_KEY "$vb_key"
+    # Full sweeps also print the per-variant tally and the worst variant.
+    local tally="" prevf=""
+    [ "$kind" = "full" ] && tally="; ${vb_imp:-?} improved/${vb_neu:-?} neutral/${vb_reg:-?} regressed) typical=${vb_typ:-?} worst_variant=${vb_key:-?}" || tally=")"
+    [ "$label" = "final" ] && prevf=" vs_prev=${vprev_verdict}${vprev_worst:+(worst ${vprev_worst}%${vprev_key:+ on ${vprev_key}})}"
+    echo "PERF label=${label} kind=${kind} metric=${metric} cur=${vb_cur:-?} best=${vbest_base:-none} base=${vb_base:-?} vs_best=${vbest_verdict}${vbest_med:+(${vbest_med}%)}${prevf} vs_baseline=${vb_verdict}(median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally} variants=${vb_n} action=${action}"
+}
+
+# ===========================================================================
+# Step 6 — make the kernel in the tree (measured as <label>) best-so-far: snapshot it
+# to $LOG_DIR/perf_best_*, record its standing vs the original. Prints next=.
+# ===========================================================================
+execute_step_perf_keep() {
+    local _L; _L="$(_LOG)"
+    local label="${1:?label required}" wt algo gen csv
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF_KEEP: disabled next=done"; return 0; fi
+    csv="$_L/perf_${label}.post.csv"
+    [ -s "$csv" ] || { echo "PERF_KEEP: no measurement for '${label}' — run execute_step_perf_measure ${label} first next=$(_perf_next)"; return 1; }
+    _perf_snapshot perf_best || return $?
+    local full=false
+    [ "$(sg PERF_LAST_LABEL)" = "$label" ] && [ "$(sg PERF_LAST_KIND)" = "full" ] && full=true
+    local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
+    vb="$(_perf_set_best "$label" "$csv" "$_L/perf_${label}_vs_baseline.json" "$full")"
+    IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
+    case "$label" in attempt*) ss PERF_KEPT "$(( $(sg PERF_KEPT) + 1 ))" --json ;; esac
+    local tally=""
+    if [ "$full" = "true" ]; then
+        # A full sweep confirms this kernel: it is what a later final sweep is judged against
+        # and what a rejected final falls back to.
+        _disk_guard cp "$csv" "$_L/perf_confirmed.post.csv" || return $?
+        cp "$_L/perf_${label}_vs_baseline.json" "$_L/perf_confirmed_vs_baseline.json"
+        _perf_snapshot perf_confirmed || return $?
+        ss PERF_FULL_CSV        "$_L/perf_confirmed.post.csv"
+        ss PERF_CONFIRMED_LABEL "$label"
+        tally="; ${vb_imp:-?} improved/${vb_neu:-?} neutral/${vb_reg:-?} regressed"
+    fi
+    rj message --message "Perf: kept ${label} as best — typical ${vb_typ:-?}, worst-variant ${vb_verdict} vs original (median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally} on $(sg PERF_METRIC))"
+    [ "$full" = "true" ] && _perf_reaim "$_L/perf_${label}_vs_baseline.json"
+    echo "PERF_KEEP: best=${label} vs_baseline=${vb_verdict}(median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally})${full:+ typical=${vb_typ:-?}}${vb_key:+ worst_variant=${vb_key}} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
+}
+
+# ===========================================================================
+# Step 6 — discard the candidate in the tree. Arg: [label].
+#   attempt_N — restore best-so-far. A candidate that died before being measured
+#               still consumes its attempt.
+#   final     — the kept attempt slowed another variant: restore the last confirmed
+#               kernel and make it best-so-far again.
+# Prints next=.
+# ===========================================================================
+execute_step_perf_revert() {
+    local _L; _L="$(_LOG)"
+    local label="${1:-}"
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF_REVERT: disabled next=done"; return 0; fi
+    if [ "$label" = "final" ]; then
+        local conf; conf="$(sg PERF_CONFIRMED_LABEL)"
+        [ -n "$conf" ] || { echo "PERF_REVERT: no confirmed kernel to fall back to — nothing restored next=$(_perf_next)"; return 1; }
+        _perf_restore perf_confirmed
+        _perf_snapshot perf_best || return $?
+        _perf_set_best "$conf" "$(sg PERF_FULL_CSV)" "$_L/perf_confirmed_vs_baseline.json" true >/dev/null
+        local kept; kept="$(sg PERF_KEPT)"; [ "${kept:-0}" -gt 0 ] && ss PERF_KEPT "$((kept - 1))" --json
+        rj message --message "Perf: final sweep regressed vs the confirmed kernel ($(sg PERF_LAST_VS_PREV)) — restored ${conf}"
+        echo "PERF_REVERT: final sweep regressed vs confirmed kernel — restored ${conf} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
+        return 0
+    fi
+    case "$label" in
+        attempt*)
+            if [ "$(sg PERF_LAST_LABEL)" != "$label" ]; then
+                ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json
+                ss PERF_LAST_LABEL "$label"; ss PERF_LAST_KIND none
+                ss PERF_LAST_VS_BEST functional_failed; ss PERF_LAST_VS_BASELINE functional_failed
+            fi ;;
+    esac
+    local best; best="$(sg PERF_BEST_LABEL)"
+    [ -n "$best" ] || { echo "PERF_REVERT: no best snapshot recorded — nothing restored next=done"; return 1; }
+    _perf_restore perf_best
+    rj message --message "Perf: reverted $(sg PERF_LAST_LABEL) — kept best=${best} ($(sg PERF_LAST_VS_BEST) vs best)"
+    echo "PERF_REVERT: restored best=${best} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
+}
+
+# ===========================================================================
+# Step 6b — record the perf verdict in state and run.json. Never touches STATUS.
+# ===========================================================================
+execute_step_perf_finalize() {
+    local _L; _L="$(_LOG)"
+    local verdict vb
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then
+        ss PERF_VERDICT not_measured
+        rj metric --patch-json "$(_perf_json)" >/dev/null || true
+        echo "PERF_FINAL: not measured ($(sg PERF_REASON))"
+        return 0
+    fi
+    # The verdict follows the median variant; regressed variants are still named.
+    vb="$(sg PERF_BEST_VS_BASELINE)"
+    local typ; typ="$(sg PERF_BEST_VERDICT_TYPICAL)"; [ -n "$typ" ] || typ="$vb"
+    case "$typ" in
+        regressed) verdict=PERF_REGRESSED ;;
+        improved)  verdict=PERF_IMPROVED ;;
+        neutral)   verdict=PERF_NEUTRAL ;;
+        *)         verdict=not_measured ;;
+    esac
+    local nreg note=""; nreg="$(sg PERF_BEST_VARIANTS_REGRESSED)"
+    [ "${nreg:-0}" -gt 0 ] 2>/dev/null && note=" (${nreg} of $(sg PERF_BEST_VARIANTS) variants regressed: $(sg PERF_BEST_WORST_KEY))"
+    ss PERF_VERDICT "$verdict"
+    ss PERF_VERDICT_NOTE "$note"
+    rj metric --patch-json "$(_perf_json)" >/dev/null || true
+    echo "PERF_FINAL: verdict=${verdict}${note} best=$(sg PERF_BEST_LABEL) typical=${typ} median=$(sg PERF_BEST_DELTA_MEDIAN_PCT)% worst=$(sg PERF_BEST_DELTA_WORST_PCT)% tally=$(sg PERF_BEST_VARIANTS_IMPROVED) improved/$(sg PERF_BEST_VARIANTS_NEUTRAL) neutral/$(sg PERF_BEST_VARIANTS_REGRESSED) regressed of $(sg PERF_BEST_VARIANTS) metric=$(sg PERF_METRIC) attempts=$(sg PERF_ATTEMPTS) kept=$(sg PERF_KEPT) rule=verdict-follows-median;all-attempts-used;re-aim-at-variants-slower-by-more-than-$(sg PERF_REGRESS_PCT)%"
+}
+
+# ===========================================================================
+# Step 6 — print the facts that route the optimizer stage.
+# ===========================================================================
+execute_step_perf_status() {
+    local _L; _L="$(_LOG)"
+    echo "PERF_ENABLED=$(sg PERF_ENABLED) KERNEL_TYPE=$(sg KERNEL_TYPE) PERF_METRIC=$(sg PERF_METRIC) PERF_MAX_ATTEMPTS=$(sg PERF_MAX_ATTEMPTS) PERF_REASON=$(sg PERF_REASON)"
 }
 
 # ===========================================================================
@@ -662,6 +1200,10 @@ PY
     ss FORMATS_EXCLUDED_JSON '{}'    --json
     ss TOKENS_JSON '{"input":0,"output":0,"cache_read":0,"cache_creation":0,"total":0,"cost_usd":0}' --json
     ss OBSTACLE             ""
+    ss PERF_ENABLED         false    --json   # perf comparison vs the original kernel (Step 2a decides)
+    ss PERF_VERDICT         not_measured      # PERF_IMPROVED | PERF_NEUTRAL | PERF_REGRESSED | not_measured
+    ss PERF_ATTEMPTS        0        --json   # optimizer perf attempts measured
+    ss PERF_KEPT            0        --json   # optimizer perf attempts kept
 
     # Agent playbook snapshot (frozen copy of what actually ran).
     local SRC="$wt/tt_metal/tt-llk/codegen/agents/quasar"
@@ -998,13 +1540,14 @@ execute_step_snapshot_generated_kernel() {
 # ===========================================================================
 execute_step_optimizer_advance() {
     local _L; _L="$(_LOG)"
-    local sfpi kn cycle msg
-    sfpi="$(sg SFPI_MODE)"; kn="$(sg KERNEL_NAME)"; cycle="$(sg CYCLE)"
+    local sfpi kn cycle msg perf
+    sfpi="$(sg SFPI_MODE)"; kn="$(sg KERNEL_NAME)"; cycle="$(sg CYCLE)"; perf="$(sg PERF_ENABLED)"
     if [ "$sfpi" = "true" ]; then
         msg="Reimplementing ${kn} in SFPI and comparing instruction count vs the TTI baseline"
     else
         msg="Applying replay-buffer optimization to ${kn}"
     fi
+    [ "$perf" = "true" ] && msg="${msg}; perf loop vs the original kernel on $(sg PERF_METRIC) (up to $(sg PERF_MAX_ATTEMPTS) attempts)"
     rj advance --new-step "optimizer" --new-message "$msg" \
         --prev-result "success" --prev-message "Cycle ${cycle} passed — entering optimization" \
         --agent "optimizer"
@@ -1050,10 +1593,11 @@ execute_step_finalize_run() {
     export END_TIME GIT_COMMIT CYCLE MAX_CYCLES REFINEMENT_COUNT PHASES_TOTAL PHASES_COMPLETED
     export COMPILATION_ATTEMPTS DEBUG_CYCLES TESTS_TOTAL TESTS_PASSED LINES_GENERATED TESTS_GENERATED
     export OPTIMIZED OPTIMIZATION_TYPE FORMATS_TESTED_JSON FORMATS_EXCLUDED_JSON TOKENS_JSON OBSTACLE
-    export PRETTIFIED FORMATTED OPTIMIZED_KERNEL_FILE
+    export PRETTIFIED FORMATTED OPTIMIZED_KERNEL_FILE PERF_JSON
     export STATUS FINAL_RESULT KERNEL_NAME TARGET_ARCH LOG_DIR WORKTREE_BRANCH
     END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     LOG_DIR="$_L"
+    PERF_JSON="$(_perf_json 2>/dev/null || echo '{"perf": null}')"
     GIT_COMMIT="$(sg GIT_COMMIT)"
     WORKTREE_BRANCH="$(sg WORKTREE_BRANCH)"
     CYCLE="$(sg CYCLE)"; MAX_CYCLES="$(sg MAX_CYCLES)"; REFINEMENT_COUNT="$(sg REFINEMENT_COUNT)"
@@ -1107,6 +1651,9 @@ patch = {
     # Final generated kernel (bare ckernel_sfpu_{op}.h) snapshotted alongside
     # pre_opt_*; null when no kernel was produced (e.g. analyzer failed).
     "artifact_optimized_kernel": os.environ.get("OPTIMIZED_KERNEL_FILE") or None,
+    # Perf comparison vs the original kernel (Step 2a baseline, Step 6 loop).
+    # Soft outcome: `enabled` false with a `reason` when the gate was not met.
+    "perf": json.loads(os.environ.get("PERF_JSON") or '{"perf": null}').get("perf"),
 }
 print(json.dumps(patch))
 PY

@@ -1,6 +1,6 @@
 ---
 name: llk-optimizer
-description: Optimize a working SFPU kernel — replay buffers (default) or an SFPI-vs-TTI rewrite (when SFPI_MODE is set). Use after tests pass.
+description: Optimize a working SFPU kernel — replay buffers (default) or an SFPI-vs-TTI rewrite (when SFPI_MODE is set); when PERF_ENABLED is set, every keep/reject is decided by measured cycles against the original kernel. Use after tests pass.
 model: inherit
 tools: Read, Write, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql
 ---
@@ -26,6 +26,9 @@ REFERENCE_ARCH="$($ST   --log-dir "$LOG_DIR" get REF_ARCH)"
 REFERENCE_PATH="$($ST   --log-dir "$LOG_DIR" get KERNEL_PATH)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
 QSR_SIM_BACKEND="$($ST  --log-dir "$LOG_DIR" get QSR_SIM_BACKEND)"
+PERF_ENABLED="$($ST     --log-dir "$LOG_DIR" get PERF_ENABLED)"
+PERF_METRIC="$($ST      --log-dir "$LOG_DIR" get PERF_METRIC)"
+PERF_MAX_ATTEMPTS="$($ST --log-dir "$LOG_DIR" get PERF_MAX_ATTEMPTS)"
 export QSR_SIM_BACKEND
 ```
 
@@ -42,12 +45,58 @@ Two mutually-exclusive modes, selected by `SFPI_MODE`:
 
 - **unset/false → Replay Mode (default).** Wrap ITERATIONS loops with replay buffers. Follow "## Process (Replay Mode)".
 - **true → SFPI Conversion Mode.** Reimplement the raw-`TTI_` kernel in the `sfpi::` DSL and keep it only if it is no worse. Do NOT apply replay buffers here — the user opted out of replay when requesting SFPI. Follow "## SFPI Conversion Mode" and skip the replay Process.
+- **`PERF_ENABLED=true` → Perf Mode overlay on either mode.** The mode still supplies the *content* of each edit; measured cycles decide keep/reject instead of instruction count. Read "## Perf Mode" before either Process and follow its loop.
 
 ## Output
 
 - **Replay Mode**: modified kernel with replay-buffer optimization, or reverted to backup.
 - **SFPI Mode**: kernel rewritten in SFPI (kept because no worse than TTI) or the TTI baseline left untouched (SFPI generated more instructions), plus the `op | TTI | SFPI` count table in the self-log and report.
-- Both modes: compilation and all functional tests must still pass.
+- **Perf Mode**: the fastest functionally correct kernel seen (best-so-far) left in the tree, plus the perf table in the self-log.
+- All modes: compilation and all functional tests must still pass.
+
+---
+
+## Perf Mode (`PERF_ENABLED=true`)
+
+The original kernel's perf was measured before the hide (metric `PERF_METRIC`, threshold `PERF_REGRESS_PCT`). Leave the fastest **functionally correct** kernel in the tree. Measured cycles decide every keep/reject; instruction counts (S5–S7 `compare`, Replay Step 8) are advisory — record them, act on `execute_step_perf_measure`.
+
+Do not read the step script, open a perf CSV, or call `perf_eval.py`. Source the script once and run one helper per step (Bash tool, `timeout: 600000`, `dangerouslyDisableSandbox: true`, foreground); act only on the line it prints.
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+```
+
+### P1: Measure the entry kernel
+
+The kernel in the tree is the tester's, functionally proven. Measure it with the full op sweep and make it best-so-far:
+```bash
+execute_step_perf_measure entry full
+execute_step_perf_keep entry
+```
+In the `PERF_KEEP` line, `vs_baseline=` is the strict standing (regressed if ANY variant is slower; this drives the loop), `typical=` the median (what the run reports), `worst_variant=` the slowest path. After every full sweep the step re-aims the per-attempt measurement at the least-improved variant — target your edits at it; a gap confined to one variant usually means one code path (e.g. the fp32-accurate branch) that your lever must reach. Then follow `next=`: attempts continue until `PERF_MAX_ATTEMPTS` are used, whether or not entry is regressed. If your mode reports not applicable (Replay Step 0 `SKIP`, or SFPI S1 on an already-SFPI kernel), skip that lever and use a different one for attempt 1.
+
+### P2: Attempt loop (k = 1 … `PERF_MAX_ATTEMPTS`)
+
+Each attempt edits the kernel in the tree — always best-so-far — then gates it functionally, then measures it:
+
+1. **Edit — one lever per attempt.** Attempt 1 = your mode's standard optimization (Replay Steps 2–7, or SFPI S2–S6). Later attempts: one S6.1 idiom lever, fewer per-iteration `SFPLOAD`/`SFPSTORE`, or a fused mul+add. Keep the algorithm and the `_init_{op}_` / `_calculate_{op}_` / dispatcher signatures.
+2. **Functional gate** — your mode's compile + `run_test.sh run --k {op} --maxfail 0` (Replay Step 8 / SFPI S7). Not `PASS` (fail, hang, or an unfixable compile error) → `execute_step_perf_revert attempt_{k}`, then step 4. A broken candidate is never measured.
+3. **Perf** — `execute_step_perf_measure attempt_{k}`. Read `action=` and run the matching helper immediately, before touching the kernel again: `keep` → `execute_step_perf_keep attempt_{k}`; `revert` → `execute_step_perf_revert attempt_{k}`; `neutral` (no measured change on this variant) → your call: keep it only if it simplifies the kernel or targets a code path this variant does not execute (the full sweep then judges it), otherwise revert; `retry` (simulator unavailable, `status=env_error`) → re-run the same measure command; it does not consume an attempt.
+4. **Route** on the `next=` field of the keep/revert line: `attempt N` → step 1 with k = N; `final` → P3; `done` → P4. `attempt N` is not optional while any variant is still slower than the original: if you have no lever left for the slow variant, read how the Blackhole reference handles that exact case (format pair, dest mode) and port that approach.
+
+Every `attempt_{k}` label consumes one attempt once you call measure or revert with it. Only a compile error you fix before the functional gate is free. Never exceed `PERF_MAX_ATTEMPTS`.
+
+### P3: Full-sweep measurement of best
+
+Whenever `next=final` (best changed since it was last measured with the full sweep). Best-so-far is in the tree:
+```bash
+execute_step_perf_measure final full
+```
+Read `action=`: `keep` → `execute_step_perf_keep final`; `revert` (the kept attempt slowed another variant — `vs_prev=` names it) → `execute_step_perf_revert final`, which restores the last confirmed kernel; `retry` → re-run the same measure command. Then follow that line's `next=`: `attempt N` → back to P2 with k = N (the per-attempt variant is re-aimed at the least-improved one); `done` → P4.
+
+### P4: Leave the tree on best-so-far
+
+Keep leaves the kept kernel in the tree; revert restores the snapshot. Do not copy kernels by hand for perf decisions and do not run `execute_step_perf_finalize` — the orchestrator records the verdict. Continue to "## Finalize": `OPTIMIZED=true` iff `PERF_KEPT > 0`.
 
 ---
 
@@ -233,19 +282,16 @@ grep -n "load_replay_buf" tt_llk_quasar/common/inc/ckernel.h | head -5
 grep -n -A 10 "load_replay_buf" tt_llk_quasar/llk_lib/llk_math_eltwise_binary.h
 ```
 
-**API:**
+**API — use exactly this form on Quasar:**
 ```cpp
-load_replay_buf(
-    start_idx,              // u10: starting index (usually 0)
-    len,                    // u10: number of instructions to record
-    execute_while_loading,  // bool: true = first pass runs + records
-    set_mutex,              // u1
-    load_mode,              // u1: 0 for normal usage
-    [&]() { /* the instruction sequence to record */ });
+// Record only: the body is written into replay_buffer[0 .. REPLAY_LEN) and is NOT executed
+// (exec_while_loading defaults to false). Every working Quasar kernel uses this overload.
+load_replay_buf<0, REPLAY_LEN>([&]() { /* the instruction sequence to record */ });
 
-TTI_REPLAY(start_idx, len, 0, 0, 0, 0);  // last, set_mutex, exec_while_loading, load_mode
+TTI_REPLAY(0, REPLAY_LEN, 0, 0, 0, 0);  // start, len, last, set_mutex, exec_while_loading, load_mode=0 → run it
 ```
-REPLAY ISA doc: Confluence `1612808713` (cloudId `tenstorrent.atlassian.net`).
+Do not record while executing (`exec_while_loading=true`): no Quasar kernel does, and it hung the emulator in two codegen runs where the record-only form passed. Do not add `disable_gathering()`/`enable_gathering()` around the compile-time overload. Leave `last` and `set_mutex` at 0.
+REPLAY ISA: `tt_llk_quasar/instructions/assembly.yaml` (`REPLAY`), Confluence `1612808713`.
 
 ### Step 5: Count instructions precisely
 
@@ -270,21 +316,19 @@ for (int d = 0; d < ITERATIONS; d++) {
 
 // AFTER:
 constexpr uint32_t REPLAY_LEN = 4;  // exactly 4 instructions in the body
-load_replay_buf(
-    0, REPLAY_LEN, true, 0, 0,
+load_replay_buf<0, REPLAY_LEN>(
     [&]() {
         TTI_SFPLOAD(0, mod0, ADDR_MOD_7, offset0);
         TTI_SFPSETCC(0, 0, 0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSTORE(0, mod0, ADDR_MOD_7, offset1);
-    });
-// iteration 0 executed during recording (execute_while_loading=true); replay the rest
-for (int d = 1; d < ITERATIONS; d++) {
+    });                                    // recorded only — nothing executes yet
+for (int d = 0; d < ITERATIONS; d++) {     // every iteration is a replay
     TTI_REPLAY(0, REPLAY_LEN, 0, 0, 0, 0);
 }
 ```
 **Rules:**
-- `execute_while_loading = true` — iteration 0 runs while recording; the replay loop starts at `d = 1`.
+- Record only, then replay all `ITERATIONS` iterations (`d` starts at 0). Issue cost: `REPLAY_LEN` recording slots + `ITERATIONS` replays (4 + 8 = 12) instead of `REPLAY_LEN × ITERATIONS` (32).
 - Drop `#pragma GCC unroll` from the replay loop.
 - Multiple independent ITERATIONS loops can share replay slot 0 (they run sequentially).
 
@@ -319,9 +363,10 @@ Exit codes: 0=pass, 2=compile fail, 1=test fail, 3=env error, 5=hang. On 1/2/5 t
 ### Step 9: Handle failures
 
 Likely causes, in order:
-1. Wrong instruction count in `REPLAY_LEN` — recount carefully.
-2. A loop body that isn't replay-safe (branches or dynamic addresses).
-3. Missing include for `load_replay_buf` / `TTI_REPLAY`.
+1. A hang (`run_test.sh` exit 5): you recorded while executing. Use the record-only `load_replay_buf<0, REPLAY_LEN>(...)` form from Step 4 and replay every iteration.
+2. Wrong instruction count in `REPLAY_LEN` — recount carefully.
+3. A loop body that isn't replay-safe (branches or dynamic addresses).
+4. Missing include for `load_replay_buf` / `TTI_REPLAY`.
 
 Cannot fix within 3 attempts → revert:
 ```bash
@@ -349,7 +394,7 @@ $ST --log-dir "$LOG_DIR" set OPTIMIZED         "true|false" --json
 $ST --log-dir "$LOG_DIR" set OPTIMIZATION_TYPE "replay|sfpi|none"
 rm -f "$WORKTREE_DIR/$GENERATED_KERNEL.pre_opt"
 ```
-Set `OPTIMIZED=true` only when a change was kept (replay applied, or the SFPI rewrite kept and no worse than TTI); `false` on revert, no-op, or already-SFPI. `OPTIMIZATION_TYPE` = `replay`, `sfpi`, or `none`.
+Set `OPTIMIZED=true` only when a change was kept (replay applied, or the SFPI rewrite kept and no worse than TTI; in Perf Mode: `PERF_KEPT` > 0 — read it with `$ST --log-dir "$LOG_DIR" get PERF_KEPT`); `false` on revert, no-op, or already-SFPI. `OPTIMIZATION_TYPE` = `replay`, `sfpi`, or `none`.
 
 ---
 
@@ -409,6 +454,11 @@ Curated. Full transcript in `$LOG_DIR/transcripts/NN_{slug}_commands.md`. Includ
 - Compile result: PASS | FAIL
 - Test result: PASS ({N}/{N}) | FAIL ({failures}) | SKIPPED
 - If reverted: the revert command run and the reason.
+
+## Perf (Perf Mode only — write "not enabled" otherwise)
+- Baseline: `PERF_METRIC`, `PERF_REGRESS_PCT`, and the `entry` line's `vs_baseline=` standing.
+- One row per attempt, copied from the printed lines: `label | edit | functional | vs_best | vs_baseline | kept?`
+- Final: the shipped best's label and `vs_baseline=`, and why the loop stopped (`next=done`, cap reached, or not regressed).
 
 ## Open questions / handoffs
 Any hardware-doc question or replay-buffer limit the analysis didn't cite, recorded for the next run.

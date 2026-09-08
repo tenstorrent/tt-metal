@@ -62,6 +62,7 @@ analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimiz
 - **refiner** (`llk-analysis-refiner.md`) — returns `REFINED` or `ESCALATE`.
 - **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 CANNOT (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
 - **optimizer** and **format** only run on success of tester.
+- **perf comparison** (`PERF_ENABLED=true`, set by Step 2a) — the original is measured before the hide; the optimizer keeps only candidates that pass the functional test and are not slower; Step 6b records the verdict as a soft outcome that never changes `STATUS`.
 
 Agent playbooks live in `codegen/agents/quasar/`.
 
@@ -179,6 +180,17 @@ source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_write_initial_run_json
 ```
 
+## Step 2a: Perf Baseline of the Original Kernel (before the hide)
+
+EXECUTE the following (Bash tool, `timeout: 600000`, `dangerouslyDisableSandbox: true`, foreground). It runs the op's perf sweep on the original kernel when `HIDE_EXISTING_KERNEL=true`, `LOCK_TESTS=true` and a Quasar perf module collects the op; otherwise it prints why and does nothing:
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_perf_baseline
+```
+
+Continue to Step 2b whatever it prints; quote a `FAILED` line in your final report.
+
 ## Step 2b: Hide Existing Implementation (blind regeneration)
 
 EXECUTE the following — it acts only when `HIDE_EXISTING_KERNEL=true`, and is a no-op otherwise:
@@ -187,7 +199,7 @@ EXECUTE the following — it acts only when `HIDE_EXISTING_KERNEL=true`, and is 
 execute_step_hide_existing_kernel
 ```
 
-If it prints a `WARNING:` block, quote it verbatim in your final report and via `execute_step_message`.
+If it prints a `REPOINTED:` block, those test includes now target the regenerated kernel and are part of the (locked) test from here on — quote the block via `execute_step_message`. If it prints a `WARNING:` block, quote it verbatim in your final report and via `execute_step_message`.
 
 ## Step 2c: Remove Existing Tests (test regeneration)
 
@@ -489,7 +501,22 @@ Loop back to Step 5a.
 
 ## Step 6: Optimizer (success path only)
 
-Only run after a cycle returned `PASS`. Skip if the tester never passed, or if `KERNEL_TYPE` is not `sfpu` (replay-buffer and SFPI optimizations are SFPU-only) — in that case go straight to Step 7.
+Only run after a cycle returned `PASS`. Skip the whole step if the tester never passed → Step 7.
+
+EXECUTE the following and route on the two values it prints:
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_perf_status
+```
+
+- `KERNEL_TYPE` is not `sfpu` (replay-buffer and SFPI optimizations are SFPU-only): do not spawn the optimizer. If `PERF_ENABLED=true`, measure the kernel once against the original (measure-only, no improvement attempts) — invoke via the Bash tool with `timeout: 600000` and `dangerouslyDisableSandbox: true`:
+  ```bash
+  source codegen/scripts/quasar/orchestrator_steps.sh
+  execute_step_perf_measure entry full
+  execute_step_perf_keep entry
+  ```
+  Then go to Step 6b. If `PERF_ENABLED=false`, go straight to Step 7.
+- `KERNEL_TYPE` is `sfpu`: Step 6a, then Step 6b.
 
 ### Step 6a: Run the optimizer
 
@@ -515,6 +542,13 @@ Agent tool:
 
     The kernel already compiles and passes all tests. Optimize with replay
     buffers or sfpi code without breaking correctness. If optimization fails, revert to the pre-optimization version.
+
+    If PERF_ENABLED=true (read it from state), run in perf mode per your
+    playbook: measure the entry kernel against the original's baseline, loop
+    up to PERF_MAX_ATTEMPTS keeping only candidates that pass the functional
+    test and are not slower, and leave best-so-far in the tree. Every
+    keep/reject in that mode is decided by execute_step_perf_measure, not by
+    instruction count.
 ```
 
 Wait for AGENTS completion.
@@ -524,6 +558,16 @@ THEN EXECUTE (capture optimizer spend):
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_refresh_cost
 ```
+
+### Step 6b: Record the perf verdict
+
+EXECUTE the following (a no-op that prints `not measured` when perf is disabled):
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_perf_finalize
+```
+
+Quote the `PERF_FINAL:` line verbatim in your final report. It is a soft outcome: never change `STATUS` or `FINAL_RESULT` because of it.
 
 ---
 
