@@ -262,12 +262,19 @@ def draw_request_latents(
 
 @dataclass
 class MiniMaxH3Output:
-    """One generation. `video` is `(1, 3, F, H, W)` in [0, 1]; `audio` is `(1, 2, samples)`."""
+    """One generation. `audio` is `(1, 2, samples)`; `video` depends on `video_format`:
+
+    `"rgb_float"` is the `(1, 3, F, H, W)` [0, 1] tensor every pixel-comparing gate reads;
+    `"yuv420"` is a planar `(F, H*3//2, W)` uint8 array straight off the device stitch, ready for
+    `export_video_audio_yuv`. Consumers must branch on `video_format` rather than assume the float
+    layout -- on the planar one `shape[2]` is the *width*, so a frame count read off it is wrong.
+    """
 
     video: torch.Tensor
     audio: torch.Tensor
     sampling_rate: int
     num_frames: int
+    video_format: str = "rgb_float"
     fps: int = MINIMAX_H3_FPS
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -299,6 +306,7 @@ class MiniMaxH3Pipeline:
         lora_strength: float = 1.0,
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        vae_output_type: str = "float",
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
         # untouched; a MiniMaxH3VSAConfig selects the sparse path and runs the whole packed
@@ -390,13 +398,17 @@ class MiniMaxH3Pipeline:
         self._text_config = None
         self._transformer = None
         self._vae = None
-        self._encoder_state_loaded = False
         self._image_processor = None
         # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
         # colour-converted on device, and `_decode_video` returns planar `(T, H*3//2, W)` uint8 for
-        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. Off by default because
-        # it changes this method's return type, and every quality gate reads the float one.
-        self.vae_output_type = "float"  # "float" | "uint8" | "yuv420"
+        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor -- 1.5 bytes per pixel
+        # against 6, with no host blend or unpatchify. It changes `MiniMaxH3Output.video`'s layout, so
+        # consumers branch on `output.video_format`, and it stays **off** by default: every
+        # pixel-comparing quality gate reads the float one, and a default flip would silently hand
+        # them a planar array.
+        if vae_output_type not in ("float", "uint8", "yuv420"):
+            raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
+        self.vae_output_type = vae_output_type
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -431,6 +443,7 @@ class MiniMaxH3Pipeline:
         lora_strength: float | None = None,
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        vae_output_type: str = "float",
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -463,6 +476,7 @@ class MiniMaxH3Pipeline:
             lora_strength=lora_strength,
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
+            vae_output_type=vae_output_type,
         )
 
     @staticmethod
@@ -526,10 +540,9 @@ class MiniMaxH3Pipeline:
     def _make_resident(self, stage: str) -> None:
         """Release whatever the previous stage held before the next one allocates.
 
-        `MiniMaxH3Vae` keeps its lazily-built per-shape encoders and decoders in a plain dict rather
-        than as registered child `Module`s, so `deallocate_weights()` does not reach them; they are
-        dropped explicitly. It still holds its host state dict, so rebuilding is a re-upload rather
-        than a re-read from disk.
+        `MiniMaxH3Vae` owns its leaf modules rather than registering them as children, so it is not
+        itself a `Module` and `deallocate_weights()` has to be driven over `vae.modules`. It keeps its
+        host state dict, so re-entering the stage is a re-upload rather than a re-read from disk.
 
         **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh with the
         precomputed AdaLN path: encoder, DiT and VAE fit together, and a prompt's Encoder row
@@ -559,8 +572,8 @@ class MiniMaxH3Pipeline:
             self._transformer = None
         elif self._resident == "vae" and self._vae is not None and not coresident:
             logger.info("releasing the video VAE")
-            self._vae._encoders.clear()
-            self._vae._decoders.clear()
+            for module in self._vae.modules:
+                module.deallocate_weights()
         self._resident = stage
 
     # ------------------------------------------------------------------ text
@@ -1271,23 +1284,18 @@ class MiniMaxH3Pipeline:
         encode_shape: tuple[int, int, int] | None = None,
         encode_taps: int = 1,
     ) -> MiniMaxH3Vae:
-        """Build the VAE and, given `decode_shape` / `encode_shape`, its per-shape sub-models too.
+        """Build the VAE and, given `decode_shape` / `encode_shape`, upload those sub-models' weights.
 
-        These arguments are about measurement, not convenience. `MiniMaxH3Vae` builds a decoder **per
-        distinct (T, H, W)** and uploads that decoder's ~4.6 GB of weights at construction. Without
-        them that upload happens lazily inside `vae.decode()`, landing *inside* the timed VAE-decode
-        row -- and weight upload is one-time construction cost the measurement contract does not
-        count. `encode_shape` does the same for the keyframe encoder, smaller at 0.72 GB against the
-        decoder's 9.7 but on the same principle.
+        These arguments are about measurement, not convenience: both are truthy-or-not flags rather
+        than shapes now, because the sub-models are shape-independent. They are kept as shapes so the
+        call sites still read as "the decode I am about to run", and `encode_taps` still selects
+        between the image and video encoders.
 
-        `load_encoder_state` is called whenever the encoder state is needed at all, and eagerly rather
-        than lazily: `encode_clip` raises `RuntimeError("call load_encoder_state() before encoding")`,
-        which is the right error but fires at encode time --- after the DiT has been built and inside a
-        timed row. One `_read_safetensors("vae")` feeds both loaders; reading the 10.4 GB twice would be
-        pure waste.
+        The weights are read once into the VAE's host state dict and each sub-model uploads on first
+        use, so forcing the upload here is what keeps it out of a timed row --- left lazy it would fire
+        inside `decode()` or `encode_clip()`, after the DiT has been built.
         """
         self._make_resident("vae")
-        want_encoder = encode_shape is not None
         if self._vae is None:
             logger.info("building the video VAE")
             # Used only for the wave readback, which keeps the decode off the MPI path; the VAE's
@@ -1296,6 +1304,7 @@ class MiniMaxH3Pipeline:
             unit_pixels = self.vae_output_type in ("uint8", "yuv420")
             self._vae = MiniMaxH3Vae(
                 self.vae_config,
+                task=self.task,
                 mesh_device=self.mesh_device,
                 weight_loader=self._cache_submodel,
                 ccl_manager=self.ccl_manager,
@@ -1305,28 +1314,27 @@ class MiniMaxH3Pipeline:
                 pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
                 readback_uint8=self.vae_output_type == "uint8",
             )
-            state = self._read_safetensors("vae")
-            self._vae.load_decoder_state(state)
-            if want_encoder:
-                self._vae.load_encoder_state(state)
-                self._encoder_state_loaded = True
-        elif want_encoder and not self._encoder_state_loaded:
-            self._vae.load_encoder_state(self._read_safetensors("vae"))
-            self._encoder_state_loaded = True
-        if decode_shape is not None and decode_shape not in self._vae._decoders:
+            # One host state dict feeds every sub-model; each uploads on first use via
+            # `_ensure_loaded`. Reading the 10.4 GB once is the point of the single call.
+            self._vae.load_state(self._read_safetensors("vae"))
+        # The decoder is shape-independent -- `decode_unit_shape` is fixed by the VAE's tiling, not by
+        # resolution or duration -- so there is one decoder and its ~4.6 GB upload is forced here
+        # rather than left to the first `decode()`. That upload is one-time construction cost and the
+        # measurement contract does not count it, so it must not land inside the timed decode row.
+        if decode_shape is not None and not self._vae.decoder.is_loaded():
             t0 = time.time()
-            self._vae._decoder_for(*decode_shape)
-            logger.info(f"per-shape decoder {decode_shape} built in {time.time() - t0:.1f}s")
+            self._vae._ensure_loaded(self._vae.decoder, self._vae._decoder_subfolder())
+            logger.info(f"decoder weights uploaded in {time.time() - t0:.1f}s")
         if encode_shape is not None:
             # taps=1 for a single frame: the causal front-pad is zeros, so a 3-tap temporal conv
-            # collapses to `weight[:, :, -1]` exactly, not approximately. A ref2va
-            # video reference goes through `vae.encode` at taps=3 and needs its own per-shape
-            # encoder, built here so the weight upload stays outside the timed encode row.
-            key = (*encode_shape, encode_taps)
-            if key not in self._vae._encoders:
+            # collapses to `weight[:, :, -1]` exactly, not approximately. A ref2va video reference
+            # goes through `vae.encode` at taps=3 and uses the video encoder instead. Forced for the
+            # same reason as the decoder above.
+            encoder = self._vae.video_encoder if encode_taps > 1 else self._vae.image_encoder
+            if encoder is not None and not encoder.is_loaded():
                 t0 = time.time()
-                self._vae._encoder_for(*key)
-                logger.info(f"per-shape encoder {encode_shape} taps={encode_taps} built in {time.time() - t0:.1f}s")
+                self._vae._ensure_loaded(encoder, self._vae._encoder_subfolder(encoder))
+                logger.info(f"encoder weights (taps={encode_taps}) uploaded in {time.time() - t0:.1f}s")
         return self._vae
 
     def _prepare_audio_encoder(self) -> MiniMaxH3AudioEncoder:
@@ -1887,11 +1895,13 @@ class MiniMaxH3Pipeline:
         total = sum(seconds for _, seconds in timings)
         logger.info(f"Total (compute): {total:.1f}s | frames={tuple(video.shape)}")
 
+        yuv = self.vae_output_type == "yuv420"
         return MiniMaxH3Output(
             video=video,
             audio=audio,
             sampling_rate=self.audio_sampling_rate,
-            num_frames=video.shape[2],
+            num_frames=video.shape[0] if yuv else video.shape[2],
+            video_format="yuv420" if yuv else "rgb_float",
             timings=dict(timings),
         )
 
