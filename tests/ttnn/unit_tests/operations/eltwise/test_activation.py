@@ -641,3 +641,40 @@ def test_lgamma_fp32(device, shapes):
     tt_out = ttnn.to_torch(z_tt)
 
     assert_with_pcc(z_torch, tt_out, 0.999)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function, torch_function",
+    [(ttnn.silu, torch.nn.functional.silu), (ttnn.mish, torch.nn.functional.mish)],
+)
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_silu_mish_negative_tail_all_bitpatterns(ttnn_function, torch_function, dtypes, device):
+    """Every bfloat16 bit pattern through silu / mish, checking the deep negative tail.
+
+    Both ops route through exp: silu as x / (1 + exp(-x)), mish as x * u(u+2)/(u^2+2u+2)
+    with u = exp(x). exp underflows (for silu, the reciprocal flushes) at x = ln(2**-126) =
+    -87.3365, which sent the result to exactly 0 even though f(x) -> x * exp(x) is a normal
+    float down to x = -91.83 and is still -1.02e-36 at the threshold.
+
+    The reference is evaluated in float64: the registered mish golden casts to float32 first
+    and is itself tens of ULP off at the bottom of the normal range.
+    """
+    torch_dtype, tt_dtype = dtypes
+    torch_input_tensor = flush_subnormal_values_to_zero(generate_all_bfloat16_bitpatterns(torch_dtype))
+
+    reference = torch_function(torch_input_tensor.to(torch.float64))
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(input_tensor))
+
+    # the whole band whose exact result is still a normal float must survive; below it the
+    # true value is subnormal and the device is right to flush it
+    tail = (torch_input_tensor.to(torch.float64) < -80.0) & (reference.abs() >= 2.0**-126)
+    assert tail.any()
+    assert not (result[tail] == 0).any()
+    assert_with_ulp(reference[tail].to(torch_dtype), result[tail].to(torch_dtype), ulp_threshold=4)
