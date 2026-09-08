@@ -1175,7 +1175,15 @@ Result conv2d_L1(
         // This is the plain matmul (no fused conv_bmm, no 0x19); its DRAM-weights K-spill accumulate is the
         // Blocker-A capability (DPRINT-masked). Small 1x1 (<=512t, e.g. 1024->512 at 512t) keep the full-K single
         // block, unchanged and still passing.
-        if (kernel_size[0] == 1 && kernel_size[1] == 1) {
+        //
+        // HEIGHT-SHARDED ONLY: block-sharded splits K across grid columns, so the per-core shard K is
+        // full_K / num_cores_c (< full_K). Forcing in0_block_w = full_K then exceeds the per-core K and trips
+        // the matmul divisibility check ((shard_K_tiles) % in0_block_w == 0) — e.g. WH block-sharded layer3
+        // 1x1 with shard_K=2 tiles vs in0_block_w=16. Block-sharded also keeps per-core K small, so no DRAM
+        // spill is needed there. This mirrors the split-path Program B K-spill above, which is likewise
+        // height-sharded-only. On block-sharded convs (WH/BH layer3/4) the matmul config from
+        // determine_matmul_op_config_from_conv_op_config_qsr is used unchanged.
+        if (height_sharded_conv && kernel_size[0] == 1 && kernel_size[1] == 1) {
             const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
             // [#54488] Same small-bank spill as the split-path Program B above: on a ~2.68 MB Quasar bank the
             // wide 1x1 weights CB (conv3 256->1024 / 512->2048, downsample) clashes with L1, so spill harder.
