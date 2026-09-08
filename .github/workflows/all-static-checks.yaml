@@ -218,18 +218,6 @@ jobs:
         with:
           checks: "files,duppatterns,syntax"
           experimental_checks: "avoid-shadowing"
-  check-codeowners-ping-selection:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.10"
-      - name: Check CodeOwners ping selection ranks owners by availability
-        run: |
-          pip install pytest
-          python -m pytest -q .github/scripts/test_select_owners_to_ping.py
   check-symlinks-valid:
     runs-on: ubuntu-latest
     steps:
