@@ -186,6 +186,30 @@ class Qwen3CompleterRemoteRollout(GRPOCompleter):
         """
         return getattr(self._client, "last_result", None)
 
+    def start_async_rollouts(self, prompt_batches, *, initial_version: int) -> None:
+        """Start a queue-driven client after synchronizing the initial SFT policy."""
+        if self._client is None or not hasattr(self._client, "start"):
+            raise RuntimeError("fully async rollout requires a FullyAsyncRolloutClient")
+        self._client.start(prompt_batches, initial_version=initial_version)
+
+    def await_async_rollout(self):
+        return self._client.receive()
+
+    def publish_weights(self, version: int) -> None:
+        self._client.publish_weights(version)
+
+    def close_async_rollouts(self) -> None:
+        self._client.close()
+
+    def export_weights(self) -> dict[str, ttnn.Tensor]:
+        """Return the live ttml policy under tt-transformers HF keys."""
+        return qwen3_weights_ref_hf_dict(self._model, tie_word_embeddings=self._tie_word_embeddings)
+
+    def set_rollout_client(self, client: _RolloutClient) -> None:
+        if self._client is not None:
+            raise RuntimeError("rollout client is already configured")
+        self._client = client
+
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
         """Generate remotely via the ttt worker.
 

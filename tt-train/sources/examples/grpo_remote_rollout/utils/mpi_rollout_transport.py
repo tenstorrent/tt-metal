@@ -161,6 +161,7 @@ def _encode_result(result: RolloutResult) -> bytes:
             "behavior_version": result.behavior_version,
             "attempt_id": result.attempt_id,
             "row_lengths": row_lengths,
+            "request_payload": result.request_payload,
         },
         separators=(",", ":"),
     ).encode("utf-8")
@@ -202,6 +203,7 @@ def _decode_result(body: bytes) -> RolloutResult:
         behavior_version=int(metadata["behavior_version"]),
         attempt_id=int(metadata["attempt_id"]),
         output=RolloutOutput(tuple(tokens), tuple(logprobs)),
+        request_payload=metadata.get("request_payload"),
     )
 
 

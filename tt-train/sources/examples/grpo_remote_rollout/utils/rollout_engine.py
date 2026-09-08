@@ -24,13 +24,14 @@ change; only the coordinator's single engine reference becomes an engine map.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from threading import RLock
 from typing import Any, Callable, Final, Optional, Sequence, final
 
 
 PolicyVersion = int
+UNBOUND_POLICY_VERSION: Final[PolicyVersion] = -1
 EventSink = Callable[["EngineEvent"], None]
 
 
@@ -102,6 +103,7 @@ class RolloutResult:
     attempt_id: int
     behavior_version: PolicyVersion
     output: RolloutOutput
+    request_payload: Any = None
 
 
 @dataclass(frozen=True)
@@ -206,7 +208,12 @@ class RolloutEngine(ABC):
                 raise ValueError("lease_id and group_id must be non-empty")
             if lease.attempt_id < 0:
                 raise ValueError("attempt_id must be non-negative")
-            if lease.behavior_version != self._active_version:
+            if lease.behavior_version == UNBOUND_POLICY_VERSION:
+                # Fully asynchronous prompt queues are populated independently
+                # of weight publication.  Bind a queued lease at the only
+                # authoritative point: immediately before generation starts.
+                lease = replace(lease, behavior_version=self._active_version)
+            elif lease.behavior_version != self._active_version:
                 raise InvalidTransitionError(
                     f"lease behavior version {lease.behavior_version} does not match "
                     f"engine active version {self._active_version}"
@@ -274,6 +281,7 @@ class RolloutEngine(ABC):
                 attempt_id=lease.attempt_id,
                 behavior_version=lease.behavior_version,
                 output=output,
+                request_payload=lease.payload,
             )
             self._active_lease = None
             if self._target_version is None:
@@ -490,5 +498,6 @@ __all__ = [
     "RolloutEngine",
     "RolloutResult",
     "RolloutOutput",
+    "UNBOUND_POLICY_VERSION",
     "WeightsStaged",
 ]

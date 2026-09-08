@@ -105,8 +105,11 @@ class TttRolloutEngine(RolloutEngine):
         super().__init__(engine_id=engine_id, active_version=active_version, event_sink=event_sink)
 
     def _start_rollout_action(self, lease: PromptGroupLease) -> None:
+        prompts = lease.payload
+        if isinstance(prompts, dict) and "generation_prompts" in prompts:
+            prompts = prompts["generation_prompts"]
         payload = self._worker.generate(
-            lease.payload,
+            prompts,
             max_new_tokens=self._max_new_tokens,
             enable_trace=self._enable_trace,
             stop_at_eos=self._stop_at_eos,

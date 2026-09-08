@@ -1226,6 +1226,19 @@ void py_module(nb::module_& mod) {
             Raises:
                 RuntimeError: If the distributed context has not been initialized.
         )doc");
+
+    // A private communicator lets background weight traffic progress without
+    // sharing MPI matching space with the bounded rollout transport.
+    mod.def(
+        "duplicate_current_world",
+        []() -> std::shared_ptr<DistributedContext> {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            nb::gil_scoped_release release;
+            return DistributedContext::get_current_world()->duplicate();
+        },
+        R"doc(Duplicate the current world distributed context.)doc");
     // Sub-context API for split MPI worlds. Returns the sub-context identifier
     // assigned by tt-run when rank bindings compose multiple overlays.
     mod.def(

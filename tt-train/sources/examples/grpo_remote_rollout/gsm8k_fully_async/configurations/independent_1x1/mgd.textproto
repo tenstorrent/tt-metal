@@ -1,0 +1,14 @@
+mesh_descriptors {
+  name: "single_device"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 1 ] }
+  host_topology { dims: [ 1, 1 ] }
+  channels { count: 1 policy: RELAXED }
+}
+graph_descriptors {
+  name: "independent_pair"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "single_device" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "single_device" mesh_id: 1 } }
+}
+top_level_instance { graph { graph_descriptor: "independent_pair" graph_id: 0 } }
