@@ -471,7 +471,7 @@ def test_matmul_decode_params_rms_norm_group_size_default():
 
 @pytest.mark.parametrize("m, k, n", [(1, 4096, 1024)])
 def test_matmul_decode_rms_norm_group_size_zero_backcompat(device, m, k, n):
-    """Default group_size=0 preserves legacy full-row RMSNorm behavior."""
+    """Default, explicit 0, and group_size=N preserve legacy full-row RMSNorm."""
     torch.manual_seed(0)
     epsilon = 1e-5
     scalar_gamma = 0.75
@@ -483,23 +483,33 @@ def test_matmul_decode_rms_norm_group_size_zero_backcompat(device, m, k, n):
     mm = torch_a.float() @ torch_b.float()
     ref = mm * scalar_gamma * torch.rsqrt(mm.square().mean(dim=-1, keepdim=True) + epsilon)
 
-    out = ttnn.experimental.matmul_decode(
-        a,
-        weight,
-        rms_norm=True,
-        rms_norm_gamma=scalar_gamma,
-        rms_norm_epsilon=epsilon,
-    )
-    assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
+    outputs = {}
+    for name, group_size_kwargs in (
+        ("default", {}),
+        ("zero", {"rms_norm_group_size": 0}),
+        ("full_width", {"rms_norm_group_size": n}),
+    ):
+        out = ttnn.experimental.matmul_decode(
+            a,
+            weight,
+            rms_norm=True,
+            rms_norm_gamma=scalar_gamma,
+            rms_norm_epsilon=epsilon,
+            **group_size_kwargs,
+        )
+        outputs[name] = ttnn.to_torch(out).float()
+        assert_with_pcc(ref, outputs[name], 0.99)
+
+    torch.testing.assert_close(outputs["zero"], outputs["default"], rtol=0.01, atol=0.01)
+    torch.testing.assert_close(outputs["full_width"], outputs["default"], rtol=0.01, atol=0.01)
 
 
 @pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("k, n", [(4096, 1024)])
-@pytest.mark.parametrize("group_size", [64, 128])
-def test_matmul_decode_rms_norm_group_size_requires_rms_norm(device, m, k, n, group_size, expect_error):
+def test_matmul_decode_rms_norm_group_size_requires_rms_norm(device, m, k, n, expect_error):
     a, weight, _, _ = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
     with expect_error(RuntimeError, "rms_norm_group_size requires rms_norm"):
-        ttnn.experimental.matmul_decode(a, weight, rms_norm_group_size=group_size)
+        ttnn.experimental.matmul_decode(a, weight, rms_norm_group_size=64)
 
 
 @pytest.mark.parametrize("m", [1])
@@ -525,30 +535,13 @@ def test_matmul_decode_rms_norm_group_size_validation(device, m, k, n, group_siz
         )
 
 
-@pytest.mark.parametrize("m", [1])
-@pytest.mark.parametrize("k, n", [(4096, 1024)])
-@pytest.mark.parametrize("group_size", [64, 128])
-def test_matmul_decode_rms_norm_group_size_valid_accepts(device, m, k, n, group_size):
-    """Valid nonzero group_size passes API validation (kernel grouped math not tested here)."""
-    a, weight, _, _ = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
-    ttnn.experimental.matmul_decode(
-        a,
-        weight,
-        rms_norm=True,
-        rms_norm_gamma=0.75,
-        rms_norm_epsilon=1e-5,
-        rms_norm_group_size=group_size,
-    )
-
-
 @pytest.mark.parametrize(
     "m, k, n, group_size,vector_gamma_dtype",
     [
         (3, 1024, 768, 32, None),  # multiple groups inside every producer shard
         (3, 1024, 768, 64, None),  # groups equal producer shards
         (3, 1024, 768, 96, None),  # unaligned groups span shards; producers contribute to multiple groups
-        (3, 1024, 768, 192, None),  # three contributors per group exercises odd-count reduction
-        (3, 1024, 768, 96, "bfloat16"),  # custom-MM scale followed by the local vector-gamma shard
+        (3, 1024, 768, 192, "bfloat16"),  # odd-count reduction followed by local vector gamma
         (3, 1024, 768, 96, "float32"),  # custom-MM with an FP32 vector-gamma shard
         (3, 1056, 768, 96, None),  # fallback path uses FP32 statistics and scales
         (3, 1056, 768, 96, "bfloat16"),  # fallback FP32 statistics followed by BF16 vector gamma
@@ -608,6 +601,8 @@ def test_matmul_decode_grouped_rms_norm_pcc(device, m, k, n, group_size, vector_
         rms_norm_epsilon=epsilon,
         rms_norm_group_size=group_size,
     )
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert tuple(out.memory_config().shard_spec.shape) == (m, n // num_inputB_cores)
     got = ttnn.to_torch(out).float()
     assert_with_pcc(ref, got, 0.99)
     got_groups = got.reshape(*got.shape[:-1], n // group_size, group_size)

@@ -246,6 +246,72 @@ def test_matmul_decode_existing_sequential_baseline(device):
         assert_with_pcc(br["ref"], result, 0.99)
 
 
+def test_matmul_decode_grouped_rms_norm_descriptor_matches_direct(device):
+    """The group size reaches MatmulDecodeParams, descriptor creation, and execution."""
+    m = 1
+    group_size = 64
+    num_cores = device.dram_grid_size().x
+    grid = device.compute_with_storage_grid_size()
+    if num_cores < 2 or num_cores % 2 != 0 or grid.x < num_cores:
+        pytest.skip(f"group_size=64 requires an even producer row, got {num_cores} cores in grid {grid.x}x{grid.y}")
+    br = _make_branch_operands(
+        device,
+        row=0,
+        num_cores=num_cores,
+        m=m,
+        k=num_cores * 32,
+        n=num_cores * 32,
+        seed=400,
+    )
+
+    params = ttnn._ttnn.operations.experimental.MatmulDecodeParams()
+    params.rms_norm_group_size = group_size
+    assert params.rms_norm_group_size == group_size
+
+    descriptor_kwargs = dict(
+        K=br["K"],
+        N=br["N"],
+        global_cb=br["gcb"],
+        rms_norm=True,
+        rms_norm_gamma=0.75,
+        rms_norm_epsilon=1e-5,
+    )
+    legacy_desc = matmul_decode(br["a"], br["weight"], rms_norm_group_size=0, **descriptor_kwargs)
+    grouped_desc = matmul_decode(br["a"], br["weight"], rms_norm_group_size=group_size, **descriptor_kwargs)
+    assert legacy_desc.program_cache_key != grouped_desc.program_cache_key
+
+    # Materialize both C++ descriptors so this checks more than the Python wrapper's
+    # cache key. The grouped descriptor is then dispatched through the fusion API.
+    assert legacy_desc.descriptor is not None
+    assert grouped_desc.descriptor is not None
+
+    grouped = br["ref"].reshape(m, br["N"] // group_size, group_size)
+    ref = (grouped * 0.75 * torch.rsqrt(grouped.square().mean(dim=-1, keepdim=True) + 1e-5)).reshape(m, br["N"])
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(br["weight"], 1)], global_cb=br["gcb"])
+        direct = ttnn.to_torch(
+            ttnn.experimental.matmul_decode(
+                br["a"],
+                br["weight"],
+                global_cb=br["gcb"],
+                rms_norm=True,
+                rms_norm_gamma=0.75,
+                rms_norm_epsilon=1e-5,
+                rms_norm_group_size=group_size,
+            )
+        ).float()
+
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(br["weight"], 1)], global_cb=br["gcb"])
+        Sequential(grouped_desc).run()
+        descriptor_result = ttnn.to_torch(grouped_desc.output_tensors[0]).float()
+
+    assert_with_pcc(ref, direct, 0.99)
+    assert_with_pcc(ref, descriptor_result, 0.99)
+    torch.testing.assert_close(descriptor_result, direct, rtol=0.02, atol=0.02)
+
+
 def test_matmul_decode_three_parallel_fusion(device):
     """All three ``matmul_decode`` ops fused into a single device program via
     ``Parallel(a, b, c)``, each still fed by its own prefetched ``global_cb``."""
