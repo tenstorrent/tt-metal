@@ -9,7 +9,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -19,18 +18,13 @@ void kernel_main() {
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
 
     constexpr uint32_t input_block_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_reduce,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
+    // c_1 belongs to compute scratch; the Welford path needs no scaler.
     const auto src_a = TensorAccessor(src_args, src_addr);
 
     uint32_t inp_tile_idx = tile_offset;

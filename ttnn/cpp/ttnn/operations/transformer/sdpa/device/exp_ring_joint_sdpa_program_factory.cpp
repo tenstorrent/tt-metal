@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
@@ -646,6 +647,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {tt::CBIndex::c_5, {{1.0F, ttnn::kernel_lib::host::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(writer_compile_time_args);
 
     // Streaming-only compute kernel: NH and the classic matmul block params (in0_block_w,
     // num_subblocks, num_blocks) are not consumed — only the subblock shapes are.

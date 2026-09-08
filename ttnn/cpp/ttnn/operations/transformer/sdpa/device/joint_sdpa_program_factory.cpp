@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
@@ -320,6 +321,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {tt::CBIndex::c_5, {{1.0F, ttnn::kernel_lib::host::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
