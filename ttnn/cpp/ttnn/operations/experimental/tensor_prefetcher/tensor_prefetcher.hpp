@@ -81,6 +81,6 @@ void wait_for_cq_on_tensor_prefetcher(
     std::optional<uint8_t> cq_id = std::nullopt,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
 
-void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
+void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool force = false);
 
 }  // namespace ttnn::operations::experimental

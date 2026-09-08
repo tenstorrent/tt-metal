@@ -219,13 +219,16 @@ void kernel_main() {
         // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
         // (use_half_tile==false, e.g. >16 heads) can take the fast-tilize path, so we must not
         // hand-roll the uninit here.
+        // One block per Q tile-row: row-major Q is Sq_chunk_t bands of 32 head rows stacked on top
+        // of each other, so tilizing the whole chunk as a single DHt*Sq_chunk_t-wide block would
+        // read the bands as one 32-row strip and interleave them.
         compute_kernel_lib::tilize<
-            q_chunk_tiles,
+            DHt,
             cb_q_rm,
             cb_q_in,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(Sq_chunk_t);
         matmul_init(cb_q_in, cb_k_in);
         // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
         // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
@@ -647,14 +650,15 @@ void kernel_main() {
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
-                // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
+                // One block per output tile-row, mirroring the Q tilize above: the writer expects
+                // Sq_chunk_t bands of 32 rows, not one interleaved strip.
                 compute_kernel_lib::untilize<
-                    out_chunk_tiles,
+                    vDHt,
                     cb_out_accumulate_im,
                     cb_out_final,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(Sq_chunk_t);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);

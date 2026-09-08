@@ -47,8 +47,11 @@ void kernel_main() {
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(26);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(27);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
+    // Compute untilizes cb_out when Q was ROW_MAJOR, so the output buffer is paged by row.
+    constexpr bool is_out_row_major = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(29);
 
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<30>();
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -399,8 +402,11 @@ void kernel_main() {
         }
 
         // ROOT CORE REMAINING WRITER WORK
-        // Offset for current batch
-        uint32_t out_tile_id = cur_batch * out_chunk_tiles;
+        // Offset for current batch, in whatever unit the output buffer is paged by: tiles normally,
+        // head rows when the output is ROW_MAJOR. The two are the same when it is not.
+        constexpr uint32_t out_pages_per_batch =
+            is_out_row_major ? (out_chunk_tiles * tile_bytes) / out_row_size_bytes : out_chunk_tiles;
+        uint32_t out_tile_id = cur_batch * out_pages_per_batch;
         CircularBuffer cb_out_buf(cb_out);
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {
             cb_out_buf.wait_front(out_chunk_tiles);
@@ -484,8 +490,13 @@ void kernel_main() {
             // MQA (Multi Query Attention):  we don't need to gather outputs for other heads so we can just write entire
             // tiles to memory
             if (!is_out_sharded) {
-                barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
-                    out_tile_id, out_writer, barrier_count);
+                if constexpr (is_out_row_major) {
+                    barrier_count = write_rows_to_memory<cb_out, out_row_size_bytes, barrier_threshold>(
+                        out_tile_id, out_pages_per_batch, out_writer, barrier_count);
+                } else {
+                    barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
+                        out_tile_id, out_writer, barrier_count);
+                }
             }
         }
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {

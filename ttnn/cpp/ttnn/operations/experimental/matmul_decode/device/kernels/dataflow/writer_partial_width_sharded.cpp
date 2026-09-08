@@ -10,12 +10,15 @@
 
 // Cross-core K-reduction: each core unicasts its partial to slot k_idx on the base core.
 void kernel_main() {
-    constexpr uint32_t partial_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t block_num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t reduce_sem_id = get_compile_time_arg_val(5);
+    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
+    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
+    constexpr uint32_t partial_cb_index = get_named_compile_time_arg_val("cb_partial");
+    constexpr uint32_t reduce_cb_index = get_named_compile_time_arg_val("cb_reduce");
+
+    constexpr uint32_t block_num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t K_blocks = get_compile_time_arg_val(2);
+    constexpr uint32_t reduce_sem_id = get_compile_time_arg_val(3);
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t base_noc_x = get_arg_val<uint32_t>(1);

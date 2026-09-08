@@ -44,8 +44,9 @@ void kernel_main() {
     // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
     // page_table lookup (bounded sliding-window cache support).
     constexpr uint32_t cache_position_modulo = get_compile_time_arg_val(18);
+    constexpr bool input_is_row_major = get_compile_time_arg_val(19) == 1;
 
-    constexpr auto s0_args = TensorAccessorArgs<19>();
+    constexpr auto s0_args = TensorAccessorArgs<20>();
     constexpr auto index_tensor_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<index_tensor_args.next_compile_time_args_offset()>();
 
@@ -56,9 +57,10 @@ void kernel_main() {
     CircularBuffer cb_index(cb_index_id);
     CircularBuffer cb_page_table(page_table_cb_id);
 
-    // Kick off compute
-    cb_input.reserve_back(Wt);
-    cb_input.push_back(Wt);
+    // Kick off compute. Tiled input is Wt tiles; row-major is one shard page.
+    constexpr uint32_t input_cb_pages = input_is_row_major ? 1 : Wt;
+    cb_input.reserve_back(input_cb_pages);
+    cb_input.push_back(input_cb_pages);
 
     const uint32_t cache_tile_bytes = cb_cache.get_tile_size();
 

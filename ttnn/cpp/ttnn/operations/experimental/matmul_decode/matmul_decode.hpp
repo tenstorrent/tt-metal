@@ -5,18 +5,58 @@
 #pragma once
 
 #include <optional>
+#include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::experimental {
 
+using PackedWeightSpec = ttnn::operations::experimental::matmul_decode::PackedWeightSpec;
+
 // Decode-optimized matmul C = A @ B for L1 width-sharded operands (full, partial, or batched B layout).
+// Full-width hub mode also accepts ROW_MAJOR HEIGHT_SHARDED A on B's grid: A is replicated on every
+// core, M is the shard height, and compute treats A as 1x32 tiles. The output is ROW_MAJOR so a
+// following decode can consume it as A.
+// `global_cb`: optional DRAM-sender GlobalCircularBuffer supplying in1 from the tensor prefetcher
+// (full width-sharded factory only; the weight must then be a DRAM ND-sharded tensor).
+// `global_cb_k_blocks`: how many GCB pages carry one receiver's weight slab. 1 (the default) is one
+// page per slab, so the GCB must hold a whole slab. Higher values cut the slab into that many
+// K-blocks and stream them, letting the GCB be smaller than a slab -- it must equal the
+// `block_count` of the prefetch request that fills the GCB or the two sides deadlock.
+// `packed_weight`: optional description of where this op's weight lives inside `input_tensor_b`
+// when B is a larger fused weight tensor (one HEIGHT_SHARDED L1 tensor packing many weights, one
+// equal one-tile-wide shard per core; see packed_weight_spec.hpp). All weight geometry -- grid,
+// slab shape, N and the K/batch cut -- then comes from the spec, and `partial_width_sharded` is
+// ignored (the spec's k_blocks/batch pick the mode). Mutually exclusive with `global_cb`.
+// `all_gather`: when true, fabric all-gather of the local N-shard is fused into the same program
+// so every device receives `[..., M, N_local * ring_size]`. The ring is the full mesh of A.
+// Requires a multi-device mesh; mutually exclusive with `global_cb` and the batched factory.
+// `ring_gather`: when true, gather in0 over a pipelined closed ring on S ∪ C instead of the
+// two-hub gather. Full- and partial-width L1-resident paths only (plain or packed_weight);
+// mutually exclusive with `global_cb` and the batched factory. Defaults to false.
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+    uint32_t global_cb_k_blocks = 1,
+    const std::optional<PackedWeightSpec>& packed_weight = std::nullopt,
+    bool all_gather = false,
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
+    bool ring_gather = false,
+    const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
+    bool output_mcast_two_hub = false,
+    bool rms_norm = false,
+    const std::optional<std::variant<float, Tensor>>& rms_norm_gamma = std::nullopt,
+    float rms_norm_epsilon = 1.0e-6F,
+    uint32_t rms_norm_group_size = 0);
 
 }  // namespace ttnn::experimental

@@ -24,6 +24,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
     const auto* paged_update_cache_doc =
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
+         ``input_tensor`` may be TILE or ROW_MAJOR. TILE input is untilized before the token-row splice; ROW_MAJOR input is already a contiguous token row per head and skips that untilize. The destination cache remains TILE.
 
          ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
          defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it for

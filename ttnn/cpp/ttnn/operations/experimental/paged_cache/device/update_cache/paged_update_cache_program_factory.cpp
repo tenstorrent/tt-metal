@@ -31,6 +31,25 @@ bool enable_fp32_dest(const tt_metal::IDevice* device, const ttnn::DeviceCompute
     return fp32_dest_acc_en;
 }
 
+// Row-major input is copied as raw bytes into the untilized cache tile, so dest-acc
+// format must match the input dtype. Tiled input is untilized into dest-acc format.
+bool update_cache_fp32_dest(
+    const Tensor& input_tensor, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+    bool fp32_dest_acc_en = enable_fp32_dest(input_tensor.device(), compute_kernel_config);
+    if (input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.dtype() != DataType::FLOAT32) {
+        fp32_dest_acc_en = false;
+    }
+    return fp32_dest_acc_en;
+}
+
+uint32_t update_cache_row_bytes(const Tensor& input_tensor, bool fp32_dest_acc_en) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return input_tensor.padded_shape()[-1] * input_tensor.element_size();
+    }
+    return fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * static_cast<uint32_t>(sizeof(float))
+                            : input_tensor.padded_shape()[-1] * 2u;
+}
+
 // Worker cores in the exact order create_descriptor emplaces per-core runtime args (core i handles
 // user i, i.e. update_idxs[i]). Shared by create_descriptor (cache miss) and
 // override_runtime_arguments (cache hit) so the two cannot drift.
@@ -62,11 +81,11 @@ std::vector<UpdateCachePerCoreOffsets> compute_update_cache_offsets(
 
     const auto& cache_tensor = tensor_args.cache_tensor;
     const auto& input_tensor = tensor_args.input_tensor;
-    const bool fp32_dest_acc_en = enable_fp32_dest(input_tensor.device(), operation_attributes.compute_kernel_config);
+    const bool fp32_dest_acc_en =
+        update_cache_fp32_dest(input_tensor, operation_attributes.compute_kernel_config);
 
     const uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
-    const uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
-                                             : input_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    const uint32_t Wbytes = update_cache_row_bytes(input_tensor, fp32_dest_acc_en);
     const uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     // share_cache => batch offset is 0 (one shared cache buffer); mirror create_descriptor exactly.
     const uint32_t cache_batch_num_tiles =
@@ -104,8 +123,8 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-
-    bool fp32_dest_acc_en = enable_fp32_dest(device, operation_attributes.compute_kernel_config);
+    const bool input_is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
+    bool fp32_dest_acc_en = update_cache_fp32_dest(input_tensor, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
@@ -148,8 +167,7 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
     // mode, cache seq-len-in-tiles otherwise.
     uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t St = is_paged_cache ? block_size_t : cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
-                                       : input_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    uint32_t Wbytes = update_cache_row_bytes(input_tensor, fp32_dest_acc_en);
     uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         operation_attributes.share_cache
@@ -170,7 +188,12 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
     const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
     CoreRangeSet all_cores = shard_spec.value().grid;
     uint32_t num_cores = all_cores.num_cores();
-    uint32_t num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
+    // Tiled input CB is one page per tile. Row-major input is already untilized: one
+    // globally-allocated shard page, which the writer copies from directly.
+    const uint32_t input_cb_page_size =
+        input_is_row_major ? input_tensor.buffer()->aligned_page_size() : input_single_tile_size;
+    const uint32_t num_input_pages =
+        input_is_row_major ? 1u : shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
     auto* in1_buffer = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
@@ -198,12 +221,12 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
     // desc.cbs[1]: the only globally-allocated CB (aliases the input shard) — re-pointed on cache hits by
     // override_runtime_arguments.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * input_single_tile_size,
+        .total_size = num_input_pages * input_cb_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
             .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
+            .page_size = input_cb_page_size,
         }}},
         .buffer = in1_buffer,
     });
@@ -304,17 +327,21 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
         St,
         in0_sequential_mode_semaphore_id,
         cache_position_modulo,
+        (std::uint32_t)input_is_row_major,
     };
     TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(update_idxs_tensor.has_value() ? update_idxs_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
 
+    // Row-major input is already untilized; writer splices from the input shard CB.
+    const uint32_t untilized_input_cb = input_is_row_major ? src1_cb_index : intermed2_cb_index;
+
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)intermed0_cb_index,
         (std::uint32_t)intermed1_cb_index,
-        (std::uint32_t)intermed2_cb_index,
+        untilized_input_cb,
         // Index tensor args
         (std::uint32_t)use_index_tensor,
         cb_index_id,
@@ -331,6 +358,7 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
         St,
         in0_sequential_mode_semaphore_id,
         cache_position_modulo,
+        (std::uint32_t)input_is_row_major,
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
@@ -343,6 +371,7 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
         output_cb_index,
         Wt,
         num_heads,
+        (std::uint32_t)input_is_row_major,
     };
 
     KernelDescriptor reader_desc;

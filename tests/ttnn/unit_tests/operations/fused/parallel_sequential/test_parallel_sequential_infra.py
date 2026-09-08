@@ -1210,9 +1210,29 @@ class TestGlobalCircularBuffer:
             has_buffer=lambda: False,
         )
 
-    def test_extract_cb_info_skips_remote(self):
+    def test_extract_cb_info_skips_global_cbs(self):
+        # A GlobalCB's L1 is owned by the GlobalCircularBuffer, so neither its local
+        # alias nor its remote index is pool-allocated; both are assigned by
+        # _assign_global_cb_indices and the CBDescriptor is passed through as-is.
         result = _cb_alloc.extract_cb_info(_ns(cbs=[self._regular_cb(0), self._global_cb(1, 31)]))
-        assert 0 in result and 1 in result and 31 not in result
+        assert 0 in result and 1 not in result and 31 not in result
+
+    def test_assign_global_cb_indices_moves_second_global_cb(self):
+        pool = _cb_alloc.CBPoolAllocator()
+        op_a = _ns(descriptor=_ns(cbs=[self._global_cb(1, 31)]))
+        op_b = _ns(descriptor=_ns(cbs=[self._global_cb(1, 31)]))
+        assert _cb_alloc._assign_global_cb_indices(pool, op_a) == {1: 1, 31: 31}
+        # The second op declares the same indices; it must land elsewhere, with its
+        # remote index still above its local one.
+        remap_b = _cb_alloc._assign_global_cb_indices(pool, op_b)
+        assert remap_b[1] != 1 and remap_b[31] != 31
+        assert remap_b[31] > remap_b[1]
+
+    def test_assign_global_cb_indices_is_idempotent(self):
+        pool = _cb_alloc.CBPoolAllocator()
+        op_a = _ns(descriptor=_ns(cbs=[self._global_cb(1, 31)]))
+        first = _cb_alloc._assign_global_cb_indices(pool, op_a)
+        assert _cb_alloc._assign_global_cb_indices(pool, op_a) == first
 
     def test_extract_remote_only_no_cbinfo(self):
         assert len(_cb_alloc.extract_cb_info(_ns(cbs=[self._remote_only_cb()]))) == 0
