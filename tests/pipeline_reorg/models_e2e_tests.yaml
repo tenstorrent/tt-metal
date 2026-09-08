@@ -977,7 +977,7 @@
       -k "bh_qb and 1024x1024" || status=1
     # Pipeline: the real generate path (create_pipeline -> denoise -> decode -> save). A smoke
     # test, no PCC assert. Confirmed on run 33910468525 (PASS, saved a 1024x1024 image).
-    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k bh_2x2 || status=1
+    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k 2x2 || status=1
     exit $status
   model: flux.2-dev
   model_family: Flux

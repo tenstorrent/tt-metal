@@ -12,10 +12,16 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-from ....utils.test import line_params, line_params_8k, ring_params, ring_params_8k
+from ....utils.test import (
+    line_params_8k,
+    line_params_req_exact_devices,
+    ring_params,
+    ring_params_8k,
+    skip_if_unsupported_num_links,
+)
 
 # Flux2 VAE uses conv2d which needs L1_SMALL buffers.
-line_params_flux2 = {**line_params, "l1_small_size": 65536}
+line_params_flux2 = {**line_params_req_exact_devices, "l1_small_size": 65536}
 ring_params_flux2 = {**ring_params, "l1_small_size": 65536}
 ring_params_8k_flux2 = {**ring_params_8k, "l1_small_size": 65536}
 line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
@@ -39,14 +45,14 @@ line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
         # cannot be co-resident on 4 chips, same as the perf test's bh_qb row.
         [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, False],
         [(1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, False, True],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, True],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 4, True, False, True],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, True],
     ],
     ids=[
-        "bh_2x2",
-        "1x8tp1",
-        "wh_4x8",
-        "bh_4x8",
+        "2x2sp0tp1vaetp1nl2_linear_is_fsdp1",
+        "1x8sp0tp1vaetp1nl1_linear_is_fsdp0",
+        "4x8sp0tp1vaetp0nl4_linear_is_fsdp1",
+        "4x8sp0tp1vaetp0nl2_linear_is_fsdp0",
     ],
     indirect=["mesh_device"],
 )
@@ -69,6 +75,8 @@ def test_pipeline(
     model_location_generator,
     is_ci_env: bool,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
