@@ -514,22 +514,40 @@ def test_concat_codegen_declines_execution_controls(device):
 
 
 def test_concat_codegen_replans_when_l1_occupancy_changes(device):
-    # The CB plan is derived from live L1, which the attributes do not describe. If it is not on
-    # the program hash, the plan built against a clear frontier is reused after a large L1
-    # allocation and its CB addresses overlap the resident tensor. Dispatch the same spec across
-    # three different frontiers and require bit-exactness on all of them.
-    shapes, dim = [[1, 32, 32], [1, 32, 64]], 2
+    # The CB plan is read off live L1, which the attributes do not describe. If it is not on the
+    # program hash, the plan built against a clear frontier is reused after a large L1 allocation
+    # and its CB addresses overlap the resident tensor.
+    #
+    # Sizing is the test: plan_concat_cb keeps batch = min(4, budget / (2 * out_page)), so unless
+    # the occupancy pushes that quotient under 4, all three dispatches share one plan and nothing
+    # about the hash is exercised. A 128 KiB output page pins the clear batch at 4 for any budget
+    # at or above 1 MiB, and 640 KiB/core drops it below 4 for any budget under 1.66 MiB while
+    # still leaving a page to plan against -- one window that holds on both architectures without
+    # naming either. Interleaved occupancy only counts per bank, hence the grid rather than a
+    # fixed total. The distinct-entry assertion is what fails if that sizing stops biting.
+    grid = device.compute_with_storage_grid_size()
+    hog_rows = grid.x * grid.y * 320  # x 2 KiB rows = 640 KiB/core
+
+    shapes, dim = [[1, 4, 32768], [1, 4, 32768]], 2  # 64 KiB sticks -> a 128 KiB output page
     xs = _inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
     golden = ttnn.to_torch(_force_native(xs, dim=dim))
 
     assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))
+    entries_clear = device.num_program_cache_entries()
+
     hog = ttnn.from_torch(
-        torch.zeros(1, 1, 512, 1024, dtype=torch.bfloat16),
+        torch.zeros(1, 1, hog_rows, 1024, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))
+    unplanned = "the occupied dispatch reused the clear frontier's program: the CB plan is not on the hash"
+    assert device.num_program_cache_entries() > entries_clear, unplanned
+    entries_occupied = device.num_program_cache_entries()
+
     ttnn.deallocate(hog)
     assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))
+    msg = "freeing the occupancy did not return to the clear frontier's program"
+    assert device.num_program_cache_entries() == entries_occupied, msg
