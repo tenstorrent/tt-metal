@@ -119,6 +119,7 @@ from .packing_ref2va import (
     build_ref2va_presentation,
     sample_reference_video_frames,
 )
+from .policy import MINIMAX_H3_MAX_TEXT_TOKENS, served_envelope
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
 
@@ -178,10 +179,10 @@ MODEL_NAME = "minimax-h3"
 # rung; a request pads to the smallest rung that fits. Multiples of 1024 so every rung satisfies the
 # `sp_factor * TILE_SIZE` alignment on both supported meshes (256 at SP=8, 1024 at SP=32). The values
 # span the t2va/fl2va envelope: 5 s at 1:1 (~21.8k packed rows) up to 15 s at the 1044 rows/frame
-# canvas ceiling with two keyframes and a generous prompt (~119.2k). The top rung is the admission
-# cap: a longer request raises, it is not served untraced. A property of the sequence-length
+# canvas ceiling with two keyframes and a full 3008-token prompt (~120.2k). The top rung is the
+# admission cap: a longer request raises, it is not served untraced. A property of the sequence-length
 # envelope rather than of the mesh, hence a module default and a constructor knob, not a preset.
-MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 119808)
+MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 
 # ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
 # push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
@@ -232,7 +233,7 @@ class MiniMaxH3ArenaCaps:
     `for_task` gives the t2va/fl2va and ref2va defaults.
     """
 
-    prompt: int = 4160  # 2112 for two keyframe vision blocks (2 x 1044, x32-aligned) + 2048 text
+    prompt: int = 5120  # 2112 for two keyframe vision blocks (2 x 1044, x32-aligned) + 3008 text
     video_rows: int = 111712  # 15 s at the 1044 rows/frame canvas ceiling, x32-aligned
     audio_rows: int = 1216  # 1206 audio rows at 15 s, x32-aligned
     condition_video_rows: int = 2112  # two keyframe anchors at 1044 rows/frame, x32-aligned
@@ -845,6 +846,10 @@ class MiniMaxH3Pipeline:
         prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
         if not prompt_ids:
             raise ValueError("prompt tokenized to zero tokens")
+        # The token budget bounds the warmed encoder envelope; enforcing it here keeps every served
+        # presentation inside the prompt arena cap.
+        if len(prompt_ids) > MINIMAX_H3_MAX_TEXT_TOKENS:
+            raise ValueError(f"prompt is {len(prompt_ids)} tokens, over the {MINIMAX_H3_MAX_TEXT_TOKENS}-token budget")
         token_ids += prompt_ids
         token_tags += [MINIMAX_H3_TEXT_TAG] * len(prompt_ids)
 
@@ -2291,6 +2296,10 @@ class MiniMaxH3Pipeline:
                 fitted[rung] = request
             if not self.trace_denoise:
                 return
+            # ref2va loads different weights and a different prompt cap, so its encoder envelope is
+            # not the one this walk compiles.
+            if self.task != "ref2va":
+                self._warm_prompt_encoder_envelope()
             capture_rungs = sorted(fitted, reverse=True)
             if host:
                 _tqdm_spacer()
@@ -2334,6 +2343,70 @@ class MiniMaxH3Pipeline:
                 if frames <= 5:
                     return None
                 kwargs["num_frames"] = max(5, frames // 2)
+
+    def _filler_prompt(self, num_tokens: int) -> str:
+        """A prompt of exactly `num_tokens` tokens: only length keys the encoder's programs, so any
+        single-token word repeated works."""
+        return " village" * num_tokens
+
+    def _warm_prompt_encoder_envelope(self) -> None:
+        """Compile every prompt-encoding program a served t2va/fl2va request can reach, strictly
+        before trace capture -- a program that first compiles under live traces can own a buffer a
+        replay will stomp, wedging the mesh on its next cache-hit run.
+
+        Encoder programs are keyed by the padded presentation length (multiples of `sp_factor *
+        TILE`) and, with keyframes, by the vision-run layout that (canvas, keyframe count) fixes.
+        The walk lands one encode on every reachable bucket for t2va and for one/two keyframes per
+        served canvas, with the bucket set derived from the arena cap and text budget. Replicated
+        meshes do not bucket the presentation, so there is no envelope to warm there.
+        """
+        if self.sp_factor <= 1:
+            return
+
+        caps = self.arena_caps
+        alignment = self.sp_factor * ttnn.TILE_SIZE
+
+        def align_up(value: int) -> int:
+            return ((value + alignment - 1) // alignment) * alignment
+
+        warm_image = Image.new("RGB", (64, 64), (127, 127, 127))
+        before = self.mesh_device.num_program_cache_entries()
+
+        for n_keyframes, canvas in served_envelope(self.task):
+            if canvas is None:
+                keyframes: list[Image.Image] = []
+                vision_len = 0
+            else:
+                height, width = canvas
+                keyframes = [
+                    prepare_keyframe_image(warm_image, height, width, stretch=(i == 0)) for i in range(n_keyframes)
+                ]
+                # The vision block is everything in the presentation ahead of the prompt.
+                probe = self._filler_prompt(1)
+                probe_ids, *_ = self._build_presentation(probe, keyframes)
+                probe_tokens = len(self.tokenizer(probe, add_special_tokens=False)["input_ids"])
+                vision_len = probe_ids.shape[1] - probe_tokens
+
+            budget = min(MINIMAX_H3_MAX_TEXT_TOKENS, caps.prompt - vision_len)
+            buckets = range(align_up(vision_len + 1), align_up(vision_len + budget) + 1, alignment)
+            unit_before = self.mesh_device.num_program_cache_entries()
+            for bucket in buckets:
+                prompt = self._filler_prompt(min(bucket - vision_len, budget))
+                landed = align_up(vision_len + len(self.tokenizer(prompt, add_special_tokens=False)["input_ids"]))
+                assert (
+                    landed == bucket
+                ), f"filler landed on {landed}, expected bucket {bucket} (vision_len {vision_len})"
+                embeds, _ = self.encode_prompt(prompt, keyframes=keyframes)
+                ttnn.deallocate(embeds)
+            label = "t2va" if canvas is None else f"{n_keyframes} keyframe(s) at {canvas[1]}x{canvas[0]}"
+            self._host_log(
+                f"warmed prompt encoder for {label}: buckets {list(buckets)}, "
+                f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
+            )
+
+        self._host_log(
+            f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
+        )
 
     def _rung_captured(self, rung: int) -> bool:
         transformer = self._transformer
