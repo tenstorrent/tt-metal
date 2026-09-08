@@ -266,7 +266,9 @@ def _ttt_side() -> None:
     print(f"[rank {TTT_RANK}] TTT: opening mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
 
-    bridge = ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, mesh_device=mesh)
+    # A [1, 1] mesh with a single [1, 1] submesh -- pass the mesh as its
+    # own single submesh so the bridge lands the recv pad directly on it.
+    bridge = ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, mesh_device=mesh, submeshes=[mesh])
     q = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=QUEUE_CAPACITY)
 
     try:

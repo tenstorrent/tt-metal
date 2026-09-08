@@ -47,7 +47,7 @@ bridge.connect()
 bridge.send_weights({"w0": x0, "w1": x1})   # caller can now mutate x0/x1
 bridge.close()
 
-bridge = ThreadedWeightBridge.receiver(peer_rank=0, mesh_device=mesh)
+bridge = ThreadedWeightBridge.receiver(peer_rank=0, mesh_device=mesh, submeshes=[mesh])
 bridge.connect()
 with bridge.receive_weights() as dicts:      # blocks; lock held here
     for k, t in dicts[0].items():

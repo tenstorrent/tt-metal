@@ -161,12 +161,33 @@ class ThreadedWeightBridge:
         role: str,
         peer_rank: int,
         mesh_device: "ttnn.MeshDevice",
+        submeshes: Optional[List["ttnn.MeshDevice"]] = None,
     ) -> None:
         if role not in (self._ROLE_SENDER, self._ROLE_RECEIVER):
             raise ValueError(f"role must be sender or receiver, got {role!r}")
         self._role: str = role
         self._peer_rank: int = int(peer_rank)
         self._mesh: "ttnn.MeshDevice" = mesh_device
+
+        # Receiver-only: where to land the incoming weights. The receiver
+        # allocates one pad per (submesh, key) so ``receive_weights`` can
+        # yield a ``List[dict]`` shaped exactly for
+        # ``TttGenerationWorker.update_weights(per_submesh)`` -- no main-thread
+        # ``to_torch`` / ``from_torch`` needed to reshape the received tensors
+        # per submesh. Sender must pass ``submeshes=None``.
+        if role == self._ROLE_RECEIVER:
+            if not submeshes:
+                raise ValueError(
+                    "ThreadedWeightBridge.receiver requires a non-empty ``submeshes`` list -- "
+                    "pads must be allocated directly on the caller's per-submesh Transformer "
+                    "targets so ``worker.update_weights`` can consume them without a host "
+                    "round-trip."
+                )
+            self._recv_targets: List["ttnn.MeshDevice"] = list(submeshes)
+        else:
+            if submeshes is not None:
+                raise ValueError("ThreadedWeightBridge.sender: ``submeshes`` must be None.")
+            self._recv_targets = []
 
         # Populated by connect().
         self._ctx: Optional[Any] = None
@@ -182,8 +203,9 @@ class ThreadedWeightBridge:
         # consumed by the sender loop for manifest generation.
         self._send_keys: List[str] = []
 
-        # Receiver-side state.
-        self._recv_pads: Optional[Dict[str, "ttnn.Tensor"]] = None  # lazy
+        # Receiver-side state. One dict per submesh; index i is the dict for
+        # ``self._recv_targets[i]``. Lazy-allocated on the first manifest.
+        self._recv_pads: Optional[List[Dict[str, "ttnn.Tensor"]]] = None
         self._recv_manifest_entries: Optional[List[dict]] = None
         self._recv_pad_lock: threading.Lock = threading.Lock()
         self._recv_pad_cv: threading.Condition = threading.Condition(self._recv_pad_lock)
@@ -201,8 +223,19 @@ class ThreadedWeightBridge:
         return cls(role=cls._ROLE_SENDER, peer_rank=peer_rank, mesh_device=mesh_device)
 
     @classmethod
-    def receiver(cls, *, peer_rank: int, mesh_device: "ttnn.MeshDevice") -> "ThreadedWeightBridge":
-        return cls(role=cls._ROLE_RECEIVER, peer_rank=peer_rank, mesh_device=mesh_device)
+    def receiver(
+        cls,
+        *,
+        peer_rank: int,
+        mesh_device: "ttnn.MeshDevice",
+        submeshes: List["ttnn.MeshDevice"],
+    ) -> "ThreadedWeightBridge":
+        return cls(
+            role=cls._ROLE_RECEIVER,
+            peer_rank=peer_rank,
+            mesh_device=mesh_device,
+            submeshes=submeshes,
+        )
 
     # ---- lifecycle -----------------------------------------------------------
 
@@ -429,9 +462,11 @@ class ThreadedWeightBridge:
 
     @contextmanager
     def receive_weights(self) -> Iterator[List[Dict[str, "ttnn.Tensor"]]]:
-        """Blocking context manager. Yields ``[{key: pad_ref}]`` (list of
-        length 1, matching the ABC) while holding the recv pad lock so the
-        bridge cannot overwrite the pads. On peer shutdown yields ``[{}]``.
+        """Blocking context manager. Yields ``[{key: pad_ref}, ...]`` (one
+        dict per submesh target passed to the constructor) while holding
+        the recv pad lock so the bridge cannot overwrite the pads. Shape
+        matches ``TttGenerationWorker.update_weights(per_submesh)``. On
+        peer shutdown yields ``[{}]``.
         """
         if self._role != self._ROLE_RECEIVER:
             raise RuntimeError("receive_weights called on a non-receiver bridge")
@@ -449,9 +484,12 @@ class ThreadedWeightBridge:
             ttnn.wait_for_event(0, self._recv_pending_event)
 
             assert self._recv_pads is not None
-            # Shallow copy of the mapping so the caller cannot accidentally
-            # mutate the bridge's own dict.
-            yield [dict(self._recv_pads)]
+            # Shallow copy of each per-target mapping so the caller cannot
+            # accidentally mutate the bridge's own dicts. The outer list is
+            # ordered to match ``self._recv_targets`` (submesh order at
+            # construction), which is what ``worker.update_weights``
+            # consumes directly.
+            yield [dict(pad) for pad in self._recv_pads]
 
             # Caller exited the with block. Clear has_data and notify.
             self._has_recv_data = False
@@ -488,21 +526,26 @@ class ThreadedWeightBridge:
             return self._recv_pad_version
 
     def _ensure_recv_pads(self, entries: List[dict]) -> None:
-        """Lazy-allocate recv pads on first manifest; assert stability after."""
+        """Lazy-allocate one pad per (submesh_target, key) on first manifest;
+        assert stability after."""
         if self._recv_pads is None:
-            pads: Dict[str, "ttnn.Tensor"] = {}
-            for e in entries:
-                pads[e["key"]] = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape(list(e["shape"])),
-                    _dtype_from_name(e["dtype"]),
-                    _layout_from_name(e["layout"]),
-                    self._mesh,
-                    ttnn.DRAM_MEMORY_CONFIG,  # test-only assumption
-                )
-            self._recv_pads = pads
+            pads_per_target: List[Dict[str, "ttnn.Tensor"]] = []
+            for target in self._recv_targets:
+                per_target: Dict[str, "ttnn.Tensor"] = {}
+                for e in entries:
+                    per_target[e["key"]] = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(list(e["shape"])),
+                        _dtype_from_name(e["dtype"]),
+                        _layout_from_name(e["layout"]),
+                        target,
+                        ttnn.DRAM_MEMORY_CONFIG,  # test-only assumption
+                    )
+                pads_per_target.append(per_target)
+            self._recv_pads = pads_per_target
             self._recv_manifest_entries = list(entries)
             print(
-                f"[weight-bridge receiver] lazy-alloc'd {len(pads)} recv pad(s): {sorted(pads.keys())}",
+                f"[weight-bridge receiver] lazy-alloc'd {len(entries)} keys x "
+                f"{len(pads_per_target)} target(s): {sorted(pads_per_target[0].keys())}",
                 flush=True,
             )
             return
@@ -609,7 +652,9 @@ class ThreadedWeightBridge:
         """Precondition: caller holds ``self._recv_pad_cv``. Per-key
         length + blob recv + torch.load + wrap as ttnn host tensor +
         ``ttnn.copy_host_to_device_tensor`` into the pre-allocated recv
-        pad on CQ1."""
+        pad on CQ1. Fans out to every submesh target so the receiver's
+        yielded ``List[dict]`` matches ``worker.update_weights``'s
+        expected per-submesh shape -- no main-thread H2D."""
         assert self._ctx is not None
         assert self._recv_pads is not None
         for entry in entries:
@@ -617,13 +662,19 @@ class ThreadedWeightBridge:
             blob = self._ctx.recv(int(blob_len), self._peer_rank, _TAG_WEIGHT_BODY)
             host_tensor = _torch_load_bytes(blob)
             # Wrap the torch host tensor as a ttnn host tensor (no device=
-            # arg -> stays on host) and copy into the pre-allocated pad.
+            # arg -> stays on host). ``from_torch`` here is zero-copy: the
+            # returned HostBuffer views the torch storage.
             ttnn_host = ttnn.from_torch(
                 host_tensor,
                 dtype=_dtype_from_name(entry["dtype"]),
                 layout=_layout_from_name(entry["layout"]),
             )
-            ttnn.copy_host_to_device_tensor(ttnn_host, self._recv_pads[entry["key"]], cq_id=1)
+            # Fan out to every submesh target. On a single-submesh receiver
+            # this is one H2D per key; a [1, N] parent with N submeshes is N
+            # H2Ds per key. All on CQ1 on the bridge thread, so the main
+            # inference thread never sees a to_torch / from_torch bounce.
+            for per_target in self._recv_pads:
+                ttnn.copy_host_to_device_tensor(ttnn_host, per_target[entry["key"]], cq_id=1)
 
     def _mark_recv_pad_full(self) -> int:
         """Precondition: caller holds ``self._recv_pad_cv``. Records the

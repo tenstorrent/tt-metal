@@ -173,7 +173,9 @@ def _rank1_side() -> None:
     print(f"[rank 1] opening [1, 1] mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
 
-    bridge = ThreadedWeightBridge.receiver(peer_rank=SENDER_RANK, mesh_device=mesh)
+    # A [1, 1] mesh with a single [1, 1] submesh -- pass the mesh as its
+    # own single submesh so the bridge lands the recv pad directly on it.
+    bridge = ThreadedWeightBridge.receiver(peer_rank=SENDER_RANK, mesh_device=mesh, submeshes=[mesh])
     try:
         bridge.connect()
         print("[rank 1] bridge connected + receiver thread started", flush=True)
