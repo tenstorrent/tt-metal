@@ -209,15 +209,18 @@ class TTFastDecoder:
                 max_batch_size=1,
             )
         )
-        # persistent device inputs
+        # persistent device inputs. The residual stream is FRACTURED over the mesh (dim/nd per device, like
+        # Embedding1D's output and the reduce-scattered attention/MLP outputs), so the step-0 hidden input is
+        # sharded on its last dim; on one device this degenerates to a replicate.
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        self._x_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape))
         self.x0_dev = ttnn.from_torch(
             torch.zeros(1, 1, 32, fc.dim, dtype=torch.bfloat16),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=rep,
+            mesh_mapper=self._x_mapper,
         )
         self.tok_dev = ttnn.from_torch(
             torch.zeros(1, 1, 1, 32, dtype=torch.int32),
@@ -298,9 +301,7 @@ class TTFastDecoder:
     def _set_hidden(self, hidden: torch.Tensor):
         t = torch.zeros(1, 1, 32, self.cfg.fast.dim, dtype=torch.bfloat16)
         t[0, 0, 0] = hidden.to(torch.bfloat16)
-        host = ttnn.from_torch(
-            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
-        )
+        host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._x_mapper)
         ttnn.copy_host_to_device_tensor(host, self.x0_dev)
 
     def _set_token(self, code: int):
