@@ -237,6 +237,10 @@ runs:
         {
           echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$TRIAGE_CMD"
           echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=$HANG_DETECTION_TIMEOUT"
+          # tt-triage symbolizes kernel ELFs, so it needs DWARF. Debug info is opt-in and triage runs
+          # post-mortem, so this has to be set before the workload builds its kernels. tt-run
+          # propagates it to every rank via the TT_ passthrough prefix.
+          echo "TT_METAL_RISCV_DEBUG_INFO=1"
           echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
           echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
         } >> "$GITHUB_ENV"
