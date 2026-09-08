@@ -285,7 +285,7 @@ done
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
 emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
 emit "$RULE_LIGHT"
-emit "$(printf '%-20s %s' 'Reset failures:'   "$reset_failures/$iterations_run iterations failed")"
+emit "$(printf '%-20s %s' 'Board resets:'     "$((iterations_run - reset_failures))/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
