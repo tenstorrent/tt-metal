@@ -300,12 +300,8 @@ def test_linear_softplus_with_bias_and_core_grid(device):
     )
     torch_output_tensor = get_golden_function_for_activation("softplus")(torch_output_tensor)
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-    )
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     bias = ttnn.from_torch(
         torch_bias.reshape((1, n_size)),
         device=device,
