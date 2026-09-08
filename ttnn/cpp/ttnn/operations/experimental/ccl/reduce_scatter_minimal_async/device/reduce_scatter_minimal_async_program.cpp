@@ -48,6 +48,13 @@ namespace ttnn {
 
 namespace operations::experimental::ccl::detail {
 
+// Positions of the penult intermediate address in the ring reader/writer runtime-arg lists for scatter
+// dims 1-3. The override helper re-patches that address by index on every program-cache hit, so the
+// builder checks the lists against these before appending the fused-op / mux / fabric args. The two
+// unit-range args (unit_start, unit_end) sit in front of it; anything inserted before it must move these.
+constexpr uint32_t RING_READER_PENULT_ADDR_ARG_IDX = 13;
+constexpr uint32_t RING_WRITER_PENULT_ADDR_ARG_IDX = 18;
+
 std::unordered_map<std::string, uint32_t> get_ring_reader_named_compile_args(
     const uint32_t ring_index,
     const uint32_t ring_size,
@@ -882,6 +889,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
                 }
+                if (normalized_dim != 0) {
+                    TT_FATAL(
+                        reader_rt_args.size() ==
+                            operations::experimental::ccl::detail::RING_READER_PENULT_ADDR_ARG_IDX + 1,
+                        "ring reader runtime-arg layout changed ({} args); update RING_READER_PENULT_ADDR_ARG_IDX and "
+                        "the "
+                        "override helper",
+                        reader_rt_args.size());
+                }
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
@@ -935,6 +951,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         // the mux/fabric-connection args appended after this block.
                         use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
+                }
+                if (normalized_dim != 0) {
+                    TT_FATAL(
+                        writer_rt_args.size() ==
+                            operations::experimental::ccl::detail::RING_WRITER_PENULT_ADDR_ARG_IDX + 1,
+                        "ring writer runtime-arg layout changed ({} args); update RING_WRITER_PENULT_ADDR_ARG_IDX and "
+                        "the "
+                        "override helper",
+                        writer_rt_args.size());
                 }
                 if (num_mux_cores_per_direction_per_link) {
                     // V2 fabric mux client connection: this worker is channel `worker` on its
@@ -1044,10 +1069,11 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                     if (penult_intermediate.has_value()) {
                         // Contiguous staging layout only, and it must be patched: the penult intermediate is
                         // an op output now, so it is reallocated on every invocation and its address is
-                        // not stable across program-cache hits. Index 11 — see the reader RT arg list in
-                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the fused-op args
-                        // are appended after it, so the position is fixed.
-                        worker_reader_sender_runtime_args[11] = penult_intermediate->buffer()->address();
+                        // not stable across program-cache hits. The builder checks the list against this
+                        // index; the fused-op args are appended after it, so the position is fixed.
+                        worker_reader_sender_runtime_args
+                            [operations::experimental::ccl::detail::RING_READER_PENULT_ADDR_ARG_IDX] =
+                                penult_intermediate->buffer()->address();
                     }
                 }
                 // sender writer
@@ -1062,12 +1088,13 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                     worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
                 }
                 if (penult_intermediate.has_value()) {
-                    // Index 16 — see the writer RT arg list in
-                    // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
-                    // connection args are appended after it, so the position is fixed. Only the
-                    // non-dim-0 layout has this arg, and penult_intermediate is only set there
-                    // (reduce_scatter_use_contiguous_interm returns false for scatter dim 0).
-                    worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
+                    // The builder checks the writer list against this index; the mux/fabric connection
+                    // args are appended after it, so the position is fixed. Only the non-dim-0 layout has
+                    // this arg, and penult_intermediate is only set there (reduce_scatter_use_contiguous_interm
+                    // returns false for scatter dim 0).
+                    worker_writer_sender_runtime_args
+                        [operations::experimental::ccl::detail::RING_WRITER_PENULT_ADDR_ARG_IDX] =
+                            penult_intermediate->buffer()->address();
                 }
             }
         }
