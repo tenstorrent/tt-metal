@@ -36,6 +36,7 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     EN_DEST_REUSE,
+    INPUT_OUTPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -63,6 +64,10 @@ BASE_MATH_OPS = [
 ]
 BASE_PERF_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwmul]
 BFP4_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
+# Elwadd is already covered for BFP4 by the base perf sweep. Keep the
+# extended BFP4 perf family incremental so identical measurements are not
+# emitted twice under the same report key.
+BFP4_PERF_MATH_OPS = [MathOperation.Elwsub]
 DEST_REUSE_MATH_OPS = [
     MathOperation.Elwadd,
     MathOperation.Elwsub,
@@ -73,6 +78,17 @@ INT8_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
 
 def _unique_dimensions(dimensions):
     return [list(dim) for dim in dict.fromkeys(tuple(dim) for dim in dimensions)]
+
+
+def _matrix_dimensions(input_dimensions, output_dimensions, tile_dimensions):
+    """Identify matrix orientation as tile rows/columns in perf reports."""
+    tile_rows, tile_cols = tile_dimensions
+    return INPUT_OUTPUT_DIMENSIONS(
+        input_rt_dim=input_dimensions[0] // tile_rows,
+        input_ct_dim=input_dimensions[1] // tile_cols,
+        output_rt_dim=output_dimensions[0] // tile_rows,
+        output_ct_dim=output_dimensions[1] // tile_cols,
+    )
 
 
 def _effective_dest_acc(dest_acc, formats):
@@ -368,6 +384,7 @@ def _run_eltwise_binary_test(
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
         ],
         "runtimes": [
+            _matrix_dimensions(input_dimensions, input_dimensions, tile_dimensions),
             UNPACK_TRANS_FACES(transpose_srca),
             UNPACK_TRANS_WITHIN_FACE(transpose_srca),
             TILE_COUNT(tile_cnt_A),
@@ -857,6 +874,7 @@ def _run_eltwise_binary_dest_reuse_test(
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
         ],
         "runtimes": [
+            _matrix_dimensions(input_dimensions, output_dimensions, tile_dimensions),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             NUM_TILES_IN_BLOCK(
