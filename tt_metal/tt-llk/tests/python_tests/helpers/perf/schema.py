@@ -12,6 +12,9 @@ class PerfSchemaError(AssertionError):
 
 MARKER = "marker"
 
+# Zones that use bare ZONE_SCOPED (no entry rendezvous), exempt from the cross-thread ordering invariant.
+NON_RENDEZVOUS_MARKERS = frozenset({"UNINIT"})
+
 FORMAT_HEADERS = (
     "formats.input_A",
     "formats.input_B",
