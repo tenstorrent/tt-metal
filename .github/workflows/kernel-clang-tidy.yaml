@@ -8,10 +8,10 @@ name: "Kernel clang-tidy"
 # See tech_reports/code-indexing/kernel-clang-tidy.md.
 
 on:
-  # TEMPORARY (remove before merge): registers the workflow from this branch
-  # and lets each push verify it end-to-end, including the publish step.
-  push:
-    branches: ["clang-tidy-jit-runtime-prototype"]
+  schedule:
+    # Saturdays at noon PST (13:00 during PDT; cron is UTC and has no DST).
+    # Scheduled runs only fire on the default branch.
+    - cron: "0 20 * * 6"
   workflow_dispatch:
     inputs:
       enabled-skus:
@@ -223,9 +223,10 @@ jobs:
           retention-days: 30
 
       - name: Publish to tenstorrent/tt-metal-kernel-clang-tidy-results (gh-pages)
+        # The weekly run is on main, so it publishes; a dispatch has to ask.
         if: >-
           ${{ steps.site.outputs.found == 'true' &&
-              (inputs.publish-html || github.ref == 'refs/heads/main' || github.event_name == 'push') }}
+              (inputs.publish-html || github.ref == 'refs/heads/main') }}
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}

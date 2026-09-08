@@ -94,8 +94,9 @@ with the first-captured config. Pass `--dedupe none` to lint every configuration
 ttnn sanity suite on hardware via `ttnn-sanity-tests-impl.yaml` with
 `enable-kernel-clang-tidy: true` → a `consolidate-report` job that merges every
 leg's findings into one report and publishes it to
-`tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on main, or when
-dispatched with `publish-html: true`).
+`tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages. It runs weekly on
+Saturdays at noon PST, and on dispatch. The weekly run publishes because it is
+on main; a dispatch publishes only with `publish-html: true`.
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
