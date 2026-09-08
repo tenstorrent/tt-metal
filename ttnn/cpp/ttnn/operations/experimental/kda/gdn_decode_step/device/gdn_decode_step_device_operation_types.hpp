@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -22,6 +23,9 @@ struct GdnDecodeStepParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+    // fused-conv mode: qkv is the full projection row [q|k|v|z|a|b]; conv + gates computed in-kernel
+    bool fuse_conv = false;
+    uint32_t qkvz_dim = 0;  // column offset of the a|b block (= 2*Nk*Dk + 2*Nv*Dv)
 };
 
 struct GdnDecodeStepInputs {
@@ -30,6 +34,8 @@ struct GdnDecodeStepInputs {
     Tensor g;       // [1, 1, Nv] fp32/bf16 (log decay)
     Tensor state;   // [1, Nv, Dk, Dv] fp32, updated in place
     Tensor weight;  // [Dv] bf16 gated-norm weight
+    std::vector<Tensor> conv_states;  // fused-conv mode: 4 x [1, 1, C] bf16 (oldest first), shifted in place
+    std::vector<Tensor> conv_taps;    // fused-conv mode: 4 x (volume C) bf16
 };
 
 }  // namespace ttnn::experimental::prim

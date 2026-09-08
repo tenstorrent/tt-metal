@@ -38,8 +38,8 @@ GdnDecodeStepOperation::program_factory_t GdnDecodeStepOperation::select_program
 void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attributes_t& a, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     check_tiled(in.qkv, "qkv", {DataType::BFLOAT16});
-    check_tiled(in.beta, "beta", {DataType::FLOAT32, DataType::BFLOAT16});
-    check_tiled(in.g, "g", {DataType::FLOAT32, DataType::BFLOAT16});
+    check_tiled(in.beta, a.fuse_conv ? "dt_bias" : "beta", {DataType::FLOAT32, DataType::BFLOAT16});
+    check_tiled(in.g, a.fuse_conv ? "neg_exp_A" : "g", {DataType::FLOAT32, DataType::BFLOAT16});
     check_tiled(in.state, "state", {DataType::FLOAT32});
     check_tiled(in.weight, "weight", {DataType::BFLOAT16});
     for (const auto& [t, name] : std::array{
@@ -69,15 +69,54 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         kOp);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     const auto& qs = in.qkv.logical_shape();
-    TT_FATAL(
-        qs.rank() == 3 && qs[0] == 1 && qs[1] == 1 && qs[2] == 2 * Nk * Dk + Nv * Dv,
-        "{}: qkv must be [1, 1, 2*Nk*Dk + Nv*Dv] (got {})",
-        kOp,
-        qs);
-    for (const auto& [t, name] : std::array{std::pair{&in.beta, "beta"}, std::pair{&in.g, "g"}}) {
-        const auto& s = t->logical_shape();
+    const uint32_t C = 2 * Nk * Dk + Nv * Dv;
+    if (a.fuse_conv) {
         TT_FATAL(
-            s.rank() == 3 && s[0] == 1 && s[1] == 1 && s[2] == Nv, "{}: {} must be [1, 1, Nv] (got {})", kOp, name, s);
+            qs.rank() == 3 && qs[0] == 1 && qs[1] == 1 && qs[2] >= a.qkvz_dim + 2 * Nv,
+            "{}: fused-conv qkv (projection row) must be [1, 1, W >= qkvz_dim + 2*Nv] (got {})",
+            kOp,
+            qs);
+        TT_FATAL(
+            a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % tt::constants::TILE_WIDTH == 0 &&
+                2 * Nv <= tt::constants::TILE_WIDTH,
+            "{}: fused-conv needs qkvz_dim == 2*Nk*Dk + 2*Nv*Dv (tile aligned) and 2*Nv <= 32 (a|b in one tile)",
+            kOp);
+        TT_FATAL(
+            in.conv_states.size() == 4 && in.conv_taps.size() == 4,
+            "{}: fused-conv needs 4 conv states and 4 taps",
+            kOp);
+        for (uint32_t j = 0; j < 4; ++j) {
+            check_tiled(in.conv_states[j], "conv_state", {DataType::BFLOAT16});
+            check_tiled(in.conv_taps[j], "conv_tap", {DataType::BFLOAT16});
+            check_same_device(in.qkv, in.conv_states[j], kOp, "conv_state");
+            check_same_device(in.qkv, in.conv_taps[j], kOp, "conv_tap");
+            const auto& cs = in.conv_states[j].logical_shape();
+            TT_FATAL(
+                cs.rank() == 3 && cs[0] == 1 && cs[1] == 1 && cs[2] == C,
+                "{}: conv_state must be [1, 1, C] (got {})",
+                kOp,
+                cs);
+            TT_FATAL(in.conv_taps[j].logical_volume() == C, "{}: conv_tap volume must equal C", kOp);
+        }
+        TT_FATAL(
+            in.beta.logical_volume() == Nv && in.g.logical_volume() == Nv,
+            "{}: dt_bias / neg_exp_A volume must be Nv",
+            kOp);
+    } else {
+        TT_FATAL(
+            qs.rank() == 3 && qs[0] == 1 && qs[1] == 1 && qs[2] == C,
+            "{}: qkv must be [1, 1, 2*Nk*Dk + Nv*Dv] (got {})",
+            kOp,
+            qs);
+        for (const auto& [t, name] : std::array{std::pair{&in.beta, "beta"}, std::pair{&in.g, "g"}}) {
+            const auto& s = t->logical_shape();
+            TT_FATAL(
+                s.rank() == 3 && s[0] == 1 && s[1] == 1 && s[2] == Nv,
+                "{}: {} must be [1, 1, Nv] (got {})",
+                kOp,
+                name,
+                s);
+        }
     }
     const auto& ss = in.state.logical_shape();
     TT_FATAL(
@@ -115,7 +154,10 @@ Tensor gdn_decode_step(
     float norm_epsilon,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    DataType output_dtype) {
+    DataType output_dtype,
+    const std::vector<Tensor>& conv_states,
+    const std::vector<Tensor>& conv_taps,
+    uint32_t qkvz_dim) {
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
         GdnDecodeStepParams{
             .num_value_heads = num_value_heads,
@@ -128,8 +170,17 @@ Tensor gdn_decode_step(
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
+            .fuse_conv = !conv_states.empty(),
+            .qkvz_dim = qkvz_dim,
         },
-        GdnDecodeStepInputs{.qkv = qkv, .beta = beta, .g = g, .state = state, .weight = weight});
+        GdnDecodeStepInputs{
+            .qkv = qkv,
+            .beta = beta,
+            .g = g,
+            .state = state,
+            .weight = weight,
+            .conv_states = conv_states,
+            .conv_taps = conv_taps});
 }
 
 }  // namespace ttnn::experimental::prim

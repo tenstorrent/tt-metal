@@ -71,3 +71,76 @@ def test_gdn_decode_step(device, steps):
         d_h = (h_t - h_ref).abs().max().item()
         print(f"step {step}: out pcc={p_out:.6f} max|d|={d_out:.4e}  state pcc={p_h:.6f} max|d|={d_h:.4e}")
         assert p_out > 0.999 and p_h > 0.9999, (p_out, p_h)
+
+
+def _reference_conv(hist, new_row, taps, dtb, nea, h, w, scale, l2_eps=1e-6, norm_eps=1e-6):
+    """Fused-conv mode reference. hist: 3 x [C] rows (oldest first), new_row: [W] = [q|k|v|z|a|b], taps: 4 x [C].
+    Returns (gated [Nv*Dv], h_new, new_hist (list of 4 rows: cs0..cs3 after the shift))."""
+    C = 2 * KD + VD
+    conv = hist[0] * taps[0] + hist[1] * taps[1] + hist[2] * taps[2] + new_row[:C] * taps[3]
+    conv = torch.nn.functional.silu(conv)
+    q, k, v = conv[:KD].reshape(Nk, Dk), conv[KD : 2 * KD].reshape(Nk, Dk), conv[2 * KD : C].reshape(Nv, Dv)
+    z = new_row[C : C + VD]
+    a = new_row[C + VD : C + VD + Nv]
+    b = new_row[C + VD + Nv : C + VD + 2 * Nv]
+    beta = torch.sigmoid(b)
+    g = nea * torch.nn.functional.softplus(a + dtb, beta=1.0, threshold=20.0)
+    out, h_new = _reference(q, k, v, beta, g, h, w, scale, l2_eps, norm_eps)
+    gated = out * torch.nn.functional.silu(z)
+    new_hist = [hist[0], hist[1], hist[2], new_row[:C]]  # cs0 <- old cs1, ..., cs3 <- new qkv (hist holds old cs1..cs3)
+    return gated, h_new, new_hist
+
+
+@pytest.mark.parametrize("steps", [3])
+def test_gdn_decode_step_conv(device, steps):
+    torch.manual_seed(1)
+    scale = Dk**-0.5
+    C = 2 * KD + VD
+    W = C + VD + 32  # [q|k|v | z | a b (padded to a tile)]
+    az = C + VD
+    h = (0.05 * torch.randn(Nv, Dk, Dv)).float()
+    w = (1.0 + 0.1 * torch.randn(Dv)).bfloat16()
+    taps = [(0.3 * torch.randn(C)).bfloat16() for _ in range(4)]
+    dtb = (0.1 * torch.randn(Nv)).bfloat16()
+    nea = (-torch.exp(0.2 * torch.randn(Nv))).bfloat16()
+    cs = [(0.5 * torch.randn(C)).bfloat16() for _ in range(4)]  # cs0 (oldest) .. cs3 (newest)
+    to_dev = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    state = to_dev(h.reshape(1, Nv, Dk, Dv), ttnn.float32)
+    w_dev = to_dev(w, ttnn.bfloat16)
+    taps_dev = [to_dev(t, ttnn.bfloat16) for t in taps]
+    cs_dev = [to_dev(t.reshape(1, 1, C), ttnn.bfloat16) for t in cs]
+    h_ref = h.clone()
+    cs_ref = [t.float() for t in cs]
+    for step in range(steps):
+        row = (0.5 * torch.randn(W)).bfloat16()
+        row[az + 2 * Nv :] = 0
+        gated_ref, h_ref, new_hist = _reference_conv(
+            cs_ref[1:], row.float(), [t.float() for t in taps], dtb.float(), nea.float(), h_ref, w.float(), scale
+        )
+        out = ttnn.experimental.kda.gdn_decode_step(
+            to_dev(row.reshape(1, 1, W), ttnn.bfloat16),
+            to_dev(dtb, ttnn.bfloat16),
+            to_dev(nea, ttnn.bfloat16),
+            state,
+            w_dev,
+            Nv,
+            Nk,
+            Dk,
+            Dv,
+            scale=scale,
+            output_dtype=ttnn.float32,
+            conv_states=cs_dev,
+            conv_taps=taps_dev,
+            qkvz_dim=az,
+        )
+        out_t = ttnn.to_torch(out).reshape(-1)
+        h_t = ttnn.to_torch(state).reshape(Nv, Dk, Dv)
+        cs_t = [ttnn.to_torch(t).reshape(-1).float() for t in cs_dev]
+        p_out, p_h = _pcc(out_t, gated_ref), _pcc(h_t, h_ref)
+        cs_ok = all(torch.equal(cs_t[j], new_hist[j]) for j in range(4))
+        print(
+            f"step {step}: out pcc={p_out:.6f} max|d|={(out_t - gated_ref).abs().max().item():.4e}  "
+            f"state pcc={p_h:.6f} max|d|={(h_t - h_ref).abs().max().item():.4e}  conv-state shift exact={cs_ok}"
+        )
+        assert p_out > 0.999 and p_h > 0.9999 and cs_ok, (p_out, p_h, cs_ok)
+        cs_ref = new_hist

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -30,6 +31,14 @@ uint32_t float_bits(float f) {
     std::memcpy(&b, &f, sizeof(float));
     return b;
 }
+
+struct Dfb {
+    std::string name;
+    uint32_t tiles;
+    tt::DataFormat fmt;
+};
+
+constexpr const char* kDir = "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/";
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_program_artifacts(
@@ -42,10 +51,12 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const auto& output = output_tensor.mesh_tensor();
     const auto& device = qkv.device();
     const auto arch = device.arch();
+    const bool fused = a.fuse_conv;
 
     const uint32_t Kt = a.key_dim / TILE_WIDTH;
     const uint32_t Vt = a.value_dim / TILE_WIDTH;
     const uint32_t KV = Kt * Vt;
+    const uint32_t Ct = 2 * Kt + Vt;
     const uint32_t Nv = a.num_value_heads;
     const uint32_t Nk = a.num_key_heads;
 
@@ -62,119 +73,181 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const m2::TensorParamName STATE{"state"};
     const m2::TensorParamName WEIGHT{"weight"};
     const m2::TensorParamName OUT{"out"};
+    const std::vector<m2::TensorParamName> CS = {
+        m2::TensorParamName{"cs0"}, m2::TensorParamName{"cs1"}, m2::TensorParamName{"cs2"}, m2::TensorParamName{"cs3"}};
+    const std::vector<m2::TensorParamName> TAP = {
+        m2::TensorParamName{"tap0"},
+        m2::TensorParamName{"tap1"},
+        m2::TensorParamName{"tap2"},
+        m2::TensorParamName{"tap3"}};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
     const auto in_fmt = datatype_to_dataformat_converter(in.qkv.dtype());
     const auto out_fmt = datatype_to_dataformat_converter(a.output_dtype);
-
-    struct Dfb {
-        const char* name;
-        uint32_t tiles;
-        tt::DataFormat fmt;
-    };
     const uint32_t tmp_tiles = std::max(Kt, Vt);
-    const std::vector<Dfb> dfb_list = {
-        {"q_in", Kt, in_fmt}, {"k_in", Kt, in_fmt},   {"v_in", Vt, in_fmt}, {"beta_s", 1, fp32},
-        {"g_s", 1, fp32},     {"state_in", KV, fp32}, {"w_in", Vt, bf16},   {"scaler", 1, fp32},
-        {"eps_l2", 1, bf16},  {"eps_norm", 1, bf16},  {"mask", 1, bf16},    {"tmp", tmp_tiles, fp32},
-        {"stats", 1, fp32},   {"scratch", 1, fp32},   {"inv", 1, fp32},     {"qn", Kt, fp32},
-        {"kn", Kt, fp32},     {"vm", Vt, fp32},       {"dec", 1, fp32},     {"hd", KV, fp32},
-        {"vread", Vt, fp32},  {"delta", Vt, fp32},    {"kt", Kt, fp32},     {"outer", KV, fp32},
-        {"hn", KV, fp32},     {"hnew", KV, fp32},     {"o", Vt, fp32},      {"on", Vt, fp32},
-        {"out", Vt, out_fmt},
-    };
-    m2::Group<m2::DataflowBufferSpec> dfbs;
-    for (const auto& d : dfb_list) {
-        dfbs.push_back(m2::DataflowBufferSpec{
-            .unique_id = m2::DFBSpecName{d.name},
-            .entry_size = tt::tile_size(d.fmt),
-            .num_entries = d.tiles,
-            .data_format_metadata = d.fmt,
-        });
+
+    // ---- dataflow buffers: {name, tiles, format}; producer/consumer roles listed per kernel below
+    std::vector<Dfb> reader_out;  // produced by reader, consumed by compute
+    if (fused) {
+        reader_out = {
+            {"hist1", Ct, in_fmt},
+            {"hist2", Ct, in_fmt},
+            {"hist3", Ct, in_fmt},
+            {"cur", Ct, in_fmt},
+            {"tap0", Ct, bf16},
+            {"tap1", Ct, bf16},
+            {"tap2", Ct, bf16},
+            {"tap3", Ct, bf16},
+            {"z_in", Vt, in_fmt},
+            {"a_s", 1, fp32},
+            {"b_s", 1, fp32},
+            {"dtb_s", 1, fp32},
+            {"nea_s", 1, fp32}};
+    } else {
+        reader_out = {
+            {"q_in", Kt, in_fmt}, {"k_in", Kt, in_fmt}, {"v_in", Vt, in_fmt}, {"beta_s", 1, fp32}, {"g_s", 1, fp32}};
     }
-    auto bind = [](const char* name, m2::DFBEndpointType type) {
-        return m2::DFBBinding{m2::DFBSpecName{name}, name, type};
-    };
+    const std::vector<Dfb> common_in = {
+        {"state_in", KV, fp32},
+        {"w_in", Vt, bf16},
+        {"scaler", 1, fp32},
+        {"eps_l2", 1, bf16},
+        {"eps_norm", 1, bf16},
+        {"mask", 1, bf16}};
+    for (const auto& d : common_in) {
+        reader_out.push_back(d);
+    }
+    std::vector<Dfb> compute_local = {
+        {"tmp", tmp_tiles, fp32},
+        {"stats", 1, fp32},
+        {"scratch", 1, fp32},
+        {"inv", 1, fp32},
+        {"qn", Kt, fp32},
+        {"kn", Kt, fp32},
+        {"vm", Vt, fp32},
+        {"dec", 1, fp32},
+        {"hd", KV, fp32},
+        {"vread", Vt, fp32},
+        {"delta", Vt, fp32},
+        {"kt", Kt, fp32},
+        {"outer", KV, fp32},
+        {"hn", KV, fp32},
+        {"o", Vt, fp32},
+        {"on", Vt, fp32}};
+    if (fused) {
+        for (const auto& d : std::vector<Dfb>{
+                 {"qc", Kt, fp32}, {"kc", Kt, fp32}, {"vc", Vt, fp32}, {"beta_t", 1, fp32}, {"zs", Vt, fp32}}) {
+            compute_local.push_back(d);
+        }
+    }
+    const std::vector<Dfb> compute_out = {{"hnew", KV, fp32}, {"out", Vt, out_fmt}};
+    std::vector<Dfb> writer_local;
+    if (fused) {
+        writer_local = {{"wh1", Ct, in_fmt}, {"wh2", Ct, in_fmt}, {"wh3", Ct, in_fmt}, {"wcur", Ct, in_fmt}};
+    }
+
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    std::vector<Dfb> all;
+    const std::vector<const std::vector<Dfb>*> groups = {&reader_out, &compute_local, &compute_out, &writer_local};
+    for (const auto* v : groups) {
+        for (const auto& d : *v) {
+            all.push_back(d);
+            dfbs.push_back(m2::DataflowBufferSpec{
+                .unique_id = m2::DFBSpecName{d.name},
+                .entry_size = tt::tile_size(d.fmt),
+                .num_entries = d.tiles,
+                .data_format_metadata = d.fmt,
+            });
+        }
+    }
     using EP = m2::DFBEndpointType;
+    auto bind = [](const std::string& name, EP type) { return m2::DFBBinding{m2::DFBSpecName{name}, name, type}; };
 
-    const uint32_t beta_fp32 = in.beta.dtype() == DataType::FLOAT32 ? 1u : 0u;
-    const uint32_t g_fp32 = in.g.dtype() == DataType::FLOAT32 ? 1u : 0u;
-
+    // ---- reader
     m2::KernelSpec reader{
         .unique_id = READER,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/"
-            "reader_gdn_decode_step.cpp",
-        .dfb_bindings =
-            {bind("q_in", EP::PRODUCER),
-             bind("k_in", EP::PRODUCER),
-             bind("v_in", EP::PRODUCER),
-             bind("beta_s", EP::PRODUCER),
-             bind("g_s", EP::PRODUCER),
-             bind("state_in", EP::PRODUCER),
-             bind("w_in", EP::PRODUCER),
-             bind("scaler", EP::PRODUCER),
-             bind("eps_l2", EP::PRODUCER),
-             bind("eps_norm", EP::PRODUCER),
-             bind("mask", EP::PRODUCER)},
-        .tensor_bindings =
-            {m2::TensorBinding{QKV, "qkv"},
-             m2::TensorBinding{BETA, "beta"},
-             m2::TensorBinding{G, "g"},
-             m2::TensorBinding{STATE, "state"},
-             m2::TensorBinding{WEIGHT, "weight"}},
-        .compile_time_args =
-            {{"Kt", Kt},
-             {"Vt", Vt},
-             {"Nk", Nk},
-             {"Nv", Nv},
-             {"beta_fp32", beta_fp32},
-             {"g_fp32", g_fp32},
-             {"l2_eps_bits", float_bits(a.l2_epsilon)},
-             {"norm_eps_bits", float_bits(a.norm_epsilon)}},
+        .source = std::string(kDir) +
+                  (fused ? "dataflow/reader_gdn_decode_step_conv.cpp" : "dataflow/reader_gdn_decode_step.cpp"),
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
+    for (const auto& d : reader_out) {
+        reader.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
+    }
+    reader.tensor_bindings = {
+        m2::TensorBinding{QKV, "qkv"},
+        m2::TensorBinding{BETA, fused ? "dtb" : "beta"},
+        m2::TensorBinding{G, fused ? "nea" : "g"},
+        m2::TensorBinding{STATE, "state"},
+        m2::TensorBinding{WEIGHT, "weight"}};
+    if (fused) {
+        for (uint32_t j = 1; j < 4; ++j) {
+            reader.tensor_bindings.push_back(m2::TensorBinding{CS[j], "cs" + std::to_string(j)});
+        }
+        for (uint32_t j = 0; j < 4; ++j) {
+            reader.tensor_bindings.push_back(m2::TensorBinding{TAP[j], "tap" + std::to_string(j)});
+        }
+        reader.compile_time_args = {
+            {"Kt", Kt},
+            {"Vt", Vt},
+            {"Nk", Nk},
+            {"Nv", Nv},
+            {"z_tile0", (2 * Nk * Kt * TILE_WIDTH + Nv * Vt * TILE_WIDTH) / TILE_WIDTH},
+            {"ab_page", a.qkvz_dim / TILE_WIDTH},
+            {"dtb_fp32", in.beta.dtype() == DataType::FLOAT32 ? 1u : 0u},
+            {"nea_fp32", in.g.dtype() == DataType::FLOAT32 ? 1u : 0u},
+            {"l2_eps_bits", float_bits(a.l2_epsilon)},
+            {"norm_eps_bits", float_bits(a.norm_epsilon)}};
+    } else {
+        reader.compile_time_args = {
+            {"Kt", Kt},
+            {"Vt", Vt},
+            {"Nk", Nk},
+            {"Nv", Nv},
+            {"beta_fp32", in.beta.dtype() == DataType::FLOAT32 ? 1u : 0u},
+            {"g_fp32", in.g.dtype() == DataType::FLOAT32 ? 1u : 0u},
+            {"l2_eps_bits", float_bits(a.l2_epsilon)},
+            {"norm_eps_bits", float_bits(a.norm_epsilon)}};
+    }
+
+    // ---- writer
     m2::KernelSpec writer{
         .unique_id = WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/"
-            "writer_gdn_decode_step.cpp",
+        .source = std::string(kDir) +
+                  (fused ? "dataflow/writer_gdn_decode_step_conv.cpp" : "dataflow/writer_gdn_decode_step.cpp"),
         .dfb_bindings = {bind("hnew", EP::CONSUMER), bind("out", EP::CONSUMER)},
         .tensor_bindings = {m2::TensorBinding{STATE, "state_out"}, m2::TensorBinding{OUT, "out"}},
-        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
+    if (fused) {
+        for (const auto& d : writer_local) {
+            writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
+            writer.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
+        }
+        writer.tensor_bindings.push_back(m2::TensorBinding{QKV, "qkv_w"});
+        writer.tensor_bindings.push_back(m2::TensorBinding{CS[0], "cs0_out"});
+        for (uint32_t j = 1; j < 4; ++j) {
+            writer.tensor_bindings.push_back(m2::TensorBinding{CS[j], "cs" + std::to_string(j) + "_w"});
+        }
+        writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}};
+    } else {
+        writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}};
+    }
 
+    // ---- compute
     auto compute_hw = ttnn::to_compute_hardware_config(arch, a.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
-    for (const auto& d : dfb_list) {
+    for (const auto& d : all) {
         if (d.fmt == fp32) {
             unpack_modes[m2::DFBSpecName{d.name}] = UnpackMode::UnpackToSrc;
         }
     }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_decode_step.cpp",
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-        .dfb_bindings = {bind("q_in", EP::CONSUMER),     bind("k_in", EP::CONSUMER),    bind("v_in", EP::CONSUMER),
-                         bind("beta_s", EP::CONSUMER),   bind("g_s", EP::CONSUMER),     bind("state_in", EP::CONSUMER),
-                         bind("w_in", EP::CONSUMER),     bind("scaler", EP::CONSUMER),  bind("eps_l2", EP::CONSUMER),
-                         bind("eps_norm", EP::CONSUMER), bind("mask", EP::CONSUMER),    bind("tmp", EP::PRODUCER),
-                         bind("tmp", EP::CONSUMER),      bind("stats", EP::PRODUCER),   bind("stats", EP::CONSUMER),
-                         bind("scratch", EP::PRODUCER),  bind("scratch", EP::CONSUMER), bind("inv", EP::PRODUCER),
-                         bind("inv", EP::CONSUMER),      bind("qn", EP::PRODUCER),      bind("qn", EP::CONSUMER),
-                         bind("kn", EP::PRODUCER),       bind("kn", EP::CONSUMER),      bind("vm", EP::PRODUCER),
-                         bind("vm", EP::CONSUMER),       bind("dec", EP::PRODUCER),     bind("dec", EP::CONSUMER),
-                         bind("hd", EP::PRODUCER),       bind("hd", EP::CONSUMER),      bind("vread", EP::PRODUCER),
-                         bind("vread", EP::CONSUMER),    bind("delta", EP::PRODUCER),   bind("delta", EP::CONSUMER),
-                         bind("kt", EP::PRODUCER),       bind("kt", EP::CONSUMER),      bind("outer", EP::PRODUCER),
-                         bind("outer", EP::CONSUMER),    bind("hn", EP::PRODUCER),      bind("hn", EP::CONSUMER),
-                         bind("hnew", EP::PRODUCER),     bind("o", EP::PRODUCER),       bind("o", EP::CONSUMER),
-                         bind("on", EP::PRODUCER),       bind("on", EP::CONSUMER),      bind("out", EP::PRODUCER)},
+        .source = std::string(kDir) + (fused ? "compute/gdn_decode_step_conv.cpp" : "compute/gdn_decode_step.cpp"),
+        .compiler_options = {.opt_level = fused ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::O3},
         .compile_time_args =
             {{"Kt", Kt},
              {"Vt", Vt},
@@ -183,7 +256,18 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };
+    for (const auto& d : reader_out) {
+        compute.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
+    }
+    for (const auto& d : compute_local) {
+        compute.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
+        compute.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
+    }
+    for (const auto& d : compute_out) {
+        compute.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
+    }
 
+    // ---- runtime args
     m2::KernelRunArgs reader_args{.kernel = READER};
     m2::KernelRunArgs writer_args{.kernel = WRITER};
     m2::KernelRunArgs compute_args{.kernel = COMPUTE};
@@ -196,24 +280,37 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
     }
 
+    // ---- tensor parameters
+    m2::Group<m2::TensorParameter> tensor_parameters = {
+        m2::TensorParameter{.unique_id = QKV, .spec = qkv.tensor_spec()},
+        m2::TensorParameter{.unique_id = BETA, .spec = beta.tensor_spec()},
+        m2::TensorParameter{.unique_id = G, .spec = g.tensor_spec()},
+        m2::TensorParameter{.unique_id = STATE, .spec = state.tensor_spec()},
+        m2::TensorParameter{.unique_id = WEIGHT, .spec = weight.tensor_spec()},
+        m2::TensorParameter{.unique_id = OUT, .spec = output.tensor_spec()}};
+    m2::ProgramRunArgs run_args;
+    run_args.tensor_args = {{QKV, qkv}, {BETA, beta}, {G, g}, {STATE, state}, {WEIGHT, weight}, {OUT, output}};
+    if (fused) {
+        for (uint32_t j = 0; j < 4; ++j) {
+            tensor_parameters.push_back(
+                m2::TensorParameter{.unique_id = CS[j], .spec = in.conv_states[j].mesh_tensor().tensor_spec()});
+            tensor_parameters.push_back(
+                m2::TensorParameter{.unique_id = TAP[j], .spec = in.conv_taps[j].mesh_tensor().tensor_spec()});
+            run_args.tensor_args.emplace(CS[j], in.conv_states[j].mesh_tensor());
+            run_args.tensor_args.emplace(TAP[j], in.conv_taps[j].mesh_tensor());
+        }
+    }
+
     m2::ProgramSpec spec{
-        .name = "gdn_decode_step",
+        .name = fused ? "gdn_decode_step_conv" : "gdn_decode_step",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
-        .tensor_parameters =
-            {m2::TensorParameter{.unique_id = QKV, .spec = qkv.tensor_spec()},
-             m2::TensorParameter{.unique_id = BETA, .spec = beta.tensor_spec()},
-             m2::TensorParameter{.unique_id = G, .spec = g.tensor_spec()},
-             m2::TensorParameter{.unique_id = STATE, .spec = state.tensor_spec()},
-             m2::TensorParameter{.unique_id = WEIGHT, .spec = weight.tensor_spec()},
-             m2::TensorParameter{.unique_id = OUT, .spec = output.tensor_spec()}},
+        .tensor_parameters = std::move(tensor_parameters),
         .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = cores}},
     };
-    m2::ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(reader_args));
     run_args.kernel_run_args.push_back(std::move(writer_args));
     run_args.kernel_run_args.push_back(std::move(compute_args));
-    run_args.tensor_args = {{QKV, qkv}, {BETA, beta}, {G, g}, {STATE, state}, {WEIGHT, weight}, {OUT, output}};
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 

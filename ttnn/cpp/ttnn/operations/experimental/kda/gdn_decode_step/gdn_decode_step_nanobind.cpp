@@ -28,6 +28,13 @@ void bind_gdn_decode_step(nb::module_& mod) {
             scale (float, optional): query scale, defaults to ``key_dim ** -0.5``.
             l2_epsilon (float): l2-norm epsilon (default 1e-6). norm_epsilon (float): RMSNorm epsilon (default 1e-6).
             memory_config, compute_kernel_config, output_dtype (FLOAT32 or BFLOAT16, default BFLOAT16).
+            conv_states (list[ttnn.Tensor], optional): fused-conv mode: 4 conv history rows ``[1, 1, C]`` BFLOAT16
+                (oldest first); ``qkv`` is then the full projection row ``[1, 1, W]`` = ``[q | k | v | z | a | b]``,
+                ``beta`` is dt_bias and ``g`` is -exp(A_log) (both volume Nv). The op computes the 4-tap causal conv
+                + SiLU, beta = sigmoid(b), decay = exp(-exp(A) * softplus(a + dt_bias)) and gates the output with
+                silu(z); the conv states are shifted in place (cs0 <- cs1, cs1 <- cs2, cs2 <- cs3, cs3 <- new qkv).
+            conv_taps (list[ttnn.Tensor], optional): 4 per-channel taps (volume C) BFLOAT16, oldest history first.
+            qkvz_dim (int): column offset of the a|b block in the projection row (= 2*Nk*Dk + 2*Nv*Dv).
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",
@@ -47,7 +54,10 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("norm_epsilon") = 1e-6f,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output_dtype") = ttnn::DataType::BFLOAT16);
+        nb::arg("output_dtype") = ttnn::DataType::BFLOAT16,
+        nb::arg("conv_states") = nb::none(),
+        nb::arg("conv_taps") = nb::none(),
+        nb::arg("qkvz_dim") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail

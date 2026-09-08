@@ -278,7 +278,10 @@ class TPGatedDeltaNet:
         self._kda_dec_const = None
         # QWEN36_GDN_DECODE_FUSED=1: single fused device op for the decode recurrence + gated norm
         # (ttnn.experimental.kda.gdn_decode_step, one core per value head, state updated in place).
-        self._decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED") == "1"
+        # =1: fused recurrence + gated norm; =2: additionally the 4-tap conv, the beta/decay gates and silu(z) in the op
+        # (projection -> one op -> out-projection), conv states shifted in place by the op.
+        self._decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED") in ("1", "2")
+        self._decode_fused_conv = os.environ.get("QWEN36_GDN_DECODE_FUSED") == "2"
         self._norm_w_1d = None
         # QWEN36_KDA_RM_L1=1: ROW_MAJOR fallback tuning. The untilize itself cannot use more than 64 cores
         # for a [1,2048,2560] chunk -- UntilizeCodegen splits work over tile-rows only
@@ -1336,12 +1339,10 @@ class TPGatedDeltaNet:
         self._kda_dec_const = {"e_q": dev(e_q), "e_g": dev(e_g), "gate": dev(gate), "norm_w": dev(w_host)}
         return self._kda_dec_const
 
-    def _decode_fused_step(self, conv, z, a, b):
-        """Decode recurrence + gated RMSNorm in one device op (see _decode_fused); returns gated [1,1,value_dim] (L1)."""
-        tw, Nv, Nk, Dk, Dv = self.tw, self.Nv, self.Nk, self.Dk, self.Dv
-        _L1 = ttnn.L1_MEMORY_CONFIG
+    def _norm_weight_1d(self):
+        """tw["norm_w"] as the 1-D [Dv] bf16 tensor the fused op wants (built once)."""
         if self._norm_w_1d is None:
-            w_host = ttnn.to_torch(ttnn.get_device_tensors(tw["norm_w"])[0]).float().reshape(-1)[:Dv]
+            w_host = ttnn.to_torch(ttnn.get_device_tensors(self.tw["norm_w"])[0]).float().reshape(-1)[: self.Dv]
             self._norm_w_1d = ttnn.from_torch(
                 w_host,
                 dtype=ttnn.bfloat16,
@@ -1350,6 +1351,12 @@ class TPGatedDeltaNet:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
+        return self._norm_w_1d
+
+    def _decode_fused_step(self, conv, z, a, b):
+        """Decode recurrence + gated RMSNorm in one device op (see _decode_fused); returns gated [1,1,value_dim] (L1)."""
+        tw, Nv, Nk, Dk, Dv = self.tw, self.Nv, self.Nk, self.Dk, self.Dv
+        _L1 = ttnn.L1_MEMORY_CONFIG
         beta = ttnn.sigmoid(b, memory_config=_L1)
         ttnn.deallocate(b)
         g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
@@ -1359,7 +1366,7 @@ class TPGatedDeltaNet:
             beta,
             g,
             self.rec_state,
-            self._norm_w_1d,
+            self._norm_weight_1d(),
             Nv,
             Nk,
             Dk,
@@ -1451,6 +1458,41 @@ class TPGatedDeltaNet:
         # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
+
+        if self._decode_fused_conv and B == 1 and self._fuse_ab and getattr(self.args, "proj_1d_decode", False):
+            qkvzab = tpc.matmul_1d_decode(
+                x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
+            )
+            gated = ttnn.experimental.kda.gdn_decode_step(
+                qkvzab,
+                tw["dt_bias"],
+                tw["neg_exp_A"],
+                self.rec_state,
+                self._norm_weight_1d(),
+                Nv,
+                self.Nk,
+                Dk,
+                Dv,
+                scale=self.scale,
+                memory_config=_L1,
+                output_dtype=ttnn.bfloat16,
+                conv_states=self.conv_states,
+                conv_taps=tw["conv_taps"],
+                qkvz_dim=self.qkvz_dim_tp,
+            )
+            ttnn.deallocate(qkvzab)
+            partial = self._row_proj(gated, tw["out"])
+            ttnn.deallocate(gated)
+            partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+            return tt_all_reduce(
+                partial,
+                self.mesh,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 

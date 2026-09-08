@@ -3,6 +3,7 @@
 #pragma once
 
 #include <variant>
+#include <vector>
 
 #include "gdn_decode_step_device_operation_types.hpp"
 #include "gdn_decode_step_program_factory.hpp"
@@ -38,6 +39,9 @@ Tensor gdn_decode_step(
     float norm_epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    tt::tt_metal::DataType output_dtype);
+    tt::tt_metal::DataType output_dtype,
+    const std::vector<Tensor>& conv_states = {},
+    const std::vector<Tensor>& conv_taps = {},
+    uint32_t qkvz_dim = 0);
 
 }  // namespace ttnn::experimental::prim
