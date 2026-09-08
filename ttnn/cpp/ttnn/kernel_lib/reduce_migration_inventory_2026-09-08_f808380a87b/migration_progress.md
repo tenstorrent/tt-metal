@@ -184,3 +184,46 @@ Migrated the attention MAX/SUM calls, their five readers, and both attention fac
 Also migrated the four general H/W factories which reuse the Moreh compute/readers. The Falcon sanity test had an obsolete model configuration lookup; it now specifies the small sharded softmax configuration it exercises.
 
 Validation: native build passed. All five attention sanity selections passed (`wfu3dlkz`, with corrected SM049 in `fvr4t6tk`). Full T034/T035/T046/T047/T048 completed **677 passed, 1 upstream skip** across 678 cases: general and ULP results `5hw4h99z`, interleaved/sharded nightly results `6ow2r_al`, and final wide/partial BF16 correction `7l8rdcz7`. The host planner regression T174 passed (`w961j4ud`). All device runs used the safe wrapper. The local Python binding was refreshed from `build/ttnn/_ttnn.so` after its signature changed.
+- Output padding contract: AccumulateViaAdd now programs the reduced-output
+  pack mask after finalization and callbacks, while intermediate accumulation
+  tiles remain unmasked. The SFPU width mask clears the right faces explicitly
+  on wide tiles. Native reduce_tile retains its existing mask setup. Added an
+  exact-zero padding assertion to the existing complete helper matrix; T175
+  passed all 111 cases (`reduce-migration-f40qn6dj`). The full runner now
+  includes that matrix and the repeated-input-CB test (two definitions).
+- Interleaved layernorm readers (DF037/DF038/DF039): host auxiliary recipes
+  replace the old full/partial scaler calls. The raw compute reduction stays
+  unchanged. SM007/SM008/SM046 passed (`reduce-migration-s80bxp5k`).
+- Distributed LN/RMS pre/post all-gather (S087/S088/S090/S091,
+  DF043/DF044/DF045): factories serialize calls for the actual logical widths
+  and statistics divisors; compute uses reduce<Call>. The shared Welford reader
+  bypasses auxiliary generation and its scratch buffer is a compute self-loop.
+  All three sanity cases passed (`reduce-migration-s9pzm_81`). Full T037 passed
+  142/142 including poisoned-padding and FP32 precision cases
+  (`reduce-migration-6430fkj5`); T036 passed 99 with 102 upstream skips and T038
+  passed four (`reduce-migration-fk3d5mea`, excluding its superseded T037 result).
+- Sharded layernorm (S083/S085, DF040/DF041/DF042): host descriptors cover full
+  and tail shards and preserve the existing cross-core reduction protocol.
+  Explicitly reconfigure the BF16 epsilon operand after the now-FP32 auxiliary
+  buffer; otherwise the old implicit format assumption corrupts variance.
+  SM009/SM044/SM045 passed with temporary diagnostics removed
+  (`reduce-migration-6f4vbtkm`). Distributed uneven/two-stage boundary selection
+  T026 passed 24 cases (`reduce-migration-ugdiw030`).
+- Groupnorm (S079/S080, DF035/DF036): all three factories now provide local and
+  global calls plus auxiliary recipes. Full and tail blocks are independent
+  local reductions; existing two-dimensional group/padding masks stay in place.
+  Sharded mean reduction replaces the manual tile-times-one accumulation, and
+  removes its ones CB. Variance retains its fused square-and-accumulate to avoid
+  an additional full-group L1 allocation, followed by a planned HW reduction.
+  SM005/SM006 passed (`reduce-migration-8yd95ysb`, `reduce-migration-6f4vbtkm`).
+  T028 selected padding/configuration checks passed 113/113
+  (`reduce-migration-14wrg17z`); T029 selected interleaved/padding checks passed
+  8/8 (`reduce-migration-hn10c64d`). Native build command for all normalization
+  changes: `cmake --build build --target ttnn unit_tests_ttnn --parallel 8`.
+  Build logs: `/tmp/reduce-gn-interleaved-build-20260908.log` and
+  `/tmp/reduce-gn-sharded-build-20260908.log`.
+- Additional completed checks: T031 uneven, row-major, and two-stage sharded
+  widths passed 46/46; together with T026 this is 70/70
+  (`reduce-migration-ugdiw030`). T160/T170/T173 passed 48/48 across C++ reduction
+  smoke tests, final-only callbacks, and narrow SFPU cases
+  (`reduce-migration-5zis0zdd`).
