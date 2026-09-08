@@ -290,7 +290,11 @@ jobs:
           #   `x/comments` -> reaches the /commits/{ref}/comments sub-resource
           # Written out rather than shelling to jq so the job needs nothing extra.
           encode_ref() {
-            local s="$1" out="" i c
+            # LC_ALL=C so the loop walks bytes rather than characters: percent
+            # encoding is defined over the UTF-8 bytes, and a character-wise loop
+            # emits the code point instead, turning `café` into caf%E9 rather than
+            # caf%C3%A9. ASCII refs encode identically either way.
+            local LC_ALL=C s="$1" out="" i c
             for (( i = 0; i < ${#s}; i++ )); do
               c="${s:i:1}"
               case "$c" in
