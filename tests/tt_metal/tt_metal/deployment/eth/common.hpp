@@ -6,6 +6,11 @@
 #define _ETH_COMMON_HPP
 
 #include <chrono>
+#include <fstream>
+#include <optional>
+#include <unordered_map>
+
+#include <nlohmann/json.hpp>
 
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
 #include "impl/program/program_impl.hpp"
@@ -908,21 +913,85 @@ static std::string get_locinfo(
         get_connector(sdev, score));
 }
 
+// ETH_TEST_EXPECTED_LINKS_MAP is a JSON object path keyed by "{tray_id}:{asic_id}"
+// (same IDs as tt::tt_fabric::get_ubb_id). A global ETH_TEST_EXPECTED_LINKS scalar
+// is not applied — mixed per-chip degrees cannot be expressed as one integer.
+[[maybe_unused]]
+static std::optional<std::unordered_map<std::string, uint32_t>> load_expected_links_map(bool* load_failed) {
+    *load_failed = false;
+    const char* path = std::getenv("ETH_TEST_EXPECTED_LINKS_MAP");
+    if (path == nullptr || path[0] == '\0') {
+        return std::nullopt;
+    }
+
+    std::ifstream in(path);
+    if (!in) {
+        *load_failed = true;
+        log_critical(tt::LogTest, "failed to open ETH_TEST_EXPECTED_LINKS_MAP {}", path);
+        return std::nullopt;
+    }
+
+    nlohmann::json parsed;
+    try {
+        in >> parsed;
+    } catch (const std::exception& ex) {
+        *load_failed = true;
+        log_critical(tt::LogTest, "failed to parse ETH_TEST_EXPECTED_LINKS_MAP {}: {}", path, ex.what());
+        return std::nullopt;
+    }
+    if (!parsed.is_object()) {
+        *load_failed = true;
+        log_critical(tt::LogTest, "ETH_TEST_EXPECTED_LINKS_MAP {} is not a JSON object", path);
+        return std::nullopt;
+    }
+
+    std::unordered_map<std::string, uint32_t> expected;
+    for (auto it = parsed.begin(); it != parsed.end(); ++it) {
+        if (!it.value().is_number_unsigned() && !it.value().is_number_integer()) {
+            *load_failed = true;
+            log_critical(
+                tt::LogTest, "ETH_TEST_EXPECTED_LINKS_MAP {} has non-integer value for key {}", path, it.key());
+            return std::nullopt;
+        }
+        expected[it.key()] = it.value().get<uint32_t>();
+    }
+    log_info(tt::LogTest, "ETH_TEST_EXPECTED_LINKS_MAP {} ({} chips)", path, expected.size());
+    return expected;
+}
+
 static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
     bool pass = true;
-
-    TEST_PARAM(uint32_t, expected_links, 0, "ETH_TEST_EXPECTED_LINKS");
-
-    if (!expected_links) {
+    bool load_failed = false;
+    const auto expected_map = load_expected_links_map(&load_failed);
+    if (load_failed) {
+        return false;
+    }
+    if (!expected_map.has_value()) {
         return pass;
     }
 
+    const auto& cluster = MetalContext::instance().get_cluster();
+    umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+
     for (const auto& device : devices) {
         auto* const dev = device->get_devices()[0];
-        int numlinks = dev->get_active_ethernet_cores().size();
-        if (numlinks != expected_links) {
+        int numlinks = static_cast<int>(dev->get_active_ethernet_cores().size());
+        auto ubb = tt::tt_fabric::get_ubb_id(*cluster_desc, dev->id());
+        const std::string key = fmt::format("{}:{}", ubb.tray_id, ubb.asic_id);
+        auto it = expected_map->find(key);
+        if (it == expected_map->end()) {
             pass = false;
-
+            log_critical(
+                tt::LogTest,
+                "no expected count for ubb {} chip {} (map key {})",
+                ubb.tray_id,
+                ubb.asic_id,
+                key);
+            continue;
+        }
+        const uint32_t expected_links = it->second;
+        if (static_cast<uint32_t>(numlinks) != expected_links) {
+            pass = false;
             log_critical(
                 tt::LogTest,
                 "missing links: chip[{} ({}), {}]: expected {} links, got {}",

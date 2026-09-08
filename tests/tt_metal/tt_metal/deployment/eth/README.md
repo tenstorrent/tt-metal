@@ -29,6 +29,10 @@ This test suite is meant for testing the functionality of the Ethernet subsystem
 ## Environment variables
 
 - `ETH_TEST_TRANSFER_SIZE`: Controls the size of transfers initiated through metal
+- `ETH_TEST_EXPECTED_LINKS_MAP`: Path to a JSON object of expected trained ETH
+  channel counts per ASIC, keyed by `"{tray_id}:{asic_id}"` (same IDs as
+  `get_ubb_id`). Example: `{"1:1": 6, "1:2": 8, "4:8": 10}`. When unset, the
+  count check is skipped. A single global expected-link count is not used.
 
 ### Tests using DRAM:
 - `ETH_TEST_START_ADDR`: Starting address of DRAM to copy over
