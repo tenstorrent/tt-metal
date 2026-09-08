@@ -34,7 +34,6 @@ from pathlib import Path
 import ttnn
 from ttnn.mcast_spec import McastFamily
 
-from .toy_variance_program_artifacts import fp32_bits
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
@@ -143,13 +142,73 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
     output_page_size = output_tensor.buffer_page_size()
 
     # 1/N over the FULL width: each core's reduce already emits its share of the mean.
-    inv_N_bits = fp32_bits(1.0 / float(origin_W))
+    planner = ttnn.reduce_planner
+    # Each node sees a resident Ht x Wt_local block. Describe that local alias
+    # independently of the global width-sharded tensor's placement.
+    local_memory = ttnn.create_sharded_memory_config(
+        shape=(origin_H, Wt_local * TILE_DIM),
+        core_grid=ttnn.CoreGrid(x=1, y=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    local_spec = ttnn.TensorSpec(
+        ttnn.Shape([origin_H, Wt_local * TILE_DIM]),
+        input_tensor.dtype,
+        ttnn.TILE_LAYOUT,
+        local_memory.memory_layout,
+        local_memory.shard_spec,
+        ttnn.BufferType.L1,
+    )
+    result_spec = ttnn.TensorSpec(
+        ttnn.Shape([origin_H, 1]),
+        output_tensor.dtype,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        None,
+        ttnn.BufferType.L1,
+    )
+    hardware = planner.ReduceHardwareConfig(
+        arch=device.arch(),
+        fp32_dest_acc_en=False,
+        dst_full_sync_en=False,
+        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+    )
+    mean_plan = planner.make_reduce_plan(
+        input_spec=local_spec,
+        output_spec=result_spec,
+        reduce_math=planner.ReduceMath.SUM,
+        reduce_dim=planner.ReduceDimension.ROW,
+        scalar=1.0 / origin_W,
+        fp32_mode=planner.ReduceFp32Mode.FAST,
+        hardware=hardware,
+        max_input_cb_bytes=0,
+    )
+    variance_plan = planner.make_reduce_plan(
+        input_spec=local_spec,
+        output_spec=result_spec,
+        reduce_math=planner.ReduceMath.SUM,
+        reduce_dim=planner.ReduceDimension.ROW,
+        scalar=1.0 / origin_W,
+        fp32_mode=planner.ReduceFp32Mode.FAST,
+        hardware=hardware,
+        max_input_cb_bytes=shard_tiles * tile_bytes,
+    )
+    reduce_args = mean_plan.compile_time_args(input_cb_id=0, auxiliary_cb_id=1, output_cb_id=2)
+    reduce_args += variance_plan.compile_time_args(input_cb_id=0, auxiliary_cb_id=1, output_cb_id=2)
+    auxiliary_args = mean_plan.auxiliary_compile_time_args(auxiliary_cb_id=1)
+    assert auxiliary_args == variance_plan.auxiliary_compile_time_args(auxiliary_cb_id=1)
 
     dfbs = [
         # The resident shard itself -- zero copy. Nothing reads it into L1 because it is already
         # there; the reader only credits it (see the reader kernel's note on the producer rule).
         ttnn.dfb_spec_from_sharded_tensor(DFB_IN_SHARD, input_tensor, borrowed_from=TP_IN),
-        ttnn.DataflowBufferSpec(unique_id=DFB_SCALER, entry_size=tile_bytes, num_entries=1, data_format=ttnn.bfloat16),
+        ttnn.DataflowBufferSpec(
+            unique_id=DFB_SCALER,
+            entry_size=tile_bytes,
+            num_entries=len(mean_plan.auxiliary_tiles),
+            data_format=ttnn.bfloat16,
+        ),
         # (x - mean)^2 for the whole local shard: sub writes the block, then square consumes it, so
         # the buffer has to hold a full shard's worth rather than a streaming window.
         ttnn.DataflowBufferSpec(
@@ -203,7 +262,8 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
             ttnn.consumer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
             ttnn.producer_of(DFB_MEAN, DFB_MEAN),
         ],
-        compile_time_args={**shape_args, "scaler_bits": inv_N_bits},
+        compile_time_args=shape_args,
+        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=auxiliary_args),
         runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 
@@ -223,7 +283,12 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
             ttnn.consumer_of(DFB_MEAN, DFB_MEAN),
             ttnn.producer_of(DFB_OUT, DFB_OUT),
         ],
-        compile_time_args={**shape_args, "compute_std_dev": int(std_dev)},
+        compile_time_args={
+            **shape_args,
+            "compute_std_dev": int(std_dev),
+            "auxiliary_tiles": len(mean_plan.auxiliary_tiles),
+        },
+        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=reduce_args),
         runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 

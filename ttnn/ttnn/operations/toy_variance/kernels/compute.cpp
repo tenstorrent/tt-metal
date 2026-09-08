@@ -11,9 +11,8 @@
 //   Pass 2: dfb::variance = mean((x - mean)^2)   -- per-block: sub<COL> -> square_in_place ->
 //                                                  accumulating reduce
 //
-// Both passes use the standard accumulate pattern: one reduce<> call per block with
-// Accumulate::at(dfb_acc, b), which reloads the running accumulator for b > 0. The partial scaler
-// (and, for std-dev, the sqrt finalizer) are routed to the LAST block only.
+// Each pass uses a host-planned seed/repeat/final sequence. The auxiliary recipe
+// carries the final partial tile, and callbacks run only after final accumulation.
 //
 // compute_std_dev: when set, sqrt is applied as the post_reduce_op on the pass-2 last-block reduce,
 // so sqrt runs in DST after the final accumulation, before pack -- no extra pass over the data, and
@@ -35,36 +34,49 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace ckl = compute_kernel_lib;
+
+template <uint32_t Input, uint32_t Output, typename PostOp>
+ALWI void reduce_block(uint32_t block, PostOp post_op) {
+    constexpr uint32_t count = get_compile_time_arg_val(0);
+    using First = ttnn::kernel_lib::
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, 0>, Input, dfb::scaler, Output, dfb::reduce_accumulator>;
+    using Middle = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallAtT<1, (count > 1 ? 1 : 0)>,
+        Input,
+        dfb::scaler,
+        Output,
+        dfb::reduce_accumulator>;
+    using Last = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallAtT<1, count - 1>,
+        Input,
+        dfb::scaler,
+        Output,
+        dfb::reduce_accumulator>;
+    if (block + 1 == get_arg(args::num_blocks)) {
+        ckl::reduce<Last>(post_op);
+    } else if (block == 0) {
+        ckl::reduce<First>();
+    } else {
+        ckl::reduce<Middle>();
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t BLOCK_SIZE = get_arg(args::block_size);
     constexpr uint32_t NUM_BLOCKS = get_arg(args::num_blocks);
     constexpr bool COMPUTE_STD_DEV = get_arg(args::compute_std_dev) != 0;
-    constexpr bool HAS_PARTIAL_W = get_arg(args::has_partial_w) != 0;
 
     compute_kernel_hw_startup(dfb::in_tiles, dfb::scaler, dfb::out_tiles);
 
-    constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
     constexpr auto bin_block_shape = ckl::IterationShape::of(Ht, BLOCK_SIZE);
 
-    // For non-tile-aligned W, select partial-scaler handling on the last W tile. Only the LAST block
-    // has the partial edge, so Scaler is passed on the last block and None on every earlier one.
-    constexpr auto partial_mode = HAS_PARTIAL_W ? ckl::ReducePartialMode::Scaler : ckl::ReducePartialMode::None;
-
     // ---------- Pass 1: streaming mean ----------
-    // Scaler = 1/N (with partial-scaler-zeroed padded positions) converts SUM into mean. One
-    // accumulating reduce<> per block into dfb::mean.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
-        const bool is_last = (b + 1 == NUM_BLOCKS);
-        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::in_tiles, dfb::scaler, dfb::mean>(
-            reduce_block_shape,
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(dfb::mean, b),
-            ckl::NoOp{},
-            is_last ? partial_mode : ckl::ReducePartialMode::None);
+        reduce_block<dfb::in_tiles, dfb::mean>(b, ckl::NoOp{});
     }
 
     // ---------- Pass 2: streaming variance via (x - mean)^2 ----------
@@ -88,40 +100,12 @@ void kernel_main() {
 
         ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(bin_block_shape);
 
-        const bool is_last = (b + 1 == NUM_BLOCKS);
-        const auto block_partial_mode = is_last ? partial_mode : ckl::ReducePartialMode::None;
-
-        if constexpr (COMPUTE_STD_DEV) {
-            if (is_last) {
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    dfb::centered_sq,
-                    dfb::scaler,
-                    dfb::variance>(
-                    reduce_block_shape,
-                    ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(dfb::variance, b),
-                    [](uint32_t dst) {
-                        sqrt_tile_init();
-                        sqrt_tile(dst);
-                    },
-                    block_partial_mode);
-                continue;
+        reduce_block<dfb::centered_sq, dfb::variance>(b, [](uint32_t dst) {
+            if constexpr (COMPUTE_STD_DEV) {
+                sqrt_tile_init();
+                sqrt_tile(dst);
             }
-        }
-
-        ckl::reduce<
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dfb::centered_sq,
-            dfb::scaler,
-            dfb::variance>(
-            reduce_block_shape,
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(dfb::variance, b),
-            ckl::NoOp{},
-            block_partial_mode);
+        });
     }
 
     DataflowBuffer dfb_mean(dfb::mean);
@@ -135,5 +119,5 @@ void kernel_main() {
     // dfb::variance and reserve/push on dfb::out_tiles).
     ckl::copy<ckl::input(dfb::variance), ckl::output(dfb::out_tiles)>(ckl::IterationShape::tiles(Ht));
 
-    dfb_scaler.pop_front(HAS_PARTIAL_W ? 2 : 1);
+    dfb_scaler.pop_front(get_arg(args::auxiliary_tiles));
 }

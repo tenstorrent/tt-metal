@@ -32,6 +32,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -104,19 +105,18 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in_shard, dfb::scaler, dfb::partial);
 
-    constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(Ht, Wt_local, /*NC=*/1);
+    using MeanArgs = ttnn::kernel_lib::ReduceCallArgs<0>;
+    using MeanCall = ttnn::kernel_lib::BoundReduceCallArgs<MeanArgs, dfb::in_shard, dfb::scaler, dfb::partial>;
+    using VarianceCall = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallArgs<MeanArgs::next_compile_time_args_offset()>,
+        dfb::centered_sq,
+        dfb::scaler,
+        dfb::partial>;
     constexpr auto block_shape = ckl::IterationShape::of(Ht, Wt_local);
 
     // ---------- round 1: this core's share of the mean ----------
-    // WaitUpfrontNoPop: the shard is resident and gets read again in round 2, so the reduce indexes
-    // into it rather than consuming it.
-    ckl::reduce<
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dfb::in_shard,
-        dfb::scaler,
-        dfb::partial,
-        ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
+    DataflowBuffer(dfb::in_shard).wait_front(shard_tiles);
+    ckl::reduce<MeanCall>();
 
     if (is_root) {
         combine_blocks<dfb::gather_mean, dfb::mean_src>(num_cores, Ht, [](uint32_t) {});
@@ -133,8 +133,7 @@ void kernel_main() {
 
     ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(block_shape);
 
-    ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::centered_sq, dfb::scaler, dfb::partial>(
-        reduce_shape);
+    ckl::reduce<VarianceCall>();
 
     if (is_root) {
         if constexpr (COMPUTE_STD_DEV) {
@@ -155,5 +154,5 @@ void kernel_main() {
     DataflowBuffer dfb_scaler(dfb::scaler);
     dfb_in.pop_front(shard_tiles);
     dfb_mean.pop_front(Ht);
-    dfb_scaler.pop_front(1);
+    dfb_scaler.pop_front(get_arg(args::auxiliary_tiles));
 }

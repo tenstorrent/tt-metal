@@ -245,3 +245,9 @@ Validation: native build passed (`/tmp/reduce-rms-allgather-build-v2-20260908.lo
 All helper-based inline examples now serialize host calls and auxiliary recipes. The examples retain their explicitly compared manual/FPU/SFPU benchmark variants. Compute fusion describes the aliased sharded input without consuming it and attaches the reciprocal callback to the planned reduction.
 
 Validation: SM055/SM056/SM057 passed (`reduce-migration-96kgms4k`). Full T074/T075/T076 passed all 7 collected cases, including device performance variants (`reduce-migration-n4ve55eh`). These Python/inline-kernel changes required no native build; device JIT compilation ran through the safe wrapper.
+
+## Toy variance and Python Metal2 descriptors
+
+The interleaved variance implementation uses a compressed planned seed/repeat/final sequence with a separate accumulator buffer and a final-only sqrt callback. The sharded implementation describes its local aliased input and the centered-square buffer as independent planned reductions. Both readers use host auxiliary recipes. Exposed the existing KernelAdvancedOptions.compile_time_varargs field to Python so ProgramSpec factories can serialize descriptors.
+
+Validation: native build passed (`/tmp/reduce-toy-variance-build-20260908.log`); SM058 and SM059 passed (`reduce-migration-9dm1kocp`). Full T079 remains scheduled to check wider blocks and BF16 accumulation.

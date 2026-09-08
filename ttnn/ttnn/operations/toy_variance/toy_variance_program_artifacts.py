@@ -19,7 +19,6 @@ surfaces together, and it is set only for ProgramSpec-created kernels. See
 `.claude/PROGRAMSPEC_MIGRATION_PLAYBOOK.md` §1.
 """
 
-import struct
 from pathlib import Path
 
 import ttnn
@@ -33,6 +32,7 @@ DFB_SCALER = "scaler"
 DFB_MEAN = "mean"
 DFB_VARIANCE = "variance"
 DFB_OUT = "out_tiles"
+DFB_ACCUMULATOR = "reduce_accumulator"
 
 K_READER = "reader"
 K_COMPUTE = "compute"
@@ -54,10 +54,6 @@ def pick_block_size(Wt: int, requested: int | None) -> int:
         if Wt % candidate == 0:
             return candidate
     return 1
-
-
-def fp32_bits(value: float) -> int:
-    return struct.unpack("I", struct.pack("f", value))[0]
 
 
 def create_program_artifacts(
@@ -86,16 +82,12 @@ def create_program_artifacts(
     Wt = (origin_W + TILE_DIM - 1) // TILE_DIM
     Ht = (origin_H + TILE_DIM - 1) // TILE_DIM
 
-    partial_w = origin_W % TILE_DIM
-    has_partial_w = partial_w != 0
-
     BLOCK_SIZE = pick_block_size(Wt, block_size)
     NUM_BLOCKS = Wt // BLOCK_SIZE
 
     # Variance reduces over the *real* W (= origin_W). With scaler = 1/N built into the reduce, SUM
     # produces means directly. The partial scaler tile zeros out the contributions of the
-    # (TILE_DIM - partial_w) padded positions in the last W-tile, so origin_W is the correct N.
-    inv_N_bits = fp32_bits(1.0 / float(origin_W))
+    # padded positions in the last W-tile, so origin_W is the correct N.
 
     input_page_size = input_tensor.buffer_page_size()
     output_page_size = output_tensor.buffer_page_size()
@@ -105,6 +97,51 @@ def create_program_artifacts(
 
     tiles_per_block = Ht * BLOCK_SIZE
     scaler_tile_bytes = ttnn.tile_size(ttnn.bfloat16)
+
+    planner = ttnn.reduce_planner
+
+    def reduce_spec(width, dtype):
+        return ttnn.TensorSpec(
+            ttnn.Shape([Ht * TILE_DIM, width]),
+            dtype,
+            ttnn.TILE_LAYOUT,
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+            None,
+            ttnn.BufferType.L1,
+        )
+
+    configs = []
+    call_count = min(NUM_BLOCKS, 3)
+    for i in range(call_count):
+        width = origin_W - (NUM_BLOCKS - 1) * BLOCK_SIZE * TILE_DIM if i + 1 == call_count else BLOCK_SIZE * TILE_DIM
+        configs.append(
+            (
+                0,
+                planner.ReduceCallConfig(
+                    input_spec=reduce_spec(width, input_tensor.dtype),
+                    output_spec=reduce_spec(1, output_tensor.dtype),
+                    reduce_math=planner.ReduceMath.SUM,
+                    reduce_dim=planner.ReduceDimension.ROW,
+                    scalar=1.0 / origin_W,
+                    fp32_mode=planner.ReduceFp32Mode.FAST,
+                    max_input_cb_bytes=BLOCK_SIZE * input_page_size,
+                ),
+            )
+        )
+    sequence = planner.make_reduce_sequence_plan(
+        reductions=configs,
+        cb_ids=planner.ReduceSequenceCbIds(auxiliary_cb_id=1, accumulator_cb_id=3, output_cb_id=2),
+        hardware=planner.ReduceHardwareConfig(
+            arch=input_tensor.device().arch(),
+            fp32_dest_acc_en=False,
+            dst_full_sync_en=False,
+            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        ),
+    )
+    reduce_args = []
+    sequence.append_to(reduce_args)
+    auxiliary_args = []
+    sequence.auxiliary.append_to(auxiliary_args)
 
     dfbs = [
         # in_tiles: per-tile streaming for both passes. Double-buffer one block of work for
@@ -125,12 +162,18 @@ def create_program_artifacts(
             num_entries=2 * tiles_per_block,
             data_format=input_tensor.dtype,
         ),
-        # scaler: 2 tiles when has_partial_w (full + partial scaler), else 1.
+        # The host recipe includes any full/tail scalars or masking tiles.
         ttnn.DataflowBufferSpec(
             unique_id=DFB_SCALER,
             entry_size=scaler_tile_bytes,
-            num_entries=2 if has_partial_w else 1,
+            num_entries=len(sequence.auxiliary.tiles),
             data_format=ttnn.bfloat16,
+        ),
+        ttnn.DataflowBufferSpec(
+            unique_id=DFB_ACCUMULATOR,
+            entry_size=output_page_size,
+            num_entries=max(2 * Ht, 2),
+            data_format=output_tensor.dtype,
         ),
         # mean: persistent across all of pass 2 (WaitUpfrontNoPop). After pass 1 holds Ht tiles;
         # capacity must be >= Ht.
@@ -140,8 +183,7 @@ def create_program_artifacts(
             num_entries=max(2 * Ht, 2),
             data_format=output_tensor.dtype,
         ),
-        # variance: streaming reduce accumulator for pass 2. Pop-1/push-1 per ht per block, so
-        # capacity >= Ht. 2x for safety.
+        # variance: final output of pass 2; intermediate blocks use reduce_accumulator.
         ttnn.DataflowBufferSpec(
             unique_id=DFB_VARIANCE,
             entry_size=output_page_size,
@@ -161,7 +203,6 @@ def create_program_artifacts(
         "Wt": Wt,
         "block_size": BLOCK_SIZE,
         "num_blocks": NUM_BLOCKS,
-        "has_partial_w": int(has_partial_w),
     }
 
     reader = ttnn.KernelSpec(
@@ -175,10 +216,9 @@ def create_program_artifacts(
         tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
         compile_time_args={
             **shape_args,
-            "scaler_bits": inv_N_bits,
-            # Valid positions in the last W-tile; TILE_DIM when W is tile-aligned.
-            "partial_w": partial_w if has_partial_w else TILE_DIM,
+            "auxiliary_tiles": len(sequence.auxiliary.tiles),
         },
+        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=auxiliary_args),
     )
 
     compute = ttnn.KernelSpec(
@@ -188,6 +228,8 @@ def create_program_artifacts(
         dfb_bindings=[
             ttnn.consumer_of(DFB_IN, DFB_IN),
             ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
+            ttnn.producer_of(DFB_ACCUMULATOR, DFB_ACCUMULATOR),
+            ttnn.consumer_of(DFB_ACCUMULATOR, DFB_ACCUMULATOR),
             ttnn.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
             ttnn.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
             ttnn.producer_of(DFB_MEAN, DFB_MEAN),
@@ -196,7 +238,12 @@ def create_program_artifacts(
             ttnn.consumer_of(DFB_VARIANCE, DFB_VARIANCE),
             ttnn.producer_of(DFB_OUT, DFB_OUT),
         ],
-        compile_time_args={**shape_args, "compute_std_dev": int(std_dev)},
+        compile_time_args={
+            **shape_args,
+            "compute_std_dev": int(std_dev),
+            "auxiliary_tiles": len(sequence.auxiliary.tiles),
+        },
+        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=reduce_args),
     )
 
     writer = ttnn.KernelSpec(

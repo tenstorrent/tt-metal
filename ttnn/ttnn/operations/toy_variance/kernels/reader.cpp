@@ -34,29 +34,14 @@ void kernel_main() {
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t BLOCK_SIZE = get_arg(args::block_size);
     constexpr uint32_t NUM_BLOCKS = get_arg(args::num_blocks);
-    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);  // 1/N as fp32 bits
-    constexpr bool HAS_PARTIAL_W = get_arg(args::has_partial_w) != 0;
-    constexpr uint32_t partial_w = get_arg(args::partial_w);  // valid positions in last W-tile
 
     Noc noc;
     DataflowBuffer dfb_in(dfb::in_tiles);
     const auto acc_in = TensorAccessor(tensor::in);
     const uint32_t tile_bytes = dfb_in.get_tile_size();
 
-    // Scaler = 1/N -> SUM reduce produces means directly. For non-tile-aligned W, also emit a
-    // partial scaler tile that zeros out positions beyond partial_w; the compute kernel selects it
-    // for the last W-tile of the last block via ReducePartialMode::Scaler.
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    if constexpr (HAS_PARTIAL_W) {
-        dataflow_kernel_lib::prepare_partial_reduce_scalers<
-            dfb::scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            partial_w>(scaler_f);
-    } else {
-        dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scaler_f);
-    }
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     for (uint32_t pass = 0; pass < 2; ++pass) {
         for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
