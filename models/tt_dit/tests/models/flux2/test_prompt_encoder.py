@@ -17,14 +17,11 @@ from ....utils.check import assert_quality
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        # The mesh a 4-chip Blackhole box (bh_quietbox_2) runs; tp_axis=1 gives a factor of 2.
         pytest.param((2, 2), id="2x2"),
         pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
 )
-# require_exact_physical_num_devices: the mesh rows self-skip unless they match the machine
-# exactly -- 2x2 on a 4-chip QuietBox, 4x8 on a galaxy.
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
@@ -73,14 +70,11 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        # The mesh a 4-chip Blackhole box (bh_quietbox_2) runs; tp_axis=1 gives a factor of 2.
         pytest.param((2, 2), id="2x2"),
         pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
 )
-# require_exact_physical_num_devices: the mesh rows self-skip unless they match the machine
-# exactly -- 2x2 on a 4-chip QuietBox, 4x8 on a galaxy.
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],

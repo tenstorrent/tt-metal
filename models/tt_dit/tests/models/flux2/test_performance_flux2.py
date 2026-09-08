@@ -16,10 +16,6 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
 
-# Each mesh row self-skips unless it matches the machine exactly, so one command selects the
-# right config per SKU instead of every leg pinning mesh ids by hand: bh_qb on a 4-chip
-# QuietBox, bh_lb on a LoudBox, the bh_glx rows on a galaxy. Derived dicts rather than mutating
-# the shared ones, which test_pipeline_flux2 also uses.
 _REQ_EXACT = {"require_exact_physical_num_devices": True}
 line_params_flux2_perf = {**line_params_flux2, **_REQ_EXACT}
 line_params_8k_flux2_perf = {**line_params_8k_flux2, **_REQ_EXACT}
