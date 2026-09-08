@@ -38,8 +38,8 @@ def assert_quality(torch_output, tt_output):
 def _resolve_fused_activation(activation):
     if activation is None:
         return None
-    # Resolve through the production map so the device tests exercise the exact same fused-activation
-    # variants as models.tt_dit.layers.linear; a private copy here silently under-tests the op.
+    # Resolve through the production map (single source of truth) so a drifted private copy can't
+    # silently under-test the op. An unknown key surfaces as KeyError from the production map.
     return _FUSED_GELU_VARIANTS[activation]
 
 
@@ -50,18 +50,22 @@ def _apply_torch_activation(torch_output, activation):
         return torch.nn.functional.gelu(torch_output)
     if activation == "gelu_tanh":
         return torch.nn.functional.gelu(torch_output, approximate="tanh")
+    # Narrower than _resolve_fused_activation on purpose: gelu_fast is a lossy LUT approximation with
+    # no exact torch oracle at this suite's PCC bar, so exercising it on-device needs a bespoke
+    # reference rather than F.gelu.
     raise AssertionError(f"Unsupported activation: {activation}")
 
 
 def test_fused_activation_helper_matches_production_variants():
-    # Lock the production fused-activation contract and that the helper resolves through it, so the
-    # device tests exercise the real mapping; gelu_fast: (GELU, True) was previously dropped.
+    # The helper resolves through the production _FUSED_GELU_VARIANTS map (single source of truth).
+    # Lock the map's key set and values so a dropped/renamed variant fails here, and check one
+    # delegated lookup for the gelu_fast entry the old private copy omitted.
+    assert set(_FUSED_GELU_VARIANTS) == {"gelu", "gelu_fast", "gelu_tanh"}
     assert _FUSED_GELU_VARIANTS["gelu"] == (ttnn.UnaryOpType.GELU, False)
     assert _FUSED_GELU_VARIANTS["gelu_fast"] == (ttnn.UnaryOpType.GELU, True)
     assert _FUSED_GELU_VARIANTS["gelu_tanh"] == ttnn.UnaryOpType.GELU_TANH
     assert _resolve_fused_activation(None) is None
-    for name, expected in _FUSED_GELU_VARIANTS.items():
-        assert _resolve_fused_activation(name) == expected
+    assert _resolve_fused_activation("gelu_fast") == (ttnn.UnaryOpType.GELU, True)
 
 
 def run_test_linear_impl(
