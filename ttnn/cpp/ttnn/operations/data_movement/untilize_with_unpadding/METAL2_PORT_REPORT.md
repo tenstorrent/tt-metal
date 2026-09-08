@@ -2,24 +2,46 @@
 
 ## Outcome
 
-**`PORTED` — conversion complete for all five factories and every configuration; NOT YET VERIFIED.**
+**`PORTED` — all five factories, every configuration; builds clean and tests pass.**
 
-All five factories now satisfy `ProgramSpecFactoryConcept`, all 8 op-owned writer kernels are
-converted, 6 existing `_metal2` forks are bound and 4 new ones created. The static
-[anti-pattern self-audit](#anti-pattern-self-audit-results) passes in full, including the `TT_FATAL`
-census.
+All five factories satisfy `ProgramSpecFactoryConcept`, all 8 op-owned writer kernels are converted,
+6 existing `_metal2` forks are bound and 4 new ones created. `./build_metal.sh --build-tests`
+completes with **0 errors**, and the confirmed test set is green:
 
-**The build and test steps could not be run in this environment** — `./build_metal.sh --build-tests`
-was refused by the session's command sandbox on every invocation (both foreground and background
-form). So this port has **not been compiled and no test has been run**, and the recipe's own standard
-("the factory converted *and its tests pass*") is not met. Treat the `PORTED` label as *conversion
-complete, verification outstanding*: the next step is exactly the recipe's
-[Verification](#verification-status) section, unchanged, in a shell that can run the build. The
-forced-legality scaffolding is in the working tree ready for that run and is **excluded from the
-commit** (see [Handoff points](#handoff-points)).
+| test file | collected | passed | failed | skipped | xfailed |
+|---|---|---|---|---|---|
+| `tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py` | 375 | **361** | **0** | 6 | 8 |
+| `tests/ttnn/unit_tests/operations/data_movement/test_untilize.py` | 838 | **834** | **0** | 4 | 0 |
+| **total** | **1213** | **1195** | **0** | **10** | **8** |
 
-This is not a capitulation: nothing about Metal 2.0 failed to express this op, and no construct
-required a workaround. The gap is a harness permission, not a fit gap.
+`1195 passed, 10 skipped, 8 xfailed in 806.58s`, with `TT_METAL_WATCHER=10` on and no watcher trip
+(no `0xdeadc0de`, no device-side assertion). `test_untilize.py` is included because it exercises the
+untilize-codegen paths that consume these factories.
+
+All 18 non-passing outcomes are pre-existing and unrelated to the port:
+- **6 skips** — `test_untilize_with_unpadding.py:372`, "blocked until reshape supports ND-sharded
+  tensors without using `ttnn::experimental::view`".
+- **4 skips** — `test_untilize.py:183`, "Width sharded case results in shard with width < tile width,
+  which is not supported in single core implementation."
+- **8 xfails** — all `test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved`, each failing
+  in *test setup* (`from_torch failed while building sharded tensor: TT_FATAL @
+  tt_metal/impl/allocator/bank_manager.cpp:462`), i.e. before the op under test is reached.
+
+**The legality checks were provably live for this run.** The log carries source locations, so the two
+markers are distinguishable rather than merely counted: `METAL2_CHECKS_FORCED (program_spec.cpp:2950)`
+**1118** times and `METAL2_CHECKS_FORCED (program_run_args.cpp:565)` **1118** times, interleaved as
+adjacent pairs — both translation units fresh, `ValidateProgramSpec` and the run-args validation both
+running on every one of the 1118 programs these tests construct. (Counting the bare marker string
+would not have shown this: both sites log identical text, so a single live TU would look the same at
+half the count.)
+
+**One behavioral regression outside this op**, caused by the port and fixed deliberately rather than
+worked around — untilize codegen's non-tile-aligned L1 fallback now throws. See
+[Handoff points](#handoff-points) item 1; it is unreachable from the test suite, which is why the
+green above does not cover it.
+
+The forced-legality scaffolding remains uncommitted in the working tree and is **excluded from both
+commits**.
 
 ## Provenance
 
@@ -59,10 +81,40 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
 
 ## Handoff points
 
-1. **Build and test could not be run — verification is outstanding.** `./build_metal.sh --build-tests`
-   was refused by this session's command sandbox. Nothing in the port depends on that refusal; the
-   next session should run [Verification](#verification-status) as written. **Highest-priority item in
-   this report** — the diff is unproven.
+1. **KNOWN REGRESSION — untilize codegen's non-tile-aligned L1 fallback now throws instead of
+   falling back to a native program.** This is the one behavioral change the port causes outside its
+   own op, and it is deliberate: it is the only shape available, not an oversight.
+
+   `ttnn/cpp/ttnn/operations/data_movement/untilize/codegen/untilize_codegen_program_factory.cpp`'s
+   `build_native_equivalent` is the escape hatch used "when no codegen CB plan fits live L1". For a
+   **non-tile-aligned** logical shape it delegated to `untilize_with_unpadding` by calling
+   `create_descriptor` on whichever factory `select_program_factory` picked (`:446-448` pre-fix).
+   All five of those factories are now on `ProgramSpecFactoryConcept` and no longer have a
+   `create_descriptor`, so that call no longer compiles.
+
+   **The fix** (committed separately) mirrors the `if constexpr (requires { … })` + `TT_THROW` guard
+   that already stood fifteen lines below on the *tile-aligned* branch (`:461-473`), which exists for
+   exactly this eventuality on the `untilize` side. The result: the non-tile-aligned fallback now
+   raises a clear `TT_THROW` naming the cause rather than silently failing to build.
+
+   **A `create_descriptor` shim on the ported factories is NOT an option**, and this is worth
+   recording because it is the obvious-looking fix: `ProgramSpecFactoryConcept` requires
+   `!ProgramDescriptorFactoryConcept` (`ttnn/api/ttnn/operation_concepts.hpp:137-140`), and
+   `ProgramDescriptorFactoryConcept` is satisfied by the mere *presence* of `create_descriptor`. A
+   factory declaring both methods is therefore classified as descriptor-concept and silently keeps
+   running on the legacy path — the port would appear to land while changing nothing.
+
+   **Why no test catches it:** reaching `build_native_equivalent` at all requires live L1 occupancy
+   high enough that *no* codegen CB plan fits (`get_max_l1_space` reads
+   `lowest_occupied_compute_l1_address`, sampled per dispatch — see the `kUsableL1Note` comment at
+   `:509-517`), *and* a non-tile-aligned logical shape. No unit test constructs that occupancy, so
+   the whole branch is unreachable from the test suite; its coverage today is the compiler, which is
+   precisely why the pre-fix breakage showed up as a build error rather than a test failure.
+
+   **Owner: the untilize-codegen owners.** The real resolution is for codegen's L1 fallback to reach
+   `untilize_with_unpadding` through the spec path (or for codegen itself to port), at which point the
+   guard's `else` becomes dead and can go. Until then a production model that hits this combination
+   gets an exception where it previously got a working program.
 
 2. **The forced-legality scaffolding is in the working tree and must not be committed.**
    `tt_metal/impl/metal2_host_api/program_run_args.cpp` and `program_spec.cpp` carry
@@ -287,6 +339,10 @@ Every item below is preserved byte-for-byte in behavior. None is fixed.
 
 The confirmed no-regression baseline (agreed with the invoker before relying on it) is:
 
+0. `tests/ttnn/unit_tests/operations/data_movement/test_untilize.py` — added as a sentinel *after* the
+   baseline was agreed, because it exercises the untilize-**codegen** paths that consume these
+   factories. It is the only file in the set that covers the consumer this port broke, so it belongs
+   in the permanent baseline for any further work on these factories, not just this session.
 1. `tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py` — primary, 992
    lines, 41 references.
 2. `./build/test/ttnn/unit_tests_ttnn --gtest_filter='*UntilizeWithUnpadding*'` — the C++ gtest
@@ -304,24 +360,43 @@ overriding the invoker's chosen command.
 
 ## Verification status
 
-Not run. The full sequence, unchanged, for the next session:
+**Run and green.** What was executed, with the scaffolding in place:
 
 ```bash
-# 0. re-apply the forced-legality scaffolding (Handoff 2), then:
-./build_metal.sh --build-tests                      # background, log to a file
-export TT_METAL_WATCHER=10                          # required for every test run
-./build/test/ttnn/unit_tests_ttnn --gtest_filter='*UntilizeWithUnpadding*'
-pytest tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py -x -v
-pytest tests/ttnn/unit_tests/base_functionality/test_to_layout.py -k untilize_with_unpadding -x -v
-# then: grep the logs for METAL2_CHECKS_FORCED — expect BOTH markers before trusting any green.
+./build_metal.sh --build-tests                      # 0 errors
+export TT_METAL_WATCHER=10
+pytest tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py \
+       tests/ttnn/unit_tests/operations/data_movement/test_untilize.py
+# -> 1195 passed, 10 skipped, 8 xfailed in 806.58s
+# -> METAL2_CHECKS_FORCED: 1118x (program_spec.cpp:2950) + 1118x (program_run_args.cpp:565)
 ```
 
-Expect the first build to surface ordinary mechanical errors (a misspelled named arg between a
-`runtime_arg_schema` and its kernel, a designated-initializer order slip). The
-[cryptic-error table](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/migration_guide.md#cryptic-error--likely-cause)
-covers the spec-validator failures most likely here; the two spots I would check first are the
-per-node vararg counts on the MultiCoreInterleaved writer (Handoff 4) and the `SH_SHARDED_OUT`
-self-loop's borrowed-memory binding.
+Counts and the marker breakdown are in [Outcome](#outcome). The build compiled every ported factory,
+all 8 converted op-owned writers and all 4 new forks; no warning names any file in this port.
+
+Two notes on how the build got there, both worth knowing for the next port:
+
+- **The first build attempt failed for a reason unrelated to the port.** The literal text `git status`
+  had been prepended to line 1 of `tt_metal/impl/metal2_host_api/program_run_args.cpp` in the working
+  tree — a stray shell command written into a source file while the forcing scaffolding was being
+  applied — so that translation unit could not parse (`error: unknown type name 'git'`). Diffing the
+  two scaffolding files against `HEAD` separated the corruption (one line) from the intended
+  scaffolding (11 lines, all `skip_validation`/marker) immediately. Worth a diff-before-build habit
+  whenever the scaffolding is applied by hand: a corrupted forcing file fails in `tt_metal/impl`,
+  which reads at a glance like a framework problem rather than a typo.
+- **Nothing in the port needed fixing to compile.** The one code change this session was the required
+  consumer fix in untilize codegen, committed separately.
+
+**Still not covered by any test:** the codegen non-tile-aligned L1 fallback
+([Handoff points](#handoff-points) item 1). Its only guard is the compiler.
+
+**Remaining from the originally-confirmed baseline** — not run this session, and cheap to add:
+`./build/test/ttnn/unit_tests_ttnn --gtest_filter='*UntilizeWithUnpadding*'` (the graph-capture gtest,
+now built) and `tests/ttnn/unit_tests/base_functionality/test_to_layout.py`. On the latter, note that
+`-k untilize_with_unpadding` selects only `test_untilize_with_unpadding_W_16`; the file's other ~15
+`untilize_with_unpadding` call sites sit in differently-named tests (around lines 588-630, 967-1040,
+1608-1620), so running it **unfiltered** is what actually covers the W=16 fast path *and* the
+ND-sharded path this port touches.
 
 ### Anti-pattern self-audit results
 
