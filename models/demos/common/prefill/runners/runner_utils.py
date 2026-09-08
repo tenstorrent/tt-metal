@@ -118,6 +118,21 @@ def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
 
 TILE_HEIGHT = 32
 
+MTP_PAD_TOKEN_ID = 0xFFFFFFFF
+"""Id written into a lookahead slot whose global position is past the request's real end.
+
+THE sentinel every side of the MTP transport agrees on -- the producer writes it, the runner scans
+for it to decide how many levels have their token provided, and the tests build to it. Before this
+existed the producer padded with 1, the tests with 0 and the runtime warmup with 0, none of which
+could be told apart from a real token.
+
+``max uint32``, deliberately: it is outside every vocabulary (GLM-5.2's is 154880), so no prompt can
+contain it and a scan can never mistake content for padding. The price is that it MUST NOT reach
+``ttnn.embedding`` -- it would index the table out of bounds. The runner clamps the id tensor before
+building the union (``tt_prefill_runtime._mtp_prepare_input``); the clamped rows are exactly the ones
+the generation keep-mask clears and the patches overwrite, so the substituted value never survives.
+"""
+
 MTP_TOKEN_ALIGN = TILE_HEIGHT
 """Granularity of the MTP token block, in ids. Three constraints meet here, and 32 is the smallest
 number satisfying all of them:

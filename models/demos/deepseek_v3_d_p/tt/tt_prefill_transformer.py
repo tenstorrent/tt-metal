@@ -474,7 +474,7 @@ class TtPrefillTransformer(LightweightModule):
         mtp_union=None,
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
-        is_last_chunk: bool = False,
+        provided_levels: int = 0,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -516,9 +516,11 @@ class TtPrefillTransformer(LightweightModule):
                         socket, are embedded on the first rank and reach this rank inside the
                         activation. None disables MTP for this chunk. Requires an mtp_predictor; the K
                         levels run after the trunk tail, off model.norm's output.
-            is_last_chunk: this chunk ends the request, so the K positions its MTP windows read past
-                        `actual_end` have no ids in the prompt and are generated on device instead —
-                        argmax of each level's own LM head, embedded straight back into the union.
+            provided_levels: how many of the K MTP levels already have their lookahead token in the
+                        ids that arrived. Levels `[provided_levels, K)` have none at `actual_end + k`
+                        and generate one on device instead — argmax of that level's own LM head,
+                        embedded straight back into the union. `K` = fully interior chunk, `0` = no
+                        successor at all. Derived by the runner from the pad sentinel, never declared.
                         Only the producer knows this boundary; see CHUNK_METADATA_SIZE_BYTES.
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens). A tap rather
                         than an extra return value, so the trunk's return arity is unchanged whether or
@@ -706,7 +708,7 @@ class TtPrefillTransformer(LightweightModule):
                 actual_isl,
                 zero_position_0=(actual_start == 0),
                 union=mtp_union,
-                is_last_chunk=is_last_chunk,
+                provided_levels=provided_levels,
                 cache_user_id=cache_user_id,
                 actual_start=actual_start,
                 actual_end=actual_end,
@@ -832,13 +834,21 @@ class TtPrefillTransformer(LightweightModule):
         ttnn.deallocate(emb)
         return gathered
 
-    def _mtp_build_generation(self, union, actual_isl: int, actual_start: int, actual_end: int):
-        """The last chunk's :class:`MTPDeviceGeneration`: one keep mask and ``K`` one-hot selectors.
+    def _mtp_build_generation(
+        self, union, actual_isl: int, actual_start: int, actual_end: int, *, provided_levels: int = 0
+    ):
+        """The :class:`MTPDeviceGeneration` for levels ``[provided_levels, K)``: one keep mask and one
+        one-hot selector per GENERATED level.
 
         All of it is host-known before any level runs. The generated token always comes off the same
         row -- the last real one -- so ``(device_id, token_offset)`` is the same at every level, and
         the only thing that changes with ``k`` is WHERE the result is written: global position
         ``actual_end + k``.
+
+        The level range is load-bearing in the keep mask. A level whose token the socket DELIVERED
+        already has the right embedding sitting in the union; clearing its row would destroy it and
+        nothing would write it back, because no selector targets a provided level. ``selects`` is
+        indexed by absolute level and holds ``None`` below ``provided_levels``.
         """
         assert not self.is_balanced, (
             "MTP device generation is block-cyclic only: under is_balanced a chip's union is not a "
@@ -862,11 +872,11 @@ class TtPrefillTransformer(LightweightModule):
             chunk_start=actual_start,
             actual_end=actual_end,
         )
-        keep_mask = build_mtp_generation_keep_mask(
-            **geom, emb_dim_per_chip=self.emb_dim_per_chip, num_levels=self.num_mtp_levels
-        )
+        generated = range(provided_levels, self.num_mtp_levels)
+        keep_mask = build_mtp_generation_keep_mask(**geom, emb_dim_per_chip=self.emb_dim_per_chip, levels=generated)
         selects = [
-            build_mtp_generation_select(**geom, level=k, source_row=source_row) for k in range(self.num_mtp_levels)
+            build_mtp_generation_select(**geom, level=k, source_row=source_row) if k in generated else None
+            for k in range(self.num_mtp_levels)
         ]
         return MTPDeviceGeneration(keep_mask, selects, embed_fn=lambda h: self.mtp_generate_embedding(h, actual_isl))
 
@@ -879,7 +889,7 @@ class TtPrefillTransformer(LightweightModule):
         *,
         zero_position_0: bool,
         union,
-        is_last_chunk: bool = False,
+        provided_levels: int = 0,
         **fwd_kwargs,
     ):
         """Run the K MTP levels off ``h^0``. Returns ``(MTPPredictorOutput, generated_tokens)``.
@@ -893,8 +903,9 @@ class TtPrefillTransformer(LightweightModule):
             actual_isl: this chunk's real-token count -- both the LM-head row and where the last
                 chunk's generation slots start.
             zero_position_0: True only on the chunk containing absolute position 0.
-            is_last_chunk: True only on the chunk that ends the request, where the prompt has no ids
-                past ``actual_end`` and the ``K`` positions the windows read there must be generated.
+            provided_levels: how many leading levels already have their token in the union as it
+                arrived. Only levels ``[provided_levels, K)`` generate; the rest slice what the socket
+                delivered. ``K`` skips generation entirely, ``0`` generates every level.
             fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
                 predictor owns ``cache_layer_idx``, writing level ``k`` (0-based) to
                 ``first_cache_slot + k``, so the caller's cache must have ``num_layers + K`` slots
@@ -903,15 +914,23 @@ class TtPrefillTransformer(LightweightModule):
         """
         assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
         assert union is not None, "run_mtp needs this chunk's MTPUnionEmbedding"
+        assert (
+            0 <= provided_levels <= self.num_mtp_levels
+        ), f"provided_levels {provided_levels} outside [0, {self.num_mtp_levels}]"
         generation = None
-        if is_last_chunk:
+        if provided_levels < self.num_mtp_levels:
             generation = self._mtp_build_generation(
-                union, actual_isl, fwd_kwargs["actual_start"], fwd_kwargs["actual_end"]
+                union,
+                actual_isl,
+                fwd_kwargs["actual_start"],
+                fwd_kwargs["actual_end"],
+                provided_levels=provided_levels,
             )
         source = MTPDeviceEmbedSource(
             union,
             mask_fn=lambda emb: self._mtp_mask_position_zero(emb, zero_position_0),
             generation=generation,
+            provided_levels=provided_levels,
         )
         # Forwarded here rather than by the caller: `actual_isl` is a named parameter of this
         # method AND something every level's block needs, so a caller that passed both would hit

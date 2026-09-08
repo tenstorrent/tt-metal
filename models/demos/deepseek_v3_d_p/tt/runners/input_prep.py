@@ -216,26 +216,30 @@ def build_mtp_generation_keep_mask(
     num_mtp_tokens: int,
     chunk_start: int,
     actual_end: int,
-    num_levels: int,
+    levels,
     dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> ttnn.Tensor:
     """``[sp, 1, U, H/tp]`` of ones, zero on every row generation will write.
 
-    Applied to the union ONCE before level 0, so each level's patch is a plain add onto a cleared
-    row rather than a read-modify-write. What it clears is whatever the producer put past the
-    request's real length -- its pad id, or, if the prompt pool outlives the request, the next ids
-    of the pool, which would be the answer leaking into its own draft.
+    Applied to the union ONCE before the FIRST generated level, so each level's patch is a plain add
+    onto a cleared row rather than a read-modify-write. What it clears is the pad the producer wrote
+    at every position at or past the request's real end (``runner_utils.MTP_PAD_TOKEN_ID``).
 
-    Rows past the last real one are pad for MTP exactly as they are for the trunk, so clearing all
-    ``K`` positions up front (rather than one per level) costs nothing: at level ``k`` the rows that
-    read a not-yet-generated position are pad rows.
+    ``levels`` is the GENERATED range, not ``range(K)``. Passing the levels whose token the socket
+    actually delivered would zero the embedding of a real id that nothing writes back -- no selector
+    targets a provided level. That is the whole reason this argument is a range and not a count.
+
+    Clearing all of the generated positions up front, rather than one per level, costs nothing: at
+    level ``k`` the rows that read a not-yet-generated position are pad rows either way.
 
     Full width, like :func:`build_position_zero_mask`, so the multiply is plain elementwise.
     """
     isl_per_chip = chunk_size // sp_factor
     union_len = isl_per_chip + num_mtp_tokens
     keep = torch.ones(sp_factor, 1, union_len, 1, dtype=torch.float32)
-    for level in range(num_levels):
+    levels = list(levels)
+    assert levels, "keep mask asked for an empty generated range; build no generation at all instead"
+    for level in levels:
         for c, u in enumerate(
             mtp_generation_union_rows(
                 sp_factor,

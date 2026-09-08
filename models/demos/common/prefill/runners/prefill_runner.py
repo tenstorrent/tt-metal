@@ -41,6 +41,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.migration import migration_file_export_enabled, serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
+    MTP_PAD_TOKEN_ID,
     activation_global_spec,
     build_h2d_service,
     compute_layer_split,
@@ -90,7 +91,8 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
-# LayerAck D2H FIFO. Records are CHUNK_METADATA_SIZE_BYTES (12 B, 16 with MTP) each; 4 KB is a
+# LayerAck D2H FIFO. Records are one chunk's metadata tensor -- 12 B on rank 0, 16 B under MTP on
+# a downstream rank, whose record is the wider D2D block (see D2D_METADATA_SIZE_BYTES); 4 KB is a
 # PCIe-aligned one-page buffer with generous headroom for in-flight records.
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
@@ -155,16 +157,31 @@ NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 builds its rows to this number and the socket op splits them back off on receive."""
 TOKEN_ID_BYTES = 4
 """uint32 token ids. Converts NUM_MTP_TOKENS (ids) to the socket op's overhang_size_bytes."""
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
-"""PrefillMetadata carried with each chunk. With MTP a 4th word, `is_last`, says this chunk completes
-the request: past `actual_end` the prompt HAS no more ids, so the MTP windows must be filled by
-generating them on device (lm_head + embedding) rather than by reading the stream. Only the producer
-knows that boundary -- `actual_end == actual_start + CHUNK_SIZE` is ambiguous, and GLM 5.2's 56320 =
-11 x 5120 is exactly the ambiguous case. Gated on MTP_LEVELS, which the producer must already agree
-on (it sizes the H2D row), so every non-MTP run stays byte-identical on the wire.
+_MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
+"""The pad sentinel as ttnn.to_torch hands it back: the words are written uint32 and read int32, so
+0xFFFFFFFF arrives as -1. Precomputed so the scan is a plain integer compare."""
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+"""PrefillMetadata carried with each chunk: 3 words, with MTP on or off.
 
-Used by all three metadata-carrying services -- H2D in, D2D between ranks, and the D2H layer-ack,
-whose record IS this chunk's metadata tensor (see prefill_chunk's `record_dev`)."""
+MTP used to widen this by a 4th `is_last` word. It no longer does -- how many of a chunk's lookahead
+ids are real is a property of the IDS, not something the producer declares, and the runner reads it
+off the pad sentinel (:func:`mtp_provided_levels`). That also makes the partially-provided case
+expressible, which a bool never could.
+
+Used by the H2D socket and, on the first rank, by the D2H layer-ack -- whose record IS this chunk's
+metadata tensor (see prefill_chunk's `record_dev`). The rank-to-rank hop is wider under MTP; see
+D2D_METADATA_SIZE_BYTES."""
+
+D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+"""PrefillMetadata on the INTERNAL rank-to-rank hop: the 3 chunk words plus, under MTP, the
+`provided_levels` count rank 0 derived from the pad sentinel.
+
+Wider than the H2D block on purpose. `run_mtp` executes on the LAST rank, which receives the union
+EMBEDDING and never the ids, so it cannot run the scan; rank 0 runs it once and the answer rides this
+hop. Nothing about it reaches the inference server, whose metadata stays 3 words.
+
+A downstream rank's layer-ack record IS its D2D metadata tensor, so that service is sized from this
+constant on every rank but the first."""
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -297,8 +314,7 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 
 
 def _decode_metadata(metadata_device: ttnn.Tensor) -> dict:
-    """This chunk's PrefillMetadata off the device tensor the socket op filled. `is_last` is present
-    only when MTP is on (CHUNK_METADATA_SIZE_BYTES); it is False otherwise so callers need no branch."""
+    """This chunk's PrefillMetadata off the device tensor the socket op filled. Three words, always."""
     import torch
 
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
@@ -306,8 +322,50 @@ def _decode_metadata(metadata_device: ttnn.Tensor) -> dict:
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
-        "is_last": bool(MTP_LEVELS and int(m[3]) == 1),
     }
+
+
+def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
+    """How many of the K MTP levels already have their token, off the ids themselves.
+
+    Level ``k`` needs the token at global position ``actual_end + k``. This returns the count ``j`` of
+    leading levels whose token the producer actually sent; levels ``j..K-1`` must generate theirs from
+    ``lm_head(H^k)`` on device. ``j == K`` is the old interior chunk, ``j == 0`` the old last chunk,
+    and ``0 < j < K`` is the case the retired `is_last` bool could not express -- a request that ends
+    fewer than K tokens after this chunk.
+
+    Two cases, and only one of them touches the device:
+
+    * ``actual_end < actual_start + CHUNK_SIZE`` -- a partial chunk, which is NECESSARILY the last one
+      (the producer sets ``actual_end = min(actual_start + CHUNK_SIZE, actual_isl)``). Everything past
+      ``actual_end`` is therefore padding, so ``j = 0`` by arithmetic, with no readback at all.
+    * a full chunk -- positions ``actual_end + k`` are exactly the first K ids of the LAST chip's
+      lookahead block, because that block starts at ``chunk_start + sp*L == actual_end``. Read those K
+      ids back and count the leading non-sentinel ones.
+
+    The readback is K uint32s from one device, at a sync point ``_decode_metadata`` already pays.
+    """
+    if not MTP_LEVELS:
+        return 0
+    if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
+        return 0
+    assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
+    import torch
+
+    # The LAST device, not device[sp-1]: the mesh enumerates row-major over (sp, tp) and the tensor is
+    # sharded on the SP axis and replicated across TP, so the final entry is SP shard sp-1 whatever tp
+    # is. That is the chip whose lookahead block starts at actual_end.
+    last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
+    ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
+    assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
+    provided = 0
+    for tok in ids[:MTP_LEVELS].tolist():
+        # to_torch hands back signed words, so the uint32 sentinel reads as -1. No real id can: the
+        # vocabulary is non-negative and far below 2**31.
+        if tok == _MTP_PAD_AS_INT32:
+            break
+        provided += 1
+    return provided
 
 
 def _is_shutdown_sentinel(meta: dict) -> bool:
@@ -366,7 +424,7 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, d2d_row
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             # The service asserts L1-only (d2d_stream_service.cpp:260).
             socket_buffer_type=ttnn.BufferType.L1,
@@ -397,9 +455,16 @@ def _d2d_recv(inbound) -> tuple:
     feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
     t0 = time.perf_counter()
     act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
+        inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
     meta = _decode_metadata(metadata_device)
+    if MTP_LEVELS:
+        # Word 3 is rank 0's derived count; see D2D_METADATA_SIZE_BYTES. The shutdown sentinel writes
+        # -1 there, which clamps to 0 -- harmless, its meta is discarded.
+        import torch
+
+        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
+        meta["provided_levels"] = max(0, int(words[3]))
     logger.info(
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
@@ -421,7 +486,12 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deall
 
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
     if MTP_LEVELS:
-        words.append(int(meta["is_last"]))
+        # The DERIVED count, not a producer flag. run_mtp executes on the LAST rank, which receives
+        # only the union embedding and never the ids, so it cannot run the scan itself; rank 0 does it
+        # once and the result rides the internal hop. This is not a leftover `is_last`: what the
+        # refactor removed is the SERVER declaring a last chunk, and the pipeline still has to
+        # propagate what rank 0 read off the padding.
+        words.append(int(meta["provided_levels"]))
     # The outbound op ships metadata as a replicated device tensor (uint32 words), not a Python list.
     md_tensor = ttnn.from_torch(
         torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
@@ -465,6 +535,9 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int) -> None
         "slot_id": SHUTDOWN_METADATA_WORD,
         "actual_start": SHUTDOWN_METADATA_WORD,
         "actual_end": SHUTDOWN_METADATA_WORD,
+        # Required by _d2d_send's MTP branch. Its absence was a live KeyError on any multi-rank MTP
+        # graceful drain; the value is irrelevant, the sentinel is discarded downstream.
+        "provided_levels": 0,
     }
     _d2d_send(d2d_out, dummy, rank, sentinel)  # ships + frees the dummy
     d2d_out.release_fabric_links()
@@ -494,11 +567,11 @@ def _compute_and_send(
     t_start = time.time()
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
-        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']}) last={meta['is_last']}"
+        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']}) "
+        f"provided={meta.get('provided_levels')}"
     )
-    # MTP-only kwargs, passed only when MTP is on: the other adapters' runtimes do not declare them,
-    # and with MTP off they carry nothing (no MTP token tensor, and every chunk's is_last is False).
-    mtp_kwargs = {"mtp_tokens": mtp_tokens, "is_last_chunk": meta["is_last"]} if MTP_LEVELS else {}
+    # MTP-only kwargs, passed only when MTP is on: the other adapters' runtimes do not declare them.
+    mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -571,6 +644,8 @@ def run_request_loop(
         if cfg.is_first_rank:
             # slot/start/end from the producer; the MTP ids only when MTP is on
             inp, mtp_tokens, meta, metadata_device = _socket_next(h2d_service, NUM_MTP_TOKENS)
+            # Derived here, once, off the ids themselves -- the producer no longer declares it.
+            meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
             # Downstream ranks get the ids' EMBEDDING stacked inside the activation, not a second tensor.
             inp, meta, metadata_device = _d2d_recv(d2d_in)
@@ -1176,7 +1251,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 global_spec=None,
                 fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
                 worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+                # record_dev is this rank's own metadata tensor: the H2D block on the first rank, the
+                # wider D2D block on every other.
+                metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
             )
             layer_ack_service = ttnn.LayerAckService(
                 d2h_service,

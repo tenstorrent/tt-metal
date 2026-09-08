@@ -529,9 +529,16 @@ class TtPrefillRuntime:
                 "the device MTP path needs the MTP ids alongside the chunk; the first rank cuts "
                 "both out of one H2D row (see runner_utils.make_h2d_spec)"
             )
-            union = MTPUnionEmbedding.from_ids(input_tensor, mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
-            ttnn.deallocate(input_tensor)
+            # MTP_PAD_TOKEN_ID is max uint32 -- deliberately outside every vocabulary, so a scan can
+            # never mistake a real token for padding. That also means it must NOT reach
+            # ttnn.embedding, which would index the table out of bounds. Clamp first. The clamped rows
+            # are exactly the ones the generation keep-mask clears and the patches overwrite, so the
+            # substituted id never survives into a window.
+            safe_mtp_tokens = ttnn.minimum(mtp_tokens, self.hf_config.vocab_size - 1)
             ttnn.deallocate(mtp_tokens)
+            union = MTPUnionEmbedding.from_ids(input_tensor, safe_mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
+            ttnn.deallocate(input_tensor)
+            ttnn.deallocate(safe_mtp_tokens)
             return union, union.trunk
         assert mtp_tokens is None, "only the first rank receives H2D MTP ids"
         hidden, union = self._mtp_unpack_activation(input_tensor)
@@ -773,7 +780,7 @@ class TtPrefillRuntime:
         record_dev: Optional[ttnn.Tensor] = None,
         mtp_tokens: Optional[ttnn.Tensor] = None,
         on_mtp_complete=None,
-        is_last_chunk: bool = False,
+        provided_levels: int = 0,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -827,10 +834,11 @@ class TtPrefillRuntime:
                 declares num_layers + K on the last rank, which is what the chunk-address table
                 strides users by.
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens).
-            is_last_chunk: GLM-5.2 MTP — this chunk ends the request, so the prompt has no ids past
-                `actual_end` and the MTP windows that read there must be filled by generating them on
-                device (lm_head + embedding). Only the producer knows this; it rides the 4th
-                PrefillMetadata word (prefill_runner.CHUNK_METADATA_SIZE_BYTES). Ignored with MTP off.
+            provided_levels: GLM-5.2 MTP — how many of the K levels already have their lookahead
+                token in the ids that arrived. Levels `[provided_levels, K)` have no id at
+                `actual_end + k` and must generate one on device (lm_head + embedding). The runner
+                derives it by scanning the pad sentinel (prefill_runner.mtp_provided_levels); `K`
+                means a fully interior chunk and `0` a chunk with no successor. Ignored with MTP off.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -934,7 +942,7 @@ class TtPrefillRuntime:
             # Only the rank that BUILT a predictor runs the levels; an upstream rank just carries the
             # union across its socket, so it must not hand it to a transformer that has none.
             mtp_union=mtp_union if self.mtp_predictor is not None else None,
-            is_last_chunk=is_last_chunk,
+            provided_levels=provided_levels,
             on_mtp_complete=on_mtp_complete,
             input_is_embedded=mtp_owns_input,
         )

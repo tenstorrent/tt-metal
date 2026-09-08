@@ -1094,16 +1094,16 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, is_last: bool) -> float:
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
         logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
         producer._push(
             service,
             payload_bytes,
-            producer._h2d_rows(producer._chunk_slice(pool, actual_start)),
-            producer._mtp_rows(pool, actual_start),
-            producer._pack_metadata(slot_id, actual_start, actual_end, is_last),
+            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl)),
+            producer._mtp_rows(pool, actual_start, actual_isl),
+            producer._pack_metadata(slot_id, actual_start, actual_end),
         )
         return (time.perf_counter() - push_start) * 1000.0
 

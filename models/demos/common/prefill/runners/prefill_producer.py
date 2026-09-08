@@ -100,6 +100,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import (
+    MTP_PAD_TOKEN_ID,
     h2d_row_len,
     load_trace_token_ids,
     num_mtp_tokens,
@@ -176,10 +177,11 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-# PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end], plus a 4th
-# `is_last` word when MTP is on -- see CHUNK_METADATA_SIZE_BYTES.
+# PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end]. MTP does NOT widen
+# it -- how many lookahead ids are real is a property of the ids themselves, read off the pad
+# sentinel (runner_utils.MTP_PAD_TOKEN_ID), not something the producer declares.
 METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES  # rebound by _load_env_config
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 
 def _load_env_config() -> None:
@@ -190,7 +192,6 @@ def _load_env_config() -> None:
     so the import-time values would otherwise be pre-manifest defaults. Importing this module never
     MUTATES the environment; only ``main()`` does, via _apply_manifest_env."""
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, MTP_LEVELS
-    global CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
@@ -199,14 +200,6 @@ def _load_env_config() -> None:
     # per chip (_mtp_rows), on the same socket and the same push. Must match the runner's
     # PREFILL_MTP_LEVELS, which sizes the receiving side; a mismatch trips the size assert in _push.
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
-    # MTP adds a 4th metadata word, `is_last`. Only the producer knows where the request's real length
-    # falls, and on the LAST chunk the ids the MTP windows read past `actual_isl` do not exist -- the
-    # device has to generate them (lm_head + embedding). Any heuristic on the runner is ambiguous:
-    # `actual_end == actual_start + CHUNK_SIZE` holds both for an interior chunk and for a request whose
-    # length is an exact multiple of CHUNK_SIZE (56320 = 11 x 5120 is exactly that case). Gated on
-    # MTP_LEVELS so every non-MTP run stays byte-identical on the wire; the runner derives the same size
-    # from the same env var, which the two already have to agree on (it sizes the H2D row).
-    CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
     # Same 11-chunk default as the runner: a larger default here would clamp requests to a depth the
     # runner's cache can't hold, and the runner asserts on the overrunning chunk.
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
@@ -217,12 +210,9 @@ def _load_env_config() -> None:
 _load_env_config()
 
 
-def _pack_metadata(slot_id: int, actual_start: int, actual_end: int, is_last: bool = False) -> bytes:
-    """Pack one chunk's PrefillMetadata: 3 little-endian uint32s, + `is_last` when MTP is on."""
-    words = [slot_id, actual_start, actual_end]
-    if MTP_LEVELS:
-        words.append(1 if is_last else 0)
-    return struct.pack(f"<{len(words)}I", *words)
+def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
+    """Pack one chunk's PrefillMetadata: 3 little-endian uint32s. Identical with MTP on or off."""
+    return struct.pack("<3I", slot_id, actual_start, actual_end)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
@@ -245,20 +235,30 @@ def _to_host_array(rows) -> "np.ndarray":
     return rows.to(torch.uint32).contiguous().numpy()
 
 
-def _pool_slice(pool, start: int, count: int):
-    """`count` ids of `pool` from `start`, right-padded with pad id 1 (_load_token_pool's own filler).
+def _pool_slice(pool, start: int, count: int, actual_isl=None):
+    """`count` ids of `pool` from `start`, with everything past the REQUEST replaced by the pad
+    sentinel and everything past the POOL right-padded with 1 (_load_token_pool's own filler).
 
-    Only the last chip's lookahead can run past a pool sized to a whole number of chunks, and those
-    ids are read only by MTP levels whose window extends past the request's real length -- rows the
-    transformer's own right-padding already discards.
+    The `actual_isl` clamp is what makes the runner's pad scan mean anything. Without it the pool
+    outlives the request -- it is sized `chunks_max * CHUNK_SIZE` while a request's depth is a random
+    draw -- so the ids past `actual_isl`, the whole last chip's lookahead block included, would be
+    REAL continuation tokens. A scan would then read "all provided" on the very chunk that has no
+    successor, and no level would generate. Those ids are also exactly the leak
+    input_prep.build_mtp_generation_keep_mask warns about: the answer the draft is meant to predict.
+
+    `actual_isl=None` keeps the old pool-only behaviour, for callers with no request in hand (the
+    shutdown sentinel).
     """
     ids = list(pool[start : start + count])
-    return ids + [1] * (count - len(ids))
+    ids = ids + [1] * (count - len(ids))
+    if actual_isl is not None:
+        ids = [MTP_PAD_TOKEN_ID if start + i >= actual_isl else v for i, v in enumerate(ids)]
+    return ids
 
 
-def _chunk_slice(pool, actual_start: int):
-    """This chunk's CHUNK_SIZE tokens out of `pool`, right-padded if the pool ends first."""
-    return _pool_slice(pool, actual_start, CHUNK_SIZE)
+def _chunk_slice(pool, actual_start: int, actual_isl=None):
+    """This chunk's CHUNK_SIZE tokens out of `pool`, padded past the request and past the pool."""
+    return _pool_slice(pool, actual_start, CHUNK_SIZE, actual_isl)
 
 
 def _h2d_rows(tokens):
@@ -274,7 +274,7 @@ def _h2d_rows(tokens):
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
-def _mtp_rows(pool, actual_start: int):
+def _mtp_rows(pool, actual_start: int, actual_isl=None):
     """The MTP lookahead tensor: `[SP, 1, num_mtp_tokens]`, row c holding the ids that follow chip
     c's shard -- `stream[(c+1)*L : (c+1)*L + num_mtp_tokens]`. None when MTP is off.
 
@@ -289,7 +289,7 @@ def _mtp_rows(pool, actual_start: int):
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
-    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, n_mtp) for c in range(sp)]
+    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, n_mtp, actual_isl) for c in range(sp)]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -678,7 +678,7 @@ class RunStats:
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
     """Execute the push schedule described by `cfg`.
 
-    Device-free: `push_fn(slot_id, chunk_idx, actual_start, actual_end, is_last) -> elapsed_ms` does and
+    Device-free: `push_fn(slot_id, chunk_idx, actual_start, actual_end, actual_isl) -> elapsed_ms` does and
     times the push; now_fn/sleep_fn/rng are injectable so tests run instantly and deterministically. Records each
     slot's resident request as a `_SlotFill` at push time, and returns RunStats. A recycled slot restarts
     at chunk 0 unless `cfg.multi_turn_prob` continues the conversation from its aligned-down length; either
@@ -705,8 +705,9 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         chunk_idx = slot.next_chunk
         actual_start = slot.prefix_len + chunk_idx * CHUNK_SIZE
         actual_end = min(actual_start + CHUNK_SIZE, slot.actual_isl)
-        # is_last: this push completes the request, so its MTP lookahead runs past the real prompt.
-        push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end, actual_end >= slot.actual_isl))
+        # actual_isl, not a last-chunk bool: the producer pads every id at or past it with
+        # MTP_PAD_TOKEN_ID, and the runner reads how many levels are provided off that padding.
+        push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end, slot.actual_isl))
         total_pushes += 1
         slot.next_chunk += 1
         resident[slot.slot_id] = _SlotFill(real_len=actual_end)  # what's now resident in this slot
@@ -1613,13 +1614,13 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths  # None => synthetic schedule depth; else depth per prompt length
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, is_last: bool) -> float:
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
-        tokens = _chunk_slice(pool, actual_start)
-        metadata = _pack_metadata(slot_id, actual_start, actual_end, is_last)
+        tokens = _chunk_slice(pool, actual_start, actual_isl)
+        metadata = _pack_metadata(slot_id, actual_start, actual_end)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        _push(service, payload_bytes, _h2d_rows(tokens), _mtp_rows(pool, actual_start), metadata)
+        _push(service, payload_bytes, _h2d_rows(tokens), _mtp_rows(pool, actual_start, actual_isl), metadata)
         return (time.perf_counter() - push_start) * 1000.0
 
     stats = run_schedule(cfg, push_fn=push_chunk)
