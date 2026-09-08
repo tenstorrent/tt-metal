@@ -915,8 +915,8 @@ execute_step_perf_baseline() {
 # ===========================================================================
 # Step 6 — measure the kernel in the tree. Args: <label> [full|variant] (default variant).
 # Labels: entry (tester's kernel, full), attempt_N (candidate, variant), final (best, full).
-# Prints one line; the caller acts on its action=keep|revert|retry field. cur/base are the
-# worst variant's cycles per tile. A failed run prints status=run_failed action=revert; a
+# Prints one line; the caller acts on its action=keep|neutral|revert|retry field. cur/base are
+# the worst variant's cycles per tile. A failed run prints status=run_failed action=revert; a
 # simulator outage (exit 3) prints status=env_error action=retry.
 # An attempt is judged against best-so-far on its one variant; a final sweep is judged
 # against the last confirmed full sweep (vs_prev) so a change that helped the measured
@@ -964,7 +964,9 @@ execute_step_perf_measure() {
                 vbest="$(_perf_eval "$_PERF_CSV" "$best" "$_L/perf_${label}_vs_best.json" 0.5)"
                 IFS='|' read -r vbest_verdict vbest_med vbest_worst vbest_cur vbest_base vbest_n _x _x _x _x _x <<<"$vbest"
             fi
-            case "$vbest_verdict" in improved|neutral) action=keep ;; *) action=revert ;; esac
+            # neutral = no measured change on this variant: the optimizer decides (keep only if the
+            # change simplifies the kernel or targets another variant's code path).
+            case "$vbest_verdict" in improved) action=keep ;; neutral) action=neutral ;; *) action=revert ;; esac
             ;;
     esac
     ss PERF_LAST_CSV "$_PERF_CSV"
