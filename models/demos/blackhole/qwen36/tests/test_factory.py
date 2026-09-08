@@ -178,6 +178,31 @@ def torch_moe_reference(moe_state, x, top_k, norm_topk_prob=True):
     return out + shared
 
 
+def torch_routed_experts_reference(moe_state, x, routing):
+    """Routed-experts-only reference (no shared expert), driven by an explicit dense routing.
+
+    moe_state: the load_moe_layer(...) dict. x: [S, H] float32. routing: [S, E] float32,
+    zero outside each row's selected experts. Returns [S, H].
+
+    Isolating the routed path matters because the shared expert contributes a large,
+    always-correct term: an aggregate PCC over ``experts + shared`` can stay high while
+    the routed branch itself is wrong (e.g. a per-user/per-expert axis mix-up).
+    """
+    import torch.nn.functional as F
+
+    gate_up = moe_state["experts.gate_up_proj"].float()  # [E, 2I, H]
+    down = moe_state["experts.down_proj"].float()  # [E, H, I]
+
+    S, H = x.shape
+    out = torch.zeros(S, H)
+    for s in range(S):
+        for e in torch.nonzero(routing[s], as_tuple=True)[0].tolist():
+            g, u = (x[s : s + 1] @ gate_up[e].T).chunk(2, dim=-1)
+            h = F.silu(g) * u
+            out[s] += float(routing[s, e]) * (h @ down[e].T)[0]
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # PCC helpers
 # --------------------------------------------------------------------------- #

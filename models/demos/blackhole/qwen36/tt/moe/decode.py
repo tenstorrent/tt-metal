@@ -108,8 +108,13 @@ def decode_forward(
         dtype=ttnn.bfloat16,
     )
     sm2 = up_gate.shape[-1]  # 2 * intermediate
-    up_gate = ttnn.reshape(up_gate, (batch_size, num_experts, 1, sm2))
-    up_gate = ttnn.transpose(up_gate, 1, 2)  # (batch, 1, num_experts, sm2) — keep 4D for ttnn.swiglu
+    # sparse_matmul returns rank 6 here: a dense [1,1,B,H] in0 contributes 2 batch dims and the
+    # sparse [1,E,H,2I] weights another 2, so the result is [1,1,1,E,B,2I] — expert-major, with
+    # the B users on dim -2. Reshaping straight to (B,E,1,sm2) would reinterpret that as
+    # user-major and hand each expert's down_proj another user's activation (B=1 is unaffected,
+    # which is why the gpt_oss decode this path follows can reshape directly: it rejects B>1).
+    up_gate = ttnn.reshape(up_gate, (1, num_experts, batch_size, sm2))
+    up_gate = ttnn.permute(up_gate, (2, 0, 1, 3))  # (batch, 1, num_experts, sm2) — keep 4D for ttnn.swiglu
 
     down_input = apply_swiglu(up_gate)  # 4D swiglu over [up|gate] -> (batch, 1, num_experts, intermediate)
     up_gate.deallocate(True)
