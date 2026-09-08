@@ -215,6 +215,44 @@ def test_embedding_tiled_input(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize("sentence_size", [640])
+@pytest.mark.parametrize("hidden_embedding_dim", [1792])
+@pytest.mark.parametrize("vocabulary_size", [512])
+def test_embedding_tiled_input_qwen_like_shapes(
+    device, batch_size, sentence_size, hidden_embedding_dim, vocabulary_size
+):
+    """TILE UINT32 indices + RM weights + TILE output; shapes from Qwen-Image text encoder (TP-sharded hidden)."""
+    torch.manual_seed(1234)
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        embeddings_type=ttnn.EmbeddingsType.GENERIC,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
+
+
 def reverse_embedding_output(output_tensor, weights_tensor):
     """
     Reverse the embedding operation by finding the indices of rows in the output tensor
