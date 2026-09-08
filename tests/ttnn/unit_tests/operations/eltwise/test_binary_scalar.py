@@ -7,9 +7,12 @@ import pytest
 import ttnn
 import random
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
+
+# Scalar-first arithmetic against the device measures at most 2 ULP, on bf16 add and subtract.
+_SCALAR_FIRST_ULP_THRESHOLD = 3
 
 
 @pytest.mark.parametrize(
@@ -608,3 +611,122 @@ def test_scalar_tensor_row_major_sharded(device, op_name):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.bfloat16, torch.bfloat16), (ttnn.int32, torch.int32)))
+def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_dtype):
+    """The goldens key dtype-dependent branches off the tensor operand rather than the argument
+    position, so they stay callable when a scalar occupies operand a. Reading the dtype off
+    operand a instead raises AttributeError, which comparison mode swallows into a skip."""
+    torch.manual_seed(0)
+    if torch_dtype == torch.int32:
+        torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch_dtype)
+        scalar = 7
+    else:
+        torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
+        scalar = 3.14
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden = ttnn.get_golden_function(getattr(ttnn, op_name))
+    expected = golden(scalar, torch_input)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(scalar, input_tensor))
+
+    # The golden is the reference the device is graded against, so it has to carry operand order
+    # too: for subtract and div a reversed golden would still be a valid tensor of the right shape.
+    # Comparing through .float() would let a golden of the wrong dtype pass, which is the class of
+    # bug this keys off the tensor operand to avoid.
+    assert expected.dtype == output.dtype
+    if torch_dtype == torch.int32 and op_name != "div":
+        # Integer add/subtract/multiply run the integer LLKs and are bit-exact on device.
+        assert_equal(expected, output)
+    else:
+        # Measured worst case is 2 ULP, on bf16 add and subtract.
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
+def test_scalar_tensor_comparison_mode_validates(device, op_name):
+    """Comparison mode must actually grade a scalar-first call, not skip it. A golden that raises
+    is caught at decorators.py and downgraded to a warning, so the op looks validated while it is
+    not; comparison_mode_should_raise_exception turns that silence into a failure.
+
+    The threshold is relaxed from the 0.9999 default because bf16 add and subtract miss it against
+    their goldens for tensor-first calls too -- a pre-existing tolerance gap this test is not
+    about. What is asserted here is that the comparison runs at all."""
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config("comparison_mode_pcc", 0.99):
+        with ttnn.manage_config("comparison_mode_should_raise_exception", True):
+            getattr(ttnn, op_name)(3.14, input_tensor)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply"))
+@pytest.mark.parametrize("torch_dtype, bit_width", ((torch.uint16, 16), (torch.uint32, 32)))
+@pytest.mark.parametrize("scalar", (70000, -2.5, 2**32))
+def test_unsigned_golden_wraps_scalar_outside_operand_range(op_name, torch_dtype, bit_width, scalar):
+    """A scalar wider than the operand wraps to its storage width, so the golden masks it rather
+    than rejecting it. Materializing the scalar in the unsigned dtype instead fails Torch's
+    conversion range check, turning the wrap into an error in both operand orders."""
+    torch.manual_seed(0)
+    torch_fn = getattr(torch, op_name)
+    mask = (1 << bit_width) - 1
+    torch_input = torch.randint(0, 60000, (1, 1, 32, 32)).to(torch_dtype)
+    wide, wrapped = torch_input.to(torch.int64), int(scalar) & mask
+
+    golden = ttnn.get_golden_function(getattr(ttnn, op_name))
+
+    assert torch.equal(golden(torch_input, scalar), (torch_fn(wide, wrapped) & mask).to(torch_dtype))
+    assert torch.equal(golden(scalar, torch_input), (torch_fn(wrapped, wide) & mask).to(torch_dtype))
+
+
+@pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
+@pytest.mark.parametrize("scalar", (7, 2.5))
+@pytest.mark.parametrize("scalar_first", (True, False))
+def test_scalar_tensor_div_rounding_golden_matches_device(device, rounding_mode, scalar, scalar_first):
+    """The integer division path requires both operands integral, not just the tensor one: a float
+    scalar promotes an INT32 tensor before dividing. Only the device decides which is right, so
+    this grades the golden against it for both scalar types, in both operand orders -- the
+    promotion applies to the tensor-first form that predates the scalar-first overloads too."""
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_args = (scalar, torch_input) if scalar_first else (torch_input, scalar)
+    device_args = (scalar, input_tensor) if scalar_first else (input_tensor, scalar)
+    expected = ttnn.get_golden_function(ttnn.div)(*golden_args, rounding_mode=rounding_mode)
+    output = ttnn.to_torch(ttnn.div(*device_args, rounding_mode=rounding_mode))
+
+    assert expected.dtype == output.dtype
+    if expected.dtype.is_floating_point:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+    else:
+        # An integer scalar keeps exact integer division on both sides.
+        assert_equal(expected, output)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply"))
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, bit_width, scalar",
+    (
+        (ttnn.uint16, torch.uint16, 16, (1 << 16) + 4464),
+        # pack_scalar_runtime_arg routes the scalar through a float before the cast, so a value
+        # above 2**24 would be rounded to the nearest float32 and the rounding, not the wrap,
+        # would decide the result. 2**32 + 512 lands on a float32 boundary exactly.
+        (ttnn.uint32, torch.uint32, 32, (1 << 32) + 512),
+    ),
+)
+def test_scalar_tensor_unsigned_out_of_range_scalar(device, op_name, ttnn_dtype, torch_dtype, bit_width, scalar):
+    """A scalar wider than the operand reaches the kernel through an out-of-range cast in
+    pack_scalar_runtime_arg, so the width it lands on is the device's to define, not the golden's.
+    The wraparound the golden models is only a reference if it agrees here."""
+    torch_input = torch.tensor([[[[0, 1, 2, 3, 100, 500, 4464, 65535]]]], dtype=torch.int64).repeat(1, 1, 32, 4)
+    torch_input = (torch_input & ((1 << bit_width) - 1)).to(torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    expected = ttnn.get_golden_function(getattr(ttnn, op_name))(scalar, torch_input)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(scalar, input_tensor)).to(torch_dtype)
+
+    assert_equal(expected, output)
