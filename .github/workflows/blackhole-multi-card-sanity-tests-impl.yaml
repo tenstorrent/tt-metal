@@ -6,6 +6,15 @@ on:
       build-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       wheel-artifact-name:
         required: true
         type: string
@@ -85,16 +94,23 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved' }}
       env:
         ARCH_NAME: blackhole
         LOGURU_LEVEL: INFO
         LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
+        # /work/ttnn and /work/tools as well as /work: these tests are pytest and
+        # import ttnn, which a full-profile image supplies from the tree rather than
+        # a wheel. Sanity builds with tracy=true, so _ttnn imports the `tracy` module
+        # at init; the wheel maps it in via package_dir (setup.py), while in place it
+        # is only importable from /work/tools.
+        PYTHONPATH: /work:/work/ttnn:/work/tools
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }} # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: "--device /dev/tenstorrent"
     defaults:
@@ -106,7 +122,10 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
           ref: ${{ inputs.ref || github.sha }}
       - name: ⬇️  Setup Job
@@ -115,6 +134,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
           # PERF jobs (tracy profiler on) need a wider hang-detection window because
@@ -150,7 +170,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}"
