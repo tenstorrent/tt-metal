@@ -659,19 +659,50 @@ class SpeakerEncoder(LightweightModule):
 
         Independent of channel count, so the cache key drops it: at mel T=384 the whole
         encoder needs ten of these (k=5 d=1 has four shifted taps, each k=3 block two),
-        ~294 KB apiece in DRAM.
+        ~294 KB apiece.
+
+        DRAM placement is deliberate, and ``QWEN3_TTS_SE_PERM_L1=1`` is the measured
+        alternative rather than a guess. What this matmul spends is the in0 read: 294 KB
+        per tap, 46 taps per replay, 13.6 MB of DRAM traffic to move 2.2 MB of
+        activation. It is neither math- nor FLOP-bound — HiFi4, HiFi3, HiFi2 and LoFi all
+        measure the same 16.3 us in the same program config, so the HiFi4 above is free
+        as well as exact. Holding the matrices in L1 removes the read:
+
+            per tap    10.0 -> 7.1 us isolated (C=64, 12 cores); 10.0 -> 8.5 us in-model
+            per replay 1603 -> 1533 us for the whole encoder, -70 us, bit-exact
+
+        It stays OFF because it does not fit the path the demo takes.
+        ``capture_audio_forward_trace`` runs the mel STFT inside the same capture region,
+        and ~1.8 MB of permanent L1 (six k=3 matrices) makes its row-major reshapes throw
+        "Statically allocated dataflow buffers in program 39 clash with L1 buffers ...
+        static dataflow buffer region ends at 1168912". That surfaces as a
+        ``tt::exception`` from a LATER op, not as a failed allocation here, so there is no
+        allocation-time fallback to lean on — and it is not worth engineering around: the
+        whole encoder is 5.0 ms of a 6.26 s request, so -70 us is 0.001 % end to end.
+        Turn it on for a host-mel deployment, where the L1 is free.
+
+        Two other tap ideas were measured and rejected, recorded so nobody re-derives
+        them. Shrinking the matrix: a one-hot holds only 1.0 and 0.0, but bfloat8_b is NOT
+        bit-exact (max|diff| 2.3e-2) and bfloat4_b is worse (4.8e-1), and a tap is a copy,
+        so exactness is a requirement. Batching taps across the eight Res2Net scales:
+        impossible, the cascade is sequential
+        (``_res2net_cascade_torch``: ``inp = hidden_part + output_part``).
         """
         hit = self._tap_perm_tt_cache.get(key)
         if hit is None:
             length = int(rows.numel())
             perm = torch.zeros(1, 1, length, length, dtype=torch.float32)
             perm[0, 0, torch.arange(length), rows.long()] = 1.0
+            # key is (length, kernel, dilation, j) — see the caller.
+            mode = os.environ.get("QWEN3_TTS_SE_PERM_L1", "0")
+            kernel = key[1] if len(key) > 1 else 0
+            use_l1 = mode == "all" or (mode != "0" and kernel == 3)
             hit = ttnn.from_torch(
                 perm,
                 device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=self._replicate_mapper(),
             )
             self._tap_perm_tt_cache[key] = hit
