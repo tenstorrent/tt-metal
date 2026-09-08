@@ -352,10 +352,10 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_mo
 
 Lane: `wormhole`. Primary kernels: `DP010`, `DP012`.
 
-Layernorm small backward [20,30], affine enabled: both gamma/beta and input-gradient readers.
+Layernorm backward with width normalization and affine gradients; exercises the parameter H reduction and small input-gradient kernel.
 
 ```text
-tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_backward[input_shape_normalized_dims=([20, 30], 2)-elementwise_affine=True-bfloat16-1e-5]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_backward[input_shape_normalized_dims=([2, 20, 30], 1)-elementwise_affine=True-bfloat16-1e-5]
 ```
 
 ### SM029 — Moreh layer_norm

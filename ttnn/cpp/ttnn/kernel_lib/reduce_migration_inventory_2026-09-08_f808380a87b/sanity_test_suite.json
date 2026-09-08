@@ -767,13 +767,13 @@
       "id": "SM028",
       "full_suite_group": "T054",
       "tests": [
-        "test_moreh_layer_norm_backward[input_shape_normalized_dims=([20, 30], 2)-elementwise_affine=True-bfloat16-1e-5]"
+        "test_moreh_layer_norm_backward[input_shape_normalized_dims=([2, 20, 30], 1)-elementwise_affine=True-bfloat16-1e-5]"
       ],
       "kernel_ids": [
         "DP010",
         "DP012"
       ],
-      "selection": "Layernorm small backward [20,30], affine enabled: both gamma/beta and input-gradient readers.",
+      "selection": "Layernorm backward with width normalization and affine gradients; exercises the parameter H reduction and small input-gradient kernel.",
       "lane": "wormhole",
       "hardware": "One Wormhole device; upstream Moreh layernorm backward tests skip Blackhole.",
       "expected_cases": 1,
