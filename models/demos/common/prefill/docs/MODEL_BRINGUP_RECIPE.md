@@ -16,114 +16,109 @@ kernels, decode.
 
 ---
 
-## 1. Inputs to the bring-up
+## 1. Input to the bring-up
 
-Two JSON files. Everything the agent needs comes from one of them; nothing is inferred.
+**One file: the prefill spec** (`models/demos/common/prefill/specs/prefill_spec_template.json`).
 
-### 1.1 Donor map — `donor_template.json` (advisory)
+*What this model is, and what it is graded against.* It carries only what the HF config and the
+checkpoint cannot tell you: target hardware, TP/SP split, chunk size and sequence length, user
+count, data formats, PCC thresholds, golden trace location. Anything readable from `config.json` —
+dims, layer count, attention family, rope parameters, vocab, norm eps, expert counts, checkpoint
+quantization — is **not** in the spec; read it from the config and assert it (see D1).
 
-*How this repo builds a prefill model.* For each part that is copied rather than written fresh, it
-names the existing file to copy from: weight loading, dense MLP, MoE wrapper, attention, rope, the
-runtime, and the KV cache cluster (one donor package resolving five coupled roles).
-Every entry is copy-and-adapt — see §2.1 for how far that goes.
+The **spec is binding**. Every value in it must be respected exactly, at every stage; no convention
+in this document overrides it. Where an existing implementation in the repo conflicts with the spec,
+the spec wins and that implementation was the wrong thing to borrow from.
 
-Pointers that never vary by model are **not** in this file — they live in
-[Fixed references](#3-fixed-references) below.
-
-### 1.2 Prefill spec — `TODO: template not written yet` (binding)
-
-*What this model is.* The model-specific facts: HF reference and config, checkpoint dtype and
-quantization, tensor naming, layer map, attention parameters, MoE parameters, target arch and mesh,
-TP/SP/EP split, chunk size, sequence length, user count, PCC thresholds, golden trace location.
-
-`TODO` — write `prefill_spec_template.json` and replace this paragraph with a field list plus the
-fields that fail *silently* when guessed.
-
-### 1.3 Precedence
-
-The **spec is binding** and has the highest priority of any input. Every value in it must be
-respected exactly, at every stage. Nothing in a donor, and no convention in this document, overrides
-it.
-
-The **donor map is advisory**. It points at existing implementations to guide and speed up the work.
-Where a donor conflicts with the spec, or where following it would violate the spec, the donor gives
-way — and that is a signal the donor was the wrong choice, not a reason to bend the spec.
+Everything else — which existing code to learn from for each part — the agent finds itself (§2).
 
 ---
 
-## 2. Donors
+## 2. Exploration — finding what to borrow
 
-### 2.1 What a donor is for
+Most of a prefill package is plumbing every model needs: sharding, collectives, weight caching, KV
+layout, chunking. It is written and debugged several times over in this repo. Before writing a part,
+find the existing code that already solved it — but find it, do not be handed it: a pointer with no
+shape attached is what makes a mismatch invisible until PCC drops.
 
-A donor is a working prefill package that already solved the same problem for a different model.
-Reading it before writing a part serves two purposes:
+### 2.1 Gate the candidates first
 
-- **Don't reinvent what exists.** Most of a prefill package is plumbing every model needs —
-  sharding, collectives, weight caching, KV layout, the serving contract. It is already written and
-  debugged several times over.
-- **Don't diverge from patterns that are load-bearing.** Some conventions look arbitrary and are
-  not: the KV cache layout is read by the ring SDPA op and the migration address walk, collectives
-  must go through the CCL manager's semaphore ping-pong, weight-cache keys must match what the
-  cache-populate run wrote. Deviating from these does not raise an error — it degrades PCC, corrupts
-  output nondeterministically, or silently misses the cache.
+Enumerate the packages that implement prefill on the `common/prefill` engine — `ADAPTER_PATHS` in
+`models/demos/common/prefill/adapter.py` is the registry, and a package not in it has never run on
+this engine — then keep only those that have actually run on the spec's **target hardware and
+mesh**. A package that never ran on the
+target teaches nothing reliable about sharding, collectives or L1 budgets — its program configs are
+tuned for a different machine.
 
-**Start from the donor's file: copy it into the new package and adapt it.** It is a template, not a
-reference you merely consult — but adapting is the point, not transcribing. Take its structure, its
-sharding and CCL placement, its program configs, its lifetime and deallocation discipline. Do not
-carry over its model-specific content: attention math, config constants, the HF weight-name map, or
-anything the spec fixes.
+Rank what survives by, in order: attention family (MLA / GQA / sparse — this decides the cache
+count), MLP density (dense / MoE), checkpoint quantization. Record the ranking and the reason in
+`README.md`; if the best match for a part is a package that is *not* on the target hardware, treat it
+as a source for the **math only**, never for a copy.
 
-A donor is advisory (§1.3). If following one would violate the spec, the donor is the wrong choice.
+### 2.2 What to look for, per part
 
-### 2.2 What the donor map covers
+One row, one search. The reject column matters as much as the first: it is what stops a plausible
+but wrong source being adopted.
 
-`donor_template.json` is the single source for which package each part comes from — filled per
-bring-up, one pointer per part whose donor depends on the model:
+| Part | Look for | Reject if |
+|---|---|---|
+| Weight loading | safetensors walk, prefix filtering, the single dtype exit | the quantization scheme differs from the spec's |
+| Dequant | the spec's exact scheme (per-tensor / blockwise / packed) | it differs — write the scale application fresh, reuse only the sorted key walk and the fail-loud on a missing scale |
+| Norm / embedding | a package that ran at this spec's `hidden` and tokens-per-chunk | it never ran at this width — expect to compose the op from primitives (§2.3) |
+| MLP | the column/row-parallel split and where the CCL lands | the activation variant differs — port the structure, never the math |
+| Attention | head split, projection sharding, the output-proj CCL tail. **Not** the attention math | the cache count differs (MLA vs GQA vs sparse) |
+| RoPE | variant plumbing and the whole-cache indexed build | the source was written against a different `transformers` major — re-read the HF branch the model actually takes |
+| KV cache | **one** package for all five coupled roles: 32-token bank walk, slot packing, block-cyclic SP sharding | any one role is sourced from a different package |
+| Runtime | `compile` / `make_chunk_input` / `prefill_chunk` and its chunk-range assertions | — |
 
-| Entry | What you are reading it for |
-|---|---|
-| `weights.loading` | safetensors iteration, prefix filtering, dtype conversion |
-| `weights.dequant_and_permute` | qkv fusion/swizzle, tile-alignment padding, bias handling |
-| `compute.mlp_dense` | column/row-parallel split and where the CCL lands |
-| `compute.moe_wrapper` | thin wrapper over the imported EP substrate: router, activation, shared expert |
-| `compute.attention` | head split, projection sharding, program configs, output-proj CCL tail — **not** the attention math |
-| `compute.rope` | variant plumbing, and the whole-cache indexed rope built once |
-| `kv_cache` | one donor package resolving five coupled roles — see §5 |
-| `serving.runtime` | `compile` / `make_chunk_input` / `prefill_chunk` and its chunk-range assertions |
+Shared code is **imported, never copied**: the MoE substrate
+(`models/demos/deepseek_v3_d_p/tt/moe/`), the migration helpers
+(`models/demos/common/prefill/runners/migration.py` — `get_num_dram_banks` sizes the KV allocator),
+and the golden-cache helpers (§3).
 
-Parts whose pointer never varies by model — norm, embedding, MoE substrate, MeshConfig, CCLManager,
-weight cache, test scaffolds, golden cache — are not in the donor map. They are fixed, and listed
-below.
+### 2.3 Structural vs shape-tuned
+
+A borrowed file holds two kinds of thing, and they transfer differently.
+
+**Structural** — sharding, CCL placement, cache layout, slot packing, lifetime and deallocation
+discipline. Load-bearing: some of it looks arbitrary and is not, because the KV layout is read by the
+ring SDPA op and collectives must go through the CCL manager's semaphore ping-pong. Copy it, then
+verify it mechanically (grep the copied files for the layout invariants in §5 and assert they agree).
+Deviating here does not raise an error — it degrades PCC or corrupts output nondeterministically.
+
+**Shape-tuned** — compute configs, dtype casts, program-config constants, and op choices that fit
+inside the source's L1 budget. These encode the *source's* hidden size, head_dim and chunk size.
+**Re-derive them for this model's dimensions.** Copying a tuned value to a wider model is not the
+conservative choice; it silently costs PCC.
+
+The bring-up default for every projection matmul and the plain SDPA is **HiFi4 with
+`fp32_dest_acc_en=True`**. A narrower setting is a measurement, not an inheritance — record what it
+costs. Where such a constraint is real it is also local: `fp32_dest_acc_en=False` belongs to the ring
+cache-read op, not to SDPA in general, and a source that sets it globally is over-broad.
+
+### 2.4 Record the envelope
+
+For every part, write down in `README.md` where it came from and the `(hidden, head_dim, chunk,
+sp × tp)` that source was **measured** at. Outside that envelope, expect to compose the op from
+primitives or to re-measure it — and where a borrowed module has a known ceiling, pin it with a test
+at the boundary so the next bring-up inherits the knowledge instead of the bug.
 
 ---
 
-## 3. Fixed references
+## 3. Shared helpers and test patterns
 
-Pointers that do NOT vary from model to model. Take them as-is; the donor map
-(`donor_template.json`) carries only the entries whose donor depends on the model.
-
-> Provisional home. These belong in their per-stage sections (D3, M3, P1, ...) and will be moved
-> there once those sections are written. Kept in one block for now so the donor template stays clean.
+Genuinely model-independent, and the only pointers this document hands out. Everything else is found
+by exploration (§2), with its envelope recorded.
 
 | What | Pointer | Mode |
 |---|---|---|
-| RMSNorm | `models/demos/gpt_oss_d_p/tt/rms_norm.py` | copy |
-| Embedding | `models/demos/minimax_m3/tt/parallel_embedding.py` | copy |
 | MoE substrate | `models/demos/deepseek_v3_d_p/tt/moe/` | **import** |
-| MeshConfig | `models/demos/gpt_oss_d_p/tt/config.py` | copy |
-| CCLManager | `models/demos/gpt_oss_d_p/tt/ccl.py` | copy |
-| CCL wrappers | `models/demos/gpt_oss_d_p/tt/config.py` | copy |
-| Weight cache | `models/demos/minimax_m3/tt/weight_cache.py` | copy |
-| Migration helpers | `models/demos/common/prefill/runners/migration.py` | **import** |
-| Runtime contract | `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` | contract |
-| Reference trimming | `models/demos/deepseek_v3_d_p/reference/kimi_k3/modeling_kimi_k3_mla.py` | pattern |
+| DRAM bank count | `models/demos/common/prefill/runners/migration.py` | **import** |
+| CPU golden cache | `models/demos/deepseek_v3_d_p/utils/transformer_helpers.py:762` | **import** |
 | Reference purity | `models/demos/deepseek_v3_d_p/reference/kda/README.md` | contract |
-| PCC test scaffold | `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py` | pattern |
-| Config diff test | `models/demos/deepseek_v3_d_p/tests/torch/test_kimi_k3_mla_reference.py` | pattern |
-| KV table test | `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py` | pattern |
-| Mesh KV-PCC | `models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py` | pattern |
-| CPU golden cache | `models/demos/deepseek_v3_d_p/utils/transformer_helpers.py:762` | import |
-| Golden trace generation | `models/demos/deepseek_v3_d_p/tt/runners/generate_prompt_trace.py` | pattern |
+
+Test *patterns* are named per stage in each Testing table below (§6) — read them for structure, not
+for content.
 
 Two rules the golden cache embodies, worth keeping: key the cache on **every** field that changes the
 output (`ReferenceCacheKey` is frozen so a changed field yields a different filename and stale results
@@ -406,7 +401,7 @@ cannot.
 |---|---|
 | `minimax_m3/tests/unit/test_reference_model.py`, widened to the full model | The whole-model CPU reference forward against the inline torch golden, all layers, random weights. |
 | `minimax_m3/tests/golden_hf_first_token.py` | The reference against the **real HF checkpoint** loaded on CPU — ground truth for the whole model, not just self-consistency. |
-| No donor — author it | That the golden cache round-trips: a second run loads from disk instead of recomputing, and a changed `ReferenceCacheKey` field forces a miss rather than silently reusing a stale result. |
+| No pattern in the repo — author it | That the golden cache round-trips: a second run loads from disk instead of recomputing, and a changed `ReferenceCacheKey` field forces a miss rather than silently reusing a stale result. |
 
 **Goal** M1 passes when all three pass.
 
@@ -506,7 +501,7 @@ Five triggers, all mechanical — there is no "worth logging?" judgment to make:
 |---|---|
 | Entering a stage | `enter` |
 | Every run of the stage's Testing table, pass or fail | `verify` |
-| Going off-script: something the recipe, spec, or donor did not cover, **and you solved it** | `judgment` |
+| Going off-script: something the recipe, the spec, or the code you borrowed from did not cover, **and you solved it** | `judgment` |
 | Falling back to torch CPU for a block (D3/M3 step 4) | `fallback` |
 | Dropping a Testing-table row the model does not have | `skip` |
 
@@ -531,8 +526,8 @@ already record that the stage was fighting back, and how many times.
 {"t":"2026-09-02T09:00Z","ev":"enter","stage":"D3"}
 {"t":"2026-09-02T12:00Z","ev":"verify","stage":"D3","result":"fail",
  "failed":["tests/unit/test_ring_joint_cache_read_sp_vs_ref.py::test_sp8"]}
-{"t":"2026-09-02T15:00Z","ev":"judgment","stage":"D3","kind":"donor_wrong",
- "issue":"donor program config assumed q_chunk 256, PCC stalled at 0.91 at sp=8",
+{"t":"2026-09-02T15:00Z","ev":"judgment","stage":"D3","kind":"reference_gap",
+ "issue":"borrowed program config assumed q_chunk 256, PCC stalled at 0.91 at sp=8",
  "fix":"set q_chunk_size to seq_local per SP row (128)",
  "failed":["tests/unit/test_ring_joint_cache_read_sp_vs_ref.py::test_sp8"]}
 {"t":"2026-09-02T17:00Z","ev":"verify","stage":"D3","result":"pass","failed":[]}
@@ -549,9 +544,9 @@ cause, not the symptom.
 
 | `kind` | Means | Reading it |
 |---|---|---|
-| `spec_gap` | A value the work needed was absent or ambiguous in the prefill spec. | The spec template (§1.2) is missing a field. |
+| `spec_gap` | A value the work needed was absent or ambiguous in the prefill spec. | The spec template (§1) is missing a field. |
 | `recipe_gap` | This document was silent, ambiguous, or wrong. | Fix the doc. |
-| `donor_wrong` | The donor conflicted with the spec, or its pattern did not transfer. | The donor map (§1.1) points somewhere bad. |
+| `reference_gap` | Code borrowed from another package did not transfer: it conflicted with the spec, or it did not hold at this model's shape. | Exploration (§2) found the wrong source, or the envelope (§2.4) was not checked. |
 | `ttnn_gap` | No ttnn op existed; the math had to be composed, or could not be. | Op-coverage backlog. Pairs with a `fallback` when it could not be. |
 | `model_quirk` | The model itself does something the reference implementations do not. | Genuine per-model cost, not a process defect. |
 | `env` | Build, mesh bring-up, fabric, or tooling. | Infra, not bring-up. |

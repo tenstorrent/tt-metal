@@ -1,5 +1,5 @@
 {
-  "_comment": "BINDING prefill spec. Only carries what the HF config and the checkpoint CANNOT tell you, plus the few targets the bring-up is graded against. Anything readable from config.json - dims, layer count, attention family, rope, vocab, norm eps, expert counts, checkpoint quantization - is NOT here; read it from the config. Where a donor conflicts with this file, this file wins.",
+  "_comment": "BINDING prefill spec. Only carries what the HF config and the checkpoint CANNOT tell you, plus the few targets the bring-up is graded against. Anything readable from config.json - dims, layer count, attention family, rope, vocab, norm eps, expert counts, checkpoint quantization - is NOT here; read it from the config. Where any existing implementation in the repo conflicts with this file, this file wins.",
 
   "model_name": "",
 
