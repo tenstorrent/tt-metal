@@ -16,6 +16,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "dataflow_common.hpp"
 #include "windowed_mask_gen.hpp"
 
@@ -106,11 +107,9 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb_identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb_identity_scale_in>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     DataflowBuffer dfb_col(dfb_col_identity);
     generate_bcast_col_scalar(dfb_col, identity_scalar_packed);
 

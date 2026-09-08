@@ -269,3 +269,9 @@ Validation: native builds passed (`/tmp/reduce-kda-build-20260908.log`, `/tmp/re
 Attn-res gather softmax now binds a planned SUM for both local statistics reductions. DiT fused distributed RMSNorm uses planned local/post-gather calls and host auxiliary recipes. It retains fused square/L1 accumulation to fit its existing pipeline, and retains the packed-statistics add/transpose branch with its documented GMPOOL packer workaround.
 
 Validation: native build passed (`/tmp/reduce-ccl-final-build-20260908.log`). Device checks remain unverified: attn-res requires a Blackhole 2x4 mesh and DiT fused tests require Galaxy.
+
+## Quasar reductions and SDPA
+
+Quasar W/H/HW and dense row-major factories now serialize planned calls and auxiliary recipes. The H reader streams one complete column per planned batch. Welford's shared readers receive a harmless explicit zero recipe, and the three Metal2 SDPA writers receive their identity recipe through varargs. Removed the Quasar sharded H reader, which has no factory references (the H factory rejects width sharding).
+
+Validation: the native build compiled the Quasar factory objects and linked successfully (`/tmp/reduce-quasar-build-20260908.log`). On-device Quasar compilation/numerics cannot be verified on Wormhole. Full toy variance T079 also passed all 41 cases (`reduce-migration-if_f43wa`).

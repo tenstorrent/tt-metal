@@ -89,6 +89,28 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     }
     TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
 
+    namespace rh = ttnn::kernel_lib::host;
+    const rh::ReduceHardwareConfig hardware{
+        a.device().arch(), fp32_dest_acc_en, dst_full_sync_en, a.device().l1_size_per_core()};
+    auto plan_reduction = [&](uint32_t local_Wt) {
+        return make_generic_reduce_sequence(
+            a.tensor_spec(),
+            output.tensor_spec(),
+            operation_attributes.math_op,
+            ReduceOpDim::H,
+            operation_attributes.scaler,
+            ReduceFp32Mode::Fast,
+            hardware,
+            Ht,
+            local_Wt,
+            1,
+            false);
+    };
+    const auto reduction = plan_reduction(1);
+    std::vector<uint32_t> auxiliary_args;
+    reduction.append_auxiliary_to(auxiliary_args);
+    const uint32_t auxiliary_tiles = reduction.auxiliary.tiles.size();
+
     // ---- Resource names ----
     const DFBSpecName IN{"in"};          // legacy c_0
     const DFBSpecName SCALER{"scaler"};  // legacy c_2
@@ -108,7 +130,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     DataflowBufferSpec scaler_dfb{
         .unique_id = SCALER,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = auxiliary_tiles,
         .data_format_metadata = scaler_cb_data_format};
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
@@ -149,6 +171,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config =
             ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     KernelSpec writer{
@@ -163,6 +186,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     };
 
     auto make_compute = [&](const KernelSpecName& id, uint32_t compute_Wt) {
+        std::vector<uint32_t> reduce_args;
+        plan_reduction(compute_Wt).append_to(reduce_args);
         return KernelSpec{
             .unique_id = id,
             .source = kdir / "compute/reduce_metal2.cpp",
@@ -173,7 +198,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                      .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
-                {{"Ht", Ht}, {"Wt", compute_Wt}, {"NC", 1u}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
+                {{"Ht", Ht},
+                 {"Wt", compute_Wt},
+                 {"NC", 1u},
+                 {"post_mul_scaler_bits", post_mul_scaler_bits},
+                 {"auxiliary_tiles", auxiliary_tiles}},
             .hw_config = ttnn::to_compute_hardware_config(
                 device->arch(),
                 ttnn::ComputeKernelConfig{
@@ -181,6 +210,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                     .math_approx_mode = false,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .dst_full_sync_en = dst_full_sync_en}),
+            .advanced_options = {.compile_time_varargs = reduce_args},
         };
     };
 
