@@ -902,10 +902,14 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // the i-th candidate placement for that shape. Built once here so that
     // compute_solution_bitset (called once per SAT solution) is a simple
     // word-OR loop instead of a per-chip hash lookup.
+    // TODO: delete with the find_all_in_psd Phase 3 loop. The DFS builds its own bitsets.
     std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
+        // TODO: this per-shape loop is replaced by a single adjacency-guided DFS call over all
+        // shapes at once. Solving one shape at a time is what discards the cross-shape edges. Duplicated in the
+        // other builder overload.
         std::vector<std::string> find_all_errors;
         const auto placements = physical_grouping_descriptor.find_all_in_psd(
             groupings, physical_system_descriptor, flat_graph, &find_all_errors);
@@ -957,6 +961,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // galaxy is the same 4×8 tile), the grouping descriptor's placements
     // already cover the entire system. We can skip the solver entirely and
     // return the pre-built graph right away.
+    //
+    // TODO: delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
+    // can still resolve to several PGD variants, and what is returned here is Phase B's coverage-maximizing
+    // tiling. A single-shape MGD that needs a particular tile boundary therefore fails with no search left to
+    // recover, so the premise "one shape means nothing to search" does not hold. Route every MGD through the
+    // adjacency-guided DFS instead. Note this block is duplicated in the other builder overload.
     // -------------------------------------------------------------------------
     const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
     if (mesh_shape_entries.size() == 1) {
@@ -990,6 +1000,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     //                     larger placements first (better pruning).
     //   exhausted       — set to true once the solver finds no more options.
     // -------------------------------------------------------------------------
+    // TODO: delete with the find_all_in_psd Phase 3/6 path. DFS emits labelled placements directly.
     struct MeshEnumState {
         AdjacencyGraph<MeshId> logical_graph;
         AdjacencyGraph<MeshId> physical_graph;
@@ -1192,6 +1203,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     };
 
     // -----------------------------------------------------------------------
+    // TODO: delete with MeshEnumState / find_all_in_psd. Not the adjacency-guided DFS.
     // DisjointPackingSearch — depth-first search over all combinations of one
     // placement per mesh shape.
     //
@@ -1517,22 +1529,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
 namespace {
 
-// Map logical MeshId (MGD local_id) -> mesh/switch definition name used as the MESH key in
-// get_valid_groupings_for_mgd (e.g. MeshId{0} -> "M0").
-std::unordered_map<MeshId, std::string> logical_mesh_id_to_mgd_instance_name(
-    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
-    std::unordered_map<MeshId, std::string> mesh_id_to_name;
-    for (const auto global_id : mesh_graph_descriptor.all_meshes()) {
-        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
-        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
-    }
-    for (const auto global_id : mesh_graph_descriptor.all_switches()) {
-        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
-        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
-    }
-    return mesh_id_to_name;
-}
-
 // Attach PGD preferred pinnings onto an already-built rank-bound physical graph. For each mesh already
 // present on the graph, look up its MGD type name and copy the committed MESH grouping's
 // mesh_node_to_asic_position onto mesh_pgd_pinnings_ (no footprint rediscovery).
@@ -1559,7 +1555,7 @@ void assign_pgd_pinnings_to_rank_bound_physical_graph(
     }
 
     const auto& mesh_groupings_by_name = valid_groupings_map.at("MESH");
-    const auto mesh_id_to_instance_name = logical_mesh_id_to_mgd_instance_name(mesh_graph_descriptor);
+    const auto mesh_id_to_instance_name = mesh_graph_descriptor.mesh_id_to_instance_name();
 
     std::size_t assigned = 0;
     for (const auto& [logical_mesh_id, _] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -1705,10 +1701,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             next_base += static_cast<std::uint32_t>(mesh_local_ids.size());
         }
     }
-    // Build the valid-groupings key for (mgd index, original mesh name). get_valid_groupings_for_mgds prefixes
-    // keys with "mgd{i}_" only in the multi-MGD case.
     auto mesh_key_for = [&](std::size_t mgd_index, const std::string& name) -> std::string {
-        return multi_mgd ? fmt::format("mgd{}_{}", mgd_index, name) : name;
+        return ::tt::tt_fabric::merged_instance_key(mgd_index, mesh_graph_descriptors.size(), name);
     };
 
     // -------------------------------------------------------------------------
@@ -1726,10 +1720,14 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // the i-th candidate placement for that shape. Built once here so that
     // compute_solution_bitset (called once per SAT solution) is a simple
     // word-OR loop instead of a per-chip hash lookup.
+    // TODO: delete with the find_all_in_psd Phase 3 loop. The DFS builds its own bitsets.
     std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
+        // TODO: this per-shape loop is replaced by a single adjacency-guided DFS call over all
+        // shapes at once. Solving one shape at a time is what discards the cross-shape edges. Duplicated in the
+        // other builder overload.
         std::vector<std::string> find_all_errors;
         const auto placements = physical_grouping_descriptor.find_all_in_psd(
             groupings, physical_system_descriptor, flat_graph, &find_all_errors);
@@ -1781,6 +1779,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // galaxy is the same 4×8 tile), the grouping descriptor's placements
     // already cover the entire system. We can skip the solver entirely and
     // return the pre-built graph right away.
+    //
+    // TODO: delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
+    // can still resolve to several PGD variants, and what is returned here is Phase B's coverage-maximizing
+    // tiling. A single-shape MGD that needs a particular tile boundary therefore fails with no search left to
+    // recover, so the premise "one shape means nothing to search" does not hold. Route every MGD through the
+    // adjacency-guided DFS instead. Note this block is duplicated in the other builder overload.
     // -------------------------------------------------------------------------
     const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
     if (mesh_shape_entries.size() == 1) {
@@ -1814,6 +1818,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     //                     larger placements first (better pruning).
     //   exhausted       — set to true once the solver finds no more options.
     // -------------------------------------------------------------------------
+    // TODO: delete with the find_all_in_psd Phase 3/6 path. DFS emits labelled placements directly.
     struct MeshEnumState {
         AdjacencyGraph<MeshId> logical_graph;
         AdjacencyGraph<MeshId> physical_graph;
@@ -2032,6 +2037,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     };
 
     // -----------------------------------------------------------------------
+    // TODO: delete with MeshEnumState / find_all_in_psd. Not the adjacency-guided DFS.
     // DisjointPackingSearch — depth-first search over all combinations of one
     // placement per mesh shape.
     //

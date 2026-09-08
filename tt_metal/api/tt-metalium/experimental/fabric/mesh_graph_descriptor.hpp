@@ -171,6 +171,10 @@ public:
     // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
     std::vector<std::string> get_all_mesh_names() const;
 
+    // Map MeshId (mesh/switch instance local_id) -> definition name used as the MESH key in
+    // get_valid_groupings_for_mgd (e.g. MeshId{0} -> "M0").
+    std::unordered_map<MeshId, std::string> mesh_id_to_instance_name() const;
+
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
         auto it = instances_by_name_.find(name);

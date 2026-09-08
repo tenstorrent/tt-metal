@@ -3,6 +3,10 @@
 **Adjacency-guided mixed-shape placement.** Replace the per-shape maximum-coverage tiling with a single
 DFS that grows one mixed-shape placement along the MGD's own mesh graph.
 
+**Status: WIP.** The search is implemented (`PhysicalGroupingDescriptor::solve_adjacency_guided_placement`
+and the pool entry point) and covered by offline unit tests. It is not wired into
+`build_physical_multi_mesh_adjacency_graph`; `find_all_in_psd` is still the production placement path.
+
 **Priority: 2.** This is the plan that actually answers #54623.
 
 Tracking issue: [#54623 — \[Auto-mapper\] Verify inter-mesh connectivity in heterogeneous placements via
@@ -845,6 +849,81 @@ try S4_a = [c2..c5]
 
 Three search nodes. The propagation does the work, not the enumeration.
 
+### (l) Implementation interface (v1 — incremental domains, adopted)
+
+The code skeleton in `physical_grouping_descriptor_matching.cpp` follows this split. It **replaces**
+the global-pool + `touches` index of §5(a)–(c) with on-demand domain generation (§5(i)) as the
+**default**, not a contingency — PGD slot labels collapse domains today, and per-node anchored
+`find_any_in_psd` avoids building a cross-shape pool up front.
+
+**Entry point — `solve_adjacency_guided_placement`**
+
+Infrastructure setup only:
+
+1. Merge MGDs → `LogicalMultiMeshGraph merged` + `local_to_global_mesh_ids`.
+2. Build PSD physical graph.
+3. Derive `ordered_mesh_ids` from `merged.mesh_adjacency_graphs_` (authoritative mesh instance list).
+4. Build `mesh_id_to_index` for dense `assignment[mesh_index]`.
+5. Move `merged.mesh_level_graph_` into search context (**do not** dedupe neighbours — channel
+   multiplicity lives in duplicate entries; §3).
+6. Call `start_adjacency_guided_dfs` (which runs `adjacency_guided_dfs_iteration_loop`).
+
+**Why `mesh_level_graph` directly, not a derived adjacency list**
+
+| Keep | Drop |
+| --- | --- |
+| `AdjacencyGraph<MeshId> mesh_level_graph` from merge | Precomputed `mesh_neighbors[mesh_index]` with sort+unique |
+
+Deduping neighbours loses parallel-link count. Strict-mode channel matching and exit-node graphs
+(`mesh_exit_node_graphs_`) may be wired in later; the mesh-level graph is the minimum connectivity
+view the DFS needs for frontier growth and seam existence (§5(j): existence-only v1).
+
+**`AdjacencyGuidedSearchContext`**
+
+| Field | Role |
+| --- | --- |
+| `pgd`, `valid_groupings`, `physical_system_descriptor`, `physical_graph` | Inputs to `find_any_in_psd` |
+| `mesh_level_graph` | MGD inter-mesh edges (with multiplicity) |
+| `ordered_mesh_ids`, `mesh_id_to_index` | Map `MeshId` ↔ dense index for `assignment[]` |
+| `mesh_accepted_groupings[mesh_index]` | PGD variant names per mesh (grouping only, no placements) |
+| `assignment`, `occupied_asics`, `nodes_expanded` | Search state |
+| `node_budget` | §5(f) cap on expanded nodes |
+
+**Function split**
+
+```
+solve_adjacency_guided_placement   → infrastructure (above)
+start_adjacency_guided_dfs         → populate mesh_accepted_groupings, size assignment[], run iteration loop
+adjacency_guided_dfs_iteration_loop → backtracking loop (stub)
+select_next_mesh                   → §5(b) frontier heuristic (stub)
+generate_next_step_pool            → §5(i) anchored find_any_in_psd per grouping variant (stub)
+forward_check                      → §5(d) union bound / domain wipeout (deferred)
+```
+
+**`generate_next_step_pool(mesh_index)` contract**
+
+For mesh `L = ordered_mesh_ids[mesh_index]`, for each `GroupingInfo` in
+`mesh_accepted_groupings[mesh_index]`:
+
+```cpp
+MappingConstraints<LogicalChipId, AsicID> seed;
+seed.add_forbidden_constraint(all_nodes, occupied_asics);
+for (MeshId neighbor_id : ctx.mesh_level_graph.get_neighbors(L)) {
+    if (!assignment[mesh_id_to_index.at(neighbor_id)].has_value()) continue;
+    seed.add_cardinality_constraint(all_nodes, open_boundary(neighbor_region), /*min_count=*/1);
+}
+pgd->find_any_in_psd(grouping, *physical_system_descriptor, *physical_graph, max=1, seed);
+```
+
+Seeded component (no placed neighbours): omit cardinality constraints; honour mesh-level pinning
+projection from §4(d) if present.
+
+**Not in v1 context**
+
+- Full `LogicalMultiMeshGraph` — only `mesh_level_graph` is needed until exit-node strictness;
+  `mesh_exit_node_graphs_` can be added when §5(j) channel/exit work lands.
+- Global `pool`, `touches`, `touches_bits` — superseded by incremental generation.
+
 ## 6. DFS optimizations
 
 ### (a) Status
@@ -1040,7 +1119,7 @@ here needs to appear in a public header.
 
 | Phase | Fate |
 | --- | --- |
-| 3 — `find_all_in_psd` | Replaced on this path by the Phase A pool build. `find_all_in_psd` itself stays for its other callers |
+| 3 — `find_all_in_psd` | Replaced on this path by the Phase A pool build. `find_all_in_psd` itself has no other production caller — see the inventory in §8(a) |
 | 4 — single-shape fast path | **Delete.** Every MGD goes through the search — see the note below |
 | 5 — per-shape `MeshEnumState` + SAT | Becomes fallback only |
 | 6 — `DisjointPackingSearch` | Becomes fallback only |
@@ -1097,6 +1176,43 @@ a mesh when `handle_forbidden_constraint` rejects a pair, which is the only repa
 This is worth doing as part of deleting Phase 4 rather than after it, since deleting the fast path is
 what takes the headroom away. It is cheap — the DFS already has the pool and the occupancy mask, so
 producing spares is continuing the loop rather than new machinery.
+
+### (a) Function-level inventory: what becomes dead, and what has to be true first
+
+None of this is deleted in the change that introduces the DFS. The order is: land the DFS as the
+placement producer, confirm on real MGDs that the fallback is either unnecessary or is being kept
+deliberately, and only then remove. Each row below records the condition that must hold before the
+deletion is safe, so that the removal is a separate reviewable change rather than a guess bundled into
+the feature.
+
+| Symbol | File | Role today | Fate |
+| --- | --- | --- | --- |
+| `solve_for_many_groupings_to_psd_heterogeneous` | `physical_grouping_descriptor_matching.cpp` | Phase A enumeration plus Phase B set packing — the frozen tiling this plan exists to remove | **Delete** once the DFS is the only placement producer. Its sole caller is `find_all_in_psd` |
+| `solve_set_packing`, `PackingResult`, `kSetPackingBudget` | same | Maximum-weight set packing, objective is chip coverage | **Delete** together with the row above, which is its only caller |
+| `find_all_in_psd`, both overloads | same, declared in `physical_grouping_descriptor.hpp` | Public entry point the Phase 3 loop calls once per mesh shape | **Delete** once Phase 3 is replaced. Its only non-test callers are the two Phase 3 sites, so after that it is reachable only from `test_physical_grouping_descriptor.cpp` |
+| `solve_for_many_groupings_to_psd` | same | Homogeneous repeated placement of a single grouping | **Already unreachable today** — see below. Deletable now, independently of this plan |
+| Phase 3 loop | `topology_mapper_utils.cpp` | Per-shape placement, shape graph, and per-placement bitmask precompute | Replaced by one DFS call |
+| Phase 4 single-shape fast path | same | Returns Phase B's tiling directly, skipping the solver | **Delete** — rationale above |
+| `group_bits_by_name` | same | Chip bitmask per candidate placement, built in Phase 3 and consumed by Phase 6 | Dead on the DFS path, which builds its own bitsets. Survives exactly as long as the Phase 6 fallback does |
+| Phase 5 `MeshEnumState`, Phase 6 `DisjointPackingSearch` | same | Per-shape SAT enumeration and the disjointness search over its solutions | Fallback only. Delete when the fallback is retired, not before |
+| `mesh_physical_layouts_from_psd_placements`, `build_hierarchical_from_flat_graph` | same | Turn placements into the result graph, re-keyed under logical `MeshId` | **Keep.** The DFS emits the same `PsdPlacement` struct, so Phase 7 is untouched |
+
+Two things this inventory exposes that are worth acting on separately.
+
+**`solve_for_many_groupings_to_psd` is already dead code.** It sits at namespace scope in
+`tt::tt_fabric` rather than in the anonymous namespace, so it has external linkage and no compiler
+warns about it, but it is declared in no header and called from nowhere — not from production, not from
+tests. It is the homogeneous ancestor of the heterogeneous packer that replaced it. This is not caused
+by the DFS and does not need to wait for it; it can be removed on its own.
+
+**Every `topology_mapper_utils.cpp` row above exists twice.**
+`build_physical_multi_mesh_adjacency_graph` has a single-MGD and a multi-MGD copy, and the multi-MGD one
+says so in its own header comment: *"Phases 1/3/4/6/7 are identical to the single-MGD builder."* So each
+deletion here, and the DFS wiring itself, has to be applied in both places, with the usual risk that the
+two drift. Unifying the two builders before wiring in the DFS would roughly halve the work and remove
+that risk; doing it afterwards means doing the integration twice. This is the strongest argument in the
+plan for tackling the duplication first, and it is worth deciding deliberately rather than discovering
+mid-implementation.
 
 ## 9. Interaction with Plans 1 and 2
 
