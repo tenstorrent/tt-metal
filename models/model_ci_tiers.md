@@ -86,6 +86,7 @@ it is classified differently on different systems.
 | Mixtral-8x7B | WH LLMBox |
 | Gemma-3-4B | WH N150, BH P150 |
 | Gemma-3-27B | WH LLMBox |
+| Gemma-4-12B | WH LLMBox |
 | Gemma-4-26B-A4B | WH LLMBox |
 | Gemma-4-31B | WH LLMBox |
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |

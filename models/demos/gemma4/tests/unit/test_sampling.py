@@ -13,13 +13,21 @@ Covers acceptance criteria:
   compares the per-sampled-token logprob returned by the sampling kernel
   against a torch ``log_softmax`` reference.
 
-Decoder shape: vocab=262144 with per-device shard = ``V/TP``. The on-device
-sampling module only requires ``tp > 1``, so the tests parametrize over both
-``(1, 4)`` (Blackhole quietbox, TP=4, shard 65536) and ``(1, 8)`` (T3K, TP=8,
-shard 32768). The host-argmax fallback for TP=1 is covered by ``test_full_model``.
+Decoder shape: vocab=262144 with per-device shard = ``V/TP``. Every mesh the
+model can run on is covered, because ``Gemma4Model`` enables on-device sampling
+at every one of them — the shard width is what varies:
 
-    pytest -k "1x4 and sampling"   # Blackhole quietbox (on-device sampling active)
-    pytest -k "1x8 and sampling"   # T3K (on-device sampling active)
+    1x1 -> 262144   (single-device multi_step_reduction path, uint32 topk indices)
+    1x2 -> 131072   (uint32 topk indices)
+    1x4 ->  65536
+    1x8 ->  32768
+
+1x1 and 1x2 are the load-bearing cases for ``_MAX_SAMPLING_SHARD_WIDTH`` in
+``tt/model.py``: they were previously gated onto the host-argmax path, which read
+a full 262144-wide logits row to CPU every decode step.
+
+    pytest -k "1x1 and sampling"   # single card  (widest shard)
+    pytest -k "1x8 and sampling"   # T3K
 """
 
 import pytest
@@ -31,7 +39,7 @@ from models.common.sampling.generator import SamplingGenerator, SamplingParams, 
 
 from ...config import MeshConfig, ModeConfig
 from ...tests.test_factory import compare_tensors, get_pcc_threshold, parametrize_mesh_with_fabric
-from ...tt.model import Gemma4Model, _compute_per_device_vocab
+from ...tt.model import Gemma4Model, _compute_per_device_vocab, force_argmax_sampling_enabled
 
 LOG_PROBS_SUPPORTED_DEVICE_COUNTS = (8, 32)
 
@@ -61,6 +69,48 @@ def test_gemma4_make_sampling_args_sets_sampling_dp_from_mesh_rows():
     mesh = _FakeMeshDevice((4, 8))
     args = Gemma4Model._make_sampling_args(_FakeConfig(), mesh, tp=mesh.shape[1])
     assert args.sampling_dp == 4
+
+
+def test_gemma4_force_argmax_env(monkeypatch):
+    """``GEMMA4_TT_FORCE_ARGMAX`` is the only switch for the argmax path.
+
+    Unset (the default) leaves SAMPLING_AG_CONFIG out of model_config, so
+    TTSampling keeps allow_force_argmax=False and greedy batches stay on the
+    top-k pipeline. Pure-Python; no hardware required.
+    """
+
+    class _FakeMeshDevice:
+        def __init__(self, shape):
+            self.shape = shape
+
+        def get_num_devices(self):
+            return self.shape[0] * self.shape[1]
+
+    class _FakeConfig:
+        vocab_size = VOCAB_SIZE
+
+    mesh = _FakeMeshDevice((1, 8))
+
+    monkeypatch.delenv("GEMMA4_TT_FORCE_ARGMAX", raising=False)
+    assert force_argmax_sampling_enabled() is False
+    args = Gemma4Model._make_sampling_args(
+        _FakeConfig(), mesh, tp=mesh.shape[1], force_argmax=force_argmax_sampling_enabled()
+    )
+    assert "SAMPLING_AG_CONFIG" not in args.model_config
+
+    for off in ("0", "false", "no", "off"):
+        monkeypatch.setenv("GEMMA4_TT_FORCE_ARGMAX", off)
+        assert force_argmax_sampling_enabled() is False, off
+
+    for on in ("1", "true", "TRUE"):
+        monkeypatch.setenv("GEMMA4_TT_FORCE_ARGMAX", on)
+        assert force_argmax_sampling_enabled() is True, on
+
+    args = Gemma4Model._make_sampling_args(
+        _FakeConfig(), mesh, tp=mesh.shape[1], force_argmax=force_argmax_sampling_enabled()
+    )
+    assert args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] is True
+    assert args.model_config["SAMPLING_AG_CONFIG"]["num_links"] >= 1
 
 
 def _make_sampling_args(mesh_device, *, use_topk_logprobs=False):
@@ -143,7 +193,7 @@ def _extract_tokens(tt_tokens, batch_size):
     return ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[:batch_size].tolist()
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_greedy_batch32(mesh_device, reset_seeds):
     """Greedy on-device sampling at batch=32 matches CPU argmax exactly.
 
@@ -175,7 +225,7 @@ def test_sampling_greedy_batch32(mesh_device, reset_seeds):
     logger.info(f"Greedy batch=32 sampling matched all {BATCH_SIZE} winners")
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_top_k_constrained(mesh_device, reset_seeds):
     """Top-k sampling keeps every drawn token inside the reference top-k set.
 
@@ -214,7 +264,7 @@ def test_sampling_top_k_constrained(mesh_device, reset_seeds):
     logger.info(f"Top-k={top_k} sampling stayed within {expected_set}; sampled {len(seen)} unique tokens")
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_top_p_constrained(mesh_device, reset_seeds):
     """Top-p (nucleus) sampling keeps every drawn token inside the reference nucleus.
 
@@ -259,7 +309,7 @@ def test_sampling_top_p_constrained(mesh_device, reset_seeds):
     logger.info(f"Top-p={top_p} sampling stayed within {nucleus_set}; sampled {len(seen)} unique tokens")
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_log_probs_pcc(mesh_device, reset_seeds, request):
     """PCC ≥ 0.999 between device-computed log-probs and torch log_softmax reference.
 

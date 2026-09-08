@@ -13,7 +13,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
@@ -26,13 +25,36 @@ from .operations import (
     chunked_prefill_sdpa_sliding,
     concat_heads,
     effective_block_size,
+    interleave_qkv_if_sharded,
+    o_proj_input_memcfg,
+    prefill_sdpa_act_memcfg,
+    prefill_sdpa_compute_kernel_config,
     prefill_sdpa_program_config,
-    prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
 
 TILE_HEIGHT = 32
+
+
+def _ensure_dram_interleaved(tensor):
+    """Park an activation in DRAM interleaved before SDPA (L1 CBs need the room)."""
+    if tensor is None:
+        return tensor
+    try:
+        mem = tensor.memory_config()
+        is_l1 = mem.buffer_type == ttnn.BufferType.L1
+        is_sharded = tensor.is_sharded()
+    except Exception:
+        return tensor
+    if not is_l1 and not is_sharded:
+        return tensor
+    if is_sharded:
+        out = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        out = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    tensor.deallocate(True)
+    return out
 
 
 def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device, force_inline=False):
@@ -422,10 +444,18 @@ def _prefill_forward_single(
         fill_page_table = chunk_page_table if is_chunked else page_table
 
     xqkv = apply_qkv_projection(hidden_states, weights)
+    # Free the QKV in0 (often L1 interleaved from input_layernorm S2I / hoist)
+    # before SDPA. Leaving it resident clashes with SDPA's static circular
+    # buffers on the full worker grid (same pattern as the batched path below).
+    ttnn.deallocate(hidden_states)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
-    # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
-    act_mc = prefill_short_lived_memcfg()
+    # #48861). The allreduce input stays DRAM (CCL path); the o_proj matmul writes
+    # L1 block-sharded under its tuned config and is interleaved back before CCL.
+    # The tuned prefill QKV already writes DRAM interleaved; the guard stays for
+    # callers/paths that hand back a sharded projection (head-split needs interleaved).
+    act_mc = prefill_sdpa_act_memcfg()
+    xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv,
         config,
@@ -434,6 +464,9 @@ def _prefill_forward_single(
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
     )
+    # Free the fused projection buffer once the heads are materialized so it is
+    # not still resident under SDPA.
+    ttnn.deallocate(xqkv)
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
@@ -476,6 +509,10 @@ def _prefill_forward_single(
                 # cap): may still kernel-cap-fill in-graph.
                 if valid_seq_len is not None:
                     v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    if os.environ.get("GEMMA4_DEBUG_RING_FILL") == "1":
+                        from loguru import logger as _rl
+
+                        _rl.info(f"[ring-fill] DEFERRED-STASH branch: v={v} rows={int(tt_k.shape[-2])}")
                     tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
                     tile_end = min(tile_end, int(tt_k.shape[-2]))
                     if tile_end <= 0:
@@ -525,6 +562,13 @@ def _prefill_forward_single(
                     # Traced / single-chunk with get_last_token=-1: kernel-cap fill.
                     k_fill, v_fill = tt_k, tt_v
                     fill_kwargs = {}
+                    if os.environ.get("GEMMA4_DEBUG_RING_FILL") == "1":
+                        from loguru import logger as _rl
+
+                        _rl.info(
+                            f"[ring-fill] KERNEL-CAP branch: valid_seq_len={valid_seq_len} "
+                            f"rows={int(tt_k.shape[-2])} modulo={config.cache_position_modulo}"
+                        )
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
@@ -594,6 +638,11 @@ def _prefill_forward_single(
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
     # 6. SDPA (causal prefill, scale=1.0)
+    # Prefill SDPA's static CBs fill Wormhole L1; any L1 Q/K/V (or residue from
+    # an L1 QKV out) clashes. Force DRAM interleaved heads before the op.
+    tt_q = _ensure_dram_interleaved(tt_q)
+    tt_k = _ensure_dram_interleaved(tt_k)
+    tt_v = _ensure_dram_interleaved(tt_v)
     # The non-chunked SDPA silently returns WRONG results at seq_len >= 32768
     # (2^15) — generation degrades to garbage. The cliff is INCLUSIVE of 32768:
     # a power-of-2-padded prompt that lands exactly on 32768 is already broken
@@ -624,13 +673,7 @@ def _prefill_forward_single(
         # rows [hist, hist+seq_len) are query positions [chunk_offset,
         # chunk_offset+seq_len) with their full window covered. The current
         # chunk's last ``sliding_window`` K/V become next chunk's tail.
-        sdpa_ckc = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
-            math_approx_mode=False,
-            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
-            packer_l1_acc=False,
-        )
+        sdpa_ckc = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=config.hidden_size)
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
         if sliding_tail_in is not None:
@@ -763,16 +806,33 @@ def _prefill_forward_single(
             scale=1.0,
             base_offset=chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset,
             num_kv_heads=nkv_local,
+            hidden_size=config.hidden_size,
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
-        tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
+        tt_sdpa = chunked_prefill_sdpa_sliding(
+            tt_q,
+            tt_k,
+            tt_v,
+            sliding_window,
+            config.head_dim,
+            scale=1.0,
+            hidden_size=config.hidden_size,
+        )
     elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None:
         # Full-attention long context (incl. KV-shared layers whose kv_cache is
         # the source layer's already-filled pool).
         k_cache, v_cache = kv_cache
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = chunked_prefill_sdpa(
-            tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0, num_kv_heads=nkv_local
+            tt_q,
+            k_cache,
+            v_cache,
+            page_table,
+            user_id,
+            config.head_dim,
+            scale=1.0,
+            num_kv_heads=nkv_local,
+            hidden_size=config.hidden_size,
         )
     elif long_seq:
         raise RuntimeError(
@@ -783,16 +843,10 @@ def _prefill_forward_single(
             f"Non-chunked SDPA silently returns garbage above this length."
         )
     else:
-        # HiFi4 + FP32 dest-acc SDPA: restore the softmax-reduce precision #47311 removed
-        # (it dropped the reduce's forced-FP32 accumulation). fp32_dest_acc is safe on the
-        # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
-        sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
-            math_approx_mode=False,
-            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
-            packer_l1_acc=False,
-        )
+        # fp32 dest-acc is safe on the prefill SDPA op (unlike the decode op, where
+        # it halves dest for head_dim=512). Fidelity policy and the #38306 caveat
+        # live in prefill_sdpa_compute_kernel_config.
+        sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=config.hidden_size)
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
@@ -842,12 +896,10 @@ def _prefill_forward_single(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=act_mc)
-    # o_proj + allreduce need DRAM activations (CCL / matmul CB pressure).
-    if act_mc == ttnn.L1_MEMORY_CONFIG:
-        tt_out_l1 = tt_out
-        tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
-        tt_out_l1.deallocate(True)
+    # The tuned o_proj matmul reads in0 from L1 interleaved — land the head-concat
+    # there directly when it fits the L1 budget (else act_mc, i.e. DRAM by default).
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
@@ -924,10 +976,12 @@ def prefill_forward(
     xqkv = apply_qkv_projection(hidden_states, weights)
     ttnn.deallocate(hidden_states)
 
+    # Block-sharded QKV (tuned prefill path) must be interleaved before reshape/split.
+    act_mc = prefill_sdpa_act_memcfg()
+    xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
     seq_len_per_user = seq_len // batch_size
 
-    act_mc = prefill_short_lived_memcfg()
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv,
         config,
@@ -1100,17 +1154,12 @@ def prefill_forward(
                 ttnn.fill_cache(v_cache, tt_v[slot_idx : slot_idx + 1], batch_idx=slot_idx)
 
     sliding_window = config.sliding_window if config.is_sliding else None
-    # HiFi4 + FP32 dest-acc SDPA: restore softmax-reduce precision lost after #47311
-    # (forced-FP32 reduce accumulation removed).
-    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
-        math_approx_mode=False,
-        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
-        packer_l1_acc=False,
-    )
-    # Batched path previously omitted program_config → op default q/k=32
-    # (#51911, ~3x SDPA slowdown on Gemma4 shapes). Match the single-user path.
+    tt_q = _ensure_dram_interleaved(tt_q)
+    tt_k = _ensure_dram_interleaved(tt_k)
+    tt_v = _ensure_dram_interleaved(tt_v)
+    # Fidelity policy and the #38306 caveat live in
+    # prefill_sdpa_compute_kernel_config.
+    sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=config.hidden_size)
     tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -1129,11 +1178,8 @@ def prefill_forward(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=act_mc)
-    if act_mc == ttnn.L1_MEMORY_CONFIG:
-        tt_out_l1 = tt_out
-        tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
-        tt_out_l1.deallocate(True)
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 

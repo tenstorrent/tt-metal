@@ -25,6 +25,47 @@ from .decode import decode_forward, packed_decode_forward
 from .prefill import flush_deferred_bounded_fills, prefill_forward
 
 
+#: Ring headroom, in 64-token blocks, added on top of the sliding window.
+#: 0 (default) keeps the historical exact-window ring.
+SPEC_RING_HEADROOM_ENV = "GEMMA4_SPEC_RING_HEADROOM_BLOCKS"
+_RING_HEADROOM_BLOCK = 64
+
+
+def bounded_ring_modulo(sliding_window):
+    """Ring size for a bounded sliding layer: the window plus optional headroom.
+
+    A ring of EXACTLY ``sliding_window`` slots is correct for plain decode (slot
+    p%W holds exactly the window), but it breaks SPECULATIVE decode: verify
+    writes candidates at p+1..p+K, and slot (p+j)%W currently holds position
+    p+j-W, which for j>=1 is still inside the live window [p-W+1, p]. Every
+    draft therefore evicts an in-window token, accepted or rejected. Measured at
+    32k: K=1 stays token-correct, K=5 corrupts from the first token.
+
+    Extra blocks push those speculative slots outside the window; SDPA still
+    masks to the true ``sliding_window``, so decode semantics are unchanged.
+    Opt-in (the spec path sets it) because it costs one block per user per
+    sliding layer.
+    """
+    if sliding_window is None:
+        return None
+    try:
+        extra = int(os.environ.get(SPEC_RING_HEADROOM_ENV, "0"))
+    except ValueError:
+        extra = 0
+    ring = int(sliding_window) + max(0, extra) * _RING_HEADROOM_BLOCK
+    # The ring must stay a power of two. Chunk starts have to be multiples of the
+    # ring (paged_fill_cache writes row r to slot r % ring, with no start offset)
+    # AND of SDPA's q_chunk_size, which TT_FATALs otherwise. An odd factor makes
+    # those two nearly unsatisfiable (a 1088 ring aligns only every 8704 tokens).
+    if ring & (ring - 1):
+        raise ValueError(
+            f"bounded sliding ring must be a power of two, got {ring} "
+            f"(sliding_window={sliding_window}, {SPEC_RING_HEADROOM_ENV}={extra} blocks). "
+            f"Pick headroom that doubles the window, e.g. {int(sliding_window) // _RING_HEADROOM_BLOCK} blocks."
+        )
+    return ring
+
+
 class Gemma4AttentionConfig:
     """Configuration for a single attention layer, derived from HF config + layer type."""
 
@@ -101,7 +142,7 @@ class Gemma4Attention:
             bounded_sliding_kv_cache and config.is_sliding and config.sliding_window is not None
         )
         if self.bounded_sliding_kv_cache:
-            config.cache_position_modulo = config.sliding_window
+            config.cache_position_modulo = bounded_ring_modulo(config.sliding_window)
 
         self.weights = load_attention_weights(
             mesh_device=mesh_device,

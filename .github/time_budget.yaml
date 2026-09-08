@@ -353,7 +353,10 @@ models:
     bh_sc1: 140
     bh_sc4: 120
   e2e_tier2:
-    wh_llmbox_perf: 266
+    # Sized for the Gemma-4 T3K e2e set (26B-A4B 10m + 12B 25m + 31B 35m, the last
+    # two covering teacher-forcing) on top of the rest of tier 2: sum is 309/311.
+    # Only ~2m of headroom -- raise this before adding another wh_llmbox_perf job.
+    wh_llmbox_perf: 311
     wh_n150: 45
     wh_n300: 6
     bh_p150: 26
@@ -426,7 +429,7 @@ models:
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 60
+    wh_llmbox_perf: 100
     bh_quietbox_2: 30
     bh_p150: 30
   vllm:

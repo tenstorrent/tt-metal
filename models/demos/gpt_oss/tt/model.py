@@ -602,13 +602,14 @@ class Model:
 
         return logits
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+    def process_logits_after_prefill_trace(self, logits, last_token_idx, allow_sharded=False):
         """
         Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
 
         Unlike tt_transformers `Transformer`, GPT-OSS `ttnn_prefill_forward` already
         applies final norm + lm_head, so this method only slices logits.
         """
+        del allow_sharded  # Gemma4-only opt-in; API parity with Generator callers
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
             logits,

@@ -13,8 +13,11 @@ from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_HARD_MAX,
     PREFILL_SDPA_MAX_SEQ,
     prefill_short_lived_memcfg,
+    prefill_tensor_memcfg,
+    prefill_tilize_memcfg,
 )
 from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_topology
+from models.demos.gemma4.tt.compute_config import prefill_sdpa_mode
 from models.demos.gemma4.tt.dram_sharded import can_dram_shard
 
 
@@ -39,6 +42,27 @@ class _FakeMesh:
         return self._n
 
 
+class _FakeDevice:
+    def __init__(self, arch):
+        self._arch = arch
+
+    def arch(self):
+        return self._arch
+
+
+def test_prefill_sdpa_mode_is_model_aware_on_wormhole(monkeypatch):
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_FIDELITY", raising=False)
+    wh = _FakeDevice(ttnn.device.Arch.WORMHOLE_B0)
+    assert prefill_sdpa_mode(wh, hidden_size=5376) == "hifi4_nodest"
+    assert prefill_sdpa_mode(wh, hidden_size=3840) == "hifi4"
+
+
+def test_prefill_sdpa_mode_explicit_override_wins(monkeypatch):
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_FIDELITY", "HiFi3")
+    wh = _FakeDevice(ttnn.device.Arch.WORMHOLE_B0)
+    assert prefill_sdpa_mode(wh, hidden_size=5376) == "hifi3"
+
+
 def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):
     """QB2 / P300x2 opened as 1x4: Ring drops 12B full-model PCC below 0.94."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
@@ -54,10 +78,10 @@ def test_ccl_topology_ring_on_bh_8_device_mesh(monkeypatch):
 
 
 def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
-    """WH T3K 1x8: keep Linear — Ring regresses 26B-A4B full-model PCC < 0.76."""
+    """T3K keeps main's validated Linear default; Ring remains an explicit opt-in."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
-    assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Linear
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):
@@ -70,9 +94,18 @@ def test_ccl_topology_env_override_beats_device_count(monkeypatch):
 
 def test_ccl_async_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_CCL_ASYNC", raising=False)
+    monkeypatch.delenv("GEMMA4_CCL_ASYNC_PREFILL", raising=False)
     assert ccl_async_enabled() is False
+    assert ccl_async_enabled(32) is False
+    assert ccl_async_enabled(2048) is True
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC_PREFILL", "0")
+    assert ccl_async_enabled(2048) is False
+    monkeypatch.delenv("GEMMA4_CCL_ASYNC_PREFILL", raising=False)
     monkeypatch.setenv("GEMMA4_CCL_ASYNC", "1")
     assert ccl_async_enabled() is True
+    assert ccl_async_enabled(32) is True
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC", "0")
+    assert ccl_async_enabled(2048) is False
 
 
 def test_prefill_l1_act_env(monkeypatch):
@@ -80,6 +113,19 @@ def test_prefill_l1_act_env(monkeypatch):
     assert prefill_short_lived_memcfg() == ttnn.DRAM_MEMORY_CONFIG
     monkeypatch.setenv("GEMMA4_PREFILL_L1_ACT", "1")
     assert prefill_short_lived_memcfg() == ttnn.L1_MEMORY_CONFIG
+
+
+def test_prefill_tensor_memcfg_size_budget(monkeypatch):
+    """Short activations → L1; over budget / disabled → DRAM."""
+    monkeypatch.delenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", raising=False)
+    # 128 x 5376 BF16 ≈ 1.3 MiB < 4 MiB default
+    assert prefill_tilize_memcfg(128, 5376) == ttnn.L1_MEMORY_CONFIG
+    # RoPE slice 128 x 256 BF16 ≈ 64 KiB
+    assert prefill_tensor_memcfg(128 * 256) == ttnn.L1_MEMORY_CONFIG
+    # 512 x 5376 BF16 ≈ 5.3 MiB > 4 MiB
+    assert prefill_tilize_memcfg(512, 5376) == ttnn.DRAM_MEMORY_CONFIG
+    monkeypatch.setenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", "0")
+    assert prefill_tilize_memcfg(128, 5376) == ttnn.DRAM_MEMORY_CONFIG
 
 
 def test_prefill_sdpa_max_seq_clamped_to_hard_max():
