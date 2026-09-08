@@ -80,7 +80,6 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
                 ? tt::tt_metal::split_work_to_cores(*args.sub_core_grid, work_units)
                 : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
-    const auto fp32_temp_dtype = DataType::FLOAT32;
     const auto farthest_x_y =
         args.sub_core_grid.has_value() ? args.sub_core_grid->bounding_box().end_coord : compute_with_storage_grid_size;
     const uint32_t all_cores_in_bounding_box = (farthest_x_y.x + 1) * (farthest_x_y.y + 1);
@@ -91,7 +90,7 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     const DFBSpecName INDEX_DFB{"index"};
     const DFBSpecName SRC_DFB{"source"};
     const DFBSpecName DST_DFB{"output"};
-    const DFBSpecName FP32_TEMP_DFB{"fp32_temp"};
+    const ScratchpadSpecName FP32_TEMP_SCRATCH{"fp32_temp"};
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName INDEX_TENSOR{"index"};
     const TensorParamName SRC_TENSOR{"source"};
@@ -116,7 +115,6 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
         make_dfb(INDEX_DFB, index_tensor.dtype(), index_page_size_bytes),
         make_dfb(SRC_DFB, src_tensor.dtype(), source_page_size_bytes),
         make_dfb(DST_DFB, output_tensor.dtype(), output_page_size_bytes),
-        make_dfb(FP32_TEMP_DFB, fp32_temp_dtype, fp32_temp_page_size_bytes),
     };
 
     // The reader alone fills and drains INPUT/INDEX/SRC and the FP32_TEMP scratch (self-loop: bound
@@ -139,15 +137,11 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
                 DFBBinding{
                     .dfb_spec_name = SRC_DFB, .accessor_name = "source", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
-                    .dfb_spec_name = FP32_TEMP_DFB,
-                    .accessor_name = "fp32_temp",
-                    .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = FP32_TEMP_DFB,
-                    .accessor_name = "fp32_temp",
-                    .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
                     .dfb_spec_name = DST_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = FP32_TEMP_SCRATCH, .accessor_name = "fp32_temp"},
             },
         .tensor_bindings =
             {
@@ -253,6 +247,9 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     spec.name = "scatter_reduce_bfloat16";
     spec.kernels = {reader, writer};
     spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = FP32_TEMP_SCRATCH, .size_per_node = fp32_temp_page_size_bytes},
+    };
     spec.tensor_parameters = {
         TensorParameter{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()},
         TensorParameter{.unique_id = INDEX_TENSOR, .spec = index_tensor.tensor_spec()},
