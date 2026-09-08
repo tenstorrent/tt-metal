@@ -151,13 +151,6 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
         # Galaxy (no wrap-around links) can only do FABRIC_1D — pass linear_fabric=True
         # there (and use ttnn.Topology.Linear in the CCLManager). See galaxy_mesh_smoke.py.
         multidev_fabric = ttnn.FabricConfig.FABRIC_1D if linear_fabric else ttnn.FabricConfig.FABRIC_1D_RING
-        # Experiment override: M3_TEST_FABRIC=FABRIC_2D_TORUS_Y (any ttnn.FabricConfig name) runs the same
-        # tests under another fabric, e.g. to measure the high_bw_all_gather ring schedule on a torus. Pair
-        # it with an unset TT_MESH_GRAPH_DESC_PATH so the torus wrap is auto-discovered (see
-        # deepseek_v3_d_p/tests/fabric_profiles.py).
-        fabric_override = os.getenv("M3_TEST_FABRIC")
-        if fabric_override:
-            multidev_fabric = getattr(ttnn.FabricConfig, fabric_override)
         params = [
             pytest.param(
                 shape,

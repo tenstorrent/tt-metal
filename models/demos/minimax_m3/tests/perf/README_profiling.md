@@ -86,8 +86,8 @@ Opening that path in an editor shows you HTML source, not the report — it need
 | level | zones/layer | what you get |
 |---|---|---|
 | **1** coarse | ~3 | `attn` vs `mlp` per layer. Start here — it answers "which block". |
-| **2** medium | ~20 | every block that costs real time: sdpa, the CCLs, `cache_read`, `indexer`, and the MoE stages (`dispatch` / `experts_mm` / `combine` / `moe_reduce`). The default. |
-| **3** fine | ~35 | + norms, residuals, rope, head splits, and sub-splits (`deshard` vs `slice`). |
+| **2** medium | ~20 | every block that costs real time: sdpa, the CCLs (incl. the MSA cache-read gathers `ag_kv` / `ag_index_k`), `indexer`, and the MoE stages (`dispatch` / `experts_mm` / `combine` / `moe_reduce`). The default. |
+| **3** fine | ~35 | + norms, residuals, rope, head splits, and sub-splits (weighted-sum vs reduce-scatter). |
 
 Suppressing a zone never loses time — its ops are charged to the nearest enclosing zone, so every
 level accounts for 100% of the chunk, just in fewer buckets. Levels also buy headroom against Tracy's
@@ -307,27 +307,14 @@ times across two days:
 Compute zones land within ~1%. The collectives (`combine`, `dispatch`, `moe_reduce`) move by tens of
 percent between runs — that variance is real cross-chip skew, not a broken capture.
 
-## The `cache_read/deshard` hypothesis (legacy gather only)
+## The MSA cache read (`ag_kv` + `ag_index_k`)
 
 The packed KV cache is one tensor per K/V/index_k of shape
 `[num_users*num_layers, 1, seq_local, head_dim]` ([attention/kv_cache.py](../../tt/attention/kv_cache.py)).
-The LEGACY MSA cache-read path (`M3_MSA_GATHER=legacy`) converts the **whole** tensor from NdShard to
-DRAM-interleaved on **every** sparse layer — the round-robin bank mapping is only intact for the full
-tensor, so it cannot slice one layer's slot first ([attention/prefill.py](../../tt/attention/prefill.py)).
-At 61440 tokens that is ~63 MiB per tensor, read+write, ×3 tensors, ×57 layers ≈ 20+ GiB of DRAM traffic
-per chunk — plausibly more than every expert weight read combined.
-
-The default path no longer has this zone: `ttnn.experimental.high_bw_all_gather`
-([attention/msa.py](../../tt/attention/msa.py) `msa_sp_attention_cache_read`) reads the one selected
-slot straight out of the ND-sharded cache (`input_batch_index`), moves only the written prefix
-(`gathered_dim_size`) and lands it in a persistent worst-case buffer, so the entire cache-read cost is
-`ag_kv` + `ag_index_k`. To A/B the two, run the profile once per mode:
-
-```bash
-LAYERS=6 CACHE=25600                      ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
-LAYERS=6 CACHE=25600 M3_MSA_GATHER=legacy ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
-```
-
-`profile_prefill.py` logs the expected byte count at startup, and the report separates
-`attn/cache_read/deshard` from `attn/cache_read/slice`, so the measured cost and GB/s land right next
-to the prediction.
+The MSA cache read ([attention/msa.py](../../tt/attention/msa.py) `msa_sp_attention_cache_read`) gathers the
+one selected slot straight out of the ND-sharded cache with `ttnn.experimental.high_bw_all_gather`
+(`input_batch_index`), moving only the written prefix (`gathered_dim_size`) into a persistent worst-case
+buffer, so the whole cache-read cost is the two gather zones. The earlier path converted the **whole** cache
+from NdShard to DRAM-interleaved on every sparse layer (`cache_read/{deshard,slice}` zones); that path and
+its zones were removed in #55668, and captures from before it show the zone under `attn/cache_read`.
+Numbers for both are in [docs/ATTENTION_HIGH_BW_ALL_GATHER.md](../../docs/ATTENTION_HIGH_BW_ALL_GATHER.md).

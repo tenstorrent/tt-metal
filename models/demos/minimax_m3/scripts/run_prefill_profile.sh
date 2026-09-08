@@ -26,8 +26,11 @@
 #   STAGE=k         which stage to profile, 0..STAGES-1. Stage k owns global layers
 #                   [k*60/STAGES, (k+1)*60/STAGES); LAYER_IDS must fall inside that range and LAYERS
 #                   takes the first N of it. Only stage 0 has dense layers.          [default 0]
-#   FABRIC=1d|1d_ring|2d|2d_torus_xy   fabric config. 1d matches the whole-galaxy baseline; the
-#                   pipeline runner's intra-galaxy bindings use 2d.                  [default 1d]
+#   FABRIC=1d|1d_ring|2d|2d_torus_xy   fabric config. 1d matches the whole-galaxy baseline and the
+#                   production runner; the pipeline runner's intra-galaxy bindings use 2d. Ring/torus
+#                   modes select the torus_xy mesh graph descriptor (see below).      [default 1d]
+#   M3_CCL_TOPOLOGY=Linear|Ring  topology of the legacy CCLs (all_gather_async / reduce_scatter);
+#                   Ring needs a ring/torus FABRIC. See docs/ATTENTION_HIGH_BW_ALL_GATHER.md. [default Linear]
 #   TT_CACHE_PATH   tilized weight-cache root; the sub-mesh shapes need their own
 #                   tensor_cache_bfp8_MeshShape([4, 4]) / ([2, 4]) (see docs/PIPELINE_PREFILL_TESTING.md).
 #   RESULTS_DIR     where finished captures are moved.        [default $TT_METAL_HOME/prefill_profile_results]
@@ -261,7 +264,7 @@ fi
 {
   echo ""
   echo "==================== SUMMARY ===================="
-  grep -E "^# |PROFILED CHUNK|wall-clock|whole-cache de-shard" "$LOG"
+  grep -E "^# |PROFILED CHUNK|wall-clock" "$LOG"
 } | tee -a "$LOG"
 echo ""
 echo "full log: $LOG"

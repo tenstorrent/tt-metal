@@ -134,10 +134,8 @@ class MeshConfig:
 
     def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False):
         """
-        All-gather operation for tensor parallel communication (legacy all_gather_async, topology from the
-        CCL manager — Linear on the galaxy; Ring / Fabric2D tracked in docs/ATTENTION_HIGH_BW_ALL_GATHER.md).
-        The MSA attention K/V/index_k SP gathers no longer go through here: see attention/msa.py
-        (ttnn.experimental.high_bw_all_gather).
+        All-gather operation for tensor parallel communication (all_gather_async, topology from the CCL
+        manager). The MSA K/V/index_k SP gathers use high_bw_all_gather instead: see attention/msa.py.
 
         Note: Caller should check if communication is needed before calling
         """

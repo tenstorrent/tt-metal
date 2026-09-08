@@ -50,9 +50,7 @@ class TtPrefillRuntimeConfig:
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
-    # Topology for the LEGACY CCLs only (high_bw_all_gather derives its own from the fabric). Linear also on the
-    # FABRIC_1D_RING fabric the galaxy runs on; Ring and FABRIC_2D_TORUS_XY are measured + tracked in
-    # docs/ATTENTION_HIGH_BW_ALL_GATHER.md (revisit under trace / 2D-optimised MoE dispatch+combine).
+    # Topology of the legacy CCLs (high_bw_all_gather derives its own from the fabric); see tt/ccl.py.
     topology: ttnn.Topology = ttnn.Topology.Linear
     use_ep_moe: bool = True
     expert_weight_dtype: ttnn.DataType = ttnn.bfloat4_b
@@ -330,6 +328,11 @@ class TtPrefillRuntime:
         assert (
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
+        # The block-cyclic SP cache and the MSA cache read address the prefix in whole chunks: a resumed
+        # prefix must be chunk-aligned (fail here, not as a scrambled cache read deep in attention).
+        assert (
+            actual_start % self.config.chunk_size == 0
+        ), f"actual_start={actual_start} must be a multiple of chunk_size={self.config.chunk_size}"
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.

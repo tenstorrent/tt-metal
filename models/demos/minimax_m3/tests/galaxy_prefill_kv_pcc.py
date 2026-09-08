@@ -216,12 +216,11 @@ def main():
             flush=True,
         )
 
-    # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology (see tt_prefill_runtime). Default is
-    # the deployed pair: FABRIC_1D_RING fabric (with the torus_xy mesh graph descriptor the wrapper scripts set)
-    # so high_bw_all_gather rings, while the legacy CCLs stay Linear. Ring for the legacy CCLs and
-    # FABRIC_2D_TORUS_XY are measured and tracked in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
+    # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology. Defaults match the production
+    # runner (FABRIC_1D, Linear). FABRIC_1D_RING / FABRIC_2D_TORUS_* need the torus_xy mesh graph
+    # descriptor (the wrapper scripts pick it); measurements in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
     ccl_topology = getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear"))
-    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D_RING")))
+    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D")))
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
     print(
         f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "

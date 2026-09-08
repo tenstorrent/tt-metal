@@ -27,9 +27,9 @@ That fixed-slot layout is exactly the block-cyclic layout the consumers already 
 (stride `T/sp`), so the only consumer-side change is bounding the indexer and top-k to the written
 prefix (`kv_len` / `valid_length`). The consumers now read bf8 K/V directly instead of a bf16 copy,
 which also halves `sparse_sdpa_msa`'s K/V traffic. The first (no-cache) chunk uses the same op on its
-activations. `M3_MSA_GATHER=legacy` restores the old path for A/B.
+activations. The old path was removed with this change; the unit test below keeps it as the reference.
 
-Numerics are unchanged: PCC vs the legacy path is 1.0 in
+Numerics are unchanged: PCC vs the previous path is 1.0 in
 [tests/unit/test_msa_sp_cache_read_vs_ref.py](../tests/unit/test_msa_sp_cache_read_vs_ref.py)
 (bf16 and bf8 caches, multi-slot, capacity > prefix), and the 60-layer golden KV check moved from
 K 0.96703 / V 0.88667 / index_k 0.97851 (baseline) to 0.96725 / 0.88743 / 0.97862.
@@ -38,13 +38,11 @@ K 0.96703 / V 0.88667 / index_k 0.97851 (baseline) to 0.96725 / 0.88743 / 0.9786
 
 | knob | where | meaning |
 | --- | --- | --- |
-| `M3_MSA_GATHER=high_bw\|legacy` | `tt/attention/msa.py` | which gather feeds the MSA consumers (default `high_bw`) |
-| `M3_MSA_GATHER_BF16=1` | `tt/attention/msa.py` | debug: typecast the gathered bf8 to bf16 (legacy behaviour) |
-| `M3_FABRIC=<FabricConfig>` | `tests/galaxy_prefill_kv_pcc.py`, `tests/perf/profile_prefill.py` | fabric config (default `FABRIC_1D_RING`) |
-| `M3_CCL_TOPOLOGY=Linear\|Ring` | same | topology handed to the legacy CCLs (default `Linear`) |
-| `M3_TEST_FABRIC=<FabricConfig>` | `tests/test_factory.py` | run the unit tests under another fabric |
-| `TT_MESH_GRAPH_DESC_PATH` | scripts default | `single_bh_galaxy_torus_xy_graph_descriptor.textproto` (declares both wraps) |
-| `PREFILL_FABRIC_MODE=1d_ring` | `models/demos/common/prefill/runners/runner_utils.py` | the shared production prefill runner's fabric (its default is still `1d` for sp<=8) |
+| `M3_FABRIC=<FabricConfig>` | `tests/galaxy_prefill_kv_pcc.py`, `scripts/run_prefill_perf.sh` | fabric config (default `FABRIC_1D`, same as the production runner) |
+| `FABRIC=1d\|1d_ring\|2d\|2d_torus_xy` | `scripts/run_prefill_profile.sh` (`PROFILE_FABRIC` in `tests/perf/profile_prefill.py`) | fabric config for the zone profiler (default `1d`) |
+| `M3_CCL_TOPOLOGY=Linear\|Ring` | both harnesses | topology handed to the legacy CCLs (default `Linear`) |
+| `TT_MESH_GRAPH_DESC_PATH` | scripts | the scripts pick `single_bh_galaxy_torus_xy_graph_descriptor.textproto` (declares both wraps) for ring / torus fabrics and the plain mesh descriptor otherwise |
+| `PREFILL_FABRIC_MODE=1d_ring` | `models/demos/common/prefill/runners/runner_utils.py` | the shared production prefill runner's fabric (default `1d` for sp<=8) |
 
 ## Fabric config vs. topology (the two "rings")
 
@@ -53,15 +51,18 @@ K 0.96703 / V 0.88667 / index_k 0.97851 (baseline) to 0.96725 / 0.88743 / 0.9786
   = routers can turn corners (needed for cross-mesh D2D pipelining); `FABRIC_2D_TORUS_{X,Y,XY}` = 2D plus
   wraps. This is capability: it makes the wrap link available, it does not make any op use it.
 * **Topology** (`ttnn.Topology.Linear|Ring`) is a per-op argument of the legacy CCLs
-  (`all_gather_async`, `reduce_scatter_minimal_async`, `ring_joint_sdpa`, via `CCLManager`). It selects
-  the algorithm. Ring on an unwrapped fabric hangs; Linear on a wrapped fabric simply ignores the wrap.
+  (`all_gather_async`, `reduce_scatter_minimal_async`, via `CCLManager`; M3's `ring_joint_sdpa` calls
+  hardcode Linear). It selects the algorithm. Ring on an unwrapped fabric hangs; Linear on a wrapped
+  fabric simply ignores the wrap.
 * `high_bw_all_gather` takes **no** topology argument: it reads the fabric config and checks the closing
   link is wired, then picks its ring or line schedule itself. It only rings on the **full 8x4 mesh**; on
   an 8x1 submesh the wrap check fails (and on this box the submesh run also returned wrong data and hung
   the mesh close — full-mesh usage is fine).
 
-Deployed configuration after this change: `FABRIC_1D_RING` fabric + torus_xy descriptor, legacy CCLs
-**still Linear**, so only `high_bw_all_gather` rings (row 6 below).
+Deployed configuration after this change: unchanged fabric, i.e. `FABRIC_1D` + plain mesh descriptor and
+Linear legacy CCLs (row 3 below) — the production runner's default and what CI runs. The ring fabric
+(row 6) is opt-in (`M3_FABRIC=FABRIC_1D_RING` / `FABRIC=1d_ring`, which also selects the torus_xy
+descriptor); it is within noise of row 3 end-to-end and needs the wrap cables declared on the box.
 
 ## Results
 
@@ -91,8 +92,8 @@ another 1.3-1.4x on the gather itself. Large payloads (512K rows/device, full me
 | 5 | new AG | 2D torus XY | Ring | 5612 | 5558 | 5549 | 929 ms |
 | 6 | **new AG** | **1D ring** | **Linear** | **6250** | **6156** | 6079 | **836 ms** |
 
-Row 1 is production before this change; row 6 is production after. Golden KV PCC was identical across
-every fabric.
+Row 1 is production before this change; row 3 is production after (row 6 is the opt-in ring fabric).
+Golden KV PCC was identical across every fabric.
 
 ### Device kernel time only (ms per layer, 6-layer zone profile, 5k @ 25k, new AG unless noted)
 
@@ -133,7 +134,9 @@ every fabric.
   directions) on **every** call, before the program-cache lookup. Trace replay would remove all of this,
   at which point 2D torus should come out slightly ahead of 1D on kernel time alone.
 * Row 6 works because the ring fabric costs nothing for ops that don't use it (cold chunk is not slower)
-  and `high_bw_all_gather` picks the ring up by itself.
+  and `high_bw_all_gather` picks the ring up by itself. It is not the default: the gain over row 3 is
+  within run-to-run noise, and the ring fabric needs the torus descriptor (wrap cables) that CI and the
+  production runner do not set.
 
 ## Follow-ups / tracking
 
@@ -151,10 +154,11 @@ every fabric.
 ## Reproducing
 
 ```bash
-# unit PCC (new vs legacy path, ~2 min on the galaxy)
-pytest models/demos/minimax_m3/tests/unit/test_msa_sp_cache_read_vs_ref.py -k high_bw -s
-# perf sweep / zone profile (defaults: new AG, FABRIC_1D_RING, Linear CCLs, torus_xy descriptor)
+# unit PCC (high_bw cache read vs the previous path kept as reference, ~2 min on the galaxy)
+pytest models/demos/minimax_m3/tests/unit/test_msa_sp_cache_read_vs_ref.py -s
+# perf sweep / zone profile (defaults: FABRIC_1D, Linear CCLs, plain mesh descriptor = row 3)
 ./models/demos/minimax_m3/scripts/run_prefill_perf.sh
 LAYERS=6 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
-# A/B: M3_MSA_GATHER=legacy | M3_FABRIC=FABRIC_1D | M3_CCL_TOPOLOGY=Ring | M3_FABRIC=FABRIC_2D_TORUS_XY
+# rows 4-6: M3_FABRIC=FABRIC_1D_RING [M3_CCL_TOPOLOGY=Ring] | M3_FABRIC=FABRIC_2D_TORUS_XY  (perf sweep)
+#           FABRIC=1d_ring [M3_CCL_TOPOLOGY=Ring] | FABRIC=2d_torus_xy                       (profile)
 ```
