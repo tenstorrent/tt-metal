@@ -156,3 +156,9 @@ audit.
 - Obtain satisfied fresh-context Claude Opus 5 reviews at high effort; record
   and address every review concern.
 - Run the full prepared regression suite after review and resolve failures.
+
+## MoE and sampling
+
+Both factories now plan and serialize their MAX/SUM calls and the auxiliary tile recipes. Compute binds those calls to its existing intermediate buffers; dataflow materializes the planned auxiliary tiles. Top-k masking, temperature scaling, and the Tensix synchronization workaround remain in place.
+
+Validation: `cmake --build build --target ttnn unit_tests_ttnn --parallel 8` passed. Sanity SM004/SM017 passed (2 cases; `reduce-migration-eikab75a`). Full groups T018/T019 passed all 28 cases (`reduce-migration-ihxzaarz`). Tests ran through `run_safe_pytest.sh` on Wormhole N300.
