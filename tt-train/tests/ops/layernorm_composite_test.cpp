@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -61,6 +63,33 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
 
         EXPECT_NEAR(exp_mean, 0.F, 3e-2);
         EXPECT_NEAR(exp_var, 1.F, 3e-2);
+    }
+}
+
+TEST_F(LayerNormOpTest, CompositeLayerNormIsShiftInvariantForLargeOffset) {
+    using namespace ttml;
+
+    constexpr uint32_t features = 32;
+    std::vector<float> input_data;
+    input_data.reserve(features * 2);
+    input_data.insert(input_data.end(), features / 2, -1.0F);
+    input_data.insert(input_data.end(), features / 2, 1.0F);
+    input_data.insert(input_data.end(), features / 2, 83.5F);
+    input_data.insert(input_data.end(), features / 2, 85.5F);
+
+    auto tensor = autograd::create_tensor(
+        core::from_vector(input_data, ttnn::Shape({1, 1, 2, features}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+    auto beta = autograd::create_tensor(core::zeros(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+
+    auto result = ops::composite_layernorm(tensor, gamma, beta);
+    auto result_data = core::to_vector(result->get_value());
+
+    ASSERT_EQ(result_data.size(), input_data.size());
+    for (std::size_t i = 0; i < result_data.size(); ++i) {
+        ASSERT_TRUE(std::isfinite(result_data[i])) << "Non-finite output at index " << i;
+        const float expected = i % features < features / 2 ? -1.0F : 1.0F;
+        EXPECT_NEAR(result_data[i], expected, 3e-2F) << "Unexpected output at index " << i;
     }
 }
 
