@@ -136,6 +136,56 @@ Per-module goldens are cheap to regenerate and are deliberately not cached.
 
 ## 4. Stages and order
 
+**Step 0 — resolve the weights, before anything else.** Do this first, so a missing checkpoint is
+known on minute one rather than discovered at P1. In order:
+
+1. `PREFILL_HF_MODEL` / `HF_MODEL`, if set — an explicit override always wins.
+2. **`/mnt/models/<hf-org>/<Model-Name>`** — the shared store (NFS, org-named dirs, TTNN caches as
+   siblings). Look here first; several models are already staged and cost nothing to reuse. A second
+   copy of some models sits in the shared hub cache `/mnt/models/huggingface/hub`, which is
+   read-only — prefer the flat org dir.
+3. Otherwise **download it** to `/mnt/models/<hf-org>/<Model-Name>` (needs an HF token:
+   `huggingface-cli login` or `HF_TOKEN`). Creating a new org dir there needs `sudo install -d -m 2775
+   -g 50000 /mnt/models/<hf-org>`.
+4. If none of that works, **bring up on synthetic weights — but say so, loudly.** A
+   format-identical random checkpoint (same on-disk layout: shard names + index, key prefixes,
+   quantization and scale tensors) fully validates the loader, the dequantizer, the key mapping and
+   the golden pipeline. It says **nothing** about the model's accuracy, and a PCC table produced from
+   it is not a result. So it is a legitimate path, never a silent one:
+   - log it — a `source` record with `part: "weights"`, `chosen` the path, and `envelope`
+     `"SYNTHETIC - format-identical, random values"`;
+   - state it in the first paragraph of `README.md`, not in a footnote;
+   - label every number it produced as synthetic wherever that number appears;
+   - treat the missing full-depth real-weights e2e PCC as a **blocker to log**, not as done.
+
+   Mistral-Medium-3.5 went synthetic because its checkpoint was unreachable, and the whole accuracy
+   table it produced turned out to describe nothing. That is the failure this step exists to prevent.
+
+**The golden trace lives beside the weights.** The trace is the reference forward run **once** and
+saved, so no test reruns a CPU model: a dir holding `metadata.json` (`{"token_ids": [...]}`, the exact
+input tokens) plus `kv_cache/layer_N.safetensors` (the reference KV per layer). P1/P2 feed those same
+token ids to the device and PCC its KV against those tensors — it is the graded artifact.
+
+Convention on the shared store is `<weights_dir>/golden/<prompt>_<isl>/`, e.g.
+`/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_5120/`, with siblings for other lengths
+(`longbook_10240`, `longbook_56320`). Point `PREFILL_TRACE_DIR` at one. Look there before generating:
+a trace is expensive, and per-model dirs like `/mnt/models/deepseek-prefill-cache/golden/` and
+`/mnt/models/kimi-prefill-cache/golden/` hold more.
+
+Three properties worth knowing before you rely on one:
+
+* **It needs real weights.** The generator refuses to run without a safetensors checkpoint, so the
+  trace is strictly downstream of step 0 — synthetic weights give a synthetic trace, and a PCC
+  against it proves only that two random-valued pipelines agree.
+* **It is per (model, prompt, ISL, depth)**, not per model. A different sequence length or layer
+  count needs a different trace. That is why the dirs are named for prompt and token count.
+* **Do not confuse it with a ttnn trace.** `use_trace` / `trace_region_size` capture the per-chunk
+  forward as a device command buffer for replay — a perf mechanism with no goldens in it.
+
+The per-module goldens of D1/M1 are the same compute-once idea at block granularity, keyed on every
+field that changes the output (§3, `ReferenceCacheKey`) — the flat `.pt` files under
+`/mnt/models/kimi-prefill-cache/golden/` are that family, not traces.
+
 Exploration (**E**, §2) comes first and once: gate the candidate packages, rank them, and record a
 `source` per part. Then three ladders, run in order and one at a time: the decoder (D1-D3), then the
 whole model around it (M1-M3), then the prefill pipeline (P1-P2). D and M have the same three-step shape — torch golden,
@@ -143,13 +193,53 @@ then a mock outline plus PCC tests, then implement in ttnn, with a torch CPU fal
 ttnn genuinely cannot.
 
 **Prerequisite for D3 — mesh up.** Bring-up goes straight to the target mesh; there is no
-single-card step at any point. Before the first module is written: the target mesh opens,
-`MeshConfig` and `CCLManager` are in place, and an all-gather + all-reduce smoke test passes. Every
-module PCC test therefore exercises sharding and collectives from the first one — more setup cost,
-and the "worked on one card, broke on the mesh" class of bug disappears entirely.
+single-card step at any point. First check the runtime env —
+`models/demos/common/prefill/tools/check_runtime_env.sh`, which fails with the exports to fix it. A
+stale `TT_METAL_RUNTIME_ROOT` is silent: `ttnn` auto-detects the root for an editable install only
+when that var is *unset*, and the device-less UMD reader resolves it *before* `TT_METAL_HOME`, so a
+dangling root beats a correct `HOME`. Machine provisioning under `/etc/profile.d` is a common source.
+It also checks the **interpreter**, which is the other half of the same trap: run everything through
+the project venv, and never read a bare `import ttnn` as proof the env is good — the repo has a
+`ttnn/` directory, so from the repo root *any* python imports it as an empty namespace package while
+`torch` and `transformers` fail, which looks like a half-broken install rather than the wrong python.
+
+**If that check fails, build the env before going further — do not work around it.** Setting up the
+venv is not this recipe's job and the commands differ per machine: load the **`build-metal` skill**
+if the box has one (it owns build + venv + the per-machine gotchas), otherwise follow the repo's own
+`INSTALLING.md` §"Virtual Environment Setup" / `create_venv.sh`. Two traps that recur regardless:
+`ttnn` must be *installed* into the venv (editable) rather than reached via `PYTHONPATH`, and a venv
+is often container-local, so nothing carries over to a new machine and it has to be redone there.
+Then, before the first module is written: the target mesh opens,
+`MeshConfig` and `CCLManager` are in place, and an all-gather + all-reduce smoke test passes.
+
+Every module PCC test therefore exercises sharding and collectives from the first one — more setup
+cost, and the "worked on one card, broke on the mesh" class of bug disappears entirely.
+
+**Fabric topology: run on whatever galaxy you get.** The mesh-graph descriptor is chosen **before
+the cluster initialises** (set it in the package's `conftest.py`), and a torus descriptor cannot map
+on a pod without wrap-around links — so this is settled at mesh-up, not later. Default to the plain
+mesh descriptor with `FABRIC_1D` + `Topology.Linear`, which maps on **any** galaxy, torus-wired or
+not. Put the torus behind one env knob: it is the one significant perf lever bring-up has, so take
+it where the pod offers it, but it is never a correctness gate and a bring-up must not fail or block
+for the want of it. If the torus descriptor will not map, log it as `env`, fall back to linear, and
+carry on. Run the smoke test in whichever topology the pod supports, and both where both work.
+
+Record which topology each measurement was taken on, in `README.md` — collective cost differs enough
+that linear and torus numbers are not comparable. It stays out of the spec: the spec fixes what the
+*model* is, and the wiring is a property of the pod you happened to get.
 
 All PCC tests up to P1 run on **random weights**, identical on both sides. Real checkpoint loading
 is not a dependency of any module test and is deferred to P1.
+
+**Reduced runs are diagnostics, never the result.** Cutting depth (`PREFILL_NUM_LAYERS`), width or
+vocab to fit a host-side comparison is legitimate and often necessary — a host cannot materialise a
+100B-parameter model as random weights on both sides. But a reduced run is a debugging aid, not a
+grade: the model must be run **end to end at its full layer count and full width with real weights**,
+with the e2e PCC measured against a full-depth golden trace, whatever the partial runs said. Any
+reduced run is logged (§7), recorded in `README.md`, and labelled as reduced wherever its numbers
+appear — an unlabelled PCC table reads as a full-model result. If the full-depth
+e2e number cannot be produced, that is a **blocker to log**, not something a reduced run substitutes
+for.
 
 All references and goldens are **fp16** (`torch.float16`), regardless of the checkpoint dtype and
 of the ttnn dtypes under test: the D1/M1 torch references compute in fp16 (input, weights, cos/sin),
@@ -330,6 +420,12 @@ One subsection per stage. Fill in individually.
 
 Each stage below ends in a **Testing** table. The first column references an existing test that the
 agent implements an equivalent of for this model — copy its structure, not its content.
+
+**Run every device test through `scripts/run_safe_pytest.sh`.** It `flock`s device access so
+several agents can share one pod, sets `TT_METAL_OPERATION_TIMEOUT_SECONDS` for hang detection at
+the dispatch layer, and resets the device after a hang so the next run starts clean. Calling `pytest`
+directly on a shared pod is what turns a second job into an apparent hang: it blocks on the chip lock
+and logs nothing but a lock warning. Host-only tests need no wrapper.
 
 **A stage is complete when, and only when, every test in its Testing table passes** and the
 stage's log lines are written (§7). No stage is entered before the previous stage's table is green.
@@ -643,7 +739,10 @@ aimed at the inputs instead of the stages.
 
 - [ ] Every module has a `*_vs_ref` test asserting at the spec's `pcc_lower_bound`; every module below
   `pcc_target` has its measured PCC and the reason in the `README.md` PCC status table
-- [ ] Full model runs at target mesh shape with real weights; per-layer KV PCC recorded in `README.md`
+- [ ] Weights resolved per §4 step 0, and `README.md` says whether they are real or synthetic
+- [ ] Full model runs at target mesh shape with real weights, at **full depth and full width**; per-layer KV PCC and the e2e PCC recorded in `README.md`, each labelled with the fabric topology it was measured on
+- [ ] Any reduced run is recorded in `README.md`, logged, and labelled as reduced wherever quoted
+- [ ] Mesh smoke test passes on the pod's wiring (linear always; torus too where the pod offers it)
 - [ ] Runtime asserts on out-of-contract chunk ranges
 - [ ] `README.md` records architecture, reuse-vs-fresh, PCC status, run commands, and known gaps
 - [ ] `bringup_log.jsonl` is committed and `bringup_digest.py --lint` is clean
