@@ -1596,10 +1596,12 @@ std::vector<Tensor> repeat_bw(
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
-    auto shape_wh = input.padded_shape();
+    // moreh_sum validates the preallocated output against the logical dims of the reduction result,
+    // so the required shape has to be built from the logical shape: a padded one rejects every input
+    // whose last two dims are not tile multiples.
+    auto shape_wh = input.logical_shape();
     TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
     auto* ttnn_device = input.device();
-    // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
         Tensor zero_tensor = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
@@ -1621,7 +1623,9 @@ std::vector<Tensor> repeat_bw(
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
-    if (shape[1] > 1) {
+    // moreh_sum reduces the whole axis to one element, which is the gradient of a repeat only when
+    // the axis has a single element to begin with; otherwise fall through to the block sum below.
+    if (shape[1] > 1 && shape_wh[1] == 1) {
         ttsl::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
@@ -1636,6 +1640,27 @@ std::vector<Tensor> repeat_bw(
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
+    // Every remaining repeat tiles its axis in blocks of the input's extent, so the gradient is the
+    // sum of those blocks.
+    Tensor result = grad;
+    for (uint32_t dim = 1; dim < 4; dim++) {
+        if (shape[dim] == 1) {
+            continue;
+        }
+        const uint32_t extent = shape_wh[dim];
+        const ttsl::SmallVector<uint32_t> step(4, 1);
+        ttsl::SmallVector<uint32_t> start(4, 0);
+        ttsl::SmallVector<uint32_t> end(result.logical_shape().cbegin(), result.logical_shape().cend());
+        Tensor blocks_sum;
+        for (uint32_t i = 0; i < shape[dim]; i++) {
+            start[dim] = i * extent;
+            end[dim] = (i + 1) * extent;
+            Tensor block = ttnn::slice(result, start, end, step, output_memory_config);
+            blocks_sum = (i == 0) ? block : ttnn::add(blocks_sum, block, std::nullopt, output_memory_config);
+        }
+        result = blocks_sum;
+    }
+    grad_tensor.emplace_back(result);
     return grad_tensor;
 }
 
