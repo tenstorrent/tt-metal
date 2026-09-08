@@ -1,0 +1,1368 @@
+{
+  "mode": "collection",
+  "manifest": "/localdev/malimpic/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_migration_inventory_2026-09-08_f808380a87b/sanity_test_suite.json",
+  "python_cases": 58,
+  "cpp_cases": 16,
+  "disabled_cpp_cases": 0,
+  "groups_requested": 74,
+  "groups_completed": 74,
+  "collected_cases": 74,
+  "failed_groups": [],
+  "results": [
+    {
+      "group": "SM001",
+      "source": "tests/ttnn/unit_tests/gtests/test_reduction.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[ReductionSmoke.MeanReduceH]",
+      "kernel_ids": [
+        "S099",
+        "DF055"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM001.log"
+    },
+    {
+      "group": "SM002",
+      "source": "tests/ttnn/unit_tests/gtests/test_reduction.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[ReductionSmoke.MeanReduceW]",
+      "kernel_ids": [
+        "DF053"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM002.log"
+    },
+    {
+      "group": "SM003",
+      "source": "tests/ttnn/unit_tests/gtests/test_reduction.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[ReductionSmoke.RowMajorSumW]",
+      "kernel_ids": [
+        "S102",
+        "DF052"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM003.log"
+    },
+    {
+      "group": "SM004",
+      "source": "tests/ttnn/unit_tests/gtests/test_reduction.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[ReductionSmoke.SamplingGreedyTopK1]",
+      "kernel_ids": [
+        "S105",
+        "DF057"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM004.log"
+    },
+    {
+      "group": "SM005",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.GroupNormNoMcastInterleaved]",
+      "kernel_ids": [
+        "S079",
+        "DF035"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM005.log"
+    },
+    {
+      "group": "SM006",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.GroupNormShardedBlock1x1]",
+      "kernel_ids": [
+        "S080",
+        "DF036"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM006.log"
+    },
+    {
+      "group": "SM007",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.LayerNormInterleaved]",
+      "kernel_ids": [
+        "DF037"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM007.log"
+    },
+    {
+      "group": "SM008",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.LayerNormRowMajorGammaBeta]",
+      "kernel_ids": [
+        "DF039"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM008.log"
+    },
+    {
+      "group": "SM009",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.LayerNormSharded1x1]",
+      "kernel_ids": [
+        "S083",
+        "DF040"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM009.log"
+    },
+    {
+      "group": "SM010",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.DistributedLayerNormStats]",
+      "kernel_ids": [
+        "S087",
+        "DF045"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM010.log"
+    },
+    {
+      "group": "SM011",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.DistributedRmsNormEndToEnd]",
+      "kernel_ids": [
+        "S090",
+        "S091",
+        "DF044"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM011.log"
+    },
+    {
+      "group": "SM012",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.DistributedRmsNorm2DGridStats]",
+      "kernel_ids": [
+        "S088",
+        "DF043"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM012.log"
+    },
+    {
+      "group": "SM013",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.SoftmaxInterleavedUniform]",
+      "kernel_ids": [
+        "S093",
+        "DF046"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM013.log"
+    },
+    {
+      "group": "SM014",
+      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[NormalizationSmoke.SoftmaxShardedInPlace]",
+      "kernel_ids": [
+        "S095",
+        "DF048"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM014.log"
+    },
+    {
+      "group": "SM015",
+      "source": "tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py::test_sharded_reduce_h[dtype=DataType.BFLOAT16-out_sharded-in0_sharded-N=8]",
+      "kernel_ids": [
+        "DF054"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM015.log"
+    },
+    {
+      "group": "SM016",
+      "source": "tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py::test_reduce_w_height_sharded_orientation_matched[op=max-row_major]",
+      "kernel_ids": [
+        "DF051"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM016.log"
+    },
+    {
+      "group": "SM017",
+      "source": "tests/ttnn/unit_tests/operations/reduce/test_moe.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/reduce/test_moe.py::test_moe[N=1-C=1-H=32-W=64-k=32-E=8-e=2-BFLOAT16_B]",
+      "kernel_ids": [
+        "S104",
+        "DF056"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM017.log"
+    },
+    {
+      "group": "SM018",
+      "source": "tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py::test_grouped_gate[minimal_case]",
+      "kernel_ids": [
+        "S051",
+        "DF020"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM018.log"
+    },
+    {
+      "group": "SM019",
+      "source": "tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=32-W=1024-latent_size=32-dtype=DataType.BFLOAT16-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]",
+      "kernel_ids": [
+        "S052",
+        "DF021"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM019.log"
+    },
+    {
+      "group": "SM020",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py::test_moreh_clip_grad_norm[num_parameters=32-norm_type=2.0-max_norm=2.0-range_of_wt=(1, 4)-range_of_ht=(1, 4)-range_of_c=(1, 4)-range_of_n=(1, 4)-range_of_padding=(0, 21, 10)-num_iters_of_each_case=2]",
+      "kernel_ids": [
+        "S056",
+        "DP002"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM020.log"
+    },
+    {
+      "group": "SM021",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py::test_moreh_dot[dtype=DataType.BFLOAT16-input_shape=[1, 1, 1, 32]]",
+      "kernel_ids": [
+        "S057",
+        "DF025"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM021.log"
+    },
+    {
+      "group": "SM022",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[23, 23]-C_num_groups=[4, 1]-N=2]",
+      "kernel_ids": [
+        "S059",
+        "DP004"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM022.log"
+    },
+    {
+      "group": "SM023",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[512, 512]-C_num_groups=[4, 1]-N=2]",
+      "kernel_ids": [
+        "S058",
+        "DP003"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM023.log"
+    },
+    {
+      "group": "SM024",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm_backward[beta_requires_grad=True-gamma_requires_grad=True-input_requires_grad=True-affine=True-eps=1e-05-HW=[23, 23]-C_num_groups=[4, 1]-N=2]",
+      "kernel_ids": [
+        "S060",
+        "S062",
+        "DP005",
+        "DP007"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM024.log"
+    },
+    {
+      "group": "SM025",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm_backward_large_algorithm[beta_requires_grad=False-gamma_requires_grad=False-input_requires_grad=True-affine=False-eps=1e-05-HW=[500, 500]-C_num_groups=[4, 1]-N=2]",
+      "kernel_ids": [
+        "S061",
+        "DP006"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM025.log"
+    },
+    {
+      "group": "SM026",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm[input_shape_normalized_dims=([1, 20], 1)-elementwise_affine=False-bfloat16-1e-5]",
+      "kernel_ids": [
+        "DP009"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM026.log"
+    },
+    {
+      "group": "SM027",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_compute_kernel_options[fp32_dest_acc_en=False-input_shape_normalized_dims=([4, 8, 111, 113], 4)-elementwise_affine=False-bfloat16-0.05]",
+      "kernel_ids": [
+        "DP008"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM027.log"
+    },
+    {
+      "group": "SM028",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_backward[input_shape_normalized_dims=([20, 30], 2)-elementwise_affine=True-bfloat16-1e-5]",
+      "kernel_ids": [
+        "DP010",
+        "DP012"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM028.log"
+    },
+    {
+      "group": "SM029",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_backward_large_algorithm[fp32_dest_acc_en=False-[1,2,500,1000]-normalized_dims=2-elementwise_affine=False-bfloat16-1e-5]",
+      "kernel_ids": [
+        "DP011"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM029.log"
+    },
+    {
+      "group": "SM030",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py::test_moreh_linear_backward[BFP16-fp32_dest_acc_en=False-requires_bias_grad=True-requires_grads=(True, False)-shapes=([31, 31], [30, 31], [1, 30], [31, 30])]",
+      "kernel_ids": [
+        "S063",
+        "DF026"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM030.log"
+    },
+    {
+      "group": "SM031",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py::test_moreh_linear_backward[BFP16-fp32_dest_acc_en=False-requires_bias_grad=True-requires_grads=(True, False)-shapes=([31, 31], [30, 31], [1, 1], [31, 30])]",
+      "kernel_ids": [
+        "S064",
+        "DP013"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM031.log"
+    },
+    {
+      "group": "SM032",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py::test_moreh_mean_ttnn_dtype[ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape_dim=[[17, 22], [0]]]",
+      "kernel_ids": [
+        "S065",
+        "DF027"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM032.log"
+    },
+    {
+      "group": "SM033",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-N-p=2.5]",
+      "kernel_ids": [
+        "S068",
+        "DP014"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM033.log"
+    },
+    {
+      "group": "SM034",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-C-p=2.5]",
+      "kernel_ids": [
+        "S069",
+        "DP015"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM034.log"
+    },
+    {
+      "group": "SM035",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxOpParallelizationStrategy.SMALL_H]]",
+      "kernel_ids": [
+        "S070",
+        "DF028"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM035.log"
+    },
+    {
+      "group": "SM036",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxOpParallelizationStrategy.LARGE_H]]",
+      "kernel_ids": [
+        "S071",
+        "DF029"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM036.log"
+    },
+    {
+      "group": "SM037",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxOpParallelizationStrategy.SMALL_W]]",
+      "kernel_ids": [
+        "S072",
+        "DF030"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM037.log"
+    },
+    {
+      "group": "SM038",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxOpParallelizationStrategy.LARGE_W]]",
+      "kernel_ids": [
+        "S073",
+        "DF031"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM038.log"
+    },
+    {
+      "group": "SM039",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_H]]",
+      "kernel_ids": [
+        "S074",
+        "DP017"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM039.log"
+    },
+    {
+      "group": "SM040",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H]]",
+      "kernel_ids": [
+        "S075",
+        "DP016"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM040.log"
+    },
+    {
+      "group": "SM041",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_W]]",
+      "kernel_ids": [
+        "S076",
+        "DF032"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM041.log"
+    },
+    {
+      "group": "SM042",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W]]",
+      "kernel_ids": [
+        "S077",
+        "DF033"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM042.log"
+    },
+    {
+      "group": "SM043",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum[bfloat16-keepdim-true-fp32_dest_acc_en=False-2-3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]",
+      "kernel_ids": [
+        "S078",
+        "DF034"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM043.log"
+    },
+    {
+      "group": "SM044",
+      "source": "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_norm_sharded_with_weight_and_bias_row_major[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-use_welford=False]",
+      "kernel_ids": [
+        "DF042"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM044.log"
+    },
+    {
+      "group": "SM045",
+      "source": "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm[fuse_residual=False-max_atol_ex2=0.04-min_pcc_ex2=0.982-min_pcc_residual_add=0.997-min_pcc_ex=0.9997-max_atol_ex=0.01-core_grid=(8, 4)-mean=0-std=1-input_df=DataType.BFLOAT16-num_devices=4-input_width=2048-seed=0-is_rmsnorm=False]",
+      "kernel_ids": [
+        "S085",
+        "DF041"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM045.log"
+    },
+    {
+      "group": "SM046",
+      "source": "tests/ttnn/unit_tests/operations/fused/test_layer_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm_with_weight_bias_and_residual_input[dtype=torch.float32-use_welford=False-h=19-w=4083]",
+      "kernel_ids": [
+        "DF038"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM046.log"
+    },
+    {
+      "group": "SM047",
+      "source": "tests/ttnn/unit_tests/operations/fused/test_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_softmax_large_non_divisible_width[Wt=637]",
+      "kernel_ids": [
+        "S094",
+        "DF047"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM047.log"
+    },
+    {
+      "group": "SM048",
+      "source": "tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py::test_scale_mask_softmax_rm[bfloat8_b-in0_DRAM-no-causal-device_params={'l1_small_size': 8192}]",
+      "kernel_ids": [
+        "DF050"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM048.log"
+    },
+    {
+      "group": "SM049",
+      "source": "models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py::test_FalconSoftmax_inference[wormhole_b0-1x1_grid-0.99]",
+      "kernel_ids": [
+        "DF049"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM049.log"
+    },
+    {
+      "group": "SM050",
+      "source": "tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py::test_indexer_score_block_pool_large_blocks_per_unit[g1-bpu16]",
+      "kernel_ids": [
+        "S039",
+        "DF009"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM050.log"
+    },
+    {
+      "group": "SM051",
+      "source": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[unit-h2-n4-k32-v64]",
+      "kernel_ids": [
+        "S040",
+        "DP001"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM051.log"
+    },
+    {
+      "group": "SM052",
+      "source": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_is_accurate_and_deterministic[bf16-output-bf16-input]",
+      "kernel_ids": [
+        "S041",
+        "DF010"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM052.log"
+    },
+    {
+      "group": "SM053",
+      "source": "tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_shapes[num_simulated_devices8-has_rope-has_weight-num_heads1-hidden_dim1024-seqlen128-BFLOAT16_stats-BFLOAT16_in]",
+      "kernel_ids": [
+        "S054",
+        "S055",
+        "DF023",
+        "DF024"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM053.log"
+    },
+    {
+      "group": "SM054",
+      "source": "tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_use_cases[tp1-tile_layout-no_affine-len512-dim2048-BFLOAT16_stats-BFLOAT16_in]",
+      "kernel_ids": [
+        "DF022"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM054.log"
+    },
+    {
+      "group": "SM055",
+      "source": "tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py::test_compute_fusion_correctness",
+      "kernel_ids": [
+        "S108",
+        "DF065"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM055.log"
+    },
+    {
+      "group": "SM056",
+      "source": "tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py::test_reduce_accumulate_correctness",
+      "kernel_ids": [
+        "S109",
+        "DF066"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM056.log"
+    },
+    {
+      "group": "SM057",
+      "source": "tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py::test_row_reduce_accumulate_correctness",
+      "kernel_ids": [
+        "S111",
+        "DF067"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM057.log"
+    },
+    {
+      "group": "SM058",
+      "source": "tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py::test_toy_variance[variance-W=256_aligned]",
+      "kernel_ids": [
+        "S113",
+        "DF068"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM058.log"
+    },
+    {
+      "group": "SM059",
+      "source": "tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py::test_toy_variance_width_sharded[variance-P=2_W=64_one_tile_each]",
+      "kernel_ids": [
+        "S114",
+        "DF069"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM059.log"
+    },
+    {
+      "group": "SM060",
+      "source": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=256-d=32-k128-q32-causal-bf16]",
+      "kernel_ids": [
+        "DF063"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM060.log"
+    },
+    {
+      "group": "SM061",
+      "source": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_sliding_window[cur_pos_tensor-b=4-nh=8-nkv=1-s=1024-d=128-grid_size=(8, 4)-sliding_window_size=128-kv_bfp8_q_bf16]",
+      "kernel_ids": [
+        "DF064"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM061.log"
+    },
+    {
+      "group": "SM062",
+      "source": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py::test_joint_sdpa[d128-seq_len=15-joint_seq_len=19-nh1-b1-k128-q32-bfp8]",
+      "kernel_ids": [
+        "DF059"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM062.log"
+    },
+    {
+      "group": "SM063",
+      "source": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_pcc_single_chunk[-all_valid]",
+      "kernel_ids": [
+        "DF062"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM063.log"
+    },
+    {
+      "group": "SM064",
+      "source": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_pcc_random_selection",
+      "kernel_ids": [
+        "DF061"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM064.log"
+    },
+    {
+      "group": "SM065",
+      "source": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py::test_scaled_dot_product_attention[seq128-ttnn_mesh_device0]",
+      "kernel_ids": [
+        "DF018"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM065.log"
+    },
+    {
+      "group": "SM066",
+      "source": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py::test_scaled_dot_product_attention_decode[batch1-ttnn_mesh_device0]",
+      "kernel_ids": [
+        "DF019"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM066.log"
+    },
+    {
+      "group": "SM067",
+      "source": "tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Small]",
+      "kernel_ids": [
+        "DF002"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM067.log"
+    },
+    {
+      "group": "SM068",
+      "source": "tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "scripts/reduce_migration_gtest_adapter.py::test_cpp_factory[MeshDevice1x4Fabric2DUDMFixture.TestWidthReduction2D_Small]",
+      "kernel_ids": [
+        "DF003",
+        "DF004"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM068.log"
+    },
+    {
+      "group": "SM069",
+      "source": "tests/ttnn/unit_tests/operations/ccl/test_minimals.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300[silicon_arch_name=wormhole_b0-topology=Topology.Linear-device_params={'fabric_config': FabricConfig.FABRIC_1D}-output_dtype=DataType.BFLOAT16-residual_dtype=DataType.BFLOAT16-input_dtype=DataType.BFLOAT16-2x1_grid-use_noc1_only=False-fused_add=False-num_iters=5-num_links=1-fp32_dest_acc_en=False-num_devices=2-elements_per_batch=2048-input_shard_grid={[0-0 - 3-7]}-output_shard_grid=None]",
+      "kernel_ids": [
+        "S035",
+        "DF007"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM069.log"
+    },
+    {
+      "group": "SM070",
+      "source": "tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py::test_matches_torch[silicon_arch_name=wormhole_b0-plain-fabric2d-mesh-2x4]",
+      "kernel_ids": [
+        "S036",
+        "DF008"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM070.log"
+    },
+    {
+      "group": "SM071",
+      "source": "models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py::test_corr_det[wormhole_b0-wan_tp1]",
+      "kernel_ids": [
+        "S034",
+        "DF006"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM071.log"
+    },
+    {
+      "group": "SM072",
+      "source": "models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py::test_corr_det[wormhole_b0-wan_tp2]",
+      "kernel_ids": [
+        "DF005"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM072.log"
+    },
+    {
+      "group": "SM073",
+      "source": "tests/nightly/t3000/ccl/test_ring_joint_attention.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "tests/nightly/t3000/ccl/test_ring_joint_attention.py::test_ring_joint_sdpa_multi_batch_wh_t3k[wormhole_b0-2x4-line]",
+      "kernel_ids": [
+        "DF060"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM073.log"
+    },
+    {
+      "group": "SM074",
+      "source": "models/tt_dit/tests/unit/test_exp_ring_joint_attention.py",
+      "returncode": 0,
+      "tt_arch": "wormhole_b0",
+      "collected": 1,
+      "unique_nodeids": 1,
+      "unconditional_skip_marks": 0,
+      "collection_errors": [],
+      "pytest_exitstatus": 0,
+      "outcomes": {},
+      "nodeid": "models/tt_dit/tests/unit/test_exp_ring_joint_attention.py::test_exp_ring_joint_sdpa_dit_bh_glx_custom[wormhole_b0-1x4-ring]",
+      "kernel_ids": [
+        "DF058"
+      ],
+      "log": "generated/test_reports/reduce-migration-2lf2hwb4/SM074.log"
+    }
+  ],
+  "schema_version": 1,
+  "commit": "f808380a87b320e24457c600cc79b05d7a0b8f73",
+  "command": "python scripts/run_reduce_migration_sanity.py --collect-only",
+  "scope": "Collection only: no device test bodies, on-device compilation or numerical checks were executed.",
+  "host_runner_checks": {
+    "result": "passed",
+    "checks": [
+      "skip returns nonzero",
+      "assertion failure returns nonzero",
+      "xfail returns nonzero",
+      "case-count drift returns nonzero",
+      "continues to a subsequent passing case"
+    ],
+    "artifacts": "/tmp/reduce-sanity-runner-a2qgxx3v"
+  },
+  "architecture_template_check": {
+    "command": "python scripts/run_reduce_migration_sanity.py --collect-only --group SM070 --group SM071 --group SM072 --group SM074 -- --tt-arch=blackhole",
+    "collected_cases": 4,
+    "failed_groups": [],
+    "results": [
+      {
+        "group": "SM070",
+        "nodeid": "tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py::test_matches_torch[silicon_arch_name=blackhole-plain-fabric2d-mesh-2x4]",
+        "log": "generated/test_reports/reduce-migration-_qdnd0nk/SM070.log"
+      },
+      {
+        "group": "SM071",
+        "nodeid": "models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py::test_corr_det[blackhole-wan_tp1]",
+        "log": "generated/test_reports/reduce-migration-_qdnd0nk/SM071.log"
+      },
+      {
+        "group": "SM072",
+        "nodeid": "models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py::test_corr_det[blackhole-wan_tp2]",
+        "log": "generated/test_reports/reduce-migration-_qdnd0nk/SM072.log"
+      },
+      {
+        "group": "SM074",
+        "nodeid": "models/tt_dit/tests/unit/test_exp_ring_joint_attention.py::test_exp_ring_joint_sdpa_dit_bh_glx_custom[blackhole-1x4-ring]",
+        "log": "generated/test_reports/reduce-migration-_qdnd0nk/SM074.log"
+      }
+    ]
+  }
+}
