@@ -41,6 +41,7 @@ namespace ckernel {
  * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | False    |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -49,16 +50,16 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     std::uint32_t kt_dim = 1,
     std::uint32_t nt_dim = 1) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
 
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>(out_cb_id)));
+    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
 }
 
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(

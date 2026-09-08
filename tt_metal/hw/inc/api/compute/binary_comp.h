@@ -59,7 +59,6 @@ ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     if constexpr (data_format == DataFormat::Int32) {
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             calculate_binary_comp_int32,
             (APPROX, 8 /* ITERATIONS */, OP),
             idst0,
@@ -69,7 +68,6 @@ ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     } else {
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             calculate_binary_comp_uint,
             (APPROX, 8 /* ITERATIONS */, OP, data_format),
             idst0,
@@ -86,7 +84,6 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_binary_eq_int,
         (APPROX, 8 /* ITERATIONS */, OP, data_format),
         idst0,

@@ -44,7 +44,6 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _sub_int_,
         (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
         idst0,
@@ -84,7 +83,6 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_rsub_int,
         (APPROX, INSTRUCTION_MODE, 8 /* ITERATIONS */),
         idst0,

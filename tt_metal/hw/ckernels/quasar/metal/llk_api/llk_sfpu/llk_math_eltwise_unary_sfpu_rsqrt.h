@@ -28,7 +28,6 @@ inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
     static_assert(legacy_compat == false, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_rsqrt,
         (APPROXIMATE, ITERATIONS, is_fp32_dest_acc_en, FAST_APPROX, legacy_compat),
         dst_index,

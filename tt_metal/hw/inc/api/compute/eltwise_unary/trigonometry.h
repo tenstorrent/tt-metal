@@ -34,12 +34,7 @@ ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_in
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sin_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sine,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_sine, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -64,12 +59,7 @@ ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosin
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cos_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_cosine,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_cosine, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -97,12 +87,7 @@ ALWI void acosh_tile_init() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acosh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_acosh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_acosh, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -127,12 +112,7 @@ ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tan_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_tangent,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_tangent, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -160,12 +140,7 @@ ALWI void asinh_tile_init() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asinh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_asinh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_asinh, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -191,12 +166,7 @@ ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atanh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_atanh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_atanh, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -216,12 +186,7 @@ ALWI void atanh_tile(uint32_t idst) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asin_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_asin,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_asin, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -247,12 +212,7 @@ ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init,
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_atan,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_atan, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -280,12 +240,7 @@ ALWI void atan_tile_init() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acos_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_acos,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_acos, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -317,12 +272,7 @@ ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_i
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cosh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_cosh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_cosh, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
@@ -348,12 +298,7 @@ ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_i
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sinh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sinh,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_sinh, (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 }  // namespace ckernel

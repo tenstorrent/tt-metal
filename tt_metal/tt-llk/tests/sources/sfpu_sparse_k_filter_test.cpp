@@ -81,7 +81,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         SFPU_UNARY_CALL(
             DST_SYNC,
-            is_fp32_dest_acc_en,
             _sparse_k_filter_tile_,
             (SPARSE_K_ITERATIONS, SPARSE_K_BANK_MASK, SPARSE_K_MY_BANK, SPARSE_K_GLOBAL_BANK_SHIFT, SPARSE_K_WITHIN_BANK_MASK, SPARSE_K_OUT_SHIFT),
             0 /* dst_index */,

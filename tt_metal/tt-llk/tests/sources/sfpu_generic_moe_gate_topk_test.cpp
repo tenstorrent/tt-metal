@@ -128,7 +128,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // RC_custom: the kernel walks DEST itself off the tile-0 base.
     SFPU_UNARY_CALL(
         DST_SYNC,
-        is_fp32_dest_acc_en,
         _generic_moe_gate_topk_,
         (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
         MOE_GATE_SCORES_DST_TILE,

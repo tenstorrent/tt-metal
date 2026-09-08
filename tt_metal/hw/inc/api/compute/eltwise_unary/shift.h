@@ -31,8 +31,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
 
 // clang-format off
@@ -55,18 +54,17 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void left_shift_tile_init() { MATH(SFPU_UNARY_INIT(left_shift)); }
+ALWI void left_shift_tile_init() { MATH(SFPU_UNARY_INIT(left_shift, DST_ACCUM_MODE)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void right_shift_tile_init() { MATH(SFPU_UNARY_INIT(right_shift)); }
+ALWI void right_shift_tile_init() { MATH(SFPU_UNARY_INIT(right_shift, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

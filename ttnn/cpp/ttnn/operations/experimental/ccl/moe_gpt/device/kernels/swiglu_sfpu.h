@@ -126,7 +126,6 @@ inline void llk_math_eltwise_binary_sfpu_swiglu(
     uint gate_tile, uint32_t up_tile, uint32_t out_tile, VectorMode vector_mode = VectorMode::RC) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_swiglu,
         (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
         gate_tile,

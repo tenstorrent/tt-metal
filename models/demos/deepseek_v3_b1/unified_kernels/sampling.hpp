@@ -141,64 +141,36 @@ ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
     ckernel::sfpu::sampling_recip_init<legacy_compat>();
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_recip_scalar,
-        (legacy_compat, DST_ACCUM_MODE),
-        idst,
-        VectorMode::None);
+        DST_SYNC_MODE, calculate_sampling_recip_scalar, (legacy_compat, DST_ACCUM_MODE), idst, VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
 }
 
 ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_comp_first_column,
-        (SfpuType::le),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_SYNC_MODE, calculate_sampling_binary_comp_first_column, (SfpuType::le), idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_comp_first_column,
-        (SfpuType::lt),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_SYNC_MODE, calculate_sampling_binary_comp_first_column, (SfpuType::lt), idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sampling_binary_comp_first_column,
-        (SfpuType::ge),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::C);
+        DST_SYNC_MODE, calculate_sampling_binary_comp_first_column, (SfpuType::ge), idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
+        DST_SYNC_MODE, calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
 }
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sampling_binary_first_column,
         (ckernel::sfpu::SamplingBinaryOp::add),
         idst0,
@@ -565,20 +537,19 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     reconfig_data_format_srca(in_scores_cb);
     UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
     UNPACK((llk_unpack_A_top32_rm(in_scores_cb, 0, num_faces)));
-    MATH((llk_math_top32_rm_init(in_scores_cb)));
-    MATH((llk_math_top32_rm(in_scores_cb, value_offset_tiles, num_faces)));
+    MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(in_scores_cb)));
+    MATH((llk_math_top32_rm<DST_ACCUM_MODE>(in_scores_cb, value_offset_tiles, num_faces)));
 
     reconfig_data_format_srca(in_indices_cb);
     UNPACK((llk_unpack_A_top32_rm_init(in_indices_cb)));
     UNPACK((llk_unpack_A_top32_rm(in_indices_cb, 0, num_faces)));
-    MATH((llk_math_top32_rm_init(in_indices_cb)));
-    MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles, num_faces)));
+    MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(in_indices_cb)));
+    MATH((llk_math_top32_rm<DST_ACCUM_MODE>(in_indices_cb, index_offset_tiles, num_faces)));
 
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
     if constexpr (presorted) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,
@@ -588,7 +559,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     } else {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_phases_steps_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,
@@ -597,7 +567,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     }
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _bitonic_top32_merge_,
         (false, DST_ACCUM_MODE, false /*idir*/),
         value_offset_tiles,
@@ -605,7 +574,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         false /*across_tiles*/));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _bitonic_top32_rebuild_,
         (false, DST_ACCUM_MODE),
         value_offset_tiles,
@@ -624,19 +592,18 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         reconfig_data_format_srca(in_scores_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
         UNPACK((llk_unpack_A_top32_rm(in_scores_cb, i / 64, num_faces)));
-        MATH((llk_math_top32_rm_init(in_scores_cb)));
-        MATH((llk_math_top32_rm(in_scores_cb, value_offset_tiles + 1, num_faces)));
+        MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(in_scores_cb)));
+        MATH((llk_math_top32_rm<DST_ACCUM_MODE>(in_scores_cb, value_offset_tiles + 1, num_faces)));
 
         reconfig_data_format_srca(in_indices_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_indices_cb)));
         UNPACK((llk_unpack_A_top32_rm(in_indices_cb, i / 64, num_faces)));
-        MATH((llk_math_top32_rm_init(in_indices_cb)));
-        MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
+        MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(in_indices_cb)));
+        MATH((llk_math_top32_rm<DST_ACCUM_MODE>(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
         if constexpr (presorted) {
             MATH(SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
-                DST_ACCUM_MODE,
                 _bitonic_top32_rebuild_,
                 (false, DST_ACCUM_MODE),
                 value_offset_tiles + 1,
@@ -646,7 +613,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         } else {
             MATH(SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
-                DST_ACCUM_MODE,
                 _bitonic_top32_phases_steps_,
                 (false, DST_ACCUM_MODE),
                 value_offset_tiles + 1,
@@ -655,7 +621,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         }
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_merge_,
             (false, DST_ACCUM_MODE, false /*idir*/),
             value_offset_tiles + 1,
@@ -663,7 +628,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
             false /*across_tiles*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles + 1,
@@ -673,7 +637,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_merge_,
             (false, DST_ACCUM_MODE, false /*idir*/),
             value_offset_tiles,
@@ -681,7 +644,6 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
             true /*across_tiles*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,
@@ -761,7 +723,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_prep_,
         (false, DST_ACCUM_MODE, decreasing),
         value_offset_tiles,
@@ -780,7 +741,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_of_1024_rm_pre_sorted_prep_,
             (false, DST_ACCUM_MODE, increasing),
             value_offset_tiles + 1,
@@ -788,7 +748,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
             value_offset_tiles + 1));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_of_1024_rm_pre_sorted_combine_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,
@@ -799,7 +758,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     // Step 6: collapse per-face top-32 to a single top-32.
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_final_,
         (false, DST_ACCUM_MODE),
         value_offset_tiles,
@@ -815,18 +773,17 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         reconfig_data_format_srca(in_scores_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
         UNPACK((llk_unpack_A_top32_rm(in_scores_cb, i / 64, num_faces)));
-        MATH((llk_math_top32_rm_init(in_scores_cb)));
-        MATH((llk_math_top32_rm(in_scores_cb, value_offset_tiles + 1, num_faces)));
+        MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(in_scores_cb)));
+        MATH((llk_math_top32_rm<DST_ACCUM_MODE>(in_scores_cb, value_offset_tiles + 1, num_faces)));
 
         reconfig_data_format_srca(in_indices_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_indices_cb)));
         UNPACK((llk_unpack_A_top32_rm(in_indices_cb, i / 64, num_faces)));
-        MATH((llk_math_top32_rm_init(in_indices_cb)));
-        MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
+        MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(in_indices_cb)));
+        MATH((llk_math_top32_rm<DST_ACCUM_MODE>(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles + 1,
@@ -835,7 +792,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
             false /*skip_second*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_merge_,
             (false, DST_ACCUM_MODE, false /*idir*/),
             value_offset_tiles + 1,
@@ -843,7 +799,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
             false /*across_tiles*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles + 1,
@@ -853,7 +808,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_merge_,
             (false, DST_ACCUM_MODE, false /*idir*/),
             value_offset_tiles,
@@ -861,7 +815,6 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
             true /*across_tiles*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,

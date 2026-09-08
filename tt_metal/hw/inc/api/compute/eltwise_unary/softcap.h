@@ -43,12 +43,12 @@ namespace ckernel {
  * | beta_recip     | The reciprocal of beta, as an fp32 bit pattern                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_softcap,
-        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC,
         beta,
@@ -58,7 +58,10 @@ ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softcap_tile_init() { MATH(SFPU_UNARY_INIT(softcap)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void softcap_tile_init() {
+    MATH(SFPU_UNARY_INIT(softcap, is_fp32_dest_acc_en));
+}
 
 }  // namespace ckernel
 

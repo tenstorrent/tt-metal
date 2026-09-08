@@ -30,7 +30,7 @@ namespace ckernel {
 ALWI void fmod_tile(uint32_t idst) {
     // The denominator and its reciprocal are loaded once by fmod_tile_init into vConstFloatPrgm0/1;
     // calculate_fmod reads them from there.
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_fmod, (APPROX), idst, VectorMode::RC));
 }
 
 /**

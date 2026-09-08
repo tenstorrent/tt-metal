@@ -32,7 +32,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_selu,
         (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
@@ -45,7 +44,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_selu,
         (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
@@ -57,8 +55,8 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu, DST_ACCUM_MODE)); }
 
-ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

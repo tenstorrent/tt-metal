@@ -15,7 +15,7 @@
 namespace ckernel {
 
 ALWI void mask_tile_init() {
-    MATH(SFPU_UNARY_INIT(mask));  // TODO(AP): move out init
+    MATH(SFPU_UNARY_INIT(mask, DST_ACCUM_MODE));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -42,17 +42,14 @@ ALWI void mask_tile_init() {
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
     } else if (data_format == DataFormat::Int32) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_int_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_int_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
     }
 }
 
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask_posinf, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_mask_posinf, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
 }
 
 }  // namespace ckernel

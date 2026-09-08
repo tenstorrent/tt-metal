@@ -24,7 +24,7 @@
 // Pack then reads 4 tiles from the DEST half using DST_ACCESS_STRIDED_MODE.
 // ============================================================================
 
-template <bool is_fp32_dest_acc_en = false, bool configure_remap = true>
+template <bool is_fp32_dest_acc_en, bool configure_remap = true>
 inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unpack_dst_format)
 {
     if constexpr (configure_remap)
@@ -67,7 +67,7 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
 
 // One call = one row-chunk (one MOP run). num_units loop removed; block
 // height is always 1 and chunk iteration is in the caller.
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_fast_tilize_block_(
     const std::uint32_t dst_index,
     [[maybe_unused]] const std::uint32_t unpack_dst_format,

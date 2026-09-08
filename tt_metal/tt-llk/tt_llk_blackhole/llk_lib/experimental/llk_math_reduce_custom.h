@@ -131,7 +131,7 @@ inline void reduce_max_row_configure_addrmod_reinit_minimal()
  * This function should NOT be used as a substitute for native reduce LLK MOP configuration.
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShape tensor_shape)
 {
     // Constraint on the outerloop and innerloop dim
@@ -321,7 +321,7 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_(const ckernel::Te
  * Use the standard _llk_math_reduce_init_<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * _llk_math_reduce_() calls in a loop for general-purpose block reduction.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& tensor_shape)
 {
     reduce_max_row_configure_addrmod();
@@ -338,7 +338,7 @@ inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& ten
     math::_configure_default_zero_flag_state_();
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_uninit_()
 {
 }
@@ -358,7 +358,7 @@ inline void _llk_math_reduce_block_max_row_uninit_()
  * Use the standard _llk_math_reduce_<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");

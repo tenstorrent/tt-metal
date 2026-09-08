@@ -75,19 +75,13 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
     // Sum top2 (SFPU)
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        deepseek_moe_gate_sum_top2,
-        (APPROX, DST_ACCUM_MODE),
-        0 /*dst_index*/,
-        VectorMode::RC_custom));
+        DST_SYNC_MODE, deepseek_moe_gate_sum_top2, (APPROX, DST_ACCUM_MODE), 0 /*dst_index*/, VectorMode::RC_custom));
     // Transpose dest step 0 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));
     // Sort top4 groups (SFPU)
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         deepseek_moe_gate_sort_top4_groups,
         (APPROX, DST_ACCUM_MODE),
         0 /*dst_index*/,
@@ -98,7 +92,6 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     // Top8 (SFPU)
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         deepseek_moe_gate_top8,
         (APPROX, DST_ACCUM_MODE),
         0 /*dst_index*/,

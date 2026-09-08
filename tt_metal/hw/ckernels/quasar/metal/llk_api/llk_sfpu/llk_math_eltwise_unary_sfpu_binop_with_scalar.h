@@ -39,7 +39,6 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
     static_assert(binop_mode == sfpu::BinopMode::Mul, "Quasar binop_with_scalar currently supports Mul only");
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROXIMATE, binop_mode, SFPU_ITERATIONS),
         dst_index,

@@ -26,7 +26,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void erfinv_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_erfinv, (APPROX), idst, VectorMode::RC));
 }
 
 /**

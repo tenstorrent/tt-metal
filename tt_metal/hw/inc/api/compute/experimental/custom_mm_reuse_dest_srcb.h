@@ -26,8 +26,9 @@ constexpr std::uint32_t CUSTOM_MM_REUSE_DEST_TILE_ROWS = 16;
 // A standard Tile32x32 DEST slot: 4 faces x 16 rows.
 constexpr std::uint32_t CUSTOM_MM_DEST_ROWS_PER_TILE32 = 64;
 // Rows addressable by math, for the current sync/accum configuration.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 constexpr std::uint32_t CUSTOM_MM_MAX_DEST_ROWS =
-    get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>() * CUSTOM_MM_DEST_ROWS_PER_TILE32;
+    get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>() * CUSTOM_MM_DEST_ROWS_PER_TILE32;
 
 // clang-format off
 /**

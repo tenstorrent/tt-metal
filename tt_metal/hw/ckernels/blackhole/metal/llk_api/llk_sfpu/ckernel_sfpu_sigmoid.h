@@ -14,7 +14,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool is_fp32_acc_to_dest_mode = true>
+template <bool is_fp32_acc_to_dest_mode>
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // Compute sigmoid as:
     // sigmoid(x) = 1 / (1 + exp(-x))

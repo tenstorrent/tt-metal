@@ -31,7 +31,6 @@ template <DataFormat data_format>
 ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
         (APPROX, sfpu::UnaryBitwiseOp::AND, data_format),
         idst,
@@ -58,7 +57,6 @@ template <DataFormat data_format>
 ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
         (APPROX, sfpu::UnaryBitwiseOp::OR, data_format),
         idst,
@@ -85,7 +83,6 @@ template <DataFormat data_format>
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
         (APPROX, sfpu::UnaryBitwiseOp::XOR, data_format),
         idst,
@@ -96,16 +93,16 @@ ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_and_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_and)); }
+ALWI void bitwise_and_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_and, DST_ACCUM_MODE)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_or_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_or)); }
+ALWI void bitwise_or_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_or, DST_ACCUM_MODE)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_xor_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_xor)); }
+ALWI void bitwise_xor_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_xor, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_dest_section_done_<dest_sync1, false>();
     }
 
-    _llk_math_reduce_block_max_row_uninit_();
+    _llk_math_reduce_block_max_row_uninit_<false>();
 
     // Operation 2: Math Setup
     const std::uint32_t math_format2 = ckernel::to_underlying(DataFormat::Float16_b);

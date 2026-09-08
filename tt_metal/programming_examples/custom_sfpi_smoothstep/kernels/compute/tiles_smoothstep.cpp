@@ -29,7 +29,7 @@
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
     MATH(SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
+        DST_SYNC_MODE, smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
 void kernel_main() {

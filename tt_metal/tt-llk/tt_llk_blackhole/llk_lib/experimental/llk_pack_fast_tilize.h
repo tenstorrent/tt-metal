@@ -131,7 +131,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
     tmp.program();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en>
 __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     [[maybe_unused]] const std::uint32_t use_32bit_dest,
     const std::uint32_t pack_dst_format,

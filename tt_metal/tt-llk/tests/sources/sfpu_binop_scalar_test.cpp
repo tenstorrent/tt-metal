@@ -86,7 +86,6 @@ void run_kernel(RUNTIME_PARAMETERS)
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
     SFPU_UNARY_CALL(
         DstSync::SyncHalf,
-        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         0 /* dst_index */,

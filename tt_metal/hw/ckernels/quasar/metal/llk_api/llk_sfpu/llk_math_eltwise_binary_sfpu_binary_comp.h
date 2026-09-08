@@ -47,7 +47,6 @@ inline void llk_math_eltwise_binary_sfpu_gt_int(
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU gt_int currently supports Int32 only");
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_binary_comp_int32,
         (APPROXIMATE, ITERATIONS, SfpuType::gt, SIGN_MAGNITUDE_FORMAT),
         idst0,

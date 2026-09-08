@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             0 /* dst_index */, formats.math, formats.math);
 
         // RC_custom: the kernel does its own DEST addressing, so no per-face loop.
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K, is_fp32_dest_acc_en), 0 /* dst_index */, VectorMode::RC_custom);
+        SFPU_UNARY_CALL(DST_SYNC, _softmax_k_, (SOFTMAX_K, is_fp32_dest_acc_en), 0 /* dst_index */, VectorMode::RC_custom);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

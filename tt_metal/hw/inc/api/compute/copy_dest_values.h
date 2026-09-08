@@ -29,13 +29,12 @@ namespace ckernel {
  * | idst_out       | The index of the tile in DST register buffer to copy values to        | uint32_t                 | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat DATA_FORMAT>
+template <DataFormat DATA_FORMAT, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         copy_dest_value,
-        (DATA_FORMAT, false /*APPROXIMATE*/),
+        (DATA_FORMAT, false /*APPROXIMATE*/, is_fp32_dest_acc_en),
         idst_in,
         idst_out,
         0 /*unused*/,
@@ -63,14 +62,7 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
     // ckernel::sfpu (the format-agnostic sfpi::vFloat path). New code should use the
     // DataFormat-templated overload above.
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        copy_dest_value,
-        (false /*APPROXIMATE*/),
-        idst_in,
-        idst_out,
-        0 /*unused*/,
-        VectorMode::RC)));
+        DST_SYNC_MODE, copy_dest_value, (false /*APPROXIMATE*/), idst_in, idst_out, 0 /*unused*/, VectorMode::RC)));
 }
 
 ALWI void copy_dest_values_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::copy_dest_value_init))); }

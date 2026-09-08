@@ -41,12 +41,7 @@ ALWI void tanh_derivative_tile_init() {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_derivative_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_tanh_derivative_sech2,
-        (fast_and_approx, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_tanh_derivative_sech2, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 }  // namespace ckernel

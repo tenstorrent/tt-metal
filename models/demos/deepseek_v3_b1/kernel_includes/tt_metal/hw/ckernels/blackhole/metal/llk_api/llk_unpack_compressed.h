@@ -87,11 +87,12 @@ FORCE_INLINE uint32_t get_compressed_tile_size(uint32_t fmt_idx) { return TILE_S
 /**
  * @brief Reconfigure unpacker A for a specific compressed format.
  */
+template <bool is_fp32_dest_acc_en>
 FORCE_INLINE void reconfig_unpack_srca(uint32_t fmt_idx) {
     UNPACK(({
         uint32_t src_format = DATA_FORMATS[fmt_idx];
         uint32_t tile_size_shifted = TILE_SIZES[fmt_idx] >> 4;
-        _llk_unpack_reconfig_data_format_srca_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
             src_format, src_format, tile_size_shifted, FACE_R_DIM, 4);
     }));
 }
@@ -99,11 +100,12 @@ FORCE_INLINE void reconfig_unpack_srca(uint32_t fmt_idx) {
 /**
  * @brief Reconfigure unpacker B for a specific compressed format.
  */
+template <bool is_fp32_dest_acc_en>
 FORCE_INLINE void reconfig_unpack_srcb(uint32_t fmt_idx) {
     UNPACK(({
         uint32_t src_format = DATA_FORMATS[fmt_idx];
         uint32_t tile_size_shifted = TILE_SIZES[fmt_idx] >> 4;
-        _llk_unpack_reconfig_data_format_srcb_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+        _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
             src_format, src_format, tile_size_shifted, FACE_R_DIM, 4);
     }));
 }
