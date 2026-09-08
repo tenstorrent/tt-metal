@@ -280,28 +280,54 @@ class MLP(LightweightModule):
             for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
-        # N300 override. The full-grid choice above is right on N150, where gate/up is
-        # 2048x6144 and runs at 210 GB/s (73 % of DRAM peak). At TP=2 the same code sees
-        # 2048x3072, where 64 cores gives per_core_N=1.5 worth of work and only 145 GB/s —
-        # 19-26 us/matmul slower than the auto-routing it replaced. Swept on N300:
-        # 32 cores with in0_block_w=2 recovers
-        # 22-25 %, net of the in0 reshard, with fp32 accumulate kept so it is numerically
-        # neutral. Keyed by exact (seq, K, N) so N150's shape cannot match.
-        _N300_GATE_UP = {
-            (64, 2048, 3072): (32, (2, 1)),
-            (128, 2048, 3072): (32, (1, 3)),
+        # Swept prefill gate/up overrides, keyed by exact (seq, K, per-chip N) so only the
+        # shapes actually measured can match. `_prefill_gate_up_progcfg` above uses the FULL
+        # grid, which drives in0_block_w to 1 (K=64 tiles / 64 cores) — the same wrong end of
+        # the tradeoff that cost 34 us/matmul in decode.
+        #
+        # `in0_sharded` asks for a width-sharded in0 on the matmul's own grid. It is not
+        # optional for a narrower grid here: on N150 the post-attention RMSNorm hands gate/up
+        # a 64-core width shard (2048/64 = 1 tile per core), and a 32-core config derives
+        # in0_block_w=2, which the matmul refuses --
+        #   "shard_shape[1] (32) / in0_tile width (32) must be divisible by in0_block_w (2)".
+        # The isolated sweep fed an L1-interleaved in0 and so never saw this. Resharding to
+        # the matmul's 32-core grid gives 2 tiles per core and in0_block_w=2 divides.
+        #
+        # N300 / TP=2, N=3072: 64 cores gives per_core_N=1.5 worth of work and 145 GB/s,
+        # 19-26 us/matmul slower than the auto-routing it replaced; 32 cores with
+        # in0_block_w=2 recovers 22-25 %, net of the in0 reshard.
+        #
+        # N150 / TP=1, N=6144: the full-grid choice was swept at **bf16** ("210 GB/s, 73 % of
+        # DRAM peak"). At bfp8 it is 135 GB/s. Re-swept in isolation at the model's shapes
+        # (bfloat8_b, LoFi + fp32 acc, median of 4 steady launches,
+        # test_qwen3_tts_prefill_mm_sweep_n150.py); isolated time tracks the in-model window
+        # to ~1 us on every shape:
+        #
+        #   m=64   c64 ibw=1 (shipped) 99.0 us 135 GB/s | c32 ibw=2 71.3 us 187 GB/s  <- best
+        #          c32 sharded-in0 72.4 (tied, so not worth the reshard) | c16 86.0 | 2D 144.4
+        #   m=128  c64 ibw=1 (shipped) 125.2 us        | c32 ibw=2 117.9 us           <- best
+        #
+        # The demo pads 61 tokens to bucket 64, so m=64 is the one on its critical path.
+        _PREFILL_GATE_UP = {
+            # (seq, K, N): (num_cores, out_subblock, in0_sharded)
+            (64, 2048, 3072): (32, (2, 1), True),  # N300 / TP=2
+            (128, 2048, 3072): (32, (1, 3), True),  # N300 / TP=2
+            (64, 2048, 6144): (32, None, True),  # N150 / TP=1
+            (128, 2048, 6144): (32, None, True),  # N150 / TP=1
         }
         self._prefill_gate_up_n300 = {}
         self._prefill_gate_up_in0_memcfg = {}
-        _n300_mm_override = os.environ.get("QWEN3_TTS_N300_MM_OVERRIDE", "1") != "0"
-        for (_m, _k, _n), (_cores, _sb) in _N300_GATE_UP.items() if _n300_mm_override else ():
+        _mm_override = os.environ.get("QWEN3_TTS_N300_MM_OVERRIDE", "1") != "0"
+        for (_m, _k, _n), (_cores, _sb, _in0_sharded) in _PREFILL_GATE_UP.items() if _mm_override else ():
             if _k != hidden_size or _n != self.local_intermediate or _m not in self._prefill_gate_up_progcfg:
                 continue
-            _mc = width_sharded_l1_memcfg(_m // 32, _k // 32, min(_cores, grid.x), max(1, _cores // grid.x))
             self._prefill_gate_up_n300[_m] = make_linear_1d_program_config(
                 _m, _k, _n, grid.x, grid.y, _fp32, num_cores=_cores, out_subblock=_sb
             )
-            self._prefill_gate_up_in0_memcfg[_m] = _mc
+            if _in0_sharded:
+                self._prefill_gate_up_in0_memcfg[_m] = width_sharded_l1_memcfg(
+                    _m // 32, _k // 32, min(_cores, grid.x), max(1, _cores // grid.x)
+                )
         self._prefill_down_progcfg = {
             m: make_linear_1d_program_config(m, self.local_intermediate, hidden_size, _down_gx, _down_gy, _fp32)
             for m in PREFILL_SEQS
