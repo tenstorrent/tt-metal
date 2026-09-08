@@ -289,8 +289,10 @@ jobs:
           echo "runner:  ${RUNNER_NAME:-unknown}"
           echo "host:    $(hostname)"
           echo "devices: $(ls /dev/tenstorrent 2>/dev/null | tr '\n' ' ')"
-          # The ceiling the producer's xdist workers compete for.
-          echo "CPUs:    $(nproc)"
+          # The ceiling the producer's xdist workers compete for -- and whether
+          # it is the machine's or the container's.
+          echo "CPUs:    $(nproc) available, $(grep -c '^processor' /proc/cpuinfo) on the host"
+          echo "quota:   $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo unknown)"
           tt-smi -ls 2>/dev/null || echo "tt-smi not available in this image"
       - name: Measure the budget
         shell: bash

@@ -132,7 +132,14 @@ SELECT=(-m "perf and not accuracy" --timeout=60)
 # checkable after the fact rather than assumed.
 BOARDS="$(ls /dev/tenstorrent 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 HOST="$(hostname)"
+# Three different numbers, and the difference between them is the point.
+# nproc follows the CPU affinity the container was given; /proc/cpuinfo counts
+# the host's CPUs regardless; cpu.max is the cgroup quota. A producer worker
+# count above the FIRST of these is oversubscription, and if the first is far
+# below the second, the cap is the container's, not the machine's.
 NPROC="$(nproc 2>/dev/null || echo 0)"
+HOST_CPUS="$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 0)"
+CPU_MAX="$(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo unknown)"
 COMMIT="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 
 WORST_RC=0
@@ -149,7 +156,7 @@ for config in "${CONFIG_LIST[@]}"; do
   echo "=== $TAG: run types: ${RUN_TYPES:-<all declared>}," \
        "speed of light: $SPEED_OF_LIGHT, group $GROUP/$N_GROUPS," \
        "producer -n $PRODUCER_WORKERS, consumer -n $CONSUMER_WORKERS," \
-       "host CPUs $NPROC"
+       "CPUs available $NPROC of $HOST_CPUS on the host, cgroup quota $CPU_MAX"
   wipe_build_tree
 
   PRODUCER_START=$(date +%s)
@@ -187,6 +194,8 @@ summary = {
     "producer_workers": $PRODUCER_WORKERS,
     "consumer_workers": $CONSUMER_WORKERS,
     "nproc": $NPROC,
+    "host_cpus": $HOST_CPUS,
+    "cpu_max": "$CPU_MAX",
     "producer_s": $PRODUCER_S,
     "consumer_s": $CONSUMER_S,
     "total_s": $TOTAL_S,
