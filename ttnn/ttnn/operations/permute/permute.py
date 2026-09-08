@@ -54,11 +54,14 @@ SUPPORTED = {
     "rank": [4],
     "swap_hw": [False],
     "mem": ["dram_interleaved"],
-    # validate-only axis (not in the harness TARGET): a permutation that moves
-    # a non-innermost axis into the tiled H position is a *retile*, not a
-    # whole-tile relocation, and must be refused rather than silently wrong.
-    "inner_pair": ["preserved"],
 }
+
+# Validate-only gate (deliberately NOT an entry in SUPPORTED — the harness never
+# generates it, and an extra SUPPORTED axis would make every generated cell read
+# as "unsupported"). A permutation that moves a non-innermost axis into the tiled
+# H position is a *retile*, not whole-tile relocation, so it must be refused
+# rather than silently produce wrongly re-tiled data.
+SUPPORTED_INNER_PAIR = ["preserved"]
 
 # ---------------------------------------------------------------------------
 # 3. EXCLUSIONS
@@ -102,7 +105,6 @@ def validate(input_tensor, dims, *, memory_config=None):
         "layout": input_tensor.layout,
         "swap_hw": bool(canon[-1] != rank - 1),
         "mem": "l1_sharded" if _is_sharded(memory_config) else "dram_interleaved",
-        "inner_pair": "preserved" if (rank >= 2 and canon[-2] == rank - 2) else "moved",
     }
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((shape,), axes)
@@ -110,6 +112,13 @@ def validate(input_tensor, dims, *, memory_config=None):
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"permute: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+
+    inner_pair = "preserved" if (rank >= 2 and canon[-2] == rank - 2) else "moved"
+    if inner_pair not in SUPPORTED_INNER_PAIR:
+        raise UnsupportedAxisValue(
+            f"permute: inner_pair={inner_pair!r} not in SUPPORTED {SUPPORTED_INNER_PAIR} "
+            "(dims moves a non-innermost axis into the tiled H position — retile regime)"
+        )
 
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
