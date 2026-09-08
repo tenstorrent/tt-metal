@@ -1661,13 +1661,33 @@ layer evaluations per frame. Same recipe, same `q_norm` fold, its own weight-cac
 Do **not** reach for `scaled_dot_product_attention_decode` on either model — it is
 numerically broken at these shapes (see 5).
 
-### 6.5 The Talker's *masked prefill* SDPA config
+### 6.5 The Talker's *masked prefill* SDPA config — MEASURED, and **off the demo's path**
 
 2.4 fixed the decode SDPA config and left the masked-prefill one (`prefill_attn_mask`, Sq =
-bucket, Sk = kv_max) on `q_chunk=64 / k_chunk=64`. `q_chunk=64` is right there — Sq is a real
-sequence — but `k_chunk=64` leaves kv=352 as 6 chunks (384 padded rows) where 352 is 1 chunk.
-Prefill runs once per utterance, so this is time-to-first-audio only; TTFT already went
-141.9 -> 134.1 ms from the fused-SDPA switch.
+bucket, Sk = kv_max) on `q_chunk=64 / k_chunk=64`, where `k_chunk=64` leaves kv=352 as 6
+chunks (384 padded rows) when 352 is 1 exact chunk. Swept in
+`test_qwen3_tts_prefill_gaps_sweep.py`, and the config is indeed badly chosen:
+
+| Sq / Sk | k=64 (shipped) | k=128 | k=192 | k=Sk |
+|---|---|---|---|---|
+| 64 / 352 | 67.2 us | 51.1 (-24 %) | **48.6 (-28 %)** | 46.0 (-32 %) |
+| 128 / 416 | 121.4 us | 122.5 (+1 %) | 137.8 (+14 %) | **98.1 (-19 %)** |
+
+k=128 and k=192 are bit-exact at Sq=64; every other winning arm is not (max diff 1.6e-2 at
+Sq=64/k=352, 1.8e-1 at Sq=128), so those would need the audio gate. Note kv=416 is **not** a
+multiple of 64, so the shipped chunking does not even tile it evenly — which is why k=64 is
+the odd one out numerically at Sq=128 (k=128/192/416 all agree with each other exactly).
+
+**None of it is worth taking, because the demo never runs this path.** `server.py:1748`
+captures the prefill traces with no `prefill_attn_mask`, so `_use_fused_prefill_sdpa` holds
+and attention takes `is_causal=True` with K/V sliced to the bucket (Sq == Sk). That SDPA
+measures **17.0 us at bucket 64 and 35.1 us at bucket 128** — a quarter of the masked
+config's cost — and at Sq=Sk=64 `k_chunk=64` is already one exact chunk, i.e. optimal. The
+67-121 us numbers above belong to a config only an external caller passing an explicit mask
+would reach.
+
+So 6.5 is closed as a **non-lever for the demo**. Reopen only if a caller starts passing
+`prefill_attn_mask`; the table above is then the answer, gated on numerics.
 
 ### 6.6 Talker prefill buckets 64 and 128 — CLOSED for caller-side work
 
@@ -1720,6 +1740,44 @@ Two incidental findings from the same investigation:
   order returns a plausible-looking wrong answer too (see 2.1's `wqkv_kvgi`).
 
 Prefill runs once per utterance, so this matters for time-to-first-audio, not steady state.
+
+### 6.6b Prefill layout gaps found by re-profiling HEAD — one landed, one closed
+
+Re-profiling the three prefill windows (29/24/24 ops at buckets 32/64/128) surfaced two
+layout choices no earlier sweep had covered, because both sweeps had parameterised the arm
+they needed out of range. Measured in `test_qwen3_tts_prefill_gaps_sweep.py`:
+
+**o_proj in0 — LANDED, -1 op and -6 us/layer at bucket 64.** `nlp_concat_heads` writes
+`concat_out`: WIDTH_SHARDED `(m, head_dim)` on `concat_grid` = `num_cores_to_corerangeset(16)`.
+For hidden=2048 that is 16 cores x 128 columns, which **is already** the K-width shard a
+1D-mcast o_proj at 16 cores wants — the exact spec `width_sharded_l1_memcfg(m/32, 64, 8, 2)`
+builds. The prefill path was calling `to_memory_config(..., L1_MEMORY_CONFIG)` on it anyway,
+paying a `ShardedToInterleaved` (2.9 us) to produce a layout the matmul is then *slower* to
+read: 36.7 us interleaved vs **33.2 us sharded, bit-exact**. Feeding `concat_out` straight in
+costs nothing and removes the op. Bucket 64: 24 -> 23 ops, o_proj 36.9 -> 33.0 us, window
+505.9 -> 500.0 us. Demo audio md5 unchanged.
+
+`prefill_mm_sweep` missed it by requiring `k_tiles % cores == 0` on a candidate list of
+`(32, 64)` for the sharded-in0 loop while the winning config at m=64 is **c16** — so the
+sharded variant of the arm that actually ships was never built. Buckets 32 (DRAM-sharded o
+path) and 128 (2D 8x4, which splits K over `grid_y` and cannot take a K-width shard) are
+unaffected and keep their configs. `QWEN3_TTS_PREFILL_WO_SHARD_IN0=0` reverts.
+
+**SiLU-mul writing `down`'s shard — CLOSED, 66-71 % slower.** The remaining
+`InterleavedToSharded` after the SiLU-mul (4.4 us at m=64, 7.5 at m=128) exists because the
+mul writes L1-interleaved and `down` wants a 32-core K-width shard. `prefill_trio_sweep` had
+tried only ONE sharded-output arm, `in c64 -> sharded c64`, which lost because it needs
+gate/up on 64 cores; the arm matching what ships (gate/up on 32 cores, `_PREFILL_DOWN_SHARD_IN0`)
+was never run. It is bit-exact and much worse:
+
+| arm | m=64 | m=128 |
+|---|---|---|
+| in c32 -> interleaved (shipped) | 20.2 us | 38.2 us |
+| in c32 -> sharded c32 | 33.4 (+66 %) | 65.4 (+71 %) |
+
+Shipped total including the I2S is 24.6 / 45.7 us against 33.4 / 65.4, so the separate
+conversion is the cheaper way to reach `down`'s layout. Do not re-propose without a new
+mechanism — writing a 32-core width shard from this eltwise is simply expensive.
 
 ### 6.7 Lower value
 

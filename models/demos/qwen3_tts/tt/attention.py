@@ -658,6 +658,36 @@ class Attention(LightweightModule):
             {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in PREFILL_SEQS}
         )
 
+        # === Prefill o_proj in0: consume nlp_concat_heads' own shard, don't flatten it ===
+        # `concat_out` is WIDTH_SHARDED (m, head_dim) on `concat_grid` = 16 cores, i.e. 128
+        # columns each — which for hidden=2048 is EXACTLY the K-width shard a 1D-mcast wo at
+        # 16 cores wants (`width_sharded_l1_memcfg(m/32, 64, 8, 2)`). The prefill path was
+        # calling `to_memory_config(..., L1_MEMORY_CONFIG)` on it, paying a
+        # ShardedToInterleaved (2.9 us at m=64) to hand the matmul a layout that is then also
+        # SLOWER to consume: 36.7 us interleaved vs 33.2 us sharded, bit-exact
+        # (`test_qwen3_tts_prefill_gaps_sweep.py`). So the flatten cost -6.4 us/layer and an
+        # op for nothing. The earlier sweep missed this because it only tried sharded-in0 at
+        # `cores in (32, 64)`, and the config that ships at m=64 is c16.
+        #
+        # Only for buckets whose swept `_PREFILL_WO` entry is 1D at exactly `num_heads` cores:
+        # the 2D config m=128 uses splits K over grid_y and does not take a K-width shard, and
+        # `find_1d_mcast_grid`'s default c32 would need 32-column shards concat does not emit.
+        # Spec equality is asserted against `width_sharded_l1_memcfg` rather than assumed, so a
+        # different hidden/num_heads ratio silently opts out instead of mis-shaping the matmul.
+        # QWEN3_TTS_PREFILL_WO_SHARD_IN0=0 reverts.
+        self._prefill_wo_in0_memcfg = {}
+        if os.environ.get("QWEN3_TTS_PREFILL_WO_SHARD_IN0", "1") != "0" and self.tp_size == 1:
+            _k_tiles_wo = self._local_hidden // 32
+            for _m, _nlp_cfg in self._prefill_concat_configs.items():
+                _swept = _PREFILL_WO.get((_m, self._local_hidden, hidden_size))
+                if _swept is None or _swept[0] != "1d" or _swept[1] != self.num_heads:
+                    continue
+                if _m in self._prefill_wo_auto_seqs or _k_tiles_wo % _swept[1] or _swept[1] % _grid.x:
+                    continue
+                _want = width_sharded_l1_memcfg(_m // 32, _k_tiles_wo, _grid.x, _swept[1] // _grid.x)
+                if _nlp_cfg["concat_out"] == _want:
+                    self._prefill_wo_in0_memcfg[_m] = _nlp_cfg["concat_out"]
+
         # N150 prefill NLP + residual memcfgs per trace bucket (M varies; DRAM matmul stays M=32).
         self._n150_prefill_nlp_by_m = {}
         if self._n150 and self.tp_size == 1:
@@ -1160,7 +1190,9 @@ class Attention(LightweightModule):
             _explicit_mask = (
                 decode_attn_mask
                 if decode_attn_mask is not None
-                else cp_prefill_mask if cp_prefill_mask is not None else prefill_attn_mask
+                else cp_prefill_mask
+                if cp_prefill_mask is not None
+                else prefill_attn_mask
             )
             _use_causal = _explicit_mask is None and _q_seq == _k_seq_inner and _q_seq > 1
             _explicit_mask, _own_sdpa_mask = prepare_fused_sdpa_mask(_explicit_mask)
@@ -1317,6 +1349,12 @@ class Attention(LightweightModule):
                     attn_output = ttnn.to_memory_config(attn_concat_sharded, _wo_in0_for_concat)
                     ttnn.deallocate(attn_concat_sharded)
                 _attn_already_in_wo_in0 = True
+            elif (not is_decode) and seq_len in self._prefill_wo_in0_memcfg:
+                # concat_out already IS wo's in0 K-width shard, so there is nothing to do:
+                # alias it and let the matmul read it in place. Do NOT deallocate here — the
+                # linear below frees `attn_output`, which is this same buffer.
+                attn_output = attn_concat_sharded
+                _attn_already_in_wo_in0 = False
             else:
                 attn_output = ttnn.to_memory_config(attn_concat_sharded, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(attn_concat_sharded)
