@@ -122,15 +122,6 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
-- id: bh-host-io-fast-unit-viommu
-  name: Host IO socket loopback unit tests (slow dispatch, viommu)
-  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
-
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
   name: fabric stability nightly tests

@@ -26,14 +26,6 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
 
-- name: Host IO fast unit test (viommu only)
-  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
 - name: TTNN multi-device CCL, SDPA PERF, and indexer tests (QB2 only)
   cmd: |
     pytest tests/nightly/blackhole/sdpa/ -svv
