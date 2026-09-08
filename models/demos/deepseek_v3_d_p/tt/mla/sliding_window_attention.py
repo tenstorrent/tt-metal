@@ -421,6 +421,13 @@ class TtSWA(LightweightModule):
         assert state is not None, "TtSWA.forward needs the state alloc_state returned"
         seq_len = hidden_states.shape[2] * self.sp_factor
         real_len = int(seq_len if seq_len_actual is None else seq_len_actual)
+        assert (
+            0 <= real_len <= seq_len
+        ), f"seq_len_actual must be between 0 and padded slab length {seq_len}, got {real_len}"
+        assert state.kv_actual + real_len <= state.max_seq_len, (
+            f"context longer than the state was allocated for: {state.kv_actual + real_len} tokens > "
+            f"max_seq_len {state.max_seq_len}"
+        )
         sw = self.sliding_window
         # On the ACCUMULATED length: a final chunk may end mid-tile, a non-final one may not.
         assert state.kv_actual % TILE_HEIGHT == 0, (

@@ -8,7 +8,7 @@ Chunked, since the per-chunk work is what a long prefill repeats. The state is a
 profiled region.
 
 Timed with the realtime profiler, as the Blaze pipeline builds without Tracy. Every program
-contributes its MAX duration across chips. HCA_PERF_BREAKDOWN=1 adds a per-op split.
+contributes its MAX duration across chips. SWA_PERF_BREAKDOWN=1 adds a per-op split.
 """
 
 import os
@@ -31,14 +31,14 @@ _CHUNKS = 2
 _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05
 
-# Measured on a host is_high_power() calls false; the margin absorbs the difference.
+# Measured on the gated high-power host.
 _BASELINES = [
-    pytest.param("flash", DeepSeekV4FlashConfig, 5_124_000, id="flash"),
+    pytest.param("flash", DeepSeekV4FlashConfig, 5_300_000, id="flash"),
 ]
 
 # Perf is gated on the 14kW hosts. Set this to run anywhere for bring-up.
-_IGNORE_POWER = os.environ.get("HCA_PERF_IGNORE_POWER") == "1"
-_BREAKDOWN = os.environ.get("HCA_PERF_BREAKDOWN") == "1"
+_IGNORE_POWER = os.environ.get("SWA_PERF_IGNORE_POWER") == "1"
+_BREAKDOWN = os.environ.get("SWA_PERF_BREAKDOWN") == "1"
 
 
 def _log_breakdown(per_program, chunk_ns, top=100):
@@ -56,7 +56,7 @@ def _log_breakdown(per_program, chunk_ns, top=100):
 @pytest.mark.skipif(
     not (is_high_power() or _IGNORE_POWER),
     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw "
-    "label. HCA_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
+    "label. SWA_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
 )
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
