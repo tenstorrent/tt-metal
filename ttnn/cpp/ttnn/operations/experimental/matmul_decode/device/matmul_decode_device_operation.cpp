@@ -803,6 +803,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
     const tt::tt_metal::Tile output_tile = in0_tile_for_compute(input_tensor_a);
+    const uint32_t output_tile_height = input_tensor_a.layout() == Layout::TILE ? output_tile.get_height() : 1;
 
     const bool batched_out = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1 &&
                              !operation_attributes.output_core_grid.has_value();
@@ -825,7 +826,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
                                                   : input_tensor_b.memory_config().shard_spec().value().grid;
         const uint32_t bc = static_cast<uint32_t>(operation_attributes.batch / operation_attributes.b_blocks);
         const uint32_t nc = static_cast<uint32_t>(operation_attributes.N / operation_attributes.n_blocks);
-        const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile.get_height()) * bc;
+        const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile_height) * bc;
         output_shape[-2] = static_cast<int>(shard_height);
         output_shape[-1] = operation_attributes.b_blocks * operation_attributes.N;
         for (int i = 0; i < static_cast<int>(output_shape.rank()) - 2; ++i) {
@@ -869,7 +870,8 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
         output_core_range_set = CoreRangeSet(base_cores);
     }
     int per_core_output_width = tt::div_up(output_N, output_num_cores);
-    const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile.get_height());
+
+    const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile_height);
     std::array<uint32_t, 2> shard_shape = {shard_height, per_core_output_width};
     auto shard_layout = TensorMemoryLayout::WIDTH_SHARDED;
     if (operation_attributes.output_core_grid.has_value()) {
