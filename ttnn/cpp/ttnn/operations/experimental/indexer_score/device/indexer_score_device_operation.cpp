@@ -421,9 +421,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 is_replicated_across_complete_mesh(k),
                 "indexer_score fused full-mesh mode requires complete-mesh replicated gathered K");
+            // Linear here is a full-mesh open path: same walk, no closing edge.
             TT_FATAL(
-                fused.topology == ttnn::ccl::Topology::Ring,
-                "indexer_score fused full-mesh mode requires Ring topology");
+                fused.topology == ttnn::ccl::Topology::Ring || fused.topology == ttnn::ccl::Topology::Linear,
+                "indexer_score fused full-mesh mode requires Ring or Linear topology");
             TT_FATAL(
                 !attrs.block_cyclic.has_value() || attrs.block_cyclic->sp == ring_size,
                 "indexer_score fused full-mesh block-cyclic SP ({}) must equal ring size ({})",
@@ -1046,7 +1047,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         const uint32_t mesh_size = mesh_shape.mesh_size();
         TT_FATAL(num_links > 0, "ring_indexer_score_dsa cluster_axis=None requires num_links > 0");
         TT_FATAL(
-            topology == ttnn::ccl::Topology::Ring, "ring_indexer_score_dsa cluster_axis=None requires Ring topology");
+            topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+            "ring_indexer_score_dsa cluster_axis=None requires Ring or Linear topology");
         TT_FATAL(
             !seq_subshard_axis.has_value(),
             "ring_indexer_score_dsa cluster_axis=None does not allow seq_subshard_axis");
@@ -1082,14 +1084,16 @@ ttnn::Tensor ring_indexer_score_dsa(
         const std::array<tt::tt_fabric::Topology, 2> axis_topology{
             ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
         const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            q, std::nullopt, num_links, axis_topology, true, "ring_indexer_score_dsa");
-        TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh snake ring");
+            q, std::nullopt, num_links, axis_topology, true, "ring_indexer_score_dsa", /*allow_open_path=*/true);
+        TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
             route->plan.ring_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
             "ring_indexer_score_dsa supports at most {} full-mesh ranks, got {}",
             ttnn::operations::experimental::indexer_score::kMaxRingSize,
             route->plan.ring_size);
         fused_ring.full_mesh = true;
+        // The proved route decides closure; the caller's topology only asked for a full-mesh gather.
+        fused_ring.topology = route->topology;
         fused_ring.snake_orientation = route->plan.orientation;
         fused_ring.mesh_rows = route->plan.mesh_rows;
         fused_ring.mesh_cols = route->plan.mesh_cols;
