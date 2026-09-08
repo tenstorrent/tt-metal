@@ -267,7 +267,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     uint32_t rms_max_hub_groups = 0;
     uint32_t rms_max_hub_contributors = 0;
     std::vector<RmsProducerTopology> rms_topology(num_producers);
-    std::vector<RmsProducerTopology> rms_legacy_topology(num_producers);
     std::vector<CoreCoord> rms_hub_cores;
     if (rms_norm) {
         const uint32_t N = static_cast<uint32_t>(operation_attributes.N);
@@ -338,25 +337,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 rms_hub_cores.push_back(producer_cores[producer]);
             }
         }
-
-        // Until Task 3 changes compute to produce and consume one page per group fragment, execute
-        // nonzero group sizes through the legacy full-row topology. Both grouped and active topology
-        // tables are sent to writers below; Task 3 only needs to switch the active metadata offset.
-        RmsHubGroup legacy_hub_group{.group_index = 0, .gathered_slot_base = 0};
-        legacy_hub_group.contributors.reserve(num_producers);
-        for (uint32_t producer = 0; producer < num_producers; ++producer) {
-            rms_legacy_topology[producer].local_fragments.push_back(RmsLocalGroupFragment{
-                .group_index = 0,
-                .local_tile_offset = 0,
-                .tile_count = inB_N_tiles_per_core,
-                .hub_producer_index = 0,
-                .hub_gathered_slot = producer,
-            });
-            legacy_hub_group.contributors.push_back(
-                RmsHubContributor{.producer_index = producer, .producer_scale_slot = 0});
-        }
-        rms_legacy_topology[0].hub_contributor_slots = num_producers;
-        rms_legacy_topology[0].hub_groups.push_back(std::move(legacy_hub_group));
 
         log_debug(
             tt::LogOp,
@@ -548,7 +528,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         local_out_cb_desc.buffer = output_tensor.buffer();
     }
     desc.cbs.push_back(std::move(local_out_cb_desc));
-    uint32_t rms_packed_tiles_per_row = 0;
     if (rms_norm) {
         const tt::DataFormat rms_data_format = rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t rms_tile_size = output_tile.get_tile_size(rms_data_format);
@@ -562,8 +541,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             "size {}",
             rms_tile_size,
             rms_reduce_tile_size);
-        // Compute remains on the legacy full-row reduction until Task 3.
-        rms_packed_tiles_per_row = num_producers;
         const CoreRangeSet rms_hub_core(rms_hub_cores);
 
         desc.cbs.push_back(CBDescriptor{
@@ -604,7 +581,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * std::max(rms_max_hub_contributors, num_producers) * rms_reduce_tile_size,
+            .total_size = M_tiles * rms_max_hub_contributors * rms_reduce_tile_size,
             // Producers derive each hub destination from their local write pointer, so this gathered
             // buffer needs one uniform allocation across the transport grid.
             .core_ranges = inputB_core_range_set,
@@ -1019,19 +996,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             compute_kernel_desc.defines.emplace_back("FUSE_RMS_VECTOR_GAMMA", "1");
             compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
         }
-        compute_kernel_desc.named_compile_time_args.emplace_back("rms_packed_tiles_per_row", rms_packed_tiles_per_row);
         compute_kernel_desc.named_compile_time_args.emplace_back("rms_group_tiles", rms_group_tiles);
         compute_kernel_desc.named_compile_time_args.emplace_back("rms_num_groups", rms_num_groups);
         compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_local_groups", rms_max_local_groups);
         compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_hub_groups", rms_max_hub_groups);
         compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_hub_contributors", rms_max_hub_contributors);
-        const uint32_t inv_n_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(operation_attributes.N));
+        const uint32_t inv_group_size_bits =
+            std::bit_cast<uint32_t>(1.0F / static_cast<float>(rms_group_tiles * tt::constants::TILE_WIDTH));
         const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon);
         const uint32_t gamma_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_gamma.value_or(1.0F));
         compute_kernel_desc.runtime_args.reserve(producer_cores.size());
         for (uint32_t producer = 0; producer < producer_cores.size(); ++producer) {
             auto args = KernelDescriptor::CoreRuntimeArgs{
-                static_cast<uint32_t>(producer == 0), inv_n_bits, epsilon_bits, gamma_bits};
+                static_cast<uint32_t>(producer == 0), inv_group_size_bits, epsilon_bits, gamma_bits};
             auto topology_args = rms_topology_runtime_args(rms_topology, producer);
             args.insert(args.end(), topology_args.begin(), topology_args.end());
             compute_kernel_desc.runtime_args.emplace_back(producer_cores[producer], std::move(args));
@@ -1058,26 +1035,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     for (uint32_t id = 0; id < producer_cores.size(); ++id) {
         rms_producer_id_by_core[producer_cores[id]] = id;
     }
-    auto rms_runtime_args = [&](const CoreCoord& core) {
+    auto rms_runtime_args = [&](const CoreCoord& core, uint32_t metadata_arg_base) {
         const auto producer_it = rms_producer_id_by_core.find(core);
         const std::optional<uint32_t> producer =
             producer_it == rms_producer_id_by_core.end() ? std::nullopt : std::optional<uint32_t>{producer_it->second};
         auto grouped_args = rms_topology_runtime_args(rms_topology, producer);
         KernelDescriptor::CoreRuntimeArgs args;
-        if (rms_num_groups == 1) {
-            // [grouped_offset=1, active/grouped topology]
-            args.reserve(1 + grouped_args.size());
-            args.push_back(1);
-            args.insert(args.end(), grouped_args.begin(), grouped_args.end());
-        } else {
-            // Keep Task 1's grouped validation smoke executable with legacy compute. Writers still
-            // receive the grouped table after the active legacy table so Task 3 can switch offsets.
-            auto legacy_args = rms_topology_runtime_args(rms_legacy_topology, producer);
-            args.reserve(1 + legacy_args.size() + grouped_args.size());
-            args.push_back(1 + legacy_args.size());
-            args.insert(args.end(), legacy_args.begin(), legacy_args.end());
-            args.insert(args.end(), grouped_args.begin(), grouped_args.end());
-        }
+        args.reserve(1 + grouped_args.size());
+        args.push_back(metadata_arg_base);
+        args.insert(args.end(), grouped_args.begin(), grouped_args.end());
         return args;
     };
 
@@ -1101,7 +1067,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             };
             rms_writer.runtime_args.reserve(cores.size());
             for (const auto& core : cores) {
-                rms_writer.runtime_args.emplace_back(core, rms_runtime_args(core));
+                rms_writer.runtime_args.emplace_back(core, rms_runtime_args(core, 1));
             }
             return rms_writer;
         };
@@ -1246,7 +1212,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                     static_cast<uint32_t>(out_role_of(core)),
                     static_cast<uint32_t>(is_dest)};
                 if (rms_norm) {
-                    auto rms_args = rms_runtime_args(core);
+                    auto rms_args = rms_runtime_args(core, 5);
                     args.insert(args.end(), rms_args.begin(), rms_args.end());
                 }
                 writer.runtime_args.emplace_back(core, std::move(args));
