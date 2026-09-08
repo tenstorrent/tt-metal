@@ -126,6 +126,12 @@ def _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim):
 def _bfp_collect_blocks(flattened_tensor, block_size, float_to_block_fn):
     """Iterate over BFP blocks, collecting shared exponents and mantissas.
 
+    Reference implementation. The packers call ``_bfp_quantize_blocks`` instead, which
+    is the same arithmetic in one numpy pass; this loop stays as the oracle that
+    ``test_bfp_pack_vectorised.py`` checks it against byte-for-byte. Do not delete it
+    as dead code -- it is the only per-element statement of the format, and it is what
+    makes the vectorised path safe to change.
+
     Args:
         flattened_tensor: Pre-processed tensor (output of _bfp_prepare_blocks).
         block_size: Elements per block (16 for all current BFP formats).
@@ -147,7 +153,81 @@ def _bfp_collect_blocks(flattened_tensor, block_size, float_to_block_fn):
     return exponents, all_mantissas
 
 
+def _bfp_quantize_blocks(flattened_tensor, block_size, magnitude_bits):
+    """Vectorised ``_bfp_collect_blocks`` + ``truncate_bfp8`` for one whole tile.
+
+    Produces byte-for-byte what the per-element reference path
+    (``_bfp_collect_blocks`` driving ``float_to_bfp{8,4,2}_block``) produces, in one
+    numpy pass instead of one Python loop iteration per datum. ``magnitude_bits`` is
+    7 for BFP8_b, 3 for BFP4_b and 1 for BFP2_b, matching ``truncate_bfp8``.
+
+    The reference path is kept as the oracle rather than deleted:
+    ``test_bfp_pack_vectorised.py`` asserts the two agree byte-for-byte, so this
+    function is never the only description of the format.
+
+    Returns:
+        (exponents, mantissas) as Python int lists. ``exponents`` is padded to at
+        least MIN_BFP_EXPONENTS; ``mantissas`` is one entry per datum, *not* yet
+        bit-packed into bytes (BFP4/BFP2 packing is the caller's job, as before).
+    """
+    # fp32 bits -> bf16 by truncation. The reference reaches the same bits via
+    # struct.pack("<f", value) >> 16; going through float32 here makes the
+    # double->float32 rounding for an fp64 input identical, and is exact for the
+    # bf16/fp32 inputs every caller actually passes.
+    x = flattened_tensor.detach().cpu().to(torch.float32).contiguous()
+    bf16 = (x.numpy().view(np.uint32) >> 16).astype(np.int32)
+
+    sign = (bf16 >> 15) & 1
+    exponent = (bf16 >> 7) & 0xFF
+    # The reference keeps bits 9..14 of the 16-bit word -- i.e. the bf16 mantissa
+    # *without* its LSB ("remove last") -- then prepends the implicit 1, giving a
+    # 7-bit explicit magnitude. (bf16 & 0x7F) | 0x80 would be 8 bits and is wrong.
+    mantissa = ((bf16 >> 1) & 0x3F) | 0x40
+
+    num_blocks = len(bf16) // block_size
+    exponent = exponent.reshape(num_blocks, block_size)
+    mantissa = mantissa.reshape(num_blocks, block_size)
+    sign = sign.reshape(num_blocks, block_size)
+
+    shared_exponent = exponent.max(axis=1, keepdims=True)
+    delta = shared_exponent - exponent
+
+    # Round-to-nearest, ties away from zero (per ISA spec for BFP8 packing): add the
+    # bit that is about to be shifted out.
+    #
+    # delta reaches ~130 for a block mixing an inf with a normal value, and ~255 in the
+    # limit. numpy 2.2 happens to define an over-wide shift as 0, which is what we want,
+    # but that is not a promise -- C semantics leave it undefined and other array
+    # libraries differ. Clip explicitly so the result does not depend on it. Clipping is
+    # exact rather than merely safe: the magnitude is 7 bits, so every shift >= 7 yields
+    # 0 either way, which is what the reference's Python-int arithmetic produces.
+    guard = np.where(delta > 0, (mantissa >> np.clip(delta - 1, 0, 31)) & 1, 0)
+    shifted = np.where(delta > 0, (mantissa >> np.clip(delta, 0, 31)) + guard, mantissa)
+    magnitude = shifted & 0x7F
+
+    # Flush negative zero to +0: a magnitude that rounds/shifts away drops its sign
+    # bit, so the hardware unpacker never sees a sign-only mantissa (which it decodes
+    # to -inf). Same rule the tt-metal host quantizer (convert_u32_to_bfp) applies.
+    bfp8 = np.where(magnitude != 0, (sign << 7) | magnitude, 0)
+
+    if magnitude_bits == 7:
+        mantissas = bfp8
+    else:
+        # truncate_bfp8: keep the sign bit and the top `magnitude_bits` of the 7
+        # magnitude bits, re-flushing a magnitude that truncation took to zero.
+        shift = 7 - magnitude_bits
+        narrow = (bfp8 >> shift) & ((1 << magnitude_bits) - 1)
+        mantissas = np.where(narrow != 0, ((bfp8 >> 7) << magnitude_bits) | narrow, 0)
+
+    exponents = shared_exponent.reshape(-1).tolist()
+    if len(exponents) < MIN_BFP_EXPONENTS:
+        exponents.extend([0] * (MIN_BFP_EXPONENTS - len(exponents)))
+    return exponents, mantissas.reshape(-1).tolist()
+
+
 def float_to_bfp8_block(block):
+    """Reference per-element BFP8_b block quantiser. See ``_bfp_collect_blocks``."""
+
     def bfloat16_to_binary(value):
         float_value = struct.unpack("<I", struct.pack("<f", value))[0]
         bfloat16_value = (float_value & 0xFFFF0000) >> 16
@@ -211,8 +291,8 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         List of packed bytes: [exponents...] + [mantissas...]
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
-    exponents, mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp8_block
+    exponents, mantissas = _bfp_quantize_blocks(
+        flattened_tensor, block_size, magnitude_bits=7
     )
     return exponents + mantissas
 
@@ -278,15 +358,14 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         List of packed bytes: [exponents...] + [packed_mantissas...]
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
-    exponents, all_mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp4_block
+    exponents, all_mantissas = _bfp_quantize_blocks(
+        flattened_tensor, block_size, magnitude_bits=3
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 2):
-        low = all_mantissas[i]
-        high = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        packed_mantissas.append((high << 4) | low)
+    # Two datums per byte, low nibble first. The datum count is a whole number of
+    # 16-element blocks, so there is never an odd tail to zero-fill.
+    datums = np.asarray(all_mantissas, dtype=np.uint8).reshape(-1, 2)
+    packed_mantissas = ((datums[:, 1] << 4) | datums[:, 0]).tolist()
 
     return exponents + packed_mantissas
 
@@ -323,17 +402,16 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         List of packed bytes: [exponents...] + [packed_mantissas...]
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
-    exponents, all_mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp2_block
+    exponents, all_mantissas = _bfp_quantize_blocks(
+        flattened_tensor, block_size, magnitude_bits=1
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 4):
-        e0 = all_mantissas[i] if i < len(all_mantissas) else 0
-        e1 = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        e2 = all_mantissas[i + 2] if (i + 2) < len(all_mantissas) else 0
-        e3 = all_mantissas[i + 3] if (i + 3) < len(all_mantissas) else 0
-        packed_mantissas.append((e3 << 6) | (e2 << 4) | (e1 << 2) | e0)
+    # Four datums per byte, lowest-order pair first. As for BFP4 the datum count is a
+    # whole number of 16-element blocks, so no tail padding is needed.
+    datums = np.asarray(all_mantissas, dtype=np.uint8).reshape(-1, 4)
+    packed_mantissas = (
+        (datums[:, 3] << 6) | (datums[:, 2] << 4) | (datums[:, 1] << 2) | datums[:, 0]
+    ).tolist()
 
     return exponents + packed_mantissas
 

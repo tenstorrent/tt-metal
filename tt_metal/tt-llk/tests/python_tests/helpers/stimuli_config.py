@@ -7,7 +7,7 @@ import os
 import shutil
 from hashlib import sha256
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 import torch
 
@@ -79,7 +79,12 @@ class StimuliConfig:
         self,
         buffer_A: torch.Tensor,
         stimuli_A_format: DataFormat,
-        buffer_B: torch.Tensor,
+        # May be None for a test whose kernel never reads operand B (the unary SFPU
+        # drivers). B's L1 region is still reserved and still declared in the generated
+        # header -- the operands are laid out contiguously, so dropping the reservation
+        # would move buffer_Res -- but nothing is generated, packed or written into it.
+        # tile_count_B must still be passed, because that is what sizes the region.
+        buffer_B: Optional[torch.Tensor],
         stimuli_B_format: DataFormat,
         stimuli_res_format: DataFormat,
         tile_count_A: int = 1,
@@ -641,8 +646,10 @@ class StimuliConfig:
         pack_function_A = StimuliConfig.get_packer(self.stimuli_A_format)
         pack_function_B = StimuliConfig.get_packer(self.stimuli_B_format)
 
-        # Validate pack functions for A and B
-        if not pack_function_A or not pack_function_B:
+        # Validate pack functions for A and B. B's is still required when B has content:
+        # an absent B needs no packer, but a *present* B with an unsupported format is
+        # the same error it always was.
+        if not pack_function_A or (self.buffer_B is not None and not pack_function_B):
             raise ValueError(
                 f"Unsupported data formats: srcA({self.stimuli_A_format.name}), srcB({self.stimuli_B_format.name})"
             )
@@ -661,19 +668,20 @@ class StimuliConfig:
             twos_complement=self.twos_complement,
         )
 
-        StimuliConfig.write_matrix(
-            self.buffer_B,
-            self.tile_count_B,
-            pack_function_B,
-            self.buf_b_addr,
-            self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            location,
-            self.write_full_tiles,
-            use_srcs=self._operand_use_srcs("B"),
-            twos_complement=self.twos_complement,
-        )
+        if self.buffer_B is not None:
+            StimuliConfig.write_matrix(
+                self.buffer_B,
+                self.tile_count_B,
+                pack_function_B,
+                self.buf_b_addr,
+                self.tile_size_B_bytes,
+                self.num_faces,
+                self.face_r_dim,
+                location,
+                self.write_full_tiles,
+                use_srcs=self._operand_use_srcs("B"),
+                twos_complement=self.twos_complement,
+            )
 
         for op in self._active_optional_operands():
             self._write_optional_operand(op, location, dense=False)
@@ -686,8 +694,8 @@ class StimuliConfig:
         pack_function_A = StimuliConfig.get_packer(self.stimuli_A_format)
         pack_function_B = StimuliConfig.get_packer(self.stimuli_B_format)
 
-        # Validate pack functions for A and B
-        if not pack_function_A or not pack_function_B:
+        # See the sibling path: B's packer is only required when B has content.
+        if not pack_function_A or (self.buffer_B is not None and not pack_function_B):
             raise ValueError(
                 f"Unsupported data formats: srcA({self.stimuli_A_format.name}), srcB({self.stimuli_B_format.name})"
             )
@@ -705,19 +713,20 @@ class StimuliConfig:
             use_srcs=self._operand_use_srcs("A"),
             twos_complement=self.twos_complement,
         )
-        StimuliConfig.write_matrix_w_tile_dimensions(
-            self.buffer_B,
-            self.tile_count_B,
-            pack_function_B,
-            self.buf_b_addr,
-            self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            self.tile_dimensions,
-            location,
-            use_srcs=self._operand_use_srcs("B"),
-            twos_complement=self.twos_complement,
-        )
+        if self.buffer_B is not None:
+            StimuliConfig.write_matrix_w_tile_dimensions(
+                self.buffer_B,
+                self.tile_count_B,
+                pack_function_B,
+                self.buf_b_addr,
+                self.tile_size_B_bytes,
+                self.num_faces,
+                self.face_r_dim,
+                self.tile_dimensions,
+                location,
+                use_srcs=self._operand_use_srcs("B"),
+                twos_complement=self.twos_complement,
+            )
 
         for op in self._active_optional_operands():
             self._write_optional_operand(op, location, dense=True)

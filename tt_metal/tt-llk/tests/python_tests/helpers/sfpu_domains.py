@@ -1907,7 +1907,7 @@ def op_edge_points(
 #      — all 5 predicates fail on all 5 output formats at both dest_acc, 10/10 cells. As an
 #      *output* it fails too, unless a 32-bit input is paired with dest_acc=Yes:
 #      Float32->Float16 at dest_acc=No fails all five, the exact pair Blackhole already
-#      guards in _skip_bh_unsupported_float_combo.
+#      guards in _bh_unsupported_float_combo.
 #
 #   2. A 16-bit input with dest_acc=Yes. Float16_b there fails isinf, isneginf and isnan
 #      while isposinf and isfinite pass — +inf survives, -inf and NaN do not. Precisely the
