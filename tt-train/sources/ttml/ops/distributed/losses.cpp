@@ -14,6 +14,8 @@
 #include "core/compute_kernel_config.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -94,8 +96,21 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // per-position [B,1,S,1] tensor itself, so no extra factor is needed.
     const float inv_N = (reduce == ReduceType::MEAN) ? (1.0F / static_cast<float>(N)) : 1.0F;
 
+    // Generic tiled reductions fill implicit padding in place. Preserve the caller's logits
+    // whenever either reduced row dimension has padding by reducing a private allocation.
+    const auto& logits_val = logits->get_value();
+    const auto& logits_padded_shape = logits_val.padded_shape();
+    const bool has_implicit_tile_padding =
+        logits_shape[-2] != logits_padded_shape[-2] || logits_shape[-1] != logits_padded_shape[-1];
+    auto logits_for_reduction = has_implicit_tile_padding ? ttnn::clone(
+                                                                logits_val,
+                                                                /*dtype=*/std::nullopt,
+                                                                /*memory_config=*/std::nullopt,
+                                                                /*compute_kernel_config=*/std::nullopt)
+                                                          : logits_val;
+
     // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
-    auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
+    auto local_max = ttnn::max(logits_for_reduction, 3, /* keepdim */ true);
 
     // Step 2: all-gather local maxes → [B,1,S,tp_size] → global max [B,1,S,1]
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
@@ -103,7 +118,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel,
     // no intermediate [B,1,S,V/tp_size] FP32 tensor.
-    auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+    auto local_exp = fused_subtract_exp_fp32(logits_for_reduction, global_max);
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
@@ -120,7 +135,6 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     if (targets_raw.logical_shape().rank() != 2U) {
         targets_raw = ttnn::reshape(targets_raw, ttnn::Shape({B, S}));
     }
-    const auto& logits_val = logits->get_value();
     auto gather_output = ttnn::prim::ttml_select_target_logit(
         logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U);
 
@@ -138,7 +152,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         auto s2 = ttnn::sum(s0, 2, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
         loss_val = ttnn::multiply(s2, inv_N, ttnn::DataType::BFLOAT16);
     } else {
-        loss_val = ttnn::typecast(per_pos, ttnn::DataType::BFLOAT16);
+        loss_val = ttnn::fill_implicit_tile_padding(ttnn::typecast(per_pos, ttnn::DataType::BFLOAT16), 0.0F);
     }
 
     auto out = autograd::create_tensor(loss_val);
@@ -165,12 +179,13 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
                                       targets_raw,
                                       local_V,
                                       cluster_axis,
-                                      inv_N]() {
+                                      inv_N,
+                                      logits_for_reduction]() {
         if (!out->is_grad_initialized()) {
             return;
         }
 
-        auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+        auto local_exp = fused_subtract_exp_fp32(logits_for_reduction, global_max);
 
         auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
         auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
@@ -186,7 +201,9 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
             scaled_softmax,
             /*subtract_value=*/inv_N);
 
-        logits->add_grad(ttnn::multiply(scaled_softmax, out->get_grad(), ttnn::DataType::BFLOAT16));
+        auto logits_grad = ttnn::multiply(scaled_softmax, out->get_grad(), ttnn::DataType::BFLOAT16);
+        logits_grad = ttnn::fill_implicit_tile_padding(logits_grad, 0.0F);
+        logits->add_grad(logits_grad);
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, logits));
