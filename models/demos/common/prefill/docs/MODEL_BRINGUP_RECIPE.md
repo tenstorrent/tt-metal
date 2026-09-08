@@ -98,6 +98,11 @@ cache-read op, not to SDPA in general, and a source that sets it globally is ove
 
 ### 2.4 Record the envelope
 
+Exploration is stage **E** and it is logged: one `source` record per part, naming what was chosen and
+the shape it was measured at (§7.2). That record is the stage's deliverable — it is what makes a
+later `reference_gap` traceable to the choice that caused it, and it is the only reason a wrong
+choice is visible at all.
+
 For every part, write down in `README.md` where it came from and the `(hidden, head_dim, chunk,
 sp × tp)` that source was **measured** at. Outside that envelope, expect to compose the op from
 primitives or to re-measure it — and where a borrowed module has a known ceiling, pin it with a test
@@ -130,8 +135,9 @@ Per-module goldens are cheap to regenerate and are deliberately not cached.
 
 ## 4. Stages and order
 
-Three ladders, run in order and one at a time: the decoder (D1-D3), then the whole model around it
-(M1-M3), then the prefill pipeline (P1-P2). D and M have the same three-step shape — torch golden,
+Exploration (**E**, §2) comes first and once: gate the candidate packages, rank them, and record a
+`source` per part. Then three ladders, run in order and one at a time: the decoder (D1-D3), then the
+whole model around it (M1-M3), then the prefill pipeline (P1-P2). D and M have the same three-step shape — torch golden,
 then a mock outline plus PCC tests, then implement in ttnn, with a torch CPU fallback only where
 ttnn genuinely cannot.
 
@@ -144,6 +150,12 @@ and the "worked on one card, broke on the mesh" class of bug disappears entirely
 All PCC tests up to P1 run on **random weights**, identical on both sides. Real checkpoint loading
 is not a dependency of any module test and is deferred to P1.
 
+
+- **E — Exploration**
+
+  Per §2: gate candidates on the spec's target hardware, rank them, and search per part. No code yet.
+
+  E goal → every part in §2.2 has a logged `source`: what was chosen, the envelope it was measured at, and what was rejected. Parts with no usable source are named as write-fresh.
 
 Decoder bringup stages:
 
@@ -504,13 +516,14 @@ Five triggers, all mechanical — there is no "worth logging?" judgment to make:
 | Going off-script: something the recipe, the spec, or the code you borrowed from did not cover, **and you solved it** | `judgment` |
 | Falling back to torch CPU for a block (D3/M3 step 4) | `fallback` |
 | Dropping a Testing-table row the model does not have | `skip` |
+| Choosing (or rejecting) an existing implementation to borrow from, in E | `source` |
 
 **Log successful resolutions only.** Unsuccessful attempts are not logged — the `verify` failures
 already record that the stage was fighting back, and how many times.
 
 ### 7.2 Records
 
-`t` is ISO-8601 UTC to the minute. `stage` is one of `D1 D2 D3 M1 M2 M3 P1 P2`.
+`t` is ISO-8601 UTC to the minute. `stage` is one of `E D1 D2 D3 M1 M2 M3 P1 P2`.
 
 | Event | Fields | Notes |
 |---|---|---|
@@ -520,6 +533,7 @@ already record that the stage was fighting back, and how many times.
 | `judgment` | `t`, `stage`, `kind`, `issue`, `fix`, `failed`: `[]` | `failed` is the tests that were failing, if any — a judgment call need not have started as a test failure. |
 | `fallback` | `t`, `stage`, `block`, `why` | `block` is the module path that went to CPU, e.g. `rope.indexed_cache`. |
 | `skip` | `t`, `stage`, `row`, `why` | `row` is the Testing-table reference being dropped. |
+| `source` | `t`, `stage`, `part`, `chosen`, `envelope`, `rejected`: `[]` | One per part in §2.2. `chosen` is the file or package (or `""` for write-fresh); `envelope` is the `(hidden, head_dim, chunk, sp × tp)` it was measured at; `rejected` names candidates passed over, so a later `reference_gap` shows whether a better one was already on the table. |
 
 ```jsonc
 {"ev":"start","model":"minimax_m3","mesh":"8x4","recipe_sha":"883d2d9"}
@@ -533,6 +547,9 @@ already record that the stage was fighting back, and how many times.
 {"t":"2026-09-02T17:00Z","ev":"verify","stage":"D3","result":"pass","failed":[]}
 {"t":"2026-09-02T17:05Z","ev":"fallback","stage":"D3","block":"rope.indexed_cache",
  "why":"no ttnn gather on tile layout; built the whole-cache index on host once"}
+{"t":"2026-09-02T08:20Z","ev":"source","stage":"E","part":"kv_cache",
+ "chosen":"models/demos/gpt_oss_d_p/tt/attention/","envelope":"hidden 2880, head_dim 64, chunk 1024, sp4xtp8",
+ "rejected":["minimax_m3: 3 caches (index_k), wrong count for GQA"]}
 ```
 
 Wrapped above for reading only — in the file each object is a single line.
@@ -570,6 +587,11 @@ Derived by the digest, so the agent does not track it:
   that is understood from one that is being guessed at.
 - **Elapsed time** — `enter` to first passing `verify`.
 - **Bottleneck test** — the node id appearing most often across all `failed` lists in a stage.
+- **Exploration cost** — E's elapsed time, and how many `source` records it produced. A long E with
+  few sources is searching, not deciding.
+- **Source miss rate** — `reference_gap` judgments against the number of `source` records. This is
+  the number that says whether exploration is picking well; nothing measured it before, because the
+  choice used to be made outside the bring-up.
 
 ### 7.6 Reading the log
 
@@ -581,6 +603,7 @@ models/demos/common/prefill/tools/bringup_digest.py --lint     # malformed recor
 ```
 stage  models  green  reiters  worst  hours  top failing test
 -------------------------------------------------------------
+E           4      4      0.0      0    0.9  -
 D1          4      4      0.2      1    1.8  -
 D2          4      4      0.5      2    3.6  test_ep_moe_vs_ref.py::test_ep8 (2)
 D3          4      3      9.8     17    7.8  test_ring_joint_cache_read_sp_vs_ref.py::test_sp8 (14)

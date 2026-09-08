@@ -27,10 +27,15 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 
-STAGES = ["D1", "D2", "D3", "M1", "M2", "M3", "P1", "P2", "P3", "P4"]
-EVENTS = {"start", "enter", "verify", "judgment", "fallback", "skip"}
-KINDS = {"spec_gap", "recipe_gap", "donor_wrong", "ttnn_gap", "model_quirk", "env"}
-TEXT_FIELDS = ("issue", "fix", "why")
+STAGES = ["E", "D1", "D2", "D3", "M1", "M2", "M3", "P1", "P2"]
+EVENTS = {"start", "enter", "verify", "judgment", "fallback", "skip", "source"}
+KINDS = {"spec_gap", "recipe_gap", "reference_gap", "ttnn_gap", "model_quirk", "env"}
+TEXT_FIELDS = ("issue", "fix", "why", "envelope")
+
+# Logs are append-only and never rewritten (recipe §7), so records written under an earlier
+# vocabulary must stay lintable. Accepted on read; not documented, not emitted, no digest row.
+LEGACY_STAGES = {"P3", "P4"}  # serving + migration, scoped out of bring-up
+LEGACY_KINDS = {"donor_wrong"}  # superseded by reference_gap when the donor map was removed
 TEXT_CAP = 160  # characters, per field -- keep entries comparable across models
 
 DEFAULT_GLOB = "models/demos/*/bringup_log.jsonl"
@@ -58,7 +63,7 @@ def lint(rec: dict, where: str) -> list[str]:
         out.append(f"{where}: unknown ev {ev!r}")
         return out  # every other check depends on ev
     if ev != "start":
-        if rec.get("stage") not in STAGES:
+        if rec.get("stage") not in STAGES and rec.get("stage") not in LEGACY_STAGES:
             out.append(f"{where}: unknown stage {rec.get('stage')!r}")
         if parse_time(rec) is None:
             out.append(f"{where}: missing or unparseable t {rec.get('t')!r}")
@@ -68,7 +73,7 @@ def lint(rec: dict, where: str) -> list[str]:
         if rec.get("result") == "fail" and not rec.get("failed"):
             out.append(f"{where}: failing verify must list the failed test ids")
     if ev == "judgment":
-        if rec.get("kind") not in KINDS:
+        if rec.get("kind") not in KINDS and rec.get("kind") not in LEGACY_KINDS:
             out.append(f"{where}: judgment kind must be one of {sorted(KINDS)}, got {rec.get('kind')!r}")
         for field in ("issue", "fix"):
             if not rec.get(field):
@@ -77,6 +82,10 @@ def lint(rec: dict, where: str) -> list[str]:
         out.append(f"{where}: fallback needs a why")
     if ev == "skip" and not (rec.get("row") and rec.get("why")):
         out.append(f"{where}: skip needs a row and a why")
+    if ev == "source":
+        for field in ("part", "chosen", "envelope"):
+            if not rec.get(field):
+                out.append(f"{where}: source needs a {field}")
     for field in TEXT_FIELDS:
         val = rec.get(field)
         if isinstance(val, str):
@@ -222,6 +231,16 @@ def render(rows: list[dict], logs: dict[str, list[dict]]) -> None:
         print("\njudgment calls by kind")
         for kind, count in kinds.most_common():
             print(f"  {str(kind):<12} {count}")
+    sources = Counter()
+    for records in logs.values():
+        for rec in records:
+            if rec.get("ev") == "source":
+                sources[rec.get("part")] += 1
+    if sources:
+        gaps = sum(v for k, v in kinds.items() if k in {"reference_gap"} | LEGACY_KINDS)
+        print(f"\nsources recorded: {sum(sources.values())} across {len(sources)} part(s); "
+              f"reference_gap judgments: {gaps}")
+
     if fallbacks:
         print("\ntorch CPU fallbacks: " + ", ".join(f"{s}={c}" for s, c in sorted(fallbacks.items())))
     if skips:
