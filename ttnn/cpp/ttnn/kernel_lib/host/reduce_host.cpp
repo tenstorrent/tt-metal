@@ -404,14 +404,12 @@ ReducePlan make_tiled_plan(
         const auto input_budget = available_for_input(hardware, fixed_owned_bytes, max_input_cb_bytes);
         std::uint32_t output_group = 1;
         if (dim == ReduceOpDim::H) {
-            output_group = std::min(plan.Wt, destination_tiles(hardware));
             const bool uses_sfpu_work_tile =
                 input.data_type() == DataType::INT32 ||
                 (input.data_type() == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
-            if (uses_sfpu_work_tile) {
-                TT_FATAL(output_group > 1, "Reduce planner: H reduction has no DEST output slots");
-                --output_group;
-            }
+            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu_work_tile ? 1U : 0U);
+            TT_FATAL(output_slots > 0, "Reduce planner: H reduction has no DEST output slots");
+            output_group = std::min(plan.Wt, output_slots);
         }
         choose_tiled_chunk(plan, dim, reduced_tiles, output_group, input_tile_bytes, input_budget);
 

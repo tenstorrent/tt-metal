@@ -9,7 +9,7 @@
 //
 // W reduce path (REDUCE_DIM == REDUCE_ROW):
 //   chunk packed Ht and Wt; one tilize pass per W chunk (all H slabs in this H chunk), then one
-//   reduce() per W chunk with ReduceInputBlockShape::of(ht_in_chunk, wt_tiles_per_chunk, NC).
+//   planned reduce() call per W chunk.
 //   chunk_idx resets per H chunk and advances per W chunk — accumulator holds ht_in_chunk partial
 //   tiles per H chunk.
 //
@@ -25,6 +25,7 @@
 //
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 #ifdef REDUCE_POST_MUL
@@ -33,61 +34,35 @@
 
 namespace {
 
-// Mixed input/output formats (bf16 input, FP32 partial) also need the packer reconfigured; the
-// factory defines REDUCE_RM_MIXED_FORMAT only then.
-constexpr auto rm_reconfig_mode =
-#ifdef REDUCE_RM_MIXED_FORMAT
-    compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
-#else
-    compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
-#endif
-
-// Accurate fp32: enable_fp32_sfpu routes Float32 through the SFPU (full fp32) instead of the
-// FPU (tf32).
-constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-
-// One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in dfb::tile_in.
-// is_last_chunk == true packs the final result into dfb::out (with optional post-mul); otherwise the
-// partial is left in dfb::acc at index chunk_idx and accumulation continues on the next call.
-FORCE_INLINE void reduce_block(
-    uint32_t ht_in_chunk, uint32_t wt_in_chunk, uint32_t NC, uint32_t chunk_idx, bool is_last_chunk) {
-    if (is_last_chunk) {
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            dfb::tile_in,
-            dfb::scaler,
-            dfb::out,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            rm_reconfig_mode,
-            fp32_mode>(
-            compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
+template <uint32_t Index>
+FORCE_INLINE void reduce_chunk() {
+    using Call = ttnn::kernel_lib::
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, Index>, dfb::tile_in, dfb::scaler, dfb::out, dfb::acc>;
+    compute_kernel_lib::reduce<Call>(
 #ifdef REDUCE_POST_MUL
-            [](uint32_t dst_idx) {
-                constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
-                binop_with_scalar_tile_init();
-                mul_unary_tile(dst_idx, post_mul_scaler_bits);
-            }
+        [](uint32_t dst_idx) {
+            constexpr auto bits = get_arg(args::post_mul_scaler_bits);
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst_idx, bits);
+        }
 #else
-            compute_kernel_lib::NoOp{}
+        compute_kernel_lib::NoOp{}
 #endif
-        );
+    );
+}
+
+FORCE_INLINE void reduce_block(uint32_t chunk_idx, bool is_last_chunk) {
+    constexpr uint32_t call_count = get_compile_time_arg_val(0);
+    if constexpr (call_count == 1) {
+        reduce_chunk<0>();
     } else {
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            dfb::tile_in,
-            dfb::scaler,
-            dfb::acc,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            rm_reconfig_mode,
-            fp32_mode>(
-            compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
-            compute_kernel_lib::NoOp{});
+        if (chunk_idx == 0) {
+            reduce_chunk<0>();
+        } else if (is_last_chunk) {
+            reduce_chunk<call_count - 1>();
+        } else {
+            reduce_chunk<1>();
+        }
     }
 }
 
@@ -98,11 +73,10 @@ void kernel_main() {
     // total H tiles for H reduce. The factory passes whichever is appropriate.
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
-    constexpr auto NC = get_arg(args::NC);
     constexpr auto wt_tiles_per_chunk = get_arg(args::wt_tiles_per_chunk);
     constexpr auto ht_tiles_per_chunk = get_arg(args::ht_tiles_per_chunk);
-    // args::post_mul_scaler_bits is captured inside reduce_block() under REDUCE_POST_MUL;
-    // args::enable_fp32_sfpu (the accurate-fp32 flag) is consumed by fp32_mode above.
+    // args::post_mul_scaler_bits is captured inside reduce_chunk() under REDUCE_POST_MUL;
+    // Accuracy and accumulation are encoded in the planned calls.
 
     compute_kernel_hw_startup(dfb::rm, dfb::tile_in);
 
@@ -120,7 +94,7 @@ void kernel_main() {
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, dfb::rm, dfb::tile_in>(
                     ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                reduce_block(chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }
         }
@@ -153,7 +127,7 @@ void kernel_main() {
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, dfb::rm, dfb::tile_in>(
                     ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                reduce_block(chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }
         }

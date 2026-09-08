@@ -3426,11 +3426,24 @@
         "Repeated layer-norm parameter gradients over multiple batches, H/W partial tiles, and BF16/FP32 destination accumulation."
       ],
       "id": "T172"
+    },
+    {
+      "id": "T173",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/kernel_lib/reduce/test_reduce_helpers.py",
+      "family": "Reduce helper migration regressions",
+      "factories": [],
+      "tests": [
+        "test_reduce_helpers_narrow_sfpu"
+      ],
+      "notes": [
+        "Narrow H reductions exercise the SFPU work-register boundary for INT32 and accurate FLOAT32."
+      ]
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 7,
-    "added_collected_cases": 221,
+    "added_test_definitions": 8,
+    "added_collected_cases": 233,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }
