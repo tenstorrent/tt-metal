@@ -20,6 +20,7 @@
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #endif
 
 void kernel_main() {
@@ -28,7 +29,8 @@ void kernel_main() {
     uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
-    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -105,8 +107,10 @@ void kernel_main() {
             // GMPOOL only respects the scaler's exponent for MAX/MIN, so the host requests reduction
             // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
             // output DEST register.
-            binop_with_scalar_tile_init();
-            mul_unary_tile(dst_idx, post_mul_scaler_bits);
+            if (apply_post_mul) {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst_idx, post_mul_scaler_bits);
+            }
 #endif
             tile_regs_wait();
             dfb_acc.pop_front(onetile);

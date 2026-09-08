@@ -13,12 +13,13 @@ The ReduceDeviceOperation uses 3 ProgramFactory variants:
     MULTI_CORE_HW which also maps to ReduceSingleCoreHwProgramFactory
 
 compute_program_hash() includes:
-  math_op, dim, scaler, output_mem_config, output_dtype, compute_kernel_config,
+  math_op, dim, scaler_mode, output_mem_config, output_dtype, compute_kernel_config,
   sub_core_grids, negate, program_factory.index(), input dtype,
   input memory_config, input padded_shape.
 
-override_runtime_arguments() only updates buffer addresses — shape/work distribution
-changes require separate cache entries (padded_shape is in hash).
+It deliberately EXCLUDES the two scalar floats (scaler / post_mul_scaler): they reach the
+kernels as common runtime args, so distinct scalar values share one program (#54180), and
+override_runtime_arguments() re-applies them on a cache hit.
 """
 
 import pytest
@@ -37,17 +38,17 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
-def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """Run a reduce op on device and return (torch_result, ttnn_result)."""
+def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, scalar=1.0):
+    """Run a reduce op on device and return (torch_result, ttnn_result). ttnn(x, scalar=s) == torch(s * x)."""
     torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
     torch_a = torch.rand(shape, dtype=torch_dtype) + 0.1
 
-    ttnn_ops = {ttnn.sum: torch.sum, ttnn.max: torch.amax, ttnn.min: torch.amin}
-    torch_result = ttnn_ops[op](torch_a, dim=dim, keepdim=True)
+    ttnn_ops = {ttnn.sum: torch.sum, ttnn.max: torch.amax, ttnn.min: torch.amin, ttnn.mean: torch.mean}
+    torch_result = ttnn_ops[op](scalar * torch_a, dim=dim, keepdim=True)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     with device.cache_entries_counter.measure():
-        tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config)
+        tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config, scalar=scalar)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -289,3 +290,56 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     )
 
     assert device.cache_entries_counter.total == 2
+
+
+# =============================================================================
+# Scalar values are runtime args (#54180): one program must serve every value
+# =============================================================================
+
+
+@pytest.mark.parametrize("op", [ttnn.sum, ttnn.max, ttnn.min, ttnn.mean])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
+    """Different scalar values -> 1 cache entry, and each result is correct."""
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 64]
+
+    for scalar in [1.0, 0.5, 2.0]:
+        torch_ref, tt_out = run_reduce_op(device, op, shape, dim=dim, scalar=scalar)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+
+    assert device.cache_entries_counter.total == 1
+
+
+def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache):
+    """Mixed-sign scalars on the HW factory -> 1 cache entry.
+
+    The host used to hand REDUCE_SCALAR sqrt(scaler), which is NaN for a negative value, so
+    `dim == HW && scaler < 0` was forced onto the two-step W-then-H path. The scalar is applied
+    after the reduction now, so both signs share the one HW program: this cost 3 entries before
+    (1 for the positive HW program, 2 for the forked W-then-H) and costs 1 now.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 32]
+
+    for scalar in [0.5, -0.5]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.sum, shape, dim=[-2, -1], scalar=scalar)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=0.007,
+            atol=0.25,
+            frobenius_threshold=0.008,
+        )
+
+    assert device.cache_entries_counter.total == 1
