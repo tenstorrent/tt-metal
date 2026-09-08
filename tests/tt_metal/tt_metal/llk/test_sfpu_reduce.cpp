@@ -54,8 +54,8 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::sfpu_reduce {
 
-constexpr uint32_t kTileHeight = 32;
-constexpr uint32_t kTileWidth = 32;
+constexpr std::uint32_t kTileHeight = 32;
+constexpr std::uint32_t kTileWidth = 32;
 
 enum class ReduceAxis { Column, Row };
 enum class ReducePool { Sum, Avg, Max, Min };
@@ -63,9 +63,9 @@ enum class ReducePool { Sum, Avg, Max, Min };
 struct SfpuReduceConfig {
     // Tiles per tile row, and tile rows per block. A row reduce needs its whole block resident in
     // Dest, so these two also bound how much Dest the program asks for.
-    uint32_t block_ct_dim = 1;
-    uint32_t block_rt_dim = 1;
-    uint32_t num_blocks = 1;
+    std::uint32_t block_ct_dim = 1;
+    std::uint32_t block_rt_dim = 1;
+    std::uint32_t num_blocks = 1;
     ReduceAxis axis = ReduceAxis::Column;
     ReducePool pool = ReducePool::Sum;
     tt::DataFormat format = tt::DataFormat::Float16_b;
@@ -120,31 +120,31 @@ bool needs_fp32_dest_acc(tt::DataFormat format) {
     return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32;
 }
 
-uint32_t datum_bytes(tt::DataFormat format) { return format == tt::DataFormat::Float16_b ? 2 : 4; }
+std::uint32_t datum_bytes(tt::DataFormat format) { return format == tt::DataFormat::Float16_b ? 2 : 4; }
 
-std::vector<uint32_t> encode_elements(const std::vector<double>& values, tt::DataFormat format) {
+std::vector<std::uint32_t> encode_elements(const std::vector<double>& values, tt::DataFormat format) {
     if (format == tt::DataFormat::Float16_b) {
         std::vector<bfloat16> elements(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
             elements[i] = bfloat16(static_cast<float>(values[i]));
         }
-        return pack_vector<uint32_t, bfloat16>(elements);
+        return pack_vector<std::uint32_t, bfloat16>(elements);
     }
 
-    std::vector<uint32_t> packed(values.size());
+    std::vector<std::uint32_t> packed(values.size());
     for (size_t i = 0; i < values.size(); ++i) {
         if (format == tt::DataFormat::Int32) {
-            packed[i] = static_cast<uint32_t>(static_cast<int32_t>(values[i]));
+            packed[i] = static_cast<std::uint32_t>(static_cast<std::int32_t>(values[i]));
         } else {
-            packed[i] = std::bit_cast<uint32_t>(static_cast<float>(values[i]));
+            packed[i] = std::bit_cast<std::uint32_t>(static_cast<float>(values[i]));
         }
     }
     return packed;
 }
 
-std::vector<double> decode_elements(const std::vector<uint32_t>& packed, tt::DataFormat format) {
+std::vector<double> decode_elements(const std::vector<std::uint32_t>& packed, tt::DataFormat format) {
     if (format == tt::DataFormat::Float16_b) {
-        const auto elements = unpack_vector<bfloat16, uint32_t>(packed);
+        const auto elements = unpack_vector<bfloat16, std::uint32_t>(packed);
         std::vector<double> values(elements.size());
         for (size_t i = 0; i < elements.size(); ++i) {
             values[i] = static_cast<float>(elements[i]);
@@ -155,7 +155,7 @@ std::vector<double> decode_elements(const std::vector<uint32_t>& packed, tt::Dat
     std::vector<double> values(packed.size());
     for (size_t i = 0; i < packed.size(); ++i) {
         if (format == tt::DataFormat::Int32) {
-            values[i] = static_cast<double>(std::bit_cast<int32_t>(packed[i]));
+            values[i] = static_cast<double>(std::bit_cast<std::int32_t>(packed[i]));
         } else {
             values[i] = static_cast<double>(std::bit_cast<float>(packed[i]));
         }
@@ -163,18 +163,33 @@ std::vector<double> decode_elements(const std::vector<uint32_t>& packed, tt::Dat
     return values;
 }
 
+// The input as the kernel actually sees it. Float16_b is already rounded by encode_elements and Int32
+// is exact. Float32 is unpacked through SrcA, which carries TF32 (10 mantissa bits), so its low 13
+// mantissa bits are truncated before the value reaches Dest.
+std::vector<double> as_seen_by_device(const std::vector<std::uint32_t>& encoded, tt::DataFormat format) {
+    auto values = decode_elements(encoded, format);
+    if (format == tt::DataFormat::Float32) {
+        for (auto& v : values) {
+            const std::uint32_t bits = std::bit_cast<std::uint32_t>(static_cast<float>(v)) & 0xFFFFE000u;
+            v = static_cast<double>(std::bit_cast<float>(bits));
+        }
+    }
+    return values;
+}
+
 // Stimulus in a range the accumulating pools can hold. A row reduce folds block_ct_dim * 32 terms,
 // so the bound is chosen against the widest fold the config asks for rather than a fixed span.
-std::vector<double> generate_stimulus(const SfpuReduceConfig& config, uint32_t rows, uint32_t cols, uint32_t seed) {
-    const uint32_t fold_width = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
+std::vector<double> generate_stimulus(
+    const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols, std::uint32_t seed) {
+    const std::uint32_t fold_width = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
     std::mt19937 gen(seed);
 
     std::vector<double> values(static_cast<size_t>(rows) * cols);
     if (is_int_format(config.format)) {
         // Keep |sum| well inside Int32 so SUM stays exact and the test measures the fold, not
         // overflow. Signed, so MIN and MAX both see negatives.
-        const int32_t bound = static_cast<int32_t>(1'000'000 / fold_width);
-        std::uniform_int_distribution<int32_t> dist(-bound, bound);
+        const std::int32_t bound = static_cast<std::int32_t>(1'000'000 / fold_width);
+        std::uniform_int_distribution<std::int32_t> dist(-bound, bound);
         for (auto& v : values) {
             v = static_cast<double>(dist(gen));
         }
@@ -191,7 +206,7 @@ std::vector<double> generate_stimulus(const SfpuReduceConfig& config, uint32_t r
 //   Column -> one value per column, for each tile row       (block_rt_dim * num_blocks * cols)
 //   Row    -> one value per row                             (rows)
 std::vector<double> gold_sfpu_reduce(
-    const std::vector<double>& values, const SfpuReduceConfig& config, uint32_t rows, uint32_t cols) {
+    const std::vector<double>& values, const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols) {
     const auto fold = [&config](double acc, double x, bool first) {
         if (first) {
             return x;
@@ -208,12 +223,12 @@ std::vector<double> gold_sfpu_reduce(
     std::vector<double> golden;
 
     if (config.axis == ReduceAxis::Column) {
-        const uint32_t tile_rows = rows / kTileHeight;
+        const std::uint32_t tile_rows = rows / kTileHeight;
         golden.reserve(static_cast<size_t>(tile_rows) * cols);
-        for (uint32_t tr = 0; tr < tile_rows; ++tr) {
-            for (uint32_t col = 0; col < cols; ++col) {
+        for (std::uint32_t tr = 0; tr < tile_rows; ++tr) {
+            for (std::uint32_t col = 0; col < cols; ++col) {
                 double acc = 0.0;
-                for (uint32_t r = 0; r < kTileHeight; ++r) {
+                for (std::uint32_t r = 0; r < kTileHeight; ++r) {
                     const double x = values[static_cast<size_t>(tr * kTileHeight + r) * cols + col];
                     acc = fold(acc, x, r == 0);
                 }
@@ -232,9 +247,9 @@ std::vector<double> gold_sfpu_reduce(
     }
 
     golden.reserve(rows);
-    for (uint32_t r = 0; r < rows; ++r) {
+    for (std::uint32_t r = 0; r < rows; ++r) {
         double acc = 0.0;
-        for (uint32_t col = 0; col < cols; ++col) {
+        for (std::uint32_t col = 0; col < cols; ++col) {
             acc = fold(acc, values[static_cast<size_t>(r) * cols + col], col == 0);
         }
         if (config.pool == ReducePool::Avg) {
@@ -247,13 +262,13 @@ std::vector<double> gold_sfpu_reduce(
 
 // Pull the same lanes out of the untilized device output that gold_sfpu_reduce returns.
 std::vector<double> extract_written_lane(
-    const std::vector<double>& values, const SfpuReduceConfig& config, uint32_t rows, uint32_t cols) {
+    const std::vector<double>& values, const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols) {
     std::vector<double> lane;
     if (config.axis == ReduceAxis::Column) {
-        const uint32_t tile_rows = rows / kTileHeight;
+        const std::uint32_t tile_rows = rows / kTileHeight;
         lane.reserve(static_cast<size_t>(tile_rows) * cols);
-        for (uint32_t tr = 0; tr < tile_rows; ++tr) {
-            for (uint32_t col = 0; col < cols; ++col) {
+        for (std::uint32_t tr = 0; tr < tile_rows; ++tr) {
+            for (std::uint32_t col = 0; col < cols; ++col) {
                 lane.push_back(values[static_cast<size_t>(tr * kTileHeight) * cols + col]);
             }
         }
@@ -261,7 +276,7 @@ std::vector<double> extract_written_lane(
     }
 
     lane.reserve(rows);
-    for (uint32_t r = 0; r < rows; ++r) {
+    for (std::uint32_t r = 0; r < rows; ++r) {
         lane.push_back(values[static_cast<size_t>(r) * cols]);
     }
     return lane;
@@ -271,7 +286,7 @@ std::vector<double> extract_written_lane(
 // low-precision float accumulates error like sqrt(N) * M * eps, and where terms nearly cancel that
 // error dwarfs the tiny true total — so a fixed tolerance would fail a correct reduction. MAX/MIN
 // and the integer formats reduce exactly.
-double reduce_atol(const SfpuReduceConfig& config, uint32_t cols) {
+double reduce_atol(const SfpuReduceConfig& config, std::uint32_t cols) {
     if (is_int_format(config.format)) {
         return 0.0;
     }
@@ -291,21 +306,33 @@ double reduce_atol(const SfpuReduceConfig& config, uint32_t cols) {
     return std::max(0.05, atol);
 }
 
+// Relative tolerance. Only the float accumulating pools get one: SUM/AVG round every partial sum
+// in the destination format, while MAX/MIN select an input unchanged and the integer pools are exact.
+double reduce_rtol(const SfpuReduceConfig& config) {
+    if (is_int_format(config.format)) {
+        return 0.0;
+    }
+    if (config.pool == ReducePool::Max || config.pool == ReducePool::Min) {
+        return 0.0;
+    }
+    return 0.05;
+}
+
 void run_single_core_sfpu_reduce(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuReduceConfig& config) {
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
-    const uint32_t elem_bytes = datum_bytes(config.format);
-    const uint32_t single_tile_size = kTileWidth * kTileHeight * elem_bytes;
-    const uint32_t tiles_per_block = config.block_ct_dim * config.block_rt_dim;
-    const uint32_t num_tiles = tiles_per_block * config.num_blocks;
-    const uint32_t buffer_size = single_tile_size * num_tiles;
+    const std::uint32_t elem_bytes = datum_bytes(config.format);
+    const std::uint32_t single_tile_size = kTileWidth * kTileHeight * elem_bytes;
+    const std::uint32_t tiles_per_block = config.block_ct_dim * config.block_rt_dim;
+    const std::uint32_t num_tiles = tiles_per_block * config.num_blocks;
+    const std::uint32_t buffer_size = single_tile_size * num_tiles;
 
     // Blocks stack along rows, so the buffer is one strip block_ct_dim tiles wide. That keeps each
     // block's tiles contiguous in tile order, which is what the compute kernel walks.
-    const uint32_t cols = config.block_ct_dim * kTileWidth;
-    const uint32_t rows = config.num_blocks * config.block_rt_dim * kTileHeight;
+    const std::uint32_t cols = config.block_ct_dim * kTileWidth;
+    const std::uint32_t rows = config.num_blocks * config.block_rt_dim * kTileHeight;
 
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
@@ -397,20 +424,22 @@ void run_single_core_sfpu_reduce(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     const std::vector<double> input = generate_stimulus(
-        config, rows, cols, static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
+        config, rows, cols, static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
 
     const ::unit_tests::compute::GoldenConfig golden_config{
         .num_tiles_r_dim = static_cast<int>(config.num_blocks * config.block_rt_dim),
         .num_tiles_c_dim = static_cast<int>(config.block_ct_dim),
         .datum_bytes = elem_bytes};
 
-    const auto input_tilized =
-        ::unit_tests::compute::gold_standard_tilize(encode_elements(input, config.format), golden_config);
+    const auto input_encoded = encode_elements(input, config.format);
+    const auto input_tilized = ::unit_tests::compute::gold_standard_tilize(input_encoded, golden_config);
 
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, input_tilized, /*blocking=*/true);
 
-    const auto src_page_stride = static_cast<uint32_t>(src_dram_buffer->get_reference_buffer()->aligned_page_size());
-    const auto dst_page_stride = static_cast<uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
+    const auto src_page_stride =
+        static_cast<std::uint32_t>(src_dram_buffer->get_reference_buffer()->aligned_page_size());
+    const auto dst_page_stride =
+        static_cast<std::uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -435,13 +464,15 @@ void run_single_core_sfpu_reduce(
 
     LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
-    std::vector<uint32_t> output_tilized;
+    std::vector<std::uint32_t> output_tilized;
     distributed::EnqueueReadMeshBuffer(cq, output_tilized, dst_dram_buffer, /*blocking=*/true);
 
     const auto output =
         decode_elements(::unit_tests::compute::gold_standard_untilize(output_tilized, golden_config), config.format);
 
-    const auto golden = gold_sfpu_reduce(input, config, rows, cols);
+    // Fold the input as the device saw it, so MAX/MIN must match exactly and SUM/AVG only carry
+    // accumulation error.
+    const auto golden = gold_sfpu_reduce(as_seen_by_device(input_encoded, config.format), config, rows, cols);
     const auto device = extract_written_lane(output, config, rows, cols);
 
     log_info(
@@ -457,7 +488,7 @@ void run_single_core_sfpu_reduce(
     ASSERT_EQ(golden.size(), device.size());
 
     const double atol = reduce_atol(config, cols);
-    const double rtol = is_int_format(config.format) ? 0.0 : 0.05;
+    const double rtol = reduce_rtol(config);
 
     for (size_t i = 0; i < golden.size(); ++i) {
         const double diff = std::abs(golden[i] - device[i]);
@@ -480,7 +511,7 @@ using namespace unit_tests::compute::sfpu_reduce;
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
     for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
-            for (uint32_t num_blocks : {1u, 4u}) {
+            for (std::uint32_t num_blocks : {1u, 4u}) {
                 run_single_core_sfpu_reduce(
                     this->devices_.at(0),
                     SfpuReduceConfig{
@@ -517,8 +548,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
     for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Max, ReducePool::Min}) {
             // Int32 must unpack to Dest, which cannot stage a block, so it stays single-tile.
-            const uint32_t widest = supports_multi_tile_block(format) ? 2u : 1u;
-            for (uint32_t block_ct_dim = 1; block_ct_dim <= widest; ++block_ct_dim) {
+            const std::uint32_t widest = supports_multi_tile_block(format) ? 2u : 1u;
+            for (std::uint32_t block_ct_dim = 1; block_ct_dim <= widest; ++block_ct_dim) {
                 run_single_core_sfpu_reduce(
                     this->devices_.at(0),
                     SfpuReduceConfig{
@@ -535,7 +566,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceInt32) {
     for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
-        for (uint32_t num_blocks : {1u, 4u}) {
+        for (std::uint32_t num_blocks : {1u, 4u}) {
             run_single_core_sfpu_reduce(
                 this->devices_.at(0),
                 SfpuReduceConfig{
