@@ -25,6 +25,19 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     // case handling.
     auto [min, max] = sfpi::min_max(sfpi::setsgn(x, 0), sfpi::setsgn(y, 0));
 
+    // sfpu_reciprocal flushes 1/max to 0 for max >= 2^126, which would collapse a (below) to 0
+    // for ordinary operands.  Scale min, max and x by 2^-2 in that band: the ratio and the
+    // |x| vs |y| ordering are unchanged (exact power-of-two scaling), and max * 2^-2 < 2^126 for
+    // every finite max.  A multiply (rather than addexp) keeps inf and NaN intact for the special
+    // cases below.  y is left alone: only its sign is used later, and a multiply would turn -0
+    // into +0.  x is scaled in place (rather than into a copy) to avoid an SFPU register spill.
+    v_if(sfpi::as<sfpi::vInt>(max) >= sfpi::as<sfpi::vInt>(sfpi::vFloat(0x1p126f))) {
+        x = x * 0.25f;
+        min = min * 0.25f;
+        max = max * 0.25f;
+    }
+    v_endif;
+
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
     sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
 

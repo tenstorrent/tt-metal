@@ -12,7 +12,13 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
     compare_equal,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_div_by_zero_outputs
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_div_by_zero_outputs,
+    generate_all_bfloat16_bitpatterns,
+    flush_subnormal_values_to_zero,
+)
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -123,6 +129,49 @@ def test_binary_atan2_special_values(input_shapes, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     torch.testing.assert_close(output_tensor, golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype",
+    [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)],
+)
+@pytest.mark.parametrize("other", [3e38, -3e38, 2.0**126, -(2.0**126)])
+@pytest.mark.parametrize("sweep_operand", ["y", "x"])
+def test_binary_atan2_large_magnitude_all_bitpatterns(ttnn_dtype, torch_dtype, other, sweep_operand, device):
+    """Regression test for #55124: atan2 returned exactly 0 (or pi/2) whenever max(|x|, |y|) >= 2^126.
+
+    The kernel forms min/max as min * recip(max), and recip(max) flushes to 0 in the top two
+    binades.  One operand is fixed in that band and the other sweeps every bfloat16 bit pattern
+    (promoted for float32), so the sweep covers both orderings of |x| and |y|, both signs, zero,
+    inf and the whole magnitude range.  Subnormal inputs are flushed to zero, as on device.
+    """
+    sweep = flush_subnormal_values_to_zero(generate_all_bfloat16_bitpatterns(torch.float32))
+    fixed = torch.full_like(sweep, other)
+    y, x = (sweep, fixed) if sweep_operand == "y" else (fixed, sweep)
+
+    golden = torch.atan2(y, x).to(torch_dtype)
+
+    tt_y = ttnn.from_torch(
+        y.to(torch_dtype), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
+    tt_x = ttnn.from_torch(
+        x.to(torch_dtype), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
+    output = ttnn.to_torch(ttnn.atan2(tt_y, tt_x)).to(torch_dtype)
+
+    # The bfloat16 path's ~7-bit reciprocal can push results in the lowest normal binade under the
+    # hardware flush threshold, so results below 2^-125 are ignored on both sides.
+    tiny = golden.abs() < 2.0**-125
+    golden[tiny] = 0.0
+    output[tiny] = 0.0
+
+    if ttnn_dtype == ttnn.bfloat16:
+        # NaN is not preserved on the bfloat16 (fp16_b Dest) path; NaN propagation is covered by float32.
+        keep = ~torch.isnan(golden)
+        golden, output = golden[keep], output[keep]
+
+    # The fp32 minimax polynomial itself is good to ~2.5 ULP (see test_unary_fp32.py::test_atan).
+    assert_with_ulp(golden, output, ulp_threshold=3, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
