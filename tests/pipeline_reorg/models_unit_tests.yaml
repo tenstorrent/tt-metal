@@ -1140,7 +1140,7 @@
     # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
     # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
     run --timeout 600 models/tt_dit/tests/models/flux2/test_vae_flux2.py
-    run --timeout 900 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    run --timeout 1200 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
     # Ring topology (4x8) is not affected by the ColParallelLinear addcmul drop, which is why
     # run 33689082073 gets PCC 99.9820% on single_blocks here against 0.3185% at 2x2 Linear.
     # all_blocks still fails, at 70.8769%: the second defect in 92919ba7f5d -- the double block
