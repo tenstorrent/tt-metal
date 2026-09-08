@@ -2,73 +2,247 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
-    get_valid_math_fidelities,
-)
-from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    BroadcastType,
+    DestAccumulation,
+    DestSync,
+    EltwiseBinaryReuseDestType,
     MathFidelity,
-    MathOperation,
-    PerfRunType,
+    Transpose,
 )
-from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
-    MATH_FIDELITY,
-    MATH_OP,
-    TILE_COUNT,
+from helpers.param_config import parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+from test_eltwise_binary import (
+    BASE_PERF_MATH_OPS,
+    BFP4_MATH_OPS,
+    DEST_REUSE_MATH_OPS,
+    INT8_FORMAT,
+    INT8_MATH_OPS,
+    _get_valid_math_fidelity,
+    _run_eltwise_binary_dest_reuse_test,
+    _run_eltwise_binary_test,
+    get_base_perf_formats,
+    get_bfp4_formats,
+    get_dest_reuse_formats,
+    get_dest_reuse_perf_input_dimensions,
+    get_dest_reuse_perf_output_dimensions,
+    get_dest_reuse_perf_tile_dimensions,
+    get_eltwise_binary_perf_input_dimensions,
+    get_eltwise_binary_perf_tile_dimensions,
 )
+
+PERF_LOOP_FACTOR = 32
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
-    ),
-    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    tile_count=16,
-    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(
-        formats, mathop, PERF_RUN=True
-    ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=get_base_perf_formats,
+    broadcast_type=[
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
+    ],
+    math_op=BASE_PERF_MATH_OPS,
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    transpose_srca=[Transpose.Yes, Transpose.No],
+    tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
+    input_dimensions=get_eltwise_binary_perf_input_dimensions,
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[PERF_LOOP_FACTOR],
+    is_perf=[True],
 )
 def test_perf_eltwise_binary(
     perf_report,
-    formats,
-    mathop,
-    tile_count,
-    math_fidelity,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    transpose_srca,
+    tile_dimensions,
+    input_dimensions,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
-
-    configuration = PerfConfig(
-        "sources/eltwise_binary_fpu_perf.cpp",
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
-        templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=mathop)],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(8)],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        dest_acc=dest_acc,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        transpose_srca,
+        input_dimensions,
+        tile_dimensions,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
-    configuration.run(perf_report)
+
+@pytest.mark.perf
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=lambda: get_bfp4_formats(),
+    broadcast_type=[
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
+    ],
+    math_op=BFP4_MATH_OPS,
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    transpose_srca=[Transpose.No],
+    tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
+    input_dimensions=get_eltwise_binary_perf_input_dimensions,
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[PERF_LOOP_FACTOR],
+    is_perf=[True],
+)
+def test_perf_eltwise_binary_bfp4_b(
+    perf_report,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    transpose_srca,
+    tile_dimensions,
+    input_dimensions,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        transpose_srca,
+        input_dimensions,
+        tile_dimensions,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    math_op=DEST_REUSE_MATH_OPS,
+    formats=get_dest_reuse_formats,
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=lambda: get_dest_reuse_perf_tile_dimensions(),
+    input_dimensions=get_dest_reuse_perf_input_dimensions,
+    output_dimensions=get_dest_reuse_perf_output_dimensions,
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[PERF_LOOP_FACTOR],
+    is_perf=[True],
+)
+def test_perf_eltwise_binary_dest_reuse(
+    perf_report,
+    reuse_dest_type,
+    math_op,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_eltwise_binary_dest_reuse_test(
+        reuse_dest_type,
+        math_op,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    dest_acc=[DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=INT8_FORMAT,
+    broadcast_type=[BroadcastType.None_],
+    math_op=INT8_MATH_OPS,
+    math_fidelity=[MathFidelity.LoFi],
+    transpose_srca=[Transpose.No],
+    tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
+    input_dimensions=get_eltwise_binary_perf_input_dimensions,
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[PERF_LOOP_FACTOR],
+    is_perf=[True],
+)
+def test_perf_eltwise_binary_int8_format(
+    perf_report,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    transpose_srca,
+    tile_dimensions,
+    input_dimensions,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        transpose_srca,
+        input_dimensions,
+        tile_dimensions,
+        int8_inputs=True,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
