@@ -339,6 +339,66 @@ jobs:
       build-args: PROFILE=full
       source-ref: ${{ inputs.ref || github.sha }}
 
+  # TEMP measurement, revert after: is pulling the env image through Harbor's
+  # pull-through cache faster than ghcr direct? Uses images an earlier run already
+  # published, so it needs no bake and no test hardware and reports in ~2 minutes.
+  probe-harbor-env:
+    name: "TEMP probe: Harbor vs ghcr for the env image"
+    needs: [check-harbor]
+    if: ${{ !cancelled() }}
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 40
+    steps:
+      - name: Time ghcr direct against Harbor for both profiles
+        env:
+          PREFIX: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          WHEEL_IMG: ghcr.io/tenstorrent/tt-metal/prebuilt-tests-env-image:036f8c92e9ee-ttnn-dist-inplace-cp310-Release-profiler-ubuntu-22.04-ci-test-amd64-66c6be85
+          FULL_IMG: ghcr.io/tenstorrent/tt-metal/prebuilt-tests-env-image:036f8c92e9ee-TTMetal_build_any_22.04_amd64_x86_64-linux-clang-ubuntu-22.04-dev-amd64-b2f317e2
+        run: |
+          set -uo pipefail
+          if [ -z "$PREFIX" ]; then
+            echo "::warning::Harbor reported unhealthy, so there is nothing to compare"
+            exit 0
+          fi
+
+          # Both refs resolve to identical layer digests, so dropping one tag leaves
+          # the layers in the local store and the next pull is a no-op. Untag both,
+          # then prune the now-dangling layers; other jobs' images stay tagged and
+          # are therefore untouched.
+          clear_local() {
+            docker rmi -f "$1" "$2" >/dev/null 2>&1 || true
+            docker image prune -f >/dev/null 2>&1 || true
+          }
+
+          timed_pull() {
+            label="$1"; ref="$2"
+            start=$SECONDS
+            if ! out=$(docker pull "$ref" 2>&1); then
+              echo "  ${label}: FAILED"
+              printf '%s\n' "$out" | tail -4 | sed 's/^/        /'
+              return 0
+            fi
+            dur=$((SECONDS - start))
+            dl=$(printf '%s\n' "$out" | grep -c 'Pull complete' || true)
+            ae=$(printf '%s\n' "$out" | grep -c 'Already exists' || true)
+            sz=$(docker image inspect "$ref" --format '{{.Size}}' 2>/dev/null || echo 0)
+            printf '  %s: %3ds  downloaded=%-3s cached=%-3s image=%sMiB\n' \
+              "$label" "$dur" "$dl" "$ae" "$((sz / 1048576))"
+          }
+
+          for pair in "wheel:$WHEEL_IMG" "full:$FULL_IMG"; do
+            profile="${pair%%:*}"; direct="${pair#*:}"; harbor="${PREFIX}${direct}"
+            echo "::group::${profile} profile"
+            echo "  direct: $direct"
+            echo "  harbor: $harbor"
+            # Harbor first: its cache is cold for any tag nothing has pulled yet.
+            clear_local "$direct" "$harbor"; timed_pull "harbor cold" "$harbor"
+            clear_local "$direct" "$harbor"; timed_pull "ghcr direct" "$direct"
+            clear_local "$direct" "$harbor"; timed_pull "harbor warm" "$harbor"
+            clear_local "$direct" "$harbor"
+            echo "::endgroup::"
+          done
+
   # Single SKU list that gates every suite (L2-nightly style). Each impl filters this list against
   # its own tests yaml via prepare_test_matrix.py, so an empty intersection just yields no jobs.
   generate-sku-matrix:
