@@ -23,7 +23,7 @@
 //
 // CB ownership remains single-producer / single-consumer. Compute publishes local group statistics;
 // writers move them into group-hub gather slots; hub compute publishes scales; writers return each
-// scale only to that group's contributors. The local fragment fields are consumed by compute in Task 3.
+// scale only to that group's contributors.
 inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
     constexpr uint32_t cb_rms_local = get_named_compile_time_arg_val("cb_rms_local");
     constexpr uint32_t cb_rms_gathered = get_named_compile_time_arg_val("cb_rms_gathered");
@@ -60,10 +60,6 @@ inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
     if (hub_group_count != 0) {
         const uint32_t gathered_tiles = M_tiles * hub_contributor_count;
         rms_gathered.reserve_back(gathered_tiles);
-        auto* packed_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_gathered.get_write_ptr());
-        for (uint32_t byte = 0; byte < gathered_tiles * reduce_tile_size; byte += sizeof(uint32_t)) {
-            packed_dst[byte / sizeof(uint32_t)] = 0;
-        }
 
         uint32_t hub_arg = hub_groups_arg_base;
         for (uint32_t hg = 0; hg < hub_group_count; ++hg) {

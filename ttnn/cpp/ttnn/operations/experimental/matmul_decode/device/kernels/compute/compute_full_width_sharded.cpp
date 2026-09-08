@@ -10,6 +10,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/experimental/add_rsqrt.h"
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/experimental/pack_block.h"
@@ -26,6 +27,45 @@
 #include "api/dataflow/circular_buffer.h"
 
 using std::uint32_t;
+
+#ifdef FUSE_RMS_NORM
+ALWI void sum_gathered_tiles_exact(uint32_t cb_id, uint32_t tile_start, uint32_t tile_count) {
+    copy_init(cb_id);
+    copy_tile(cb_id, tile_start, 0);
+    for (uint32_t contributor = 1; contributor < tile_count; ++contributor) {
+        copy_init(cb_id);
+        copy_tile(cb_id, tile_start + contributor, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+    }
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void square_reduce_scalar_tiles(
+    uint32_t input_cb_id, uint32_t output_cb_id, uint32_t tile_start, uint32_t tile_count) {
+    // Accumulating ELWMUL reads the prior DST value. Seed it explicitly because acquiring a DST
+    // slot does not guarantee that the preceding matmul or reduction left it clear.
+    fill_tile_init();
+    fill_tile(0, 0.0F);
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(input_cb_id, input_cb_id, true);
+    for (uint32_t tile = 0; tile < tile_count; ++tile) {
+        mul_tiles(input_cb_id, input_cb_id, tile_start + tile, tile_start + tile, 0);
+    }
+
+    UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
+    MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
+    MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, _calculate_fill_, (APPROX, 2), 0, VectorMode::RC_custom, 1.0F));
+    MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, _calculate_fill_, (APPROX, 2), 0, VectorMode::RC_custom, 0.0F));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(output_cb_id)));
+    MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, input_cb_id)));
+    MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
+    MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
+}
+#endif
 
 // C = A @ B per core. full_in0 is sender-major. matmul_block does not reduce over kt_dim; K is accumulated in the loop.
 //
@@ -72,14 +112,21 @@ void kernel_main() {
 #ifdef FUSE_RMS_VECTOR_GAMMA
     constexpr uint32_t rms_gamma_cb_id = get_named_compile_time_arg_val("cb_rms_gamma");
 #endif
-    constexpr uint32_t rms_packed_tiles_per_row = get_named_compile_time_arg_val("rms_packed_tiles_per_row");
+    constexpr uint32_t rms_num_groups = get_named_compile_time_arg_val("rms_num_groups");
+    constexpr uint32_t rms_metadata_arg_base = 4;
+    constexpr uint32_t rms_local_group_arg_words = 6;
 
-    const bool rms_is_hub = get_arg_val<uint32_t>(0) != 0;
-    const uint32_t rms_inv_n_bits = get_arg_val<uint32_t>(1);
+    const uint32_t rms_inv_group_size_bits = get_arg_val<uint32_t>(1);
     const uint32_t rms_epsilon_bits = get_arg_val<uint32_t>(2);
 #ifndef FUSE_RMS_VECTOR_GAMMA
     const uint32_t rms_gamma_bits = get_arg_val<uint32_t>(3);
 #endif
+    const uint32_t rms_local_group_count = get_arg_val<uint32_t>(rms_metadata_arg_base);
+    const uint32_t rms_hub_group_count = get_arg_val<uint32_t>(rms_metadata_arg_base + 1);
+    const uint32_t rms_hub_contributor_count = get_arg_val<uint32_t>(rms_metadata_arg_base + 2);
+    constexpr uint32_t rms_local_groups_arg_base = rms_metadata_arg_base + 3;
+    const uint32_t rms_hub_groups_arg_base =
+        rms_local_groups_arg_base + rms_local_group_arg_words * rms_local_group_count;
 #else
     constexpr uint32_t mm_out_cb_id = out_cb_id;
 #endif
@@ -214,8 +261,6 @@ void kernel_main() {
 
 #ifdef FUSE_RMS_NORM
     constexpr uint32_t local_out_tiles = M_tiles * N_tiles_per_core;
-    // The chunked reduction reserves one DST slot as its cross-chunk accumulator.
-    constexpr uint32_t rms_dst_capacity = get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
 
     CircularBuffer mm_out_cb(mm_out_cb_id);
     CircularBuffer rms_local_cb(rms_local_cb_id);
@@ -235,81 +280,68 @@ void kernel_main() {
 
     mm_out_cb.wait_front(local_out_tiles);
 
-    // sum(x^2) over this core's shard of each output row, landing as a single value at [0, 0] of that
-    // row's statistics tile. Each output tile is one logical row, so a scalar reduction over a row's
-    // tiles is exactly that row's statistic. mul_reduce_scalar folds the square into the reduction,
-    // so the narrow output tile never passes through an SFPU unary or a row-wise reduce -- neither of
-    // which handles a 2-face tile. The reduction applies its scaler on both the column and the final
-    // scalar pass, so it gets 1.0 and the hub divides by N once instead.
+    // Compute one sum(x^2) for every local row/group intersection. For the legacy single-group
+    // topology this is the original whole-shard reduction. Grouped topology supplies a contiguous
+    // local tile interval for each fragment, in the same order the writer transports its pages.
     reconfig_data_format(mm_out_cb_id, mm_out_cb_id);
     pack_reconfig_data_format(rms_local_cb_id);
-    rms_local_cb.reserve_back(M_tiles);
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        const uint32_t row_start = mt * N_tiles_per_core;
-        mul_reduce_scalar_init(mm_out_cb_id, mm_out_cb_id);
-        tile_regs_acquire();
-        if constexpr (N_tiles_per_core <= rms_dst_capacity) {
-            mul_reduce_scalar_tile<PoolType::SUM>(
-                mm_out_cb_id, mm_out_cb_id, rms_local_cb_id, N_tiles_per_core, 1.0F, row_start);
-            mul_reduce_scalar_uninit();
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, rms_local_cb_id, mt);
-        } else {
-            // Row wider than DST holds: chunk it and accumulate across chunks.
-            add_binary_tile_init();
-            mul_reduce_scalar_chunked_tile<N_tiles_per_core, rms_dst_capacity>(
-                mm_out_cb_id, mm_out_cb_id, rms_local_cb_id, 1.0F, row_start);
-            mul_reduce_scalar_uninit();
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(rms_dst_capacity - 1, rms_local_cb_id, mt);
-        }
-        tile_regs_release();
-    }
-    rms_local_cb.push_back(M_tiles);
+        for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
+            const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
+            const uint32_t local_tile_offset = get_arg_val<uint32_t>(fragment_arg);
+            const uint32_t fragment_tile_count = get_arg_val<uint32_t>(fragment_arg + 1);
+            const uint32_t fragment_start = mt * N_tiles_per_core + local_tile_offset;
 
-    // Only the first row-major producer consumes the gathered statistics. It sums the producers'
-    // partial mean-squares and forms rsqrt(mean + epsilon) (times scalar gamma, when gamma is not
-    // a per-column tensor), then publishes it to BRISC for multicast.
-    if (rms_is_hub) {
+            rms_local_cb.reserve_back(1);
+            tile_regs_acquire();
+            square_reduce_scalar_tiles(mm_out_cb_id, rms_local_cb_id, fragment_start, fragment_tile_count);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, rms_local_cb_id);
+            mul_reduce_scalar_uninit();
+            tile_regs_release();
+            rms_local_cb.push_back(1);
+        }
+    }
+
+    // Every first-contributor hub reduces exactly the contiguous contributor slots for each group
+    // it owns, then publishes one row/group scale in row-major order for the writer to distribute.
+    if (rms_hub_group_count != 0) {
         CircularBuffer rms_gathered_cb(rms_gathered_cb_id);
         CircularBuffer rms_scale_src_cb(rms_scale_src_cb_id);
-        rms_gathered_cb.wait_front(M_tiles * rms_packed_tiles_per_row);
-        rms_scale_src_cb.reserve_back(M_tiles);
+        rms_gathered_cb.wait_front(M_tiles * rms_hub_contributor_count);
         reconfig_data_format(rms_gathered_cb_id, rms_gathered_cb_id);
         pack_reconfig_data_format(rms_scale_src_cb_id);
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-            tile_regs_acquire();
-            const uint32_t row_start = mt * rms_packed_tiles_per_row;
-            binary_tiles_init<true, EltwiseBinaryType::ELWADD>(rms_gathered_cb_id, rms_gathered_cb_id, false);
-            add_tiles(rms_gathered_cb_id, rms_gathered_cb_id, row_start, row_start + 1, 0);
-            binary_tiles_init<false, EltwiseBinaryType::ELWADD>(rms_gathered_cb_id, rms_gathered_cb_id, true);
-            for (uint32_t p = 2; p < rms_packed_tiles_per_row; p += 2) {
-                add_tiles(rms_gathered_cb_id, rms_gathered_cb_id, row_start + p, row_start + p + 1, 0);
-            }
-            // The producers contribute raw sums of squares, so the mean is formed here.
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, rms_inv_n_bits);
-            add_rsqrt_tile_init();
-            add_rsqrt_tile<false, VectorMode::RC_custom, 1>(0, rms_epsilon_bits);
+            uint32_t hub_group_arg = rms_hub_groups_arg_base;
+            for (uint32_t hg = 0; hg < rms_hub_group_count; ++hg) {
+                const uint32_t contributor_count = get_arg_val<uint32_t>(hub_group_arg++);
+                const uint32_t gathered_slot_base = get_arg_val<uint32_t>(hub_group_arg++);
+                rms_scale_src_cb.reserve_back(1);
+                tile_regs_acquire();
+                sum_gathered_tiles_exact(
+                    rms_gathered_cb_id, mt * rms_hub_contributor_count + gathered_slot_base, contributor_count);
+                // Contributors publish raw sums of squares; form the group mean here.
+                binop_with_scalar_tile_init();
+                mul_unary_tile(0, rms_inv_group_size_bits);
+                add_rsqrt_tile_init();
+                add_rsqrt_tile<false, VectorMode::RC_custom, 1>(0, rms_epsilon_bits);
 #ifndef FUSE_RMS_VECTOR_GAMMA
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, rms_gamma_bits);
+                binop_with_scalar_tile_init();
+                mul_unary_tile(0, rms_gamma_bits);
 #endif
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, rms_scale_src_cb_id, mt);
-            tile_regs_release();
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, rms_scale_src_cb_id);
+                tile_regs_release();
+                rms_scale_src_cb.push_back(1);
+                hub_group_arg += 4 * contributor_count;
+            }
         }
-        // Handed off to the writer RISC, which is this CB's only consumer and pops it after the mcast.
-        rms_scale_src_cb.push_back(M_tiles);
-        rms_gathered_cb.pop_front(M_tiles * rms_packed_tiles_per_row);
+        rms_gathered_cb.pop_front(M_tiles * rms_hub_contributor_count);
     }
 
-    // The writer RISC pushes cb_rms_scale on every producer, hub included, once the multicast payload
-    // has landed locally. Compute is its only consumer, so this wait cannot race the transport.
-    rms_scale_cb.wait_front(M_tiles);
+    rms_scale_cb.wait_front(M_tiles * rms_local_group_count);
 #if defined(RMS_DEBUG_DUMP_COPY)
     // TODO(debug): temporary. Plain copy of the matmul result through DST, to check whether an
     // ordinary unpack/pack round trip preserves all 32 datums of a narrow tile.
@@ -326,7 +358,7 @@ void kernel_main() {
         tile_regs_release();
     }
     final_out_cb.push_back(local_out_tiles);
-    rms_scale_cb.pop_front(M_tiles);
+    rms_scale_cb.pop_front(M_tiles * rms_local_group_count);
     mm_out_cb.pop_front(local_out_tiles);
 #elif defined(RMS_DEBUG_DUMP_LOCAL) || defined(RMS_DEBUG_DUMP_SCALE)
     // TODO(debug): temporary. Copies an intermediate statistics tile verbatim into every output tile
@@ -343,7 +375,7 @@ void kernel_main() {
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
         for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
             tile_regs_acquire();
-            copy_tile(rms_dbg_cb_id, mt, 0);
+            copy_tile(rms_dbg_cb_id, mt * rms_local_group_count, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(0, out_cb_id, mt * N_tiles_per_core + bw);
@@ -351,40 +383,78 @@ void kernel_main() {
         }
     }
     final_out_cb.push_back(local_out_tiles);
-    rms_scale_cb.pop_front(M_tiles);
+    rms_scale_cb.pop_front(M_tiles * rms_local_group_count);
     mm_out_cb.pop_front(local_out_tiles);
 #else
-    // The scale has to reach SrcB from DST, not from a circular buffer. The unpacker's SCALAR
-    // broadcast replicates [0, 0] across one face only, which silently zeroes the second face of a
-    // 1x32 tile; the rmsnorm dest-reuse LLK is the variant that covers the whole narrow tile. It
-    // leaves the row packed densely in DST, so the row is packed as a block rather than tile by
-    // tile, one tile row per reservation so the write pointer walks the output shard.
+    // The single-group path retains the original whole-row operation and packing. Grouped output
+    // uses the same narrow-tile-safe RMSNorm LLK one tile at a time so each local fragment can select
+    // its own received scale while preserving output tile order.
     reconfig_data_format(rms_scale_cb_id, rms_scale_cb_id);
     pack_reconfig_data_format(out_cb_id);
-    pack_block_contiguous_init(out_cb_id);
-    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        final_out_cb.reserve_back(N_tiles_per_core);
-        tile_regs_acquire();
-        copy_init(rms_scale_cb_id);
-        copy_tile(rms_scale_cb_id, mt, 0);
-        // Consumes DST[0] as the broadcast scalar and refills DST with the scaled row, so the whole
-        // row must fit in DST.
-        rmsnorm_mul_bcast_scalar_reuse_tiles_init<N_tiles_per_core>(mm_out_cb_id);
-        rmsnorm_mul_bcast_scalar_reuse_tiles<N_tiles_per_core, true>(mm_out_cb_id, mt * N_tiles_per_core, 0, 0);
+    if constexpr (rms_num_groups == 1) {
+        pack_block_contiguous_init(out_cb_id);
+        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+            final_out_cb.reserve_back(N_tiles_per_core);
+            tile_regs_acquire();
 #ifdef FUSE_RMS_VECTOR_GAMMA
-        reconfig_data_format(rms_gamma_cb_id, rms_gamma_cb_id);
-        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id);
-        for (uint32_t nt = 0; nt < N_tiles_per_core; ++nt) {
-            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id, nt, nt);
-        }
+            reconfig_data_format_srca(rms_gamma_cb_id, rms_scale_cb_id);
+#else
+            reconfig_data_format_srca(mm_out_cb_id, rms_scale_cb_id);
 #endif
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_block_contiguous(0, out_cb_id, N_tiles_per_core);
-        tile_regs_release();
-        final_out_cb.push_back(N_tiles_per_core);
+            copy_init(rms_scale_cb_id);
+            copy_tile(rms_scale_cb_id, mt, 0);
+            reconfig_data_format_srca(rms_scale_cb_id, mm_out_cb_id);
+            rmsnorm_mul_bcast_scalar_reuse_tiles_init<N_tiles_per_core>(mm_out_cb_id);
+            rmsnorm_mul_bcast_scalar_reuse_tiles<N_tiles_per_core, true>(mm_out_cb_id, mt * N_tiles_per_core, 0, 0);
+#ifdef FUSE_RMS_VECTOR_GAMMA
+            reconfig_data_format(rms_gamma_cb_id, rms_gamma_cb_id);
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id);
+            for (uint32_t nt = 0; nt < N_tiles_per_core; ++nt) {
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id, nt, nt);
+            }
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block_contiguous(0, out_cb_id, N_tiles_per_core);
+            tile_regs_release();
+            final_out_cb.push_back(N_tiles_per_core);
+        }
+    } else {
+        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+            final_out_cb.reserve_back(N_tiles_per_core);
+            for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
+                const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
+                const uint32_t local_tile_offset = get_arg_val<uint32_t>(fragment_arg);
+                const uint32_t fragment_tile_count = get_arg_val<uint32_t>(fragment_arg + 1);
+                for (uint32_t nt = 0; nt < fragment_tile_count; ++nt) {
+                    const uint32_t local_tile = local_tile_offset + nt;
+                    tile_regs_acquire();
+#ifdef FUSE_RMS_VECTOR_GAMMA
+                    reconfig_data_format_srca(rms_gamma_cb_id, rms_scale_cb_id);
+#else
+                    reconfig_data_format_srca(mm_out_cb_id, rms_scale_cb_id);
+#endif
+                    copy_init(rms_scale_cb_id);
+                    copy_tile(rms_scale_cb_id, mt * rms_local_group_count + lg, 0);
+                    reconfig_data_format_srca(rms_scale_cb_id, mm_out_cb_id);
+                    rmsnorm_mul_bcast_scalar_reuse_tiles_init<1>(mm_out_cb_id);
+                    rmsnorm_mul_bcast_scalar_reuse_tiles<1, true>(
+                        mm_out_cb_id, mt * N_tiles_per_core + local_tile, 0, 0);
+#ifdef FUSE_RMS_VECTOR_GAMMA
+                    reconfig_data_format(rms_gamma_cb_id, rms_gamma_cb_id);
+                    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id);
+                    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id, local_tile, 0);
+#endif
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile<true>(0, out_cb_id, local_tile);
+                    tile_regs_release();
+                }
+            }
+            final_out_cb.push_back(N_tiles_per_core);
+        }
     }
-    rms_scale_cb.pop_front(M_tiles);
+    rms_scale_cb.pop_front(M_tiles * rms_local_group_count);
     mm_out_cb.pop_front(local_out_tiles);
 #endif
 #endif
