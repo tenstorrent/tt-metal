@@ -20,6 +20,7 @@ def _run_configuration(
     block_size,
     caller_managed,
     whole_shape,
+    output_base=None,
 ):
     dtype = ttnn.bfloat16
     core_grid = lib.single_core_grid()
@@ -36,8 +37,9 @@ def _run_configuration(
             lib.build_writer_1out_kernel(tt_out, output_tiles, core_grid),
             lib.build_compute_kernel(
                 KERNEL,
-                [0, tiles_per_output, block_size, int(caller_managed), num_outputs, int(whole_shape)],
+                [0, tiles_per_output, block_size, int(caller_managed), num_outputs, int(whole_shape), output_tiles],
                 core_grid,
+                defines=[("OUTPUT_OFFSET", str(output_base))] if output_base is not None else None,
             ),
         ],
         semaphores=[],
@@ -95,6 +97,42 @@ def test_dest_accumulation_modes_and_lifecycle_equivalence(device, whole_shape):
     reference = results[(1, False)]
     for config, out in results.items():
         assert torch.equal(out, reference), f"DEST accumulation changed across lifecycle/block config {config}"
+
+
+@pytest.mark.parametrize("output_base", [0, 3])
+@pytest.mark.parametrize("block_size", [1, 2])
+def test_per_row_offset_packs_contiguous_results(device, output_base, block_size):
+    n = 3
+    num_outputs = 3
+    total_input_tiles = n * num_outputs
+    a = torch.arange(1, total_input_tiles + 1, dtype=torch.float32).to(torch.bfloat16)
+    a = a.repeat_interleave(32).reshape(1, 1, 1, -1).expand(1, 1, 32, -1).contiguous()
+    tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(torch.zeros_like(a), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Include guard tiles and room for the old, incorrectly spaced writes so failure is numerical, not OOB.
+    output_tiles = output_base + (num_outputs - 1) * n + 2
+    out = _run_configuration(
+        device,
+        tt_a,
+        tt_b,
+        n,
+        total_input_tiles,
+        output_tiles,
+        num_outputs,
+        block_size,
+        caller_managed=True,
+        whole_shape=False,
+        output_base=output_base,
+    )
+
+    # The kernel fills the output window from input tile 0 before writing the reduced results.
+    golden = torch.ones_like(out)
+    for row in range(num_outputs):
+        value = sum(range(row * n + 1, (row + 1) * n + 1))
+        tile = output_base + row
+        golden[..., tile * 32 : (tile + 1) * 32] = value
+    torch.testing.assert_close(out, golden, rtol=0, atol=0)
 
 
 def _run_l1_configuration(device, tt_in, caller_managed):

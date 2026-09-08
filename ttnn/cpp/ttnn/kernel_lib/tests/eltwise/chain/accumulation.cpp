@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Accumulation scenarios. CT args:
-// [mode, tiles_per_output, block_size, caller_managed, num_outputs, whole_shape]
+// [mode, tiles_per_output, block_size, caller_managed, num_outputs, whole_shape, output_tiles]
 // mode 0 accumulates in DEST; mode 1 accumulates through an L1 output CB.
 
 #include <cstdint>
@@ -25,6 +25,15 @@ void kernel_main() {
         constexpr uint32_t cb_a = tt::CBIndex::c_0;
         constexpr uint32_t cb_b = tt::CBIndex::c_1;
         constexpr uint32_t cb_out = tt::CBIndex::c_16;
+#ifdef OUTPUT_OFFSET
+        constexpr auto output_addressing = TileAddressing::Offset;
+        constexpr uint32_t output_base = OUTPUT_OFFSET;
+        constexpr uint32_t output_tiles = get_compile_time_arg_val(6);
+#else
+        constexpr auto output_addressing = TileAddressing::Direct;
+        constexpr uint32_t output_base = 0;
+        constexpr uint32_t output_tiles = num_outputs;
+#endif
         static_assert(block_size > 0);
         static_assert(num_outputs > 0);
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
@@ -47,7 +56,7 @@ void kernel_main() {
             ReservePolicy::None,
             PushPolicy::None,
             DataFormatReconfig::Enabled,
-            TileAddressing::Direct,
+            output_addressing,
             DestAccumulation::PerRow)>;
         using WholeShapeAccumulate = BinaryFpu<
             BinaryFpuOp::Add,
@@ -87,12 +96,18 @@ void kernel_main() {
             }
         } else {
             if constexpr (caller_managed) {
-                output_buffer.reserve_back(num_outputs);
+                output_buffer.reserve_back(output_tiles);
+#ifdef OUTPUT_OFFSET
+                eltwise_chain(
+                    IterationShape::tiles(output_tiles),
+                    CopyTile<input(cb_a, WaitPolicy::Upfront, PopPolicy::None)>{},
+                    PackTile<output(cb_out, ReservePolicy::None, PushPolicy::None)>{});
+#endif
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
                     PerRowAccumulate{},
-                    PerRowCallerPack{});
-                output_buffer.push_back(num_outputs);
+                    PerRowCallerPack{output_base});
+                output_buffer.push_back(output_tiles);
             } else {
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),

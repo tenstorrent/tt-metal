@@ -44,6 +44,9 @@ struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
 };
 
 #ifdef SFPU_OP_INIT_ACTIVATION
+#ifdef UNTILIZE_OUT
+#error "Fused activation is not supported with UNTILIZE_OUT"
+#endif
 constexpr bool fused_activation_enabled = true;
 #else
 constexpr bool fused_activation_enabled = false;
@@ -309,12 +312,6 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
-    if constexpr (welford_unpack_fp32_active) {
-        // Reconfigure the transpose op for the welford intake DFB. The factory marks this DFB
-        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
-        transpose_init(dfb_welford_in_id);
-    }
-
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     constexpr bool extra_out_block = block_h % num_out_blocks != 0;
     constexpr uint32_t num_out_blocks_padded = num_out_blocks + (extra_out_block ? 1 : 0);
@@ -336,6 +333,10 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
+        if constexpr (welford_unpack_fp32_active) {
+            reconfig_data_format_srca(dfb_welford_in_id);
+            transpose_init(dfb_welford_in_id);
+        }
         dfb_ex_partial.reserve_back(2);
         tile_regs_acquire();
         welford_init();
