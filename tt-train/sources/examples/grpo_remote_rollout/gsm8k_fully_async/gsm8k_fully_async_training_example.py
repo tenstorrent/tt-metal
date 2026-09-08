@@ -147,7 +147,7 @@ def _rollout_main() -> None:
         stop_ids, pad_id = qwen3_stop_and_pad(model_id)
         worker = TttGenerationWorker(
             mesh_device=mesh,
-            model_source=model_id,
+            model_source=rr["architecture_model_id"],
             max_batch_size=rr["max_batch_size"],
             max_seq_len=rr["max_seq_len"],
             instruct=True,
@@ -159,11 +159,10 @@ def _rollout_main() -> None:
             top_p=1.0,
             seed=None,
             return_logprobs=True,
-            # Custom checkpoint names are not present in tt-transformers'
-            # dummy-weight architecture table. Load the requested SFT once at
-            # boot; the mandatory version-0 trainer snapshot then verifies and
-            # exercises the real update path before generation begins.
-            dummy_weights=False,
+            # The matching base architecture is sufficient at boot. The
+            # mandatory version-0 snapshot below replaces every dummy tensor
+            # with the custom SFT's real weights before generation can start.
+            dummy_weights=True,
         )
         bridge = AsyncHostWeightBridge.init_receiver(peer_rank=TTML_RANK, submeshes=worker.submeshes)
         transport = MPIRolloutWorkerTransport(

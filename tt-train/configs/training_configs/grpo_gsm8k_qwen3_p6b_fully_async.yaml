@@ -33,6 +33,10 @@ device_config:
   mesh_shape: [1, 1]
   device_ids: [0]
 remote_rollout_config:
+  # TT-Transformers only needs the matching architecture at boot. The trainer's
+  # mandatory version-0 snapshot installs the actual custom SFT weights before
+  # the first rollout, avoiding checkpoint-cache collectives on the two ranks.
+  architecture_model_id: "Qwen/Qwen3-0.6B"
   mesh_shape: [1, 1]
   max_batch_size: 2
   max_seq_len: 512

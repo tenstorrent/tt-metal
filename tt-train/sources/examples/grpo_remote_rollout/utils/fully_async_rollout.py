@@ -72,6 +72,11 @@ class FullyAsyncRolloutClient:
         if self._feeder_error is not None:
             raise RuntimeError("prompt feeder failed") from self._feeder_error
         result = self._transport.receive_result()
+        print(
+            f"[fully-async trainer] received {result.group_id} from behavior policy "
+            f"version {result.behavior_version}",
+            flush=True,
+        )
         payload = result.request_payload
         if not isinstance(payload, dict):
             raise RuntimeError(f"rollout {result.group_id!r} did not return its request payload")
@@ -86,6 +91,7 @@ class FullyAsyncRolloutClient:
 
     def publish_weights(self, version: int) -> None:
         self._weight_bridge.publish(version, self._weight_export())
+        print(f"[fully-async trainer] queued policy version {version}", flush=True)
 
     def close(self) -> None:
         if self._feeder is not None:
@@ -127,6 +133,7 @@ class FullyAsyncRolloutWorker:
         per_submesh = self._weight_bridge.materialize(received)
         self._worker.update_weights(per_submesh)
         self._active_version = received.version
+        print(f"[fully-async rollout] activated policy version {received.version}", flush=True)
 
     def serve_forever(self) -> None:
         # Initial SFT snapshot is mandatory and ordered before all generation.
@@ -162,6 +169,11 @@ class FullyAsyncRolloutWorker:
                         output=output,
                         request_payload=lease.payload,
                     )
+                )
+                print(
+                    f"[fully-async rollout] published {lease.group_id} from behavior policy "
+                    f"version {self._active_version}",
+                    flush=True,
                 )
         finally:
             self._transport.close()

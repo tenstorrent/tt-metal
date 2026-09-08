@@ -115,6 +115,11 @@ class FullyAsyncGRPOTrainer(GRPOTrainer):
                     # unrelated device work. Network transfer and rollout-side
                     # activation continue independently.
                     self.completer.publish_weights(self.metrics["step"])
+                    print(
+                        f"[fully-async trainer] completed optimizer step {self.metrics['step']} "
+                        f"using behavior policy version {batch.behavior_version}",
+                        flush=True,
+                    )
                     self._publish_step_metrics()
                     self._maybe_checkpoint()
                     self._reset_step_metrics()
