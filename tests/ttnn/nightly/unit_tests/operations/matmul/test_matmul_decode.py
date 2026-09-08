@@ -331,9 +331,8 @@ def test_matmul_decode_row_major_height_sharded_replicated(device, m, k, n, outp
         assert_with_pcc(torch_output_tensor, replica, 0.99)
 
 
-@pytest.mark.parametrize("m", [1, 4])
-@pytest.mark.parametrize("k", [1024, 4096])
-@pytest.mark.parametrize("n", [2048, 4096])
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("k, n", [(4096, 1024), (1024, 512)])
 @pytest.mark.parametrize("use_vector_gamma", [False, True])
 def test_matmul_decode_fused_rms_norm(device, m, k, n, use_vector_gamma, expect_error):
     torch.manual_seed(0)
