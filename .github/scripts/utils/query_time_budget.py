@@ -281,9 +281,7 @@ def main():
     with open(args.budget_file, "r") as f:
         budgets = yaml.safe_load(f) or {}
 
-    total, breakdown = collect_allocations(
-        args.tests_dir, budgets, args.team, args.testtype, args.machine, args.tier
-    )
+    total, breakdown = collect_allocations(args.tests_dir, budgets, args.team, args.testtype, args.machine, args.tier)
     budget = lookup_budget(budgets, args.team, args.testtype, args.machine, args.tier)
     if not breakdown:
         print(f"[WARN] No tests declare budget_type '{args.testtype}' for team '{args.team}' on '{args.machine}'")
