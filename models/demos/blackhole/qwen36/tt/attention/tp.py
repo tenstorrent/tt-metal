@@ -243,7 +243,8 @@ class TPAttention:
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    # L1 output on BH only; WH has no room beside the CBs (tpc.prefill_l1_output_ok).
+                    memory_config=ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_output_ok() else ttnn.DRAM_MEMORY_CONFIG,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -570,10 +571,9 @@ class TPAttention:
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
-            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+            # pad_and_free, NOT pad + deallocate: this pad aliases its input (tpc.pad_and_free).
+            k_p = tpc.pad_and_free(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+            v_p = tpc.pad_and_free(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             _kv_cfg = self._kv_shard_cfg(B)
             k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
             v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
@@ -602,10 +602,9 @@ class TPAttention:
             for h in range(NKV):
                 k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
-                k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
+                # pad_and_free, NOT pad + deallocate: this pad aliases its input (tpc.pad_and_free).
+                k_hp = tpc.pad_and_free(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                v_hp = tpc.pad_and_free(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 _kv_cfg = self._kv_shard_cfg(B)
                 k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
                 v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
