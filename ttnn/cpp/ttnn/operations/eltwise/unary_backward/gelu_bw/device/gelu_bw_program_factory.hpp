@@ -5,12 +5,12 @@
 #pragma once
 
 #include "gelu_bw_device_operation_types.hpp"
-#include "ttnn/metal_v2_artifacts.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::unary_backward::gelu_bw {
 
 struct GeluBwProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const GeluBwParams& args, const GeluBwInputs& tensor_args, Tensor& output);
 };
 
