@@ -121,6 +121,17 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+    # LR schedule shape AFTER warmup. Names match HuggingFace transformers / TRL
+    # so users familiar with those configs can map yamls directly:
+    #   "constant" -> flat at base_lr; ``min_lr_rate`` is ignored.
+    #   "cosine"   -> half-cosine anneal from base_lr down to
+    #                 base_lr * ``min_lr_rate`` over the remaining steps.
+    # Default preserves today's behavior (linear warmup then flat).
+    lr_scheduler_type: str = "constant"
+    min_lr_rate: float = 0.0
+    # Gradient clipping. Off by default (matches today).
+    use_clip_grad_norm: bool = False
+    clip_grad_norm_max_norm: float = 1.0
     log_completions: bool = False
     num_completions_to_print: int = 0
     report_to: str = "none"
@@ -169,6 +180,27 @@ class GRPOConfig:
             raise ValueError(
                 f"grpo_config: 'checkpoint_interval' must be > 0 when checkpointing is enabled "
                 f"(got {self.checkpoint_interval})."
+            )
+
+        # LR scheduler name must be one of the two shapes _build_lr_factor_fn
+        # knows about.
+        _allowed_lr_scheduler = {"constant", "cosine"}
+        if self.lr_scheduler_type not in _allowed_lr_scheduler:
+            raise ValueError(
+                f"grpo_config: 'lr_scheduler_type' must be one of {sorted(_allowed_lr_scheduler)} "
+                f"(got {self.lr_scheduler_type!r})."
+            )
+        # ``min_lr_rate`` is a fraction of base_lr (TRL semantics). Only
+        # consulted by the cosine schedule; still validate the range so a
+        # misconfigured yaml fails at construction rather than silently.
+        if not (0.0 <= self.min_lr_rate <= 1.0):
+            raise ValueError(f"grpo_config: 'min_lr_rate' must be in [0.0, 1.0] (got {self.min_lr_rate}).")
+        # Grad clip norm is only consulted when clipping is enabled; guard the
+        # positive-only invariant so a misconfigured yaml fails loudly.
+        if self.use_clip_grad_norm and self.clip_grad_norm_max_norm <= 0.0:
+            raise ValueError(
+                f"grpo_config: 'clip_grad_norm_max_norm' must be > 0 when 'use_clip_grad_norm' is True "
+                f"(got {self.clip_grad_norm_max_norm})."
             )
 
         # ``report_to`` is intentionally a plain string in this framework
@@ -771,6 +803,51 @@ def save_checkpoint(
         f.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC\n"))
 
 
+def _build_lr_factor_fn(
+    *,
+    lr_scheduler_type: str,
+    warmup_steps: int,
+    total_steps: int,
+    min_lr_rate: float,
+) -> Callable[[int], float]:
+    """Return ``lr_lambda(step) -> factor`` for a ``LambdaScheduler``.
+
+    ``step`` is 1-indexed (``LambdaScheduler`` bumps its counter to 1 before
+    calling us for the first time). The returned factor multiplies base_lr.
+
+    Combos:
+      * type="constant", warmup_steps=0  -> flat at base_lr for the whole run.
+      * type="constant", warmup_steps>0  -> linear warmup, then flat at base_lr.
+                                             ``min_lr_rate`` is ignored (matches TRL).
+      * type="cosine",   warmup_steps=0  -> half-cosine anneal base_lr -> base_lr*min_lr_rate.
+      * type="cosine",   warmup_steps>0  -> linear warmup, then half-cosine anneal.
+
+    Cosine formula matches HuggingFace ``get_cosine_with_min_lr_schedule_with_warmup``
+    with ``num_cycles=0.5`` (TRL's default), simplified from
+    ``0.5*(1+cos(pi*progress)) * (1 - min_lr_rate) + min_lr_rate`` to
+    ``min_lr_rate + 0.5*(1 - min_lr_rate) * (1 + cos(pi*progress))``.
+
+    Edge case: ``warmup_steps > total_steps`` -> the ramp caps at
+    ``total_steps / warmup_steps < 1.0``; the schedule never reaches base_lr.
+    Matches today's silent behavior in the inline warmup this replaces.
+    """
+    if lr_scheduler_type not in ("constant", "cosine"):
+        raise ValueError(f"unknown lr_scheduler_type: {lr_scheduler_type!r}; expected 'constant' or 'cosine'")
+
+    warmup = max(0, warmup_steps)
+    decay_steps = max(1, total_steps - warmup)
+
+    def factor(step: int) -> float:
+        if warmup > 0 and step <= warmup:
+            return step / warmup
+        if lr_scheduler_type == "constant":
+            return 1.0
+        progress = min((step - warmup) / decay_steps, 1.0)
+        return min_lr_rate + 0.5 * (1.0 - min_lr_rate) * (1.0 + math.cos(math.pi * progress))
+
+    return factor
+
+
 class GRPOTrainer:
     def __init__(
         self,
@@ -814,7 +891,7 @@ class GRPOTrainer:
         # ``_setup()`` on the first ``train()`` call.
         self._tokenizer: Any = None
         self._optimizer: Any = None
-        self._base_lr: float = 0.0
+        self._lr_scheduler: Any = None
         self._autograd_ctx: Any = None
         self._mesh: Any = None
         self._num_devices: int = 1
@@ -1101,7 +1178,6 @@ class GRPOTrainer:
         # Publish outputs onto self for the per-batch helpers.
         self._tokenizer = tokenizer
         self._optimizer = optimizer
-        self._base_lr = base_lr
         self._autograd_ctx = autograd_ctx
         self._mesh = mesh
         self._num_devices = num_devices
@@ -1121,6 +1197,23 @@ class GRPOTrainer:
         # (capped by dataset len for sync/onestep trainers), so all GRPO trainers
         # -- sync, onestep, fully-async -- share one source of truth for run length.
         self._total_optimizer_steps = (total_prompts // generation_batch_prompts) * self.config.num_iterations
+
+        # LR scheduler. One ``LambdaScheduler`` over the closure returned by
+        # ``_build_lr_factor_fn`` handles all four (warmup, kind) combos in one
+        # branch. Backward compat: with default ``lr_scheduler_type="constant"``
+        # and ``warmup_steps > 0`` the emitted LR trace is bit-identical to
+        # today's inline ``warmup_factor = min(1, (step+1)/warmup_steps)``.
+        from ttml.common.schedulers import LambdaScheduler
+
+        self._lr_scheduler = LambdaScheduler(
+            optimizer,
+            _build_lr_factor_fn(
+                lr_scheduler_type=self.config.lr_scheduler_type,
+                warmup_steps=int(self.config.warmup_steps),
+                total_steps=self._total_optimizer_steps,
+                min_lr_rate=float(self.config.min_lr_rate),
+            ),
+        )
 
     # -- phase helpers -------------------------------------------------------
     #
@@ -1318,14 +1411,20 @@ class GRPOTrainer:
         _deallocate_tensors([nlog_new, mask_new, adv_ttml, loss])
 
     def _apply_gradients(self) -> None:
-        """Grad sync + LR warmup + ``on_before_optimizer_step`` + ``optimizer
-        .step()`` + ``zero_grad``. Reads current step from
-        ``self.metrics["step"]`` (the optimizer step is about to increment it
-        upstream). Writes ``lr`` and per-callback timings to ``self.metrics``.
+        """LR scheduler step + grad sync + optional grad clip +
+        ``on_before_optimizer_step`` + ``optimizer.step()`` + ``zero_grad``.
+        Writes ``lr`` and per-callback timings to ``self.metrics``.
+
+        Ordering:
+          1. ``self._lr_scheduler.step()`` bumps its internal step counter
+             and writes the new LR onto the optimizer.
+          2. Grad sync (FSDP / parallelism-context DDP / named-mesh DDP).
+          3. ``ttml.core.clip_grad_norm`` AFTER grad sync so every rank clips
+             the identical reduced grads. Guarded by ``config.use_clip_grad_norm``.
+          4. Callback ``on_before_optimizer_step`` fires.
+          5. ``optimizer.step()`` + ``zero_grad``.
         """
-        step = self.metrics["step"]
-        warmup_factor = 1.0 if self.config.warmup_steps == 0 else min(1.0, (step + 1) / self.config.warmup_steps)
-        self._optimizer.set_lr(self._base_lr * warmup_factor)
+        self._lr_scheduler.step()
 
         if self._fsdp_enabled:
             ttml.sync_gradients(self.model.parameters(), axis_names=self._fsdp_sync_axes)
@@ -1343,6 +1442,12 @@ class GRPOTrainer:
             # ``grad_sync_world_size`` (= the "dp" axis size here), matched to
             # this reduction.
             ttml.sync_gradients(self.model.parameters(), axis_names=("dp",))
+
+        if self.config.use_clip_grad_norm:
+            ttml.core.clip_grad_norm(
+                self.model.parameters(),
+                self.config.clip_grad_norm_max_norm,
+            )
 
         for cb in self.callbacks:
             self._time_callback(cb, "on_before_optimizer_step", self)
