@@ -99,11 +99,8 @@ void kernel_main() {
             auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
-            const WelfordStats<std::remove_cv_t<stats_read_t>> local_result = {
-                .mean = p_local_means[0],
-                .variance = p_local_vars[0],
-                .count = block_hw * tile_width * tile_width,
-            };
+            const auto local_result =
+                make_welford_stats(p_local_means[0], p_local_vars[0], block_hw * tile_width * tile_width);
 #else
             const auto local_result =
                 combine_welford_stats<tile_width, block_hw * tile_width, local_stride>(p_local_means, p_local_vars);
