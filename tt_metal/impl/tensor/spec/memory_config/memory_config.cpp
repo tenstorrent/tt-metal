@@ -170,8 +170,13 @@ nlohmann::json ttsl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     json_object["created_with_nd_shard_spec"] = config.created_with_nd_shard_spec();
     json_object["per_core_allocation"] =
         tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config);
-    json_object["range_lockstep_allocation"] =
-        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(config);
+    // Written only when set. MemoryConfig::to_json() output is hashed as a cache key by model code
+    // (models/demos/deepseek_v3_b1/weights/cache/fingerprint.py), so emitting the default would
+    // change the digest of every config that never asked for this and invalidate prebuilt caches.
+    // from_json reads it as absent-means-false, so both spellings load.
+    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(config)) {
+        json_object["range_lockstep_allocation"] = true;
+    }
     if (config.created_with_nd_shard_spec()) {
         if (config.nd_shard_spec().has_value()) {
             json_object["nd_shard_spec"] = ttsl::json::to_json(config.nd_shard_spec().value());

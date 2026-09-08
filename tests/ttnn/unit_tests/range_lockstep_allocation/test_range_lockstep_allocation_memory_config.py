@@ -61,8 +61,11 @@ def test_binding_sets_range_lockstep_not_per_core():
 def test_binding_disable_round_trips():
     config = _sharded_config()
     config.experimental_set_range_lockstep_allocation(True)
+    assert "range_lockstep_allocation" in json.loads(config.to_json())
     config.experimental_set_range_lockstep_allocation(False)
-    assert json.loads(config.to_json())["range_lockstep_allocation"] is False
+    # Back to the default, so back to not being written at all -- see
+    # test_default_is_not_written_to_json.
+    assert "range_lockstep_allocation" not in json.loads(config.to_json())
 
 
 # -- guards --------------------------------------------------------------------------------
@@ -131,9 +134,21 @@ def test_range_lockstep_in_repr():
 def test_range_lockstep_serialized_to_json():
     lockstep, range_lockstep = _configs()
     assert json.loads(range_lockstep.to_json())["range_lockstep_allocation"] is True
-    assert json.loads(lockstep.to_json())["range_lockstep_allocation"] is False
     # The two must not serialize identically -- this is what collides cache keys.
     assert range_lockstep.to_json() != lockstep.to_json()
+
+
+def test_default_is_not_written_to_json():
+    """A config that never asked for range lockstep must serialize as if the flag did not exist.
+
+    to_json() output is hashed as a content-addressed cache key by model code
+    (models/demos/deepseek_v3_b1/weights/cache/fingerprint.py), so writing the default would
+    change the digest of every existing config and invalidate prebuilt weight caches. The
+    default therefore stays absent, and from_json reads absent as false --
+    test_json_without_the_key_loads_as_default_lockstep covers the read side.
+    """
+    lockstep, _range_lockstep = _configs()
+    assert "range_lockstep_allocation" not in json.loads(lockstep.to_json())
 
 
 def test_range_lockstep_round_trips_through_json():
@@ -172,4 +187,5 @@ def test_range_lockstep_is_independent_of_per_core():
     rl_json = json.loads(range_lockstep.to_json())
     pc_json = json.loads(per_core.to_json())
     assert (rl_json["range_lockstep_allocation"], rl_json["per_core_allocation"]) == (True, False)
-    assert (pc_json["range_lockstep_allocation"], pc_json["per_core_allocation"]) == (False, True)
+    assert "range_lockstep_allocation" not in pc_json
+    assert pc_json["per_core_allocation"] is True
