@@ -82,6 +82,9 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(index_dfb.get_id(), 1, 3);
 
         // llk_topk_sort -> inplace
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
         ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, tie_order>(
             0, (int)ascending_local, end_phase);
 

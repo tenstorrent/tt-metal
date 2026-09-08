@@ -171,6 +171,9 @@ void process_and_sort_tiles(
         transpose_tile(cb_expert_index_template_id, wt + 1, 3);
 
         // llk_topk_sort -> inplace
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
         ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
             0, (int)ascending, end_phase);
 
@@ -258,6 +261,9 @@ void topk_group_scores(
     copy_tile(cb_group_index_template_id, 0, 2);
 
     // llk_topk_sort -> inplace
+    if constexpr (stable_sort) {
+        ckernel::topk_canonicalize_negzero_values(0);
+    }
     ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
         0, (int)ascending, log_topk_groups);
     ckernel::topk_finalize_uint16_indices(2);
@@ -336,6 +342,9 @@ void topk(
         transpose_tile(cb_winning_group_indices_id, 1, 3);
     }
     // llk_topk_sort -> inplace
+    if constexpr (stable_sort) {
+        ckernel::topk_canonicalize_negzero_values(0);
+    }
     ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
         0, (int)ascending, 4);
     ckernel::
@@ -358,6 +367,9 @@ void topk(
             transpose_tile(cb_winning_group_indices_id, j, 3);
         }
 
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
         ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
             0, (int)ascending, 4);
         ckernel::topk_merge<

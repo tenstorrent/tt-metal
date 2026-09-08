@@ -338,6 +338,22 @@ ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uin
 }
 
 /**
+ * Folds -0.0 into +0.0 in the two freshly loaded value tiles of a comparator-stable slab, so the
+ * sign-magnitude network treats both zeros as one tie class. Call once per fresh slab, before its
+ * first topk_local_sort, when stable_sort=true. No-op unless values are fp32-family in 32-bit DEST.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void topk_canonicalize_negzero_values(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_topk_canonicalize_negzero,
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC_custom));
+}
+
+/**
  * Clears the low 16 bits (stale rank tags) of one rank-stamped value tile in DST, leaving exact
  * [bf16|0x0000] words so the following Float32->bf16 pack cannot RNE-round on tag bits. Must run
  * on MATH while DEST is still acquired, after the final transpose back to row layout (same

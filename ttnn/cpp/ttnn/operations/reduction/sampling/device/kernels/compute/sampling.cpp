@@ -261,6 +261,9 @@ void top_k() {
             // llk_topk_sort -> inplace
             // stable_sort: equal values keep their original (lowest) position, so the candidate the
             // top-k keeps for a tie does not depend on how the bitonic network happens to swap.
+            if constexpr (stable_sort) {
+                ckernel::topk_canonicalize_negzero_values(0);
+            }
             ckernel::
                 topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
                     0, (int)ascending, logk - 1);

@@ -128,6 +128,9 @@ inline void calculate_topk_stamp_tile_rank_range(std::uint32_t /*dst_tile_index*
     static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
 }
 
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void calculate_topk_canonicalize_negzero() {}
+
 // Load 8 lanes (one value LREG pair + one index LREG pair) from Dest at runtime offsets.
 // Values land in LREG0,1; indices (offset by dst_indices_offset = 128) land in LREG4,5.
 // TopK indices are non-negative Int16 values in the Quasar test harness. Use the
