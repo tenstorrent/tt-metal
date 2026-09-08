@@ -5,7 +5,6 @@
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_progress_monitor.hpp"
 
-#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -25,8 +24,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <hostdev/fabric_telemetry_msgs.h>
-#include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -216,11 +213,7 @@ private:
     std::unordered_map<BoardType, tt::scaleout_tools::Board> boards_;
 };
 
-// Builds the full hop-by-hop path for a single src->dst route, annotating each hop with
-// its chip id, physical tray/asic location, and the eth channel taken. Channel-to-channel
-// transitions within a chip appear as repeated entries for that chip. Example:
-//   "D0[T3/N1](ch6) -> D4[T3/N9](ch2) -> D8[T2/N1](ch3) -> D12[T2/N9](ch3)"
-// Returns "<no route>" when no valid end-to-end route exists (e.g. src not local to this host).
+// Formats one Control Plane route with its physical chip locations and channels.
 std::string format_hanging_link_path(
     tt::tt_fabric::ControlPlane& control_plane,
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
@@ -1137,9 +1130,6 @@ void TestProgressMonitor::write_summary_report(
                 (void)pair_key;
                 ofs << "  [" << pair_idx++ << "] " << format_device_label(agg.src_node) << "  ->  "
                     << format_device_label(agg.dst_node) << "\n";
-                // The hop-by-hop path the routing tables actually produce for this flow, first so
-                // it reads before the physical detail: whether the route itself is what was
-                // expected decides whether anything below it is worth reading.
                 ofs << "      Route: " << format_hanging_link_path(control_plane, psd, agg.src_node, agg.dst_node)
                     << "\n";
                 ofs << "      Dst Host: " << agg.dst_host << " (Rank " << agg.dst_host_rank << ")\n";
@@ -1234,9 +1224,6 @@ void TestProgressMonitor::write_detailed_report(
             FabricNodeId dst_node_id(MeshId{rec->dst_mesh_id}, rec->dst_chip_id);
 
             ofs << "  [" << entry_idx++ << "] " << role_str << " endpoint\n";
-            // The hop-by-hop path the routing tables actually produce for this flow, first so it
-            // reads before the physical detail: whether the route itself is what was expected
-            // decides whether anything below it is worth reading.
             ofs << "      Route: " << format_hanging_link_path(control_plane, psd, src_node_id, dst_node_id) << "\n";
             ofs << "      flow_uid: " << rec->flow_uid << "\n";
             ofs << "      Configured: " << format_device_label(src_node_id) << " -> "

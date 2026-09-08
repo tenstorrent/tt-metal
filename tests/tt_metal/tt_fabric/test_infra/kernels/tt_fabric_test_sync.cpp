@@ -28,7 +28,6 @@ static_assert(
     sizeof(SyncKernelConfigType) <= KERNEL_CONFIG_BUFFER_SIZE,
     "SyncKernelConfig size exceeds allocated kernel config buffer size");
 
-// Static assertion to ensure max fabric connections per sync config are configured properly
 static_assert(
     NUM_SYNC_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS,
     "NUM_SYNC_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");

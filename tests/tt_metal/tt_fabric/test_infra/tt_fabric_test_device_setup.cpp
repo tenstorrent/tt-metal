@@ -9,39 +9,20 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
-#include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
 namespace {
 
-// The directions a 2D multicast leaves the source on. They come from the canonical routing map, not
-// from the requested extents: a "north 8" range leaves on Z when the route to its far end takes a
-// chord, and on a RING it can leave on BOTH N and S when the requested arc passes the point where
-// the shortest path flips direction.
-//
-// A root can have several outputs, each covering a disjoint part of the range. The caller opens one
-// connection per returned direction and injects one copy into each.
-//
-// NOT gated on express_routing_enabled, and this is load-bearing. It used to be: a non-express mesh
-// returned empty and fell back to a single direction, which was correct only while non-express 2D
-// used the legacy hop-map codec, where one packet carrying n/s/e/w hop counts fanned out inside the
-// router. Since the codec unification every 2D mesh encodes multicast as a reverse tree, so a plain
-// ring root has the same multi-output shape an express root does. Leaving the gate here injected one
-// copy into a two-branch tree: half the ring never received, and any sync waiting on the whole ring
-// hung with every endpoint at zero packets.
-//
-// Uses axis_topology() rather than ring_for_direction(): the latter is null on a non-express Y axis
-// and on a non-closing X dimension, which would reintroduce the same empty-result fallback.
+// Returns the canonical root outputs, which may fan out even without express routing.
+// Per-axis topology is available for every valid 2D mesh.
 std::vector<RoutingDirection> mcast_outgoing_directions(
     const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto* y_rings = control_plane.axis_topology(src_node_id.mesh_id, 0);
     const auto* x_rings = control_plane.axis_topology(src_node_id.mesh_id, 1);
-    if (y_rings == nullptr || x_rings == nullptr) {
-        return {};
-    }
+    TT_FATAL(y_rings != nullptr && x_rings != nullptr, "Missing 2D axis topology for multicast source {}", src_node_id);
 
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto coord = mesh_graph.chip_to_coordinate(src_node_id.mesh_id, src_node_id.chip_id);
@@ -492,38 +473,24 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
     // but the routing tables cause packets to fail to reach the destination properly in some cases,
     // due to torus links. In this case, we use node IDs instead of hops.
-    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
-                               (config.parameters.is_2D_routing_enabled) &&
-                               (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
+    const bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
+                                     (config.parameters.is_2D_routing_enabled) &&
+                                     (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
-    // A Z hop is exempt from the torus workaround above.
-    const bool hops_are_single_z = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
-                                   config.hops->at(RoutingDirection::Z) > 0;
+    const bool has_z_hop = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
+                           config.hops->at(RoutingDirection::Z) > 0;
 
-    // A 2D multicast root with several canonical outputs gets one connection per output, in the
-    // encoder's order, and the kernel injects a copy into each. Every other flow has exactly one.
     std::vector<RoutingDirection> outgoing_directions;
     if (config.hops.has_value() && config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
         config.parameters.is_2D_routing_enabled) {
         outgoing_directions = mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), config.hops.value());
-    }
-    const bool is_tree_mcast = !outgoing_directions.empty();
-
-    if (!is_tree_mcast) {
-        if (config.hops.has_value() && (!is_torus_2d_unicast || hops_are_single_z)) {
-            // Use hops to determine direction (for static routing with explicit hops)
-            // However, NeighborExchange topology does not support multi-hop.
-            outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(config.hops.value()));
-        } else {
-            // Derive direction from src->dst node IDs
-            outgoing_directions.push_back(
-                this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id));
-        }
+    } else if (config.hops.has_value() && (!is_torus_2d_unicast || has_z_hop)) {
+        outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(config.hops.value()));
+    } else {
+        outgoing_directions.push_back(
+            this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id));
     }
 
-    // Use common helper to register fabric connection. The final dst_node_id is intentionally
-    // not part of the dedup key — multiple traffic configs with different dsts that share the
-    // same physical eth chan + VC will collapse to a single ConnectionKey.
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
     for (const auto direction : outgoing_directions) {
@@ -533,8 +500,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
             this->test_device_ptr_->connection_manager_,
             direction,
             config.link_id,
-            config.vc_id,
-            dst_node_id));
+            config.vc_id));
     }
 
     this->configs_.emplace_back(std::move(config), std::move(fabric_connection_keys));
@@ -596,8 +562,7 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
             config.link_id,
-            /*vc_id=*/0,
-            dst_node_id);
+            /*vc_id=*/0);
     }
 
     this->configs_.emplace_back(std::move(config), credit_connection_key);
@@ -649,10 +614,7 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
         sender_config.parameters.is_2D_routing_enabled) {
         outgoing_directions =
             mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), sender_config.hops.value());
-    }
-    const bool is_tree_mcast = !outgoing_directions.empty();
-
-    if (!is_tree_mcast) {
+    } else {
         outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value()));
     }
 
@@ -754,15 +716,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
-    uint8_t vc_id,
-    std::optional<FabricNodeId> final_dst) {
-    // Resolve link_idx -> physical eth chan and the first-hop neighbor on the other end.
-    // The ConnectionKey dedups on (direction, link_idx, vc_id, eth_chan): all four are
-    // mutually consistent, but eth_chan is what we conceptually identify the connection by.
-    // The caller's final dst is intentionally not part of the key — many traffic configs
-    // with different final dsts can legitimately share one physical connection (e.g. Z-link
-    // sub-torus all-to-all). The first-hop neighbor is recorded on the Connection so that
-    // downstream calls into the fabric API have a valid (dst, link_idx) pair.
+    uint8_t vc_id) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto candidate_eth_chans =
         cp.get_active_fabric_eth_channels_in_direction(fabric_node_id_, outgoing_direction);
@@ -772,33 +726,15 @@ ConnectionKey TestDevice::register_fabric_connection(
         static_cast<int>(outgoing_direction),
         this->fabric_node_id_);
 
-    // Narrow to the channels landing on final_dst before link_idx selects one.
-    std::vector<chan_id_t> chans_to_final_dst;
-    if (final_dst.has_value()) {
-        for (const auto chan : candidate_eth_chans) {
-            if (cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, chan).first == final_dst.value()) {
-                chans_to_final_dst.push_back(chan);
-            }
-        }
-    }
-    // Empty means the destination is not a direct neighbor through this direction
-    const std::vector<chan_id_t>& eth_chans = chans_to_final_dst.empty() ? candidate_eth_chans : chans_to_final_dst;
-
     TT_FATAL(
-        link_idx < eth_chans.size(),
-        "On node {}, link_idx={} out of range for direction {}: {} of the {} eth chan(s) in "
-        "this direction are usable for this connection. A skip-link direction can offer fewer "
-        "parallel links to an individual peer than the test's num_links.",
+        link_idx < candidate_eth_chans.size(),
+        "On node {}, link_idx={} out of range for direction {} with {} active eth channel(s)",
         this->fabric_node_id_,
         link_idx,
         static_cast<int>(outgoing_direction),
-        eth_chans.size(),
         candidate_eth_chans.size());
-    const chan_id_t eth_chan = eth_chans[link_idx];
+    const chan_id_t eth_chan = candidate_eth_chans[link_idx];
 
-    // Resolve the peer per eth_chan: this handles multi-Z (chans in one direction may land on
-    // different neighbor meshes / chips) and NESW uniformly (where it returns the single
-    // per-direction neighbor).
     const FabricNodeId next_hop_dst = cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, eth_chan).first;
 
     ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, eth_chan};
@@ -968,10 +904,6 @@ void TestDevice::create_sync_kernel() {
     const auto& sync_val = sync_worker.configs_.front().first.sync_val;
     local_args.push_back(sync_val);
 
-    // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
-    // This mapping tells each LineSyncConfig which fabric connection indices to use: a count, then
-    // that many indices. The count is per config rather than fixed because an express multicast root
-    // injects one copy per canonical output edge.
     for (const auto& [sync_config, connection_keys] : sync_worker.configs_) {
         TT_FATAL(
             !connection_keys.empty() && connection_keys.size() <= MAX_MCAST_INJECTIONS,
@@ -1060,10 +992,7 @@ void TestDevice::create_sender_kernels() {
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
 
-        // The kernel's connection array is fixed-size, and exceeding it otherwise surfaces as a
-        // static_assert during JIT compilation that names neither the core nor the test. A multi-output
-        // multicast root claims a connection per output, so a core carrying a few of those reaches the
-        // limit far sooner than one config per direction ever did.
+        // Fail on the host with core context instead of a kernel static_assert.
         const size_t max_connections_per_core = device_info_provider_->get_max_connections_per_device();
         TT_FATAL(
             num_connections <= max_connections_per_core,
@@ -1138,10 +1067,7 @@ void TestDevice::create_sender_kernels() {
             }
         }
 
-        // Add traffic config connection mapping AFTER sync args
-        // Query the array index for each traffic config's connection keys. Length-prefixed because a
-        // multi-output multicast root injects into more than one, and the kernel has to know how many
-        // to read before it can read them.
+        // Add traffic config connection mapping after sync args.
         for (const auto& [config, connection_keys] : sender.configs_) {
             TT_FATAL(!connection_keys.empty(), "Traffic config on core {} has no fabric connection", core.str());
             local_args.push_back(static_cast<uint32_t>(connection_keys.size()));
