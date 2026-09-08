@@ -98,9 +98,10 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::W: return RoutingDirection::W;
         case proto::RoutingDirection::C: return RoutingDirection::C;
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
-        default: TT_THROW(
-            "Invalid routing direction: {}",
-            static_cast<std::underlying_type_t<proto::RoutingDirection>>(routing_direction));
+        default:
+            TT_THROW(
+                "Invalid routing direction: {}",
+                static_cast<std::underlying_type_t<proto::RoutingDirection>>(routing_direction));
     }
 }
 
@@ -374,27 +375,12 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
-    // Determine inter-mesh policy from connections or graph topology
-    // Priority: 1) Check individual connections (if any), 2) Check graph_topology, 3) Unspecified
-    // (inter_mesh_policy_specified_ false — do not treat as STRICT vs a sibling MGD that does specify)
-    this->inter_mesh_policy_specified_ = false;
-    const auto& fabric_connections = mgd.connections_by_type("FABRIC");
-    if (!fabric_connections.empty()) {
-        // Check policy from the first connection (all connections have the same policy due to validation)
-        const auto& first_connection_data = mgd.get_connection(fabric_connections[0]);
-        this->inter_mesh_relaxed_policy_ = (first_connection_data.policy == proto::Policy::RELAXED);
-        this->inter_mesh_policy_specified_ = true;
-    } else {
-        // No individual connections, check graph_topology
-        const auto& top_level_instance = mgd.top_level();
-        if (top_level_instance.kind == NodeKind::Graph) {
-            const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
-            if (graph_desc && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
-                this->inter_mesh_relaxed_policy_ =
-                    (graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED);
-                this->inter_mesh_policy_specified_ = true;
-            }
-        }
+    // Determine inter-mesh policy from the descriptor. Unspecified leaves the STRICT default alone but is
+    // recorded as such, so a silent MGD is not read as STRICT against a sibling MGD that does specify.
+    const auto inter_mesh_policy = mgd.inter_mesh_policy();
+    this->inter_mesh_policy_specified_ = inter_mesh_policy.has_value();
+    if (inter_mesh_policy.has_value()) {
+        this->inter_mesh_relaxed_policy_ = (*inter_mesh_policy == InterMeshChannelPolicy::Relaxed);
     }
 
     // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
@@ -497,7 +483,8 @@ void MeshGraph::initialize_from_mgd(
         }
 
         // Populate mesh_host_ranks_
-        this->mesh_host_ranks_[*mesh_id] = tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, mesh_host_ranks_values);
+        this->mesh_host_ranks_[*mesh_id] =
+            tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, mesh_host_ranks_values);
 
         // Populate mesh_to_chip_ids
         std::vector<ChipId> chip_ids(mesh_shape[0] * mesh_shape[1]);

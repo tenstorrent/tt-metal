@@ -621,6 +621,38 @@ LogicalMultiMeshGraph remap_logical_multi_mesh_for_merge(
 
 }  // namespace
 
+void validate_shared_inter_mesh_policy(
+    const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors) {
+    const auto policy_name = [](::tt::tt_fabric::InterMeshChannelPolicy policy) {
+        return policy == ::tt::tt_fabric::InterMeshChannelPolicy::Relaxed ? "RELAXED" : "STRICT";
+    };
+
+    std::optional<::tt::tt_fabric::InterMeshChannelPolicy> shared;
+    std::size_t shared_index = 0;
+    for (std::size_t index = 0; index < mesh_graph_descriptors.size(); ++index) {
+        TT_FATAL(mesh_graph_descriptors[index] != nullptr, "Mesh graph descriptor {} is null", index);
+        const auto policy = mesh_graph_descriptors[index]->inter_mesh_policy();
+        if (!policy.has_value()) {
+            continue;
+        }
+        if (!shared.has_value()) {
+            shared = policy;
+            shared_index = index;
+            continue;
+        }
+        TT_FATAL(
+            *policy == *shared,
+            "Mesh graph descriptors merged into one topology must agree on the inter-mesh channel policy, but "
+            "descriptor {} is {} while descriptor {} is {}. Mixed policies are not supported yet: the merged solve "
+            "applies one policy to every seam, so one descriptor's policy would be applied to the other's. "
+            "See https://github.com/tenstorrent/tt-metal/issues/49960",
+            shared_index,
+            policy_name(*shared),
+            index,
+            policy_name(*policy));
+    }
+}
+
 LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
     const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs,
     std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids) {
@@ -904,13 +936,17 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
     const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings) {
-    auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgds(
-        mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
     std::vector<const tt::tt_fabric::MeshGraphDescriptor*> descriptor_ptrs;
     descriptor_ptrs.reserve(mesh_graph_descriptors.size());
     for (const auto& descriptor : mesh_graph_descriptors) {
         descriptor_ptrs.push_back(&descriptor);
     }
+    // Before any work: these descriptors are about to be merged into one topology, and everything
+    // downstream of the merge assumes they agree on the inter-mesh channel policy.
+    validate_shared_inter_mesh_policy(descriptor_ptrs);
+
+    auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgds(
+        mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
     return build_physical_from_adjacency_guided_placement(
         physical_system_descriptor, physical_grouping_descriptor, descriptor_ptrs, valid_groupings);
 }
