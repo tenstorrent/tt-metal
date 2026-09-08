@@ -3,7 +3,8 @@
 
 Extracted from the inline `Select owners for notification` step of
 `.github/workflows/codeowners-group-analysis.yaml`. The behaviour is a faithful
-port of the original bash: same inputs, same selection rules, same outputs.
+port of the original bash, except that individual owners of model files are
+all notified rather than sampled. Inputs and outputs are unchanged.
 
 Inputs (environment variables):
   TEAM_MEMBERS        Contents of ${RUNNER_TEMP}/team_members.txt, i.e. a
@@ -303,7 +304,12 @@ class Selector:
 
             usernames = [pair.split("|", 1)[0] for pair in owners.split(",") if pair != ""]
             unapproved = self.unapproved_filtered(usernames)
-            selected_owners.extend(self.pick_two(unapproved))
+            # Model owners share review coverage: notify every eligible owner
+            # of the matching rule rather than randomly hiding the request.
+            if any(file.startswith("models/") for file in files.split(",")):
+                selected_owners.extend(unapproved)
+            else:
+                selected_owners.extend(self.pick_two(unapproved))
 
         # Sort + dedupe individual owners (parity with sort | uniq).
         final_owners = sorted(set(o for o in selected_owners if o))

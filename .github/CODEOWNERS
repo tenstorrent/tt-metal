@@ -615,8 +615,8 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/perf/ @yieldthought @esmalTT @mtairum @uaydonat
 models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat
 models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
-models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT
-models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @ppetrovicTT @uaydonat
+models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT
+models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @uaydonat
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra
 models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce
