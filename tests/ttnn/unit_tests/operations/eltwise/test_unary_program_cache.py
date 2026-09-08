@@ -12,8 +12,8 @@ The unary operation uses 3 ProgramFactory variants:
   - UnaryShardedProgramFactory (sharded input)
 
 compute_program_hash() hashes:
-  TILE layout:  args, sub_core_grids, factory_index, input_dtype, input_memory_config, volume, layout
-  ROW_MAJOR:    args, sub_core_grids, factory_index, input_dtype, input_memory_config, padded_shape, layout
+  TILE layout:  args, input_dtype, layout, memory_config, Alignment, Tile, shard vols
+  ROW_MAJOR:    args, input_dtype, layout, memory_config, Alignment, Tile, padded_shape, shard vols
 
 Where args = entire UnaryParams (op_chain, output_dtype, output_memory_config,
 fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, sub_core_grids).
@@ -155,6 +155,27 @@ def test_unary_cache_miss_different_memory_configs(device):
     torch_ref2, tt_out2 = run_unary_op(
         device, ttnn.relu, shape, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
+    assert_equal(torch_ref2, tt_out2)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_different_alignment(device):
+    """Different tensor alignments -> different cache entries.
+    Alignment is part of tensor_layout and is hashed in compute_program_hash()."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 32, 32]
+    padded = [1, 1, 64, 32]  # > round_up(32, 32); produces Alignment{64,32} not {32,32}
+
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    tt_a = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.relu(tt_a)
+    assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out1))
+
+    torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.bfloat16)
     assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 2

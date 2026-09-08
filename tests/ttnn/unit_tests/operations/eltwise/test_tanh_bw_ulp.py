@@ -35,6 +35,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     ulp_distance_bf16_daz,
     bf16_quantize_rne,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def sech2_exact(x: float) -> float:
@@ -311,3 +312,34 @@ def test_tanh_bw_ulp_summary(device):
     assert max_ulp <= 2, (
         f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
+
+
+def test_tanh_bw_cache_miss_different_alignment(device):
+    """Different tensor alignments -> different cache entries.
+    Padded volume is hashed in compute_program_hash()."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+    shape = [1, 1, 32, 32]
+    padded = [1, 1, 64, 32]  # > round_up(32, 32); produces Alignment{64,32} not {32,32}
+
+    torch_grad = torch.rand(shape, dtype=torch.bfloat16)
+    torch_x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_grad = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_grad, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    tt_x = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    tt_grad2 = ttnn.from_torch(torch_grad, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_x2 = ttnn.from_torch(torch_x, layout=ttnn.TILE_LAYOUT, device=device)
+    device.clear_program_cache()
+
+    torch_ref = ttnn.get_golden_function(ttnn.tanh_bw)(torch_grad, torch_x)[0]
+    tt_out1 = ttnn.tanh_bw(tt_grad, tt_x)[0]
+    assert_with_pcc(torch_ref, ttnn.to_torch(tt_out1), 0.99)
+
+    tt_out2 = ttnn.tanh_bw(tt_grad2, tt_x2)[0]
+    assert_with_pcc(torch_ref, ttnn.to_torch(tt_out2), 0.99)
+
+    assert device.num_program_cache_entries() == 2
+    device.disable_and_clear_program_cache()
