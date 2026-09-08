@@ -651,6 +651,16 @@ def packed_decode_forward(
     rope_packed=None,
     kv_staging=None,
     embed_idx=None,
+    # Accepted for call-site compatibility with ign/gemma4_31B_MTP_Dflash and
+    # DELIBERATELY UNUSED. That branch drives a serialized paged_update_cache
+    # KV write off position_idx_cache (GEMMA4_PACKED_VERIFY_SEQ_KV) plus
+    # loop-invariant write slices in kv_write_pack. This function keeps its own
+    # validated staging paged_fill_cache / per-p fallback instead, because the
+    # two KV-write strategies are not interchangeable and the MTP one predates
+    # the per-layer page-table fix in spec_decode._pv_tables_per_layer. Wiring
+    # them is a port with its own measurement, not a signature change.
+    position_idx_cache=None,
+    kv_write_pack=None,
     hot_pt=None,
 ):
     """Packed multi-token decode attention — P query positions/slot in one pass.

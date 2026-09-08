@@ -24,7 +24,6 @@ from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
 from .prefill import flush_deferred_bounded_fills, prefill_forward
 
-
 #: Ring headroom, in 64-token blocks, added on top of the sliding window.
 #: 0 (default) keeps the historical exact-window ring.
 SPEC_RING_HEADROOM_ENV = "GEMMA4_SPEC_RING_HEADROOM_BLOCKS"

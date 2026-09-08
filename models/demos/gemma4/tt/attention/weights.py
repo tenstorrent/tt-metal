@@ -49,6 +49,15 @@ class AttentionWeights:
     # far short of peak on 31B sliding layers.
     qkv_decode_config: object = None
 
+    # Combined per-head norm scale for the FUSED decode q/k/v norm, laid out as
+    # [1, 1, local_q_heads + 2*local_kv_heads, head_dim]: q_norm rows, then
+    # k_norm rows, then ones for the unscaled v_norm. Lets one unscaled
+    # rms_norm over the fused QKV (viewed one head per row) plus one multiply
+    # replace three separate per-head norms. See
+    # operations.apply_fused_qkv_head_norm. None when the model has no per-head
+    # norms (q_norm_w absent).
+    qkv_norm_weight: ttnn.Tensor = None
+
 
 def load_attention_weights(
     mesh_device,

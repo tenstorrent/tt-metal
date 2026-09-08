@@ -1115,7 +1115,9 @@ class Gemma4Model:
                     # tables the pt_b row differs per layer, so it self-disables
                     # there, which is exactly the packed-verify path that needs
                     # width-trimmed per-layer tables (see spec_decode's
-                    # _pv_tables_per_layer). Consumed by attention/__init__.py.
+                    # _pv_tables_per_layer). STAGED ONLY: attention/__init__.py
+                    # forwards it, but packed_decode_forward ignores it until
+                    # MTP's serialized-KV-write path is ported.
                     "kv_write_pack": (packed.get("kv_write_pack") if page_tables_per_layer is None else None),
                 }
 
