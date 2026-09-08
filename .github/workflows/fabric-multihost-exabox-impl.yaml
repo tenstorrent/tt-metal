@@ -147,7 +147,7 @@ jobs:
       - name: Clean up shared staging dir
         if: always()
         run: |
-          rm -rf "$PIPELINE_DIR"
+          sudo rm -rf "$PIPELINE_DIR"
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
