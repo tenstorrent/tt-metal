@@ -92,7 +92,7 @@ ttnn:
     bh_galaxy: 40
     bh_p100: 815
     bh_p150b_civ2: 850
-    wh_n150_civ2: 1040
+    wh_n150_civ2: 1000
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 117
     bh_p300: 60
