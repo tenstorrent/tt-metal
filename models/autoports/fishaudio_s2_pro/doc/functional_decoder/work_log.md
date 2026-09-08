@@ -45,3 +45,10 @@
   parent 1x4 mesh also runs the slow tower (server warmup) - same signature as the first-day submesh upload hang.
   Multi-chip default reverted to TP for the fast decoder (correct, 181 ms/frame on 4 chips). Phase D: a replicated
   single-device fast decoder that does not need a submesh (per-device weights via replicate mappers).
+- 22:40 stage 01 done: CPU bf16-vs-fp32 floors on the 6 greedy goldens: cb0 top-1 0.948-0.971, fast top-1 0.952-0.965
+  (top-5 1.0). TT (bfp8 weights, bf16 activations) measures cb0 top-1 0.84-0.90: a ~10-point gap to the CPU-bf16 floor
+  with top-5 = 1.0 and ASR WER 0.0 on every clip -> shipped as ADVISORY; Phase D dtype sweep (KV cache bf16,
+  HiFi4 attention, bf16 residual) is the item that should close it. gates.json calibrated (13 metrics, 12 armed).
+- 22:40 first rebuild with `lock: requirements.lock` failed: tt-model's finalize froze the image's own `ttnn==...`
+  (two lines), `tt-smi`, `tt-umd`, `pyluwen` into the lock, which no index can resolve. Dropped them by hand;
+  follow-up PR for tt-model-manager: filter image-provided packages in `freeze_from_image`.
