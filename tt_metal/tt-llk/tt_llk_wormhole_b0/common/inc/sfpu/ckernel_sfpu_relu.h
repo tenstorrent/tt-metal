@@ -82,6 +82,10 @@ inline void _relu_max_(T threshold)
     VectorType v_threshold;
     if constexpr (std::is_same_v<T, float>)
     {
+        static_assert(
+            std::is_same_v<VectorType, sfpi::vFloat>,
+            "A float threshold requires VectorType == sfpi::vFloat: sfpi::vInt has no float constructor, so the assignment below would otherwise fail as an "
+            "ambiguous conversion");
         v_threshold = threshold;
     }
     else if constexpr (std::is_same_v<T, std::uint32_t>)
@@ -103,19 +107,37 @@ inline void _relu_max_(T threshold)
     _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
 }
 
-template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, InstrModLoadStore sfpload_instr_mod)
+// Contract: the threshold is an *implicit input in LREG2*, not a parameter. Every caller must
+// load it with _sfpu_load_imm32_(p_sfpu::LREG2, ...) before calling. The body is raw TTI, so
+// this dependency cannot be expressed in the signature -- keep it out of the parameter list
+// rather than carrying an argument the body never reads.
+//
+// SFPLOAD_INSTR_MOD is a template parameter rather than a function argument because it feeds
+// the "n" (immediate) operand of TTI_SFPLOAD/TTI_SFPSTORE. Passed by value it compiles only
+// for as long as the optimiser folds the constant into the asm, which makes a hard build
+// requirement out of an optimisation. Measured on this toolchain (sfpi 7.74.0, gcc 15.1.0),
+// both instantiations in one TU: as a runtime argument -O1/-O2/-O3 fold it and -O0 fails with
+// "impossible constraint in 'asm'"; as a template parameter all four levels compile.
+// ComputeConfig::opt_level is user-settable, so that is worth not relying on. Every sibling
+// integer kernel declares the mode constexpr for the same reason (see ckernel_sfpu_add_int.h,
+// ckernel_sfpu_sub_int.h, ckernel_sfpu_topk.h).
+template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore SFPLOAD_INSTR_MOD>
+inline void _relu_min_impl_(const int iterations)
 {
+    static_assert(
+        SFPLOAD_INSTR_MOD == InstrModLoadStore::DEFAULT || SFPLOAD_INSTR_MOD == InstrModLoadStore::INT32_2S_COMP,
+        "SFPLOAD_INSTR_MOD must be DEFAULT (fp32 datapath) or INT32_2S_COMP (integer datapath)");
+
     for (int d = 0; d < iterations; d++)
     {
         // Load input tensor to lreg0
-        TTI_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, SFPLOAD_INSTR_MOD, ADDR_MOD_3, 0);
         // Copy value param from lreg2 to lreg1
         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
         // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
         // Store the result
-        TTI_SFPSTORE(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, SFPLOAD_INSTR_MOD, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }
 }
@@ -126,25 +148,40 @@ inline void _relu_min_(T threshold)
 {
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
-    VectorType v_threshold;
-    int scalar = threshold;
-    if (scalar < 0)
-    { // To convert from 2's complement to sign+magnitude
-        scalar  = -scalar;
-        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
-        scalar  = res;
-    }
-    InstrModLoadStore sfpload_instr_mod = InstrModLoadStore::DEFAULT;
+    // The load/store mode the branches below encode the threshold for. Only the integer
+    // datapath needs a non-default mode, and which branch runs is fixed by <T, VectorType>,
+    // so this is a compile-time constant rather than a variable the branches assign -- see
+    // the note on _relu_min_impl_'s SFPLOAD_INSTR_MOD parameter.
+    constexpr InstrModLoadStore SFPLOAD_INSTR_MOD =
+        (std::is_same_v<T, std::uint32_t> && std::is_same_v<VectorType, sfpi::vInt>) ? InstrModLoadStore::INT32_2S_COMP : InstrModLoadStore::DEFAULT;
+
+    // Invariant every branch below must uphold: leave the threshold in LREG2, in the encoding
+    // SFPLOAD_INSTR_MOD selects. A branch that sets only a local vector compiles clean and then
+    // reads whatever the previously executed SFPU kernel left in LREG2, so the load is not
+    // optional on any path.
     if constexpr (std::is_same_v<T, float>)
     {
-        v_threshold = threshold;
+        static_assert(
+            std::is_same_v<VectorType, sfpi::vFloat>,
+            "A float threshold requires VectorType == sfpi::vFloat: the LREG2 load below bit-casts the float, which is meaningless for an integer datapath");
+        _sfpu_load_imm32_(p_sfpu::LREG2, __builtin_bit_cast(std::uint32_t, threshold));
     }
     else if constexpr (std::is_same_v<T, std::uint32_t>)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
+            // SFPSWAP orders operands as sign+magnitude, so a 2's complement integer
+            // threshold has to be re-encoded before it is loaded. Scoped to this branch
+            // because it is only meaningful for an integer threshold -- applying it to a
+            // float would reinterpret the value, not convert it.
+            int scalar = static_cast<int>(threshold);
+            if (scalar < 0)
+            {
+                scalar  = -scalar;
+                int res = 0x80000000 | (scalar & 0x7FFFFFFF);
+                scalar  = res;
+            }
             _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
-            sfpload_instr_mod = InstrModLoadStore::INT32_2S_COMP;
         }
         else
         {
@@ -156,7 +193,7 @@ inline void _relu_min_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold, sfpload_instr_mod);
+    _relu_min_impl_<APPROXIMATION_MODE, ITERATIONS, SFPLOAD_INSTR_MOD>(ITERATIONS);
 }
 
 } // namespace sfpu

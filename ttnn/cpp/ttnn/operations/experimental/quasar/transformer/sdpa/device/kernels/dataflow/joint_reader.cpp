@@ -31,7 +31,7 @@ void kernel_main() {
     const auto local_q_start = get_arg(args::local_q_start);
     const auto local_q_end = get_arg(args::local_q_end);
 
-    // Q/K/V CBs are bound by name; the magic-number CB index is gone.
+    // Q/K/V DFBs are bound by name; the magic-number DFB index is gone.
     constexpr uint32_t q_tile_bytes = get_tile_size(dfb::q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(dfb::k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(dfb::v_in);

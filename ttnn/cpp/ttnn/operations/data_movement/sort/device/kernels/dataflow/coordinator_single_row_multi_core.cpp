@@ -65,15 +65,15 @@ void kernel_main() {
 #endif
 
     // Semaphore setup
-    Semaphore<> coordinator_to_cores_sem(sem::coordinator_to_cores);
+    Semaphore coordinator_to_cores_sem(sem::coordinator_to_cores);
     // Two separate up-channels from the worker cores: the reader's per-row readiness ->
     // ready sem, the writer's per-pair confirmations -> done sem. They are kept on
     // distinct semaphores so each exact-match wait() below has its own monotonic target;
     // folded onto one shared counter, at a tile-row boundary (Ht >= 2) a fast reader's
     // next-row readiness could land during the confirmation window and push the counter
     // past the done target, so the wait would never match and the op would deadlock.
-    Semaphore<> cores_to_coordinator_ready_sem(sem::cores_to_coordinator_ready);
-    Semaphore<> cores_to_coordinator_done_sem(sem::cores_to_coordinator_done);
+    Semaphore cores_to_coordinator_ready_sem(sem::cores_to_coordinator_ready);
+    Semaphore cores_to_coordinator_done_sem(sem::cores_to_coordinator_done);
 
     const uint32_t number_of_confirmations = Wt / 2;
 

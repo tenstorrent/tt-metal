@@ -314,8 +314,11 @@ def _run_high_bw_all_gather_accuracy(
 ):
     collective_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
     global_shape = (1, 1, rows_per_device * collective_size, width)
-    torch.manual_seed(0)
-    host_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    if dtype == ttnn.uint32:
+        host_input = torch.arange(math.prod(global_shape), dtype=torch.int32).reshape(global_shape)
+    else:
+        torch.manual_seed(0)
+        host_input = torch.rand(global_shape, dtype=torch.bfloat16)
     mesh_mapper = (
         ttnn.ShardTensorToMesh(mesh_device, dim=2)
         if cluster_axis is None
@@ -351,7 +354,10 @@ def _run_high_bw_all_gather_accuracy(
     )
     ttnn.synchronize_device(mesh_device)
 
-    _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype)
+    if collective_size == mesh_device.get_num_devices():
+        _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype)
+    else:
+        _assert_exact_replicated_output(host_input, persistent_output, mesh_device, dtype, layout)
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
@@ -373,6 +379,42 @@ def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device):
         expected_page_size=4096,
         cluster_axis=cluster_axis,
         rows_per_device=640,
+    )
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize(
+    "device_params,mesh_device",
+    [
+        pytest.param(
+            _device_params(ttnn.FabricConfig.FABRIC_2D, 6144),
+            (2, 4),
+            id="loudbox_fabric_2d_6k_payload",
+        ),
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X, 6144),
+                "require_exact_physical_num_devices": True,
+            },
+            (1, 4),
+            id="quietbox_torus_x_6k_payload",
+        ),
+    ],
+    indirect=["device_params", "mesh_device"],
+)
+def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh_device):
+    """Reproduce GLM's TP-axis top-k gather when an 8 KiB RM page exceeds the 6 KiB fabric payload."""
+    assert tuple(mesh_device.shape) in ((1, 4), (2, 4))
+    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 6144
+    _run_high_bw_all_gather_accuracy(
+        mesh_device,
+        dtype=ttnn.uint32,
+        width=2048,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=8192,
+        cluster_axis=1,
+        rows_per_device=160,
+        num_links=2,
     )
 
 

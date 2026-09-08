@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include <cstdint>
 #include "llk_unpack_tilize.h"
 #include "llk_unpack_common_api.h"
@@ -25,6 +27,14 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
+    SAN_HOOK(init<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::BlockCtDim>(ct_dim),
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
+
     _llk_unpack_tilize_init_(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile, num_faces);
 }
@@ -44,6 +54,11 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    SAN_HOOK(uninit<OperationUnpackTilize>(
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
+
     _llk_unpack_tilize_uninit_(
         (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
@@ -68,6 +83,15 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
     WAYPOINT("UPTW");
+    SAN_HOOK(execute<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index)));
+
     _llk_unpack_tilize_(
         base_address,
         tile_index,

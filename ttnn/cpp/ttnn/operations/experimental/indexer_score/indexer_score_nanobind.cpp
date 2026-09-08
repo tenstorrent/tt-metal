@@ -29,7 +29,7 @@ void bind_indexer_score(nb::module_& mod) {
         R"doc(
         DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.
 
-        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
+        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]
 
         ReLU(q.kT) gated by the learned per-head weights and summed over ALL Hi
         index heads into one shared selection row [B, 1, Sq, T]. For MiniMax M3's
@@ -38,8 +38,8 @@ void bind_indexer_score(nb::module_& mod) {
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
-                pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale
+                pre-folded).
             chunk_start_idx: absolute global position of rank 0's query row 0
                 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
                 visible to query s iff t <= chunk_start + s). OMIT on a mesh ->
@@ -92,6 +92,10 @@ void bind_indexer_score(nb::module_& mod) {
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
+                remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
+                Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -107,7 +111,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -208,7 +213,7 @@ void bind_indexer_score(nb::module_& mod) {
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
             k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
                 when cache_batch_idx is set; the gather fills remote SP shards in place
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale pre-folded)
             k_local: [B, 1, sll, D] bf16/bfp8_b tiled, interleaved or ND-sharded DRAM -- this chip's SP
                 shard and the all-gather INPUT; sll = T/sp; must match k's dtype
             ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
@@ -241,6 +246,11 @@ void bind_indexer_score(nb::module_& mod) {
                 block_cyclic_sp_axis. In complete-mesh mode pass this argument alone; SP is the complete mesh
                 size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
                 K placement.
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so the invP key remap
+                decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
+                pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
+                that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -262,7 +272,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = nb::none(),
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

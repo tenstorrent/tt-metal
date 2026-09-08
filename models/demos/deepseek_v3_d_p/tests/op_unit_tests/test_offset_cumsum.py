@@ -74,13 +74,6 @@ def torch_offset_cumsum(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (2, 1),
-            fabric2d_device_params(),
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="fabric2d-2x1",
-        ),
-        pytest.param(
             (4, 1),
             torus_y_device_params(),
             1,

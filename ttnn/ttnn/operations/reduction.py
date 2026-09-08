@@ -28,6 +28,8 @@ def _create_golden_function(torch_function_name):
 
 def _create_golden_function_topk():
     def golden_function(input_tensor: ttnn.Tensor, k: int, dim: Optional[int] = None, largest=True, sorted=True, **_):
+        import torch
+
         return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted)
 
     return golden_function

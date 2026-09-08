@@ -247,7 +247,7 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     bool is_tile) {
-    // Force ROW_MAJOR to preserve pre-consolidation behaviour (input inheritance is out of scope here).
+    // IndexedFill: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
     return common::synthesize_output_shard_spec(
         input_tensor.device()->compute_with_storage_grid_size(),
         padded_out_shape,
@@ -261,6 +261,13 @@ tt::tt_metal::MemoryConfig resolve_output_memory_config(
     const Tensor& input_tensor_a,
     const ttnn::Shape& padded_out_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
+    // indexed_fill preserves the output shape, so an ND-sharded output config already
+    // carries the authoritative shard distribution. Re-deriving a legacy shard_spec here
+    // is unnecessary and would rewrite an ND-origin config onto the legacy shard-spec path.
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
+        return output_mem_config;
+    }
+
     if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value()) {
         return output_mem_config;
     }

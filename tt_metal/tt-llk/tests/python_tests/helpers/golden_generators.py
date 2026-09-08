@@ -110,6 +110,18 @@ def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     ).to(result.dtype)
 
 
+def _flush_subnormals_of_dtype(result: torch.Tensor) -> torch.Tensor:
+    """Flush values that are subnormal in *result*'s own floating-point dtype to zero.
+
+    Used where the value being modelled still lives in Dest, whose precision the
+    dtype stands in for, rather than in an L1 format.
+    """
+    if not result.dtype.is_floating_point:
+        return result
+    tiny = torch.finfo(result.dtype).tiny
+    return torch.where(result.abs() < tiny, torch.zeros_like(result), result)
+
+
 def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.Tensor:
     """Apply integer saturation during format conversion.
 
@@ -2428,11 +2440,19 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            # relu_min is the one op here that is not integer-*only*: sfpu_operations.h
+            # picks the vInt branch of _relu_min_ at runtime on math_format == Int32 and
+            # the vFloat branch otherwise, so the same MathOperation needs an exact
+            # integer golden as well as the float one. See _relu_min.
+            MathOperation.ReluMin,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
         self._int_shift_amount = 3
         self._int_maxmin_scalar = INT_MAXMIN_SCALAR
+        # relu_min's integer threshold, matching the kernel's RELU_MIN_INT_THRESHOLD default.
+        # Signed: the kernel carries it as a two's-complement uint32 and static_casts to int.
+        self._relu_min_int_threshold = int(RELU_MIN_THRESHOLD)
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2456,12 +2476,16 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
+        relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
         # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
         self._int_shift_amount = shift_amount
+        # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
+        # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
+        self._relu_min_int_threshold = relu_min_int_threshold
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -3141,12 +3165,34 @@ class UnarySFPUGolden:
         return sfpu_relu_max(float(x), float(threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.max(input_tensor, torch.tensor(threshold)).item()
+        if isinstance(x, int):
+            # Integer dst. The kernel takes the vInt branch of _relu_min_, which loads an
+            # integer threshold into LREG2 and compares under INT32_2S_COMP, so the golden
+            # is an exact integer max with no float round-trip. Deliberately independent of
+            # self.dst_format: _call_integer returns before __call__ assigns it, so reading
+            # it here would pick up whatever the previous call left behind.
+            #
+            # The threshold comes from _relu_min_int_threshold, not the float default: the
+            # int32 sweep drives negative thresholds to reach the wrapper's sign+magnitude
+            # re-encoding branch, and a negative value has no float-path equivalent here.
+            return max(x, int(self._relu_min_int_threshold))
+        # Float dst. The kernel is a single SFPSWAP fold, so this is a max under the SFPU's
+        # total order and not IEEE's -- see sfpu_total_order_key. Measured on n150, threshold
+        # 5.0, Float32 end to end:
+        #
+        #   -NaN (0xFFC00000) -> 5.0        +NaN (0x7FC00000) -> +NaN
+        #   -inf              -> 5.0        +inf              -> +inf
+        #
+        # torch.max agrees on four of those and not on -NaN, which it propagates: -NaN ranks
+        # below -inf under the total order, so the fold discards it for the threshold exactly
+        # as it does -inf. FLOAT_SPECIALS injects only +NaN, so no sweep reaches that lane
+        # today and switching to sfpu_max changes no sweep's outcome -- but the device answer
+        # is measured, so the golden may as well be right there rather than resting on which
+        # NaN sign the specials set happens to carry.
+        #
+        # ReluMax states the same thing through sfpu_relu_max, whose first compare is this
+        # fold; relu_min is that compare with no relu clamp after it.
+        return sfpu_max(float(x), float(threshold))
 
     def _lrelu(self, x, negative_slope=LRELU_NEGATIVE_SLOPE):
         input_tensor = (
@@ -3529,10 +3575,14 @@ class EltwiseBinaryGolden(FidelityMasking):
         if op == MathOperation.Elwmul:
             result = None
             for fidelity_iter in range(fidelity_iter_count + 1):
-                t1, t2 = self._apply_fidelity_masking(
+                # Each phase masks the *original* operands: the phases decompose one
+                # multiply into high/low mantissa halves, so feeding a phase the
+                # already-masked operands zeroes every phase past the first and makes
+                # HiFi2/3/4 silently degrade to LoFi.
+                masked_1, masked_2 = self._apply_fidelity_masking(
                     math_format_for_fidelity, t1, t2, fidelity_iter
                 )
-                phase_result = self.ops[op](t1, t2)
+                phase_result = self.ops[op](masked_1, masked_2)
                 if fidelity_iter == 0:
                     result = phase_result
                 else:
@@ -3731,6 +3781,12 @@ class EltwiseBinaryGolden(FidelityMasking):
             # an extra bfloat16 cast before MX quantization; quantize from the current
             # result dtype so the golden follows the active pack-source path more
             # closely.
+            #
+            # Hardware flushes subnormals where the math unit writes Dest, which is
+            # before the packer's MX conversion. The final _apply_ftz below uses the
+            # MX threshold, so a value that is subnormal for Dest but normal for the
+            # MX block would survive it; flush against Dest's own precision here.
+            result = _flush_subnormals_of_dtype(result)
             result = quantize_mx_tensor_chunked(result, data_format)
         else:
             if data_format.is_integer():
@@ -5170,9 +5226,10 @@ class SdpaSfpuGolden:
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 
-        if op == SdpaOp.RecipLegacy:
-            transformed = torch.reciprocal(x.abs())
-        elif op == SdpaOp.RecipIter:
+        if op in (SdpaOp.RecipLegacy, SdpaOp.RecipIter):
+            # Both are 1/x. RecipLegacy used to be 1/|x| -- _reciprocal_compat_ returns a
+            # magnitude, and the legacy branch of calculate_recip_first_column called it bare
+            # instead of through _reciprocal_compat_signed_, which restores the sign.
             transformed = torch.reciprocal(x)
         elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
             # Both fold the scale, so the reference is exp(scale * x).
