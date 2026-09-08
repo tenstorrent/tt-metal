@@ -166,10 +166,20 @@ def theirs(device, m, n, k, bias=False, cache={}):
     return cache[key]
 
 
-def ours_mcast(device, mcast, grid_h, grid_w, rt, ct, kt, k_blocks, mode, min_pcc):
-    """The mcast kernel on a grid_h x grid_w grid. rt/ct/kt are ONE CORE's block."""
+def ours_mcast(device, mcast, grid_h, grid_w, rt, ct, kt, k_blocks, mode, min_pcc, in1_thread=1):
+    """The mcast kernel on a grid_h x grid_w grid. rt/ct/kt are ONE CORE's block.
+
+    in1_thread=1 is THE HARDWARE CONFIGURATION and the default here, which is not the
+    default of the launcher: matmul_mcast.cpp's own header says running the two broadcasts on
+    two DM threads puts them on two NOCs so they OVERLAP, while thread 0 puts both on NOC 0
+    where they SERIALIZE -- that exists for ttsim, which cannot multicast on NOC 1. Benching
+    the serialized form on hardware measures a simulator workaround: it cost 1.4x to 1.7x
+    here, and it manufactured an asymmetry between the two broadcast directions that is not
+    there once they overlap.
+    """
+    kw = dict(k_blocks=k_blocks, mode=mode, fidelity=HIFI2, in1_thread=in1_thread)
     try:
-        got, want = mcast.run(device, grid_h, grid_w, rt, ct, kt, k_blocks=k_blocks, mode=mode, fidelity=HIFI2)
+        got, want = mcast.run(device, grid_h, grid_w, rt, ct, kt, **kw)
     except Exception as exc:  # noqa: BLE001 - a refused shape IS the result
         return None, classify(exc)
     measured = mcast.pcc(got, want)
@@ -178,7 +188,7 @@ def ours_mcast(device, mcast, grid_h, grid_w, rt, ct, kt, k_blocks, mode, min_pc
     try:
         us = bench(
             device,
-            lambda: mcast.run(device, grid_h, grid_w, rt, ct, kt, k_blocks=k_blocks, mode=mode, fidelity=HIFI2),
+            lambda: mcast.run(device, grid_h, grid_w, rt, ct, kt, **kw),
             iters=8,
             warmup=2,
             match="unified_kernels/matmul_mcast.cpp",
@@ -229,7 +239,19 @@ def sweep_mcast(device, grids, args):
             for kt in args.kt:
                 for rt in args.rt:
                     for ct in args.ct:
-                        us, note = ours_mcast(device, mcast, grid_h, grid_w, rt, ct, kt, args.k_blocks, mode, args.pcc)
+                        us, note = ours_mcast(
+                            device,
+                            mcast,
+                            grid_h,
+                            grid_w,
+                            rt,
+                            ct,
+                            kt,
+                            args.k_blocks,
+                            mode,
+                            args.pcc,
+                            in1_thread=args.in1_thread,
+                        )
                         ref, ref_why = (
                             theirs_grid(
                                 device,
@@ -246,11 +268,13 @@ def sweep_mcast(device, grids, args):
     return rows
 
 
-def report_mcast(rows):
+def report_mcast(rows, in1_thread=1):
     logger.info("")
     logger.info(
-        "MCAST, both sides on the same grid at HiFi2. rt/ct/kt are ONE CORE's block; "
-        "MACs is the WHOLE grid's tile-multiplies (grid_h*rt * grid_w*ct * kt*kb)."
+        f"MCAST, both sides on the same grid at HiFi2, in1_thread={in1_thread}"
+        f"{' (SERIALIZED on one NOC -- the ttsim form)' if in1_thread == 0 else ' (two NOCs, overlapped)'}. "
+        "rt/ct/kt are ONE CORE's block; MACs is the WHOLE grid's tile-multiplies "
+        "(grid_h*rt * grid_w*ct * kt*kb)."
     )
     logger.info(
         f"  {'grid':>5s} {'mode':4s} {'kb':>3s} {'kt':>3s} {'rt':>3s} {'ct':>3s} {'MACs':>6s} "
@@ -310,6 +334,10 @@ def main(argv=None):
     # per-core block means something different in each, so running both in one invocation
     # would put two shape vocabularies in one report.
     p.add_argument("--grid", nargs="+", default=None, help="mcast sweep on these HxW grids (e.g. 2x2 8x8)")
+    # 1 is hardware: the two broadcasts get a NOC each and overlap. 0 is the ttsim
+    # workaround, which serializes them on NOC 0 -- kept reachable so the cost of that
+    # serialization can be measured, but it is not what hardware should be judged on.
+    p.add_argument("--in1-thread", type=int, default=1, choices=[0, 1], help="DM thread for the RHS broadcast")
     args = p.parse_args(argv)
 
     grids = None
@@ -333,7 +361,7 @@ def main(argv=None):
             rows = sweep_mcast(device, grids, args)
         finally:
             ttnn.close_device(device)
-        report_mcast(rows)
+        report_mcast(rows, args.in1_thread)
         return 0
 
     device = ttnn.open_device(device_id=0)
