@@ -49,6 +49,7 @@ set(TTNN_OP_NORMALIZATION_API_HEADERS
     layernorm_distributed/device/layernorm_distributed_types.hpp
     layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp
     rmsnorm/rmsnorm.hpp
+    softmax/device/softmax_reduce.hpp
     softmax/device/softmax_operation_types.hpp
     softmax/device/softmax_device_operation.hpp
     softmax/softmax.hpp

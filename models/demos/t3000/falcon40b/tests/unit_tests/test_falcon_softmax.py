@@ -11,7 +11,6 @@ from torch.nn import functional as F
 
 import ttnn
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -63,11 +62,25 @@ def run_test_FalconSoftmax_inference(
 
     # Prepare input
     torch.manual_seed(0)
-    model_input_shape = [1, seqlen]
-
-    model_config = get_model_config("BFLOAT8_B-DRAM", "prefill", model_input_shape, 8)
-
     input_shape = [1, num_attention_heads, seqlen, seqlen]
+    # This unit test uses one head per core; full-model prefill configuration no
+    # longer defines the sharding keys used by this small standalone operation.
+    model_config = {
+        "SOFTMAX_HEIGHT_SHARDED_MEMCFG": ttnn.create_sharded_memory_config(
+            input_shape,
+            core_grid=ttnn.CoreGrid(x=8, y=2),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        "SOFTMAX_PROGCFG": ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 2),
+            subblock_w=1,
+            block_h=seqlen // 32,
+            block_w=seqlen // 32,
+        ),
+        "BFLOAT16_DTYPE": ttnn.bfloat16,
+        "ATTN_MASK_DTYPE": ttnn.bfloat16,
+    }
     input_torch = (torch.rand(input_shape) * 2) - 1
     input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.bfloat16)
     input = input.to(device, ttnn.DRAM_MEMORY_CONFIG)

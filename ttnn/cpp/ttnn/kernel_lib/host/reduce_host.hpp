@@ -262,10 +262,12 @@ ReducePlan make_reduce_plan(
 // Plan a kernel-ordered sequence of reductions whose results are accumulated
 // together. The returned call vector has exactly the same order and length as
 // `reductions`; callers decide when to issue each reduce() call. Input CB IDs
-// need not be unique.
+// need not be unique. An explicit algorithm retains the corresponding
+// accumulation order when a fused operation requires it for numerical accuracy.
 ReduceSequencePlan make_reduce_sequence_plan(
     const std::vector<ReduceCbConfig>& reductions,
     const ReduceSequenceCbIds& cb_ids,
-    const ReduceHardwareConfig& hardware);
+    const ReduceHardwareConfig& hardware,
+    std::optional<compute_kernel_lib::ReduceAlgorithm> algorithm = std::nullopt);
 
 }  // namespace ttnn::kernel_lib::host
