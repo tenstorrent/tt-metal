@@ -137,9 +137,9 @@ One layer, device profiler + Tracy, driven through the real chunked runner so th
 (8 chunks x 5,120 = 40,960 context). Both configurations, same harness.
 
 ```bash
-S=models/demos/deepseek_v3_d_p/tests/perf/pipeline_prefill_harness   # driver harness; see 5
-DEEP_CHUNKS=8 $S/run_single_layer_profile.sh 1rank_deep   # TP=4
-DEEP_CHUNKS=8 $S/run_single_layer_profile.sh pp4_deep
+# Reference branch only -- the driver harness is not in-tree; see 5.
+DEEP_CHUNKS=8 run_single_layer_profile.sh 1rank_deep   # TP=4
+DEEP_CHUNKS=8 run_single_layer_profile.sh pp4_deep
 ```
 
 Without the harness, the committed captures in `tests/perf/captures/` reproduce every number in this
@@ -328,18 +328,21 @@ legitimately could have.
 
 # 5. Reproduce
 
-Two directories, and the distinction matters if you are reading this from a tree that does not have
-the second one: **`T` is reusable tooling** (reads logs and CSVs, no device, no harness) and is part of
-this change; **`S` is the driver harness**, which is working material and may have been dropped from
-the merged set — if `S` is absent, get it from the PP=4 reference branch.
+Two directories, and only the first is in-tree: **`T` is reusable tooling** (reads logs and CSVs, no
+device, no harness) and is part of this change; **`S` is the driver harness**, site-specific working
+material that was deliberately left on the PP=4 reference branch. Get it from there if you want the
+full campaign. The one cell behind the headline does not need it — `$T/run_pipeline_prefill_256k.sh`
+is the in-tree equivalent.
 
 ```bash
-T=models/demos/deepseek_v3_d_p/tests/perf
-S=$T/pipeline_prefill_harness
+T=models/demos/deepseek_v3_d_p/tests/perf     # in-tree
+S=<pp4 reference branch>/.../pipeline_prefill_harness
 
 $PY $T/gen_pipeline_binding.py              # REQUIRED on any new galaxy; a wrong map fails SILENTLY
 $PY $T/gen_pipeline_binding.py --profile
+$T/run_pipeline_prefill_256k.sh             # the 261,120 throughput cell, on its own
 
+# The rest is the harness, i.e. the reference branch:
 $S/preflight.sh                             # chips, build, tools, caches
 $S/run_pp4_probe.sh                         # ~2 min, weightless topology + D2D check
 $S/run_campaign.sh                          # everything below, in order, then the summary

@@ -1,20 +1,24 @@
 # Mistral Small 4 prefill: PP=4 x (8,1) vs single-rank
 
-Reproduce with `models/demos/deepseek_v3_d_p/tests/perf/pipeline_prefill_harness/` (see its README for prerequisites --
-the weight caches and checkpoint are not in the repo).
+Reproduce the 256K headline with `models/demos/deepseek_v3_d_p/tests/perf/run_pipeline_prefill_256k.sh`.
+The checkpoint and the 8x1 weight cache are not in the repo; the script names what to point it at.
 
-> **Status: reference branch, not a proposed PR.** This branch exists so the PP=4 result can be
-> reproduced and argued with. The harness under `models/demos/deepseek_v3_d_p/tests/perf/pipeline_prefill_harness/` was
-> put together to get these numbers -- it has not been through review or consolidation, and it is
-> not CI-integrated. Treat it as working material: what eventually goes up for merge, and in what
-> shape, is still an open question. The topology config (mesh-graph descriptors + rank bindings) is
-> the part most likely to survive as-is; the shell drivers are the part most likely to change.
+> **What is in-tree, and what is not.** In-tree: the mesh-graph descriptors, the rank bindings and
+> their generator, the analyzers, the committed captures, and the single-cell repro script above --
+> the PP=4 capability, and enough to reproduce the headline and re-derive section 2 without a galaxy.
+> Not in-tree: the measurement campaign that produced the tables below, ~1,000 lines of site-specific
+> shell covering 16 cells, both latency modes, per-rank Tracy capture and board recovery. It stayed
+> on the PP=4 reference branch. Commands below naming a `run_*.sh` other than the repro script come
+> from there and say so.
 >
-> Note also that on a current base Mistral4 **cannot run traced** through `prefill_runner`
-> (llama4 query-scale buffer vs on-device chunk metadata) -- tracked as
-> [tt-metal#55126](https://github.com/tenstorrent/tt-metal/issues/55126). The numbers here were
-> measured traced on a base that predates that feature; eager is not a substitute, since
-> single-rank eager is host-dispatch bound and inflates PP=4's advantage ~4x.
+> Note on tracing. When these numbers were taken, Mistral4 **could not run traced** through
+> `prefill_runner` on a current base (llama4 query-scale buffer vs on-device chunk metadata), so
+> they were measured traced on a base predating that change. That is
+> [tt-metal#55126](https://github.com/tenstorrent/tt-metal/issues/55126), and its fix is on this
+> branch -- the repro script above runs traced against the in-tree path, and the tables here have
+> since been re-measured on the fix, on both galaxies, and hold: see §1.1/§1.2 of
+> `MISTRAL4_PP4_BRINGUP_RERUN.md`. Eager was never a substitute either way, since single-rank eager
+> is host-dispatch bound and inflates PP=4's advantage ~4x.
 
 **Measured 2026-08-31 on `bh-glx-110-a04u02` (32-chip Blackhole galaxy), branch
 `kmabee/mistral4-prefill-full-rebased.aug27` @ `779a4af546b`.**
@@ -65,12 +69,12 @@ single-request latency table when you want a clean long-context number.
 ## 1.3 Rerun
 
 ```bash
-T=models/demos/deepseek_v3_d_p/tests/perf          # reusable tooling
-S=$T/pipeline_prefill_harness   # driver harness
-$S/preflight.sh          # validates chips/build/caches; flags per-machine items
-$S/run_matrix.sh         # all 16 cells; completed cells are skipped (FORCE=1 to redo)
+T=models/demos/deepseek_v3_d_p/tests/perf
+$T/gen_pipeline_binding.py               # REQUIRED once per galaxy -- a wrong column map does not error
+$T/run_pipeline_prefill_256k.sh          # the 261,120 throughput cell: the headline
 ```
-Selective: `CONFIGS=pp4 ISLS="102400 261120" MODES=ttft $S/run_matrix.sh`
+The other 15 cells, the warm-latency re-run and the preflight check are the reference branch's
+`preflight.sh` and `run_matrix.sh` (selective: `CONFIGS=pp4 ISLS="102400 261120" MODES=ttft`).
 
 **Logs**: written to `<repo>/mistral4_perf_<hostname>/<cell>/{runner,producer}.log` (not committed -- multi-GB)
 **Analysis**: `analyze_prefill_throughput.py <runner.log> 8` (throughput) · `analyze_prefill_latency.py <runner.log>` (latency)
@@ -80,13 +84,23 @@ Selective: `CONFIGS=pp4 ISLS="102400 261120" MODES=ttft $S/run_matrix.sh`
 # 2. Single-layer profiling
 
 One layer, captured with the device profiler + Tracy, driven through the **real chunked runner** so
-the KV cache actually deepens (8 chunks x 5,120 = 40,960 context). Both configs, same harness.
+the KV cache actually deepens (8 chunks x 5,120 = 40,960 context). Both configs, same driver.
+
+Their output is committed under `tests/perf/captures/`, so everything from 2.1 on can be re-derived
+with no galaxy and no driver. Re-running the capture itself needs the reference branch:
 
 ```bash
-T=models/demos/deepseek_v3_d_p/tests/perf          # reusable tooling
-S=$T/pipeline_prefill_harness   # driver harness
-DEEP_CHUNKS=8 $S/run_single_layer_profile.sh 1rank_deep
-DEEP_CHUNKS=8 $S/run_single_layer_profile.sh pp4_deep
+DEEP_CHUNKS=8 run_single_layer_profile.sh 1rank_deep    # reference branch
+DEEP_CHUNKS=8 run_single_layer_profile.sh pp4_deep      # reference branch
+```
+
+In-tree there is one profiling entry point, and it is a *different, shallower* capture -- a single
+1,024-token window rather than the chunked ramp above, so its per-layer number is not the one in 2.1:
+
+```bash
+T=models/demos/deepseek_v3_d_p/tests/perf
+M4_PROFILE_ISL=1024 M4_PROFILE_LAYERS=1 python3 -m tracy -v -r -p -o <outdir> -n m4_1rank_1layer \
+    -m pytest $T/test_mistral4_profile_single_layer.py -k tp4 -s
 ```
 
 ## 2.1 Where the time goes, per layer per chunk
@@ -203,8 +217,7 @@ work. These exclude the socket waits and normalise per device, which is what mak
 numbers comparable between configurations:
 
 ```bash
-T=models/demos/deepseek_v3_d_p/tests/perf          # reusable tooling
-S=$T/pipeline_prefill_harness   # driver harness
+T=models/demos/deepseek_v3_d_p/tests/perf
 python3 $T/analyze_prefill_layer_budget.py <csv> "label"   # per-layer budget, socket waits excluded
 python3 $T/analyze_prefill_kv_ramp.py      <csv> "label"   # per-chunk ramp -> cost of KV depth
 ```
