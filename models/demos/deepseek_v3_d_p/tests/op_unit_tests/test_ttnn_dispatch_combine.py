@@ -409,7 +409,6 @@ def dispatch_combine_shape_params():
 # Two-link subset of the shared dispatch/combine mesh table. The 1-link rows are redundant
 # coverage here; everything else about the profiles stays owned by ALL_MESH_CONFIGS.
 _MESH_IDS = (
-    "fabric2d-2x1-2link",
     "fabric2d-torus-y-4x1-2link",
     "fabric2d-torus-y-8x1-2link",
     "fabric2d-mesh-4x2-2link",
