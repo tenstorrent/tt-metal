@@ -166,6 +166,16 @@ SHAPES = [
     (4768, 5376, 5376, 12, 9, True, "qkv"),
     (4768, 7168, 1344, 12, 9, True, "plain"),
     (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    # The same three at M=14400, the per-device length of a 15s VSA request (1800 tiles), plus
+    # to_gate_compress, which VSA adds and which no sweep has ever covered. Both halves of the
+    # (K, N)-only keying above are assumptions worth checking here: that M does not move the best
+    # block shape (these rows are 3x the M the entries were chosen at), and that a shape picked
+    # from the divisibility constraints alone is near the sweep optimum (the gate).
+    #   to_gate_compress  K_tiles_per_device = 42, chunks=1, no fused activation
+    (14400, 5376, 5376, 12, 9, True, "qkv"),
+    (14400, 7168, 1344, 12, 9, True, "plain"),
+    (14400, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    (14400, 5376, 1792, 12, 9, True, "plain"),
     # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
