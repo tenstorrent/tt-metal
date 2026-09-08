@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4).
+"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4 / P150x8)
+and Wormhole (N150x4).
 
 A single parametrized test covering prefill + decode across ISLs from 128 up to 256k
 (single-user) and batched serving (B=8/B=32, multi-device TP) up to 64k.
@@ -31,23 +32,35 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole, run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+# N150x4 is the Wormhole mesh, and it is supported for the Qwen3.6-35B-A3B (MoE) checkpoint ONLY
+# — see `_skip_unsupported_on_wormhole`. Every other entry is the pre-existing Blackhole set.
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    "N150x4": (1, 4),
+}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
 # including the 40-layer 35B-A3B MoE (~535 MiB captured prefill+decode trace).
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
+# The second command queue is never used — every begin/end/execute_trace here passes cq_id=0 — so
+# it is dead config. Blackhole keeps the validated 2; Wormhole asks for 1, because its dispatch
+# tunnels over the ethernet cores to the remote chips and a second queue only adds pressure there
+# (every multi-device WH demo in this repo runs 1 CQ with fabric). Precautionary, not measured.
+_NUM_CQS = 2 if "blackhole" in ttnn.get_arch_name() else 1
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
-        "num_command_queues": 2,
+        "num_command_queues": _NUM_CQS,
         **(
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}
         ),
@@ -196,7 +209,28 @@ def _blocks_for(seqlen, max_generated_tokens):
     return min(MAX_BLOCK_BUDGET, blocks)
 
 
-@run_for_blackhole()
+def _skip_unsupported_on_wormhole():
+    """Wormhole runs the sparse-MoE Qwen3.6-35B-A3B on N150x4 only.
+
+    The 9B / 27B checkpoints are Blackhole-only: their program configs and memory budget were
+    tuned for a P150 (32 GB, 11x10 grid) and neither has been brought up or validated on a
+    Wormhole n150 (12 GB, 8x8). Skip rather than run something unvalidated. Blackhole is
+    unaffected — this returns immediately there."""
+    if is_blackhole():
+        return
+    hf_model = os.environ.get("HF_MODEL", "")
+    config_path = os.path.join(hf_model, "config.json")
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            cfg = json.load(f)
+        is_moe = bool((cfg.get("text_config") or cfg).get("num_experts"))
+    else:
+        is_moe = "A3B" in hf_model  # hub id, not yet snapshot_download'd
+    if not is_moe:
+        pytest.skip(f"Wormhole supports only the Qwen3.6-35B-A3B (MoE) checkpoint here; HF_MODEL={hf_model!r}")
+
+
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
@@ -241,11 +275,12 @@ def test_demo_text(
     repeat_batches,
 ):
     """E2e text generation: prefill + decode."""
+    _skip_unsupported_on_wormhole()
     from transformers import AutoTokenizer
 
     device = mesh_device
     if batch > 1 and not _MULTI:
-        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4 or P150x8")
+        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4/P150x8/N150x4")
     device.enable_program_cache()
     # Block budget → max_seq_len, KV cache, and RoPE table
     num_blocks = _blocks_for(seqlen, max_generated_tokens)

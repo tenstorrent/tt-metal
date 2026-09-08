@@ -290,13 +290,11 @@ class Qwen36MLP:
                 seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
             )
             # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
-            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk
+            # on BH; on WH they do not fit beside the CBs (tpc.prefill_l1_output_ok).
+            _gu_mc = ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_output_ok() else mc
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_gu_mc)
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
@@ -336,8 +334,10 @@ class Qwen36MLP:
                 tuning=getattr(args, "prefill_tuning", None),
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
-        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial). WH has too
+        # little L1 left beside this matmul's CBs -- see tpc.prefill_l1_output_ok.
+        _out_l1 = x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_output_ok())
+        mc_w2_out = ttnn.L1_MEMORY_CONFIG if _out_l1 else mc
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 

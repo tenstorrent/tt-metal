@@ -225,12 +225,22 @@ def get_pcc_threshold(request, default=0.99):
 # --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
+# MESH_DEVICE -> mesh shape. N150x4 is the Wormhole (1,4) mesh the Qwen3.6-35B-A3B runs on; the
+# P150* names are the pre-existing Blackhole set and are unchanged.
+_MESH_SHAPES = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    "N150x4": (1, 4),
+}
+
+
 def _resolve_mesh_shape(max_tp=8):
     # MESH_DEVICE wins outright. The device-count fallback is computed lazily (not as a
     # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
     # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
     # fails, which would otherwise break collection even for a fully-specified mesh.
-    shape = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    shape = _MESH_SHAPES.get(os.environ.get("MESH_DEVICE"))
     if shape is not None:
         return shape
     return (1, min(len(ttnn.get_device_ids()), max_tp))
@@ -240,7 +250,8 @@ def parametrize_mesh_tp(max_tp=8):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
-    ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
+    ``P150x4``/``N150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise
+    (1, min(num_devices, max_tp)).
     The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
     keys) are readable.

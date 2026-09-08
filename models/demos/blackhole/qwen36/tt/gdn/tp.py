@@ -210,7 +210,7 @@ class TPGatedDeltaNet:
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and tpc.mmrs_prefill_supported()
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -1082,9 +1082,8 @@ class TPGatedDeltaNet:
             # shift-register as below -- the conv sum's active rows [0:B] are exact and the downstream
             # q/k/v slices take [0:B]. This keeps the op COUNT identical to the baseline path (just a
             # single pad), vs a per-row slice/concat that added ~4*K ops/layer and erased the width win.
-            qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
-            ttnn.deallocate(qkv)
-            qkv = qkv_p
+            # pad_and_free, NOT pad + deallocate: this pad can alias its input (tpc.pad_and_free).
+            qkv = tpc.pad_and_free(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
         for j in range(self.K - 1):
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
