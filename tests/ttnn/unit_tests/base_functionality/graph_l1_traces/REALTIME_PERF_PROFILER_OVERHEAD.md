@@ -29,6 +29,11 @@ All three streaming runs received exactly 50 valid records for 50 cases, with ze
 record named only `rms_norm_reader.cpp`, `rms_norm_compute.cpp`, and `rms_norm_writer.cpp`. The
 unprofiled execution therefore produced a complete one-program-per-case stream for this workload.
 
+After adding `core_count` to the real-time record, a further 50-case run matched the standard
+profiler's `core_count` **exactly in all 50 cases**. Both reported the same set of counts:
+`1, 4, 5, 6, 7, 8, 9, 10, 11, 22`. The callback took 20.3 us/record in that run, compared with
+22.4 us/record before the field was added, so the extra host metadata had no measurable cost.
+
 ## Where the time goes
 
 One additional instrumented run measured the Python collector itself:
@@ -87,9 +92,11 @@ registrations when a later module creates a new device.
 
 ## Limitations to resolve
 
-1. `ProgramRealtimeRecord` has no `core_count`. It can replace `device_kernel_ns` directly, but it
-   cannot currently produce the eval pipeline's `device_num_cores`. That field needs new record
-   metadata or a separate derivation, possibly from the L1 graph trace.
+1. This investigation adds `core_count` to `ProgramRealtimeRecord`. It is derived before dispatch
+   from the distinct logical cores targeted by the program's kernels and cached per unique program,
+   so the eval pipeline can retain `device_num_cores` without enabling the standard profiler. It is
+   host metadata joined to the timing record by runtime ID; it does not enlarge the device-to-host
+   packet.
 2. The streamed runtime ID is currently truncated to 16 bits (`#46103`). A long golden process can
    exceed 65,536 dispatched programs even if it has fewer test cases. Attribution must unwrap IDs
    in stream order or the record format must be widened before relying on the raw ID range.

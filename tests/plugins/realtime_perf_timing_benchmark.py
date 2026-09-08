@@ -64,6 +64,7 @@ def pytest_sessionstart(session):
                 {
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
+                    "core_count": int(record.core_count),
                     "duration_ns": (end - start) / frequency if frequency > 0 and end >= start else None,
                     "kernel_sources": tuple(str(source) for source in record.kernel_sources),
                 }
@@ -151,6 +152,8 @@ def pytest_sessionfinish(session, exitstatus):
         "register_ms": _REGISTER_NS / 1e6,
         "unregister_ms": unregister_ns / 1e6,
         "duration_ns": _summary([int(record["duration_ns"]) for record in valid]),
+        "core_counts": sorted({record["core_count"] for record in valid}),
+        "record_core_counts": [record["core_count"] for record in valid],
         "source_sets": source_sets,
     }
     with open(_OUTPUT, "a", encoding="utf-8") as output:
