@@ -1136,8 +1136,11 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     On Wormhole they agree now: the kernel loads and stores under
     InstrModLoadStore::INT32, the mode that converts DEST's two's complement into the
     sign+magnitude SFPSWAP compares in, and back again on the store. It previously used
-    INT32_2S_COMP, which loads raw. Blackhole is still wrong here for its own reason, so
-    the negative cases stay xfailed there -- see the marker below and
+    INT32_2S_COMP, which loads raw.
+
+    Blackhole reached the same place by a different route -- a bare DEST access defaulting
+    to the non-converting DataLayout::I32, now DataLayout::SM32 -- but that half is not
+    verified on silicon, so its negative cases stay xfailed. See the marker below and
     https://github.com/tenstorrent/tt-metal/issues/55643.
     """
     straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
@@ -1182,20 +1185,31 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     # exactly why this defect stayed invisible -- and if it ever regresses, the split between
     # the two halves is what says whether the encoding or the instruction mode moved.
 
-    # Blackhole is not fixed. Its _relu_min_impl_ has no instruction mode to get wrong --
-    # it is plain sfpi -- but it reads DEST as a bare sfpi::dst_reg[0], with no
-    # .mode<sfpi::DataLayout::I32>() to request the converting layout. Dst holds int32 as
-    # sign+magnitude (see _int_unary_stimuli_spec, which stays positive-only for exactly
-    # this reason), so a negative threshold does not survive the round trip: -1000 comes
-    # back as 0x800003E8, measured in CI on bh_p150b. Same symptom as the Wormhole defect,
-    # different cause, and not fixed here because there is no Blackhole part on the bench
-    # this was developed against. Non-strict, so it reports XPASS as soon as it is.
+    # Blackhole had the same symptom from a different cause, and the kernel side is now
+    # fixed too -- but unverified on silicon, so the marker stays until CI says otherwise.
+    #
+    # Blackhole's _relu_min_impl_ has no instruction mode to get wrong (it is plain sfpi),
+    # but it read DEST as a bare sfpi::dst_reg[0]. Dst holds int32 as sign+magnitude (see
+    # _int_unary_stimuli_spec, which stays positive-only for exactly this reason), and a
+    # bare vInt access to dst_reg defaults to DataLayout::I32 on Blackhole, which does no
+    # conversion -- so the compare saw raw bits and -1000 came back as 0x800003E8, measured
+    # in CI on bh_p150b. It now accesses DEST through DataLayout::SM32, the *converting*
+    # layout on this arch; the two names are the opposite way round to the intuition, which
+    # is documented at the fix in ckernel_sfpu_relu.h.
+    #
+    # Marker kept because there is no Blackhole part on the bench this was developed
+    # against, so the fix is reasoned and compile-checked but not measured: the vInt
+    # instantiation gains sfpi's software smag_to_int / int_to_smag (an SFPSETSGN plus a
+    # predicated negate) and every float instantiation is byte-identical. Non-strict, so
+    # bh_p150b reports XPASS if it works and a plain xfail if it does not -- either way CI
+    # is the judge, and this whole block goes away once it reports XPASS.
     if threshold < 0 and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
         request.node.add_marker(
             pytest.mark.xfail(
-                reason="Blackhole _relu_min_impl_ reads DEST without a converting sfpi "
-                "DataLayout, so a negative int32 threshold returns its sign+magnitude "
-                "encoding instead of its value (-1000 -> 0x800003E8). Wormhole is fixed. "
+                reason="Blackhole negative int32 relu_min threshold: kernel fixed to access "
+                "DEST through the converting sfpi DataLayout::SM32, but unverified on "
+                "silicon -- no Blackhole part on the development bench. Expect XPASS on "
+                "bh_p150b, at which point drop this marker. Wormhole is fixed and verified. "
                 "https://github.com/tenstorrent/tt-metal/issues/55643",
                 strict=False,
             )

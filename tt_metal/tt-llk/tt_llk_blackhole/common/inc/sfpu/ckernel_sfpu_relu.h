@@ -113,15 +113,34 @@ inline void _relu_max_(T threshold)
     _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
 }
 
+// The layout DEST is accessed through. Only the integer datapath needs a non-default one:
+// Dest holds int32 as sign+magnitude, and on Blackhole a bare vInt access to dst_reg
+// defaults to DataLayout::I32, which does *no* conversion -- so the compare below would see
+// the raw bits and a negative operand would lose against a positive one. DataLayout::SM32 is
+// the converting layout here; it emits sfpi's software smag_to_int / int_to_smag around the
+// access (Blackhole's INT32_2S_COMP load/store mode has no effect -- see the note in
+// ckernel_sfpu_sub_int.h).
+//
+// Read the two layout names carefully, they are the opposite way round to the intuition:
+// I32 is the raw one and SM32 is the converting one. On Wormhole the bare default for vInt is
+// already SM32 (sfpi_funcs.h picks it per-arch), which is why only Blackhole was wrong.
+//
+// Default for vFloat, where .mode<Default>() is a no-op and SM32 would not even be a valid
+// layout for the type.
+template <typename VecType>
+inline constexpr sfpi::DataLayout relu_dest_layout_v = std::is_same_v<VecType, sfpi::vInt> ? sfpi::DataLayout::SM32 : sfpi::DataLayout::Default;
+
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_min_impl_(const int iterations, VecType threshold)
 {
+    constexpr sfpi::DataLayout LAYOUT = relu_dest_layout_v<VecType>;
+
     for (int d = 0; d < iterations; d++)
     {
-        VecType a = sfpi::dst_reg[0];
+        VecType a = sfpi::dst_reg[0].mode<LAYOUT>();
         v_if (a < threshold)
         {
-            sfpi::dst_reg[0] = threshold;
+            sfpi::dst_reg[0].mode<LAYOUT>() = threshold;
         }
         v_endif;
         sfpi::dst_reg++;
