@@ -74,22 +74,21 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_in_2,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        block_w * tt::constants::TILE_WIDTH>();
+    using LocalAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<gamma_args.next_compile_time_args_offset()>;
+    using FirstStageAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<LocalAuxiliary::next_compile_time_args_offset()>;
+    using SecondStageAuxiliary =
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<FirstStageAuxiliary::next_compile_time_args_offset()>;
+    using PostAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<SecondStageAuxiliary::next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<LocalAuxiliary>();
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c_bits = get_arg_val<uint32_t>(arg_idx++);
-        float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-            scalar_c_f);
-        const uint32_t post_scalar_c_bits = get_arg_val<uint32_t>(base_post_rt + 0);
-        float post_scalar_c_f = __builtin_bit_cast(float, post_scalar_c_bits);
-        dataflow_kernel_lib::
-            prepare_reduce_scaler<post_cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-                post_scalar_c_f);
+        if (scalar_c_bits == 0x3f800000U) {
+            dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<FirstStageAuxiliary>();
+        } else {
+            dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SecondStageAuxiliary>();
+        }
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<PostAuxiliary>();
     } else {
         arg_idx++;
     }

@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -48,6 +49,16 @@ void kernel_main() {
     constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(26);
     constexpr uint32_t cb_ex_global = get_compile_time_arg_val(27);
     constexpr uint32_t signaling_cb = get_compile_time_arg_val(28);
+    using FirstStageArgs = ttnn::kernel_lib::ReduceCallArgs<29>;
+    using SecondStageArgs = ttnn::kernel_lib::ReduceCallArgs<FirstStageArgs::next_compile_time_args_offset()>;
+    using PostArgs = ttnn::kernel_lib::ReduceCallArgs<SecondStageArgs::next_compile_time_args_offset()>;
+    using FirstStageCall =
+        ttnn::kernel_lib::BoundReduceCallArgs<FirstStageArgs, cb_ex_external2, cb_scaler_global, cb_ex2>;
+    using SingleStageCall = ttnn::kernel_lib::
+        BoundReduceCallArgs<FirstStageArgs, cb_ex_external2, cb_scaler_global, cb_to_allgather_writer>;
+    using SecondStageCall = ttnn::kernel_lib::
+        BoundReduceCallArgs<SecondStageArgs, cb_ex_external2, cb_scaler_global, cb_to_allgather_writer>;
+    using PostCall = ttnn::kernel_lib::BoundReduceCallArgs<PostArgs, cb_stats, post_cb_scaler_global, cb_var>;
 
     constexpr uint32_t num_blocks_second_stage_reduction = num_blocks_first_stage + num_blocks_second_stage - 1;
 
@@ -173,29 +184,13 @@ void kernel_main() {
         const uint32_t num_tiles_per_allgather_worker = get_arg_val<uint32_t>(1);
         const bool use_two_stage_reduce = get_arg_val<uint32_t>(2) == 1;
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
-        uint32_t num_blocks_reduce;
-        num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
-        const auto reduce_block =
-            compute_kernel_lib::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce);
-
-        if (!use_two_stage_reduce || is_second_stage_reader) {
-            compute_kernel_lib::reduce<
-                PoolType::AVG,
-                ReduceDim::REDUCE_ROW,
-                cb_ex_external2,
-                cb_scaler_global,
-                cb_to_allgather_writer,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+        ASSERT(num_tiles_per_allgather_worker == 1);
+        if (!use_two_stage_reduce) {
+            compute_kernel_lib::reduce<SingleStageCall>();
+        } else if (is_second_stage_reader) {
+            compute_kernel_lib::reduce<SecondStageCall>();
         } else {
-            compute_kernel_lib::reduce<
-                PoolType::AVG,
-                ReduceDim::REDUCE_ROW,
-                cb_ex_external2,
-                cb_scaler_global,
-                cb_ex2,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+            compute_kernel_lib::reduce<FirstStageCall>();
         }
     }
 
@@ -217,15 +212,8 @@ void kernel_main() {
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
 
-            compute_kernel_lib::reduce<
-                PoolType::AVG,
-                ReduceDim::REDUCE_ROW,
-                cb_stats,
-                post_cb_scaler_global,
-                cb_var,
-                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-                compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
+            ASSERT(num_distributed_blocks == PostCall::columns);
+            compute_kernel_lib::reduce<PostCall>();
             cb_stats_obj.pop_front(num_distributed_blocks);
 
             // 1/[sqrt(Var + eps)],
