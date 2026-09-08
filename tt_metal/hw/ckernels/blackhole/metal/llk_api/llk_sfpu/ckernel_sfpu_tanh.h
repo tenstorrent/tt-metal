@@ -182,8 +182,15 @@ sfpi_inline void _tanh_appx_lut6_step_() {
     TTI_SFPLUTFP32(p_sfpu::LREG7, TANH_APPX_LUT6_MOD);
 
     // Goes between the LUT and the store that consumes it, and is genuinely independent: it
-    // writes LReg[3], which the LUT already consumed on issue, and leaves LReg[7] alone. The
-    // last datum has no next load, and needs nothing in its place.
+    // writes LReg[3], which the LUT already consumed on issue, and leaves LReg[7] alone.
+    //
+    // The last datum has no next load and gets no filler, which leaves SFPLUTFP32 -> SFPSTORE
+    // back to back on LReg[7]. That is a real read-after-write hazard, not a free pairing: the
+    // Blackhole SFPU interlocks RAW hazards in hardware and stalls the store until the LUT's
+    // write retires -- the same behaviour ckernel_sfpu_quant.h in this directory relies on to
+    // omit its SFPNOPs -- where the Wormhole copy has to spend an explicit TTI_SFPNOP. The
+    // stall is real and measurable; hiding it for every other datum is where most of the 1.27x
+    // below comes from. This one datum eats it because there is nothing left to fill it with.
     if constexpr (K + 1 < ITERATIONS) {
         TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_7, 2 * (K + 1));
     }
@@ -197,10 +204,14 @@ sfpi_inline void _tanh_appx_lut6_step_() {
 
 template <int ITERATIONS>
 inline void _calculate_tanh_appx_lut6_() {
+    // No zero-trip base case: _tanh_appx_lut6_step_<0, 0> would still issue the LUT and a store
+    // to dest row 0, where the loop this replaces was a no-op at ITERATIONS == 0. Unreachable
+    // today -- every instantiation is 8 or 32 -- so assert it rather than emit a runtime guard.
+    static_assert(ITERATIONS > 0, "approximate tanh requires at least one datum");
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
     // Prologue load; every later load is issued inside the previous datum's LUT shadow.
     TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_7, 0);
-    _tanh_appx_lut6_step_<0, ITERATIONS>();
+    _tanh_appx_lut6_step_<0 /* K */, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
@@ -250,17 +261,28 @@ inline void tanh_init() {
         // FP16_6ENTRY_TABLE1 mode: LReg[0..2] hold the slopes, LReg[4..6] the intercepts, two
         // Lut16ToFp32-encoded halves per register (low half = even segment, high half = odd).
         //
-        //   |x| <  0.5   0.942871094*|x|                 (intercept pinned to exactly 0)
-        //   |x| <  1.0   0.599121094*|x| + 0.174194336
-        //   |x| <  1.5   0.287109375*|x| + 0.481933594
+        //   |x| <  0.5   0.947265625*|x|                 (intercept pinned to exactly 0)
+        //   |x| <  1.0   0.599121094*|x| + 0.174072266
+        //   |x| <  1.5   0.269775391*|x| + 0.503417969
         //   |x| <  2.0   0.117736816*|x| + 0.731933594
         //   |x| <  3.0   0.030960083*|x| + 0.905761719
         //   |x| >= 3.0                     1.0
         //
         // Each segment is a minimax linear fit snapped to the nearest Lut16ToFp32-representable
-        // pair. Max |absolute error| 0.0117 (was 0.1447), max relative error 0.0571 (was 0.1899).
-        // The residual is dominated by the [0.5, 1.0) segment and is the floor for a linear fit
-        // on hardware-fixed 0.5-wide breakpoints: err ~ |tanh''|*h^2/16.
+        // pair, then constrained so consecutive lines never step down where they meet. tanh is
+        // strictly increasing and has no discontinuity, so a downward step at a knee inverts the
+        // order of two inputs straddling it -- and six independently fitted segments do step
+        // down: by 0.0043 at |x| = 1.0 and 0.0041 at |x| = 1.5, both larger than a bf16 ulp
+        // there, so the inversion survives the store instead of being rounded away. Segments 0-2
+        // are therefore tied to meet exactly at |x| = 0.5 and 1.0; the three remaining knees
+        // already step up (+0.00046 at 1.5, +0.00027 at 2.0, +0.00136 at 3.0), so the fit is
+        // monotone non-decreasing whatever the store rounds them to. The constraint is close to
+        // free -- max |absolute error| 0.011740 tied against
+        // 0.011721 untied (was 0.1447), and max relative error 0.0527 tied against 0.0571 untied
+        // (was 0.1899) -- and it leaves the |x| >= 2 error unchanged at 0.0049, which is what
+        // TABLE1 was picked over TABLE2 for. The residual is dominated by the [0.5, 1.0) segment
+        // and is the floor for a linear fit on hardware-fixed 0.5-wide breakpoints:
+        // err ~ |tanh''|*h^2/16.
         //
         // Both pinned coefficients are load-bearing. The first intercept must stay exactly 0
         // (Lut16ToFp32 code 0x7C00, which encodes zero as exponent 31, not 0x0000) or SGN_RETAIN
@@ -268,14 +290,14 @@ inline void tanh_init() {
         // fit diverges as |x| grows. A zero tail slope also evaluates 0*inf for |x| = inf, so
         // tanh(+/-inf) is NaN -- unchanged from the old table, which had one too.
 
-        // A0 = 0.942871094 (0x3B8B), A1 = 0.599121094 (0x38CB)
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x38CB3B8B);
-        // B0 = 0           (0x7C00), B1 = 0.174194336 (0x3193)
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x31937C00);
-        // A2 = 0.287109375 (0x3498), A3 = 0.117736816 (0x2F89)
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x2F893498);
-        // B2 = 0.481933594 (0x37B6), B3 = 0.731933594 (0x39DB)
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x39DB37B6);
+        // A0 = 0.947265625 (0x3B94), A1 = 0.599121094 (0x38CB)
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x38CB3B94);
+        // B0 = 0           (0x7C00), B1 = 0.174072266 (0x3192)
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x31927C00);
+        // A2 = 0.269775391 (0x3451), A3 = 0.117736816 (0x2F89)
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x2F893451);
+        // B2 = 0.503417969 (0x3807), B3 = 0.731933594 (0x39DB)
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x39DB3807);
         // A4 = 0.030960083 (0x27ED), A5 = 0           (0x7C00)
         sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x7C0027ED);
         // B4 = 0.905761719 (0x3B3F), B5 = 1.0         (0x3C00)
