@@ -586,6 +586,10 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    # The legacy tensor_cache_bf16/ dirs for E4B on bh_p300 / bh_quietbox_2 hold placeholder-derived
+    # tensorbins written after #50648 renamed the cache files (#54831). Build into the mesh-qualified
+    # dir instead of falling back to legacy; E4B is small enough to cold-build inside the budget.
+    export GEMMA4_WEIGHT_CACHE_MESH_ONLY=1
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -602,7 +606,9 @@
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
-      timeout: 5
+      # 10 (was 5): the first run after GEMMA4_WEIGHT_CACHE_MESH_ONLY=1 cold-builds the mesh-qualified
+      # cache on the rw lfc mount; later runs are warm again.
+      timeout: 10
       tier: 3
       release_ready: false
     bh_quietbox_2:
