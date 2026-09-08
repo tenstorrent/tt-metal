@@ -1,0 +1,78 @@
+# tt-perf-report, pp4_stage0  (rendered from the FULL capture; the .csv.gz here is column-reduced)
+# source: ops_perf_results_pp4_deep_rank0_2026_08_31_20_42_13.csv
+
+Warning: Unclassified operation 'RingJointSDPADeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ZeroPaddedKvCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MaskedBincountDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'OffsetCumsumDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'DispatchDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UnifiedRoutedExpertFfnDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'CombineDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PostCombineReduceDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'OutboundSocketServiceSyncOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                        Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+99.28 %  InboundSocketServiceSyncOperation (in0:dram_interleaved)      15,627,933.51 μs         9        Other
+ 0.15 %  RingJointSDPADeviceOperation (in0:dram_interleaved)               24,264.61 μs         8        Other
+ 0.11 %  UnifiedRoutedExpertFfnDeviceOperation (in0:dram_interleaved)      18,060.02 μs         8        Other
+ 0.11 %  CombineDeviceOperation (in0:dram_interleaved)                     16,926.31 μs         8        Other
+ 0.11 %  MatmulDeviceOperation (in0:dram_interleaved)                      16,748.01 μs        80      Compute     5.92 %    48.29 %     28.42 %    15.23 %              35.72 %
+ 0.10 %  DispatchDeviceOperation (in0:dram_interleaved)                    15,470.04 μs         8        Other
+ 0.10 %  OutboundSocketServiceSyncOperation (in0:dram_interleaved)         15,365.63 μs         9        Other
+ 0.01 %  LayerNormDeviceOperation (in0:dram_interleaved)                    1,261.45 μs        32      Compute
+ 0.01 %  BinaryNgDeviceOperation (in0:dram_interleaved)                     1,082.37 μs        40      Compute
+ 0.01 %  PostCombineReduceDeviceOperation (in0:dram_interleaved)            1,063.90 μs         8        Other
+ 0.00 %  ConcatDeviceOperation (in0:dram_interleaved)                         566.26 μs        16           TM
+ 0.00 %  EmbeddingsDeviceOperation (in0:dram_interleaved)                     459.61 μs         8      Compute
+ 0.00 %  NlpCreateHeadsDeviceOperation (in0:dram_interleaved)                 457.96 μs         8           TM
+ 0.00 %  NLPConcatHeadsDeviceOperation (in0:dram_interleaved)                 417.73 μs         8           TM
+ 0.00 %  SliceDeviceOperation (in0:dram_interleaved)                          342.80 μs        48           TM
+ 0.00 %  RotaryEmbeddingIndexedDeviceOperation (in0:dram_interleaved)         337.48 μs        16        Other
+ 0.00 %  MaskedBincountDeviceOperation (in0:dram_interleaved)                 276.71 μs         8        Other
+ 0.00 %  TopKDeviceOperation (in0:dram_interleaved)                           184.52 μs         8        Other
+ 0.00 %  AllGatherDeviceOperation (in0:dram_interleaved)                      158.38 μs         8           DM
+ 0.00 %  OffsetCumsumDeviceOperation (in0:dram_interleaved)                   154.84 μs         8        Other
+ 0.00 %  UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved)          154.20 μs        16           TM
+ 0.00 %  TilizeDeviceOperation (in0:dram_interleaved)                          83.09 μs         1           TM
+ 0.00 %  TypecastDeviceOperation (in0:dram_interleaved)                        58.64 μs         9           TM
+ 0.00 %  ReshapeViewDeviceOperation (in0:dram_interleaved)                     56.05 μs         8           TM
+ 0.00 %  SoftmaxDeviceOperation (in0:dram_interleaved)                         45.51 μs         8      Compute
+ 0.00 %  ZeroPaddedKvCacheDeviceOperation (in0:nd_sharded)                     38.69 μs         8        Other
+ 0.00 %  UpdatePaddedKvCacheDeviceOperation (in0:nd_sharded)                   37.67 μs         8        Other
+ 0.00 %  CopyDeviceOperation (in0:l1_interleaved)                              10.27 μs         8           DM
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# ---- analyze_layer_budget.py ----
+
+=== pp4_stage0 ===
+forward passes (layer x chunk): 72
+COMPUTE per layer per chunk (socket waits excluded): 11.89 ms
+   MLA/attn    2.953 ms  ( 24.8%)
+   MoE         6.323 ms  ( 53.2%)
+   norm        0.155 ms  (  1.3%)
+   other       2.461 ms  ( 20.7%)
+  top ops:
+    RingJointSDPADeviceOperation                           2.788 ms  x1.0/pass
+    CombineDeviceOperation                                 2.162 ms  x1.0/pass
+    MatmulDeviceOperation                                  2.085 ms  x10.0/pass
+    DispatchDeviceOperation                                2.077 ms  x1.0/pass
+    UnifiedRoutedExpertFfnDeviceOperation                  1.875 ms  x1.0/pass
+    LayerNormDeviceOperation                               0.155 ms  x4.0/pass
+    BinaryNgDeviceOperation                                0.133 ms  x5.0/pass
+    PostCombineReduceDeviceOperation                       0.132 ms  x1.0/pass
+  [wait] InboundSocketServiceSyncOperation                    1736.43 ms  x1.0/pass
+  [wait] OutboundSocketServiceSyncOperation                      1.70 ms  x1.0/pass
+
+# ---- analyze_kv_ramp.py ----
+
+=== KV-depth ramp pp4_stage0 (device 0, 9 passes; pass 0 is warm-up) ===
+  RingJointSDPADeviceOperation                  953    961   1422   2034   2678   3320   3960   4599   5242  us   growth 5.46x
+  UnifiedRoutedExpertFfnDeviceOperation           5   1892   1915   1804   1919   1797   1790   1882   1879  us   growth 0.99x
+  CombineDeviceOperation                       4070   2272   1925   2205   2092   2247   2141   1871   2132  us   growth 0.94x
+  DispatchDeviceOperation                      3431   1753   1754   2168   1828   1960   1936   1817   1939  us   growth 1.11x
+  MatmulDeviceOperation                        2077   2089   2086   2088   2085   2082   2086   2090   2088  us   growth 1.00x
