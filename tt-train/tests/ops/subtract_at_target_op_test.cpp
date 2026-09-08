@@ -5,8 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <random>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -131,6 +133,59 @@ TEST_F(SubtractAtTargetTest, BatchedNonAlignedShape) {
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
     EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+}
+
+TEST_F(SubtractAtTargetTest, PaddedTargetUsesPhysicalPageStrideAndDistinctCacheEntry) {
+    using namespace ttml;
+
+    auto& device = autograd::ctx().get_device();
+    device.enable_program_cache();
+
+    const uint32_t N = static_cast<uint32_t>(device.num_dram_channels()) + 1U;
+    constexpr uint32_t S = 33U;
+    constexpr uint32_t V = 32U;
+
+    xt::xarray<float> input_t = xt::zeros<float>({N, 1U, S, V});
+    xt::xarray<uint32_t> target_t = xt::empty<uint32_t>({N, S});
+    for (uint32_t n = 0; n < N; ++n) {
+        for (uint32_t s = 0; s < S; ++s) {
+            target_t(n, s) = (n + 3U * s) % V;
+        }
+    }
+
+    auto input_dev = core::from_xtensor(input_t, &device);
+    auto default_target_dev =
+        core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(target_t, &device, ttnn::Layout::ROW_MAJOR);
+
+    const tt::tt_metal::TensorSpec padded_target_spec(
+        ttnn::Shape({N, S}),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::UINT32,
+            ttnn::PageConfig(ttnn::Layout::ROW_MAJOR),
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({64U})));
+    auto padded_target_dev = ttnn::Tensor::from_vector<uint32_t>(
+        std::vector<uint32_t>(target_t.begin(), target_t.end()),
+        padded_target_spec,
+        &device,
+        std::nullopt,
+        std::numeric_limits<uint32_t>::max());
+
+    ASSERT_EQ(padded_target_dev.buffer()->page_size(), 64U * sizeof(uint32_t));
+    ASSERT_EQ(padded_target_dev.buffer()->aligned_page_size(), 64U * sizeof(uint32_t));
+
+    const auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, V);
+    auto run_and_check = [&](const ttnn::Tensor& target_dev) {
+        auto result = metal::subtract_at_target(input_dev, target_dev, /*local_V=*/V);
+        auto result_xt = core::to_xtensor(result);
+        ASSERT_EQ(result_xt.shape(), expected_xt.shape());
+        EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/0.F, /*atol=*/0.F));
+    };
+
+    run_and_check(default_target_dev);
+    const auto entries_after_default = device.num_program_cache_entries();
+    run_and_check(padded_target_dev);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_after_default + 1U);
 }
 
 TEST_F(SubtractAtTargetTest, BatchedPartialVocabShard) {

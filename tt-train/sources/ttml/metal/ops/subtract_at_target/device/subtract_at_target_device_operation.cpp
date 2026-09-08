@@ -6,6 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <limits>
+#include <tt-metalium/buffer.hpp>
 
 #include "subtract_at_target_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -115,15 +116,14 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
 ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // first_v / local_V / subtract_value only affect runtime args (they're patched by
-    // override_runtime_arguments per coord). cluster_axis, however, determines the mesh-workload
-    // structure (one program per TP slab when set vs one per coordinate when unset) and the
-    // program-to-coordinate mapping, so it must be part of the hash. value_or keeps nullopt
-    // distinct from axis 0 (an optional hashes its payload directly, so nullopt and 0 would
-    // otherwise collide); the sentinel can never be a valid axis.
+    // override_runtime_arguments per coord). cluster_axis determines the mesh-workload structure
+    // and target aligned page size is compiled into TensorAccessorArgs, so both are part of the
+    // hash. value_or keeps nullopt distinct from axis 0; the sentinel can never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SubtractAtTargetDeviceOperation>(
         args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
         tensor_args.input.dtype(),
-        tensor_args.input.logical_shape());
+        tensor_args.input.logical_shape(),
+        tensor_args.target.buffer()->aligned_page_size());
 }
 
 }  // namespace ttml::metal::ops::subtract_at_target::device
