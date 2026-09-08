@@ -193,12 +193,7 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        // get_semaphore() returns an offset into this core's L1, so this local store
-        // works only because prefetcher and dispatcher are on same dispatch engines sharing one L1.
-        // A split _h/_d build must go over the NoC instead. See the checklist at the top of cq_prefetch.cpp.
-        // Non-atomic RMW, so exactly one agent may ever increment this semaphore.
-        auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(sem_id));
-        *sem_addr += pages;
+        Semaphore<programmable_core_type>(sem_id).up(pages);
 #else
         uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
@@ -1096,7 +1091,6 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
-        // Worker completion counter, incremented by workers with a NoC atomic.
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
         // DPRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
@@ -1131,14 +1125,11 @@ static void process_wait() {
     }
     if (clear_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
-        // Same counter as above; a cached store here would race the workers' atomics.
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        auto* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(upstream_sync_sem));
-        *sem_addr += 1;
+        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
 #else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),
