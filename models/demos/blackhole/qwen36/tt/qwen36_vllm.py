@@ -164,7 +164,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             logger.info(
                 f"[prefill] allocating {shape[0]} KV blocks ({kv_cache_shape[0]} scheduler + 1 pad block for bucket traces)"
             )
-        return model.allocate_kv_caches(shape, ttnn.bfloat16, batch_size=batch_size)
+        # QWEN_SDPA_BF8: bf8 paged KV (model.allocate_kv_caches also promotes this internally; wired explicitly here so
+        # the caller's intent is visible and a future refactor that drops the model-side override stays correct).
+        kv_dtype = ttnn.bfloat8_b if os.environ.get("QWEN_SDPA_BF8", "0") == "1" else ttnn.bfloat16
+        return model.allocate_kv_caches(shape, kv_dtype, batch_size=batch_size)
 
     @staticmethod
     def _has_visual(kwargs, pixel_key):
