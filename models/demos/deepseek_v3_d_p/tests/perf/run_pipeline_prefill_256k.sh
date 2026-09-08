@@ -37,8 +37,11 @@ export PREFILL_KV_ONLY_LAST_LAYER=1   # throughput, not TTFT -- no final norm/LM
 export PREFILL_USE_TRACE=1
 export LOGURU_LEVEL=INFO
 
-CHUNKS=51                             # 51 x 5,120 = 261,120
-MAX_SEQ_LEN=261120
+# The headline is 51 chunks x 5,120 = 261,120. Both are overridable ONLY to smoke-test the plumbing
+# on a few chunks before spending an hour of galaxy on the real thing -- override either and the
+# result is no longer the published number.
+CHUNKS="${CHUNKS:-51}"
+MAX_SEQ_LEN="${MAX_SEQ_LEN:-261120}"
 REQUESTS="${REQUESTS:-2}"
 OUT="${OUT:-$TT_METAL_HOME/mistral4_pp4_256k_$(hostname)}"
 mkdir -p "$OUT"
