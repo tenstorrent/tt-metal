@@ -76,6 +76,7 @@ def _result() -> RolloutResult:
         behavior_version=3,
         attempt_id=4,
         output=RolloutOutput.from_sequences([[21, 22], [23]], [[-0.1, -0.2], [-0.3]]),
+        request_payload=_lease().payload,
     )
 
 

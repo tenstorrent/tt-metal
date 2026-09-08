@@ -85,6 +85,7 @@ def test_rollout_result_keeps_lease_identity_and_behavior_version():
             attempt_id=2,
             behavior_version=1,
             output=output,
+            request_payload=active_lease.payload,
         )
     )
 
