@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, g
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    IndexerSelectionState,
     ReuseIndexer,
     TtIndexer,
     indexer_layer_is_reused,
@@ -35,8 +36,16 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import TT_CCL
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCache,
+    MlaKvCacheFormat,
+    MlaKvCacheGeometry,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -180,6 +189,377 @@ def test_reuse_indexer_forward_raises(expect_error):
         ReuseIndexer().forward()
 
 
+def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch):
+    """Host-only contract test for the overlap seam: local selection forwards the score state's
+    runtime bound and core selection, while TP=1 finalization is an identity."""
+    indexer = object.__new__(TtIndexer)
+    indexer.index_topk_capacity = 512
+    logits = object()
+    local_indices = object()
+    core_grid = object()
+    subdevice_id = object()
+    captured = {}
+
+    def fake_topk(input_tensor, **kwargs):
+        captured["input"] = input_tensor
+        captured.update(kwargs)
+        return local_indices
+
+    monkeypatch.setattr(ttnn.experimental, "topk_large_indices", fake_topk)
+    state = IndexerSelectionState(logits, topk_valid_length=768, requires_tp_redistribution=False)
+
+    selected = indexer.select_local(state, subdevice_id=subdevice_id, sub_core_grids=core_grid)
+    assert selected is local_indices
+    assert captured == {
+        "input": logits,
+        "k": 512,
+        "valid_length": 768,
+        "subdevice_id": subdevice_id,
+        "sub_core_grids": core_grid,
+    }
+    assert indexer.finalize_distribution(selected, state) is local_indices
+
+
+def test_indexer_forward_is_sequential_stage_wrapper(monkeypatch):
+    """The compatibility API remains score -> local select -> TP distribution in that order."""
+    indexer = object.__new__(TtIndexer)
+    state = object()
+    local_indices = object()
+    final_indices = object()
+    calls = []
+
+    monkeypatch.setattr(indexer, "score", lambda *args, **kwargs: calls.append("score") or state)
+    monkeypatch.setattr(
+        indexer,
+        "select_local",
+        lambda actual_state: calls.append(("select_local", actual_state)) or local_indices,
+    )
+    monkeypatch.setattr(
+        indexer,
+        "finalize_distribution",
+        lambda actual_indices, actual_state: calls.append(("finalize", actual_indices, actual_state)) or final_indices,
+    )
+
+    assert indexer.forward(object(), object(), 32) is final_indices
+    assert calls == ["score", ("select_local", state), ("finalize", local_indices, state)]
+
+
+class _FakeOverlapMesh:
+    def __init__(self, x, y):
+        self.grid = ttnn.CoreCoord(x, y)
+        self.calls = []
+
+    def compute_with_storage_grid_size(self):
+        return self.grid
+
+    def create_sub_device_manager(self, subdevices, local_l1_size):
+        self.calls.append(("create", subdevices, local_l1_size))
+        return "manager"
+
+    def clear_loaded_sub_device_manager(self):
+        self.calls.append("clear")
+
+    def remove_sub_device_manager(self, manager):
+        self.calls.append(("remove", manager))
+
+
+def _bare_tt_ccl(mesh):
+    ccl = object.__new__(TT_CCL)
+    ccl.mesh_device = mesh
+    ccl.sparse_mla_overlap_resources = None
+    return ccl
+
+
+def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
+    """The local proxy owns exactly 80/30 cores, a mesh-initialized pair, and idempotent teardown."""
+    mesh = _FakeOverlapMesh(11, 10)
+    ccl = _bare_tt_ccl(mesh)
+    events = []
+    semaphores = iter(("ready", "valid"))
+    monkeypatch.setattr(
+        ttnn,
+        "get_memory_view",
+        lambda *_: SimpleNamespace(total_bytes_per_bank=2048),
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "create_global_semaphore",
+        lambda _mesh, cores, initial, buffer_type: events.append(
+            ("create_sem", cores.num_cores(), initial, buffer_type)
+        )
+        or next(semaphores),
+    )
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda actual_mesh: events.append(("sync", actual_mesh)))
+    monkeypatch.setattr(
+        ttnn,
+        "reset_global_semaphore_value",
+        lambda semaphore, value: events.append(("reset", semaphore, value)),
+    )
+
+    resources = ccl.get_sparse_mla_overlap_resources("qb2_80_30")
+    assert resources.topk_core_grid.num_cores() == 80
+    assert resources.gather_core_grid.num_cores() == 30
+    assert resources.ready_semaphore == "ready"
+    assert resources.data_valid_semaphore == "valid"
+    assert ccl.get_sparse_mla_overlap_resources("qb2_80_30") is resources
+    assert mesh.calls[0][0] == "create" and mesh.calls[0][2] == 0
+    assert events[:3] == [
+        ("create_sem", 30, 0, ttnn.BufferType.L1_SMALL),
+        ("create_sem", 30, 0, ttnn.BufferType.L1_SMALL),
+        ("sync", mesh),
+    ]
+
+    ccl.release_sparse_mla_overlap_manager()
+    ccl.release_sparse_mla_overlap_manager()
+    assert mesh.calls[-2:] == ["clear", ("remove", "manager")]
+    assert events[-4:] == [
+        ("sync", mesh),
+        ("reset", "ready", 0),
+        ("reset", "valid", 0),
+        ("sync", mesh),
+    ]
+
+
+@pytest.mark.parametrize(
+    "profile,grid",
+    [("galaxy_80_40", (11, 10)), ("loudbox_80_40", (12, 9)), ("qb2_80_30", (12, 10))],
+)
+def test_sparse_mla_overlap_profiles_fail_closed(profile, grid, expect_error):
+    ccl = _bare_tt_ccl(_FakeOverlapMesh(*grid))
+    with expect_error(ValueError, "requires a"):
+        ccl.get_sparse_mla_overlap_resources(profile)
+
+
+def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
+    """Only local top-k and KV gather run while the manager is loaded; TP finalization follows clear."""
+    mla = object.__new__(ttMLA)
+    events = []
+    state = object()
+    local_indices = object()
+    final_indices = object()
+    gathered = object()
+    resources = SimpleNamespace(
+        manager_id="manager",
+        topk_subdevice_id="topk_sd",
+        topk_core_grid="topk_grid",
+        gather_subdevice_id="gather_sd",
+        gather_core_grid="gather_grid",
+        ready_semaphore="ready",
+        data_valid_semaphore="valid",
+    )
+
+    class FakeMesh:
+        loaded = False
+
+        def load_sub_device_manager(self, manager):
+            assert manager == "manager"
+            self.loaded = True
+            events.append("load")
+
+        def clear_loaded_sub_device_manager(self):
+            self.loaded = False
+            events.append("clear")
+
+    class FakeIndexer:
+        def select_local(self, actual_state, **kwargs):
+            assert mla.mesh_device.loaded
+            assert actual_state is state
+            assert kwargs == {"subdevice_id": "topk_sd", "sub_core_grids": "topk_grid"}
+            events.append("topk")
+            return local_indices
+
+        def finalize_distribution(self, actual_indices, actual_state):
+            assert not mla.mesh_device.loaded
+            assert actual_indices is local_indices and actual_state is state
+            events.append("finalize")
+            return final_indices
+
+    mla.mesh_device = FakeMesh()
+    mla._indexer = FakeIndexer()
+    mla._sparse_mla_overlap = resources
+    mla.tt_ccl = SimpleNamespace(reset_sparse_mla_overlap_semaphores=lambda: events.append("reset"))
+
+    def fake_gather(*args, **kwargs):
+        assert mla.mesh_device.loaded
+        assert kwargs["overlap_resources"] is resources
+        events.append("gather")
+        return gathered
+
+    mla._gather_kvpe_prefix = fake_gather
+    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.mla.mla.signpost", lambda **_: None)
+
+    actual_indices, actual_gathered = mla._select_and_gather_overlapped(
+        selection_state=state,
+        kvpe_cache=object(),
+        cache_batch_idx=3,
+        populated_global=4096,
+        seq_len_local=640,
+    )
+    assert actual_indices is final_indices and actual_gathered is gathered
+    assert events == ["load", "topk", "gather", "clear", "finalize"]
+
+
+@pytest.mark.parametrize("failure_stage", ["topk", "gather"])
+def test_sparse_mla_overlap_region_recovers_after_exception(monkeypatch, expect_error, failure_stage):
+    """An enqueue failure cannot leave the manager loaded or caller-owned semaphore state reusable."""
+    mla = object.__new__(ttMLA)
+    events = []
+    mla._sparse_mla_overlap = SimpleNamespace(manager_id="manager", topk_subdevice_id=0, topk_core_grid="grid")
+    mla.mesh_device = SimpleNamespace(
+        load_sub_device_manager=lambda manager: events.append(("load", manager)),
+        clear_loaded_sub_device_manager=lambda: events.append("clear"),
+    )
+
+    def select_local(*args, **kwargs):
+        events.append("topk")
+        if failure_stage == "topk":
+            raise ValueError("boom")
+        return object()
+
+    def gather(*args, **kwargs):
+        events.append("gather")
+        raise ValueError("boom")
+
+    mla._indexer = SimpleNamespace(select_local=select_local)
+    mla._gather_kvpe_prefix = gather
+    mla.tt_ccl = SimpleNamespace(reset_sparse_mla_overlap_semaphores=lambda: events.append("reset"))
+    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.mla.mla.signpost", lambda **_: None)
+
+    with expect_error(ValueError, "boom"):
+        mla._select_and_gather_overlapped(
+            selection_state=object(),
+            kvpe_cache=object(),
+            cache_batch_idx=0,
+            populated_global=32,
+            seq_len_local=32,
+        )
+    expected_branch_events = ["topk"] if failure_stage == "topk" else ["topk", "gather"]
+    assert events == [("load", "manager"), *expected_branch_events, "clear", "reset"]
+
+
+def test_sparse_mla_overlap_gather_threads_external_resources(monkeypatch):
+    """The overlapped SP prefix gather passes the selected strip and both persistent semaphore handles."""
+    mla = object.__new__(ttMLA)
+    mla.sp_factor = 4
+    mla.sp_axis = 0
+    mla.ccl_num_links = 2
+    mla._sparse_kv_gather_buffer = "persistent_output"
+    geometry = MlaKvCacheGeometry(latent_dim=512, rope_dim=64)
+    storage = SimpleNamespace(
+        shape=(8, 1, 256, 576),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    gathered_storage = SimpleNamespace(
+        shape=(1, 1, 1024, 576),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    cache = MlaKvCache(MlaKvCacheFormat.BF16_RM, storage, geometry)
+    resources = SimpleNamespace(
+        gather_subdevice_id="gather_sd",
+        gather_core_grid="gather_grid",
+        ready_semaphore="ready",
+        data_valid_semaphore="valid",
+    )
+    captured = {}
+
+    def fake_gather(input_tensor, **kwargs):
+        captured["input"] = input_tensor
+        captured.update(kwargs)
+        return gathered_storage
+
+    monkeypatch.setattr(ttnn.experimental, "high_bw_all_gather", fake_gather)
+    result = mla._gather_kvpe_prefix(
+        cache,
+        cache_batch_idx=3,
+        populated_global=100,
+        block_cyclic_chunk_local=32,
+        overlap_resources=resources,
+    )
+
+    assert result.storage is gathered_storage
+    assert captured == {
+        "input": storage,
+        "dim": 2,
+        "output_tensor": "persistent_output",
+        "num_links": 2,
+        "cluster_axis": 0,
+        "input_batch_index": 3,
+        "gathered_dim_size": 128,
+        "subdevice_id": "gather_sd",
+        "sub_core_grids": "gather_grid",
+        "ready_semaphore": "ready",
+        "data_valid_semaphore": "valid",
+    }
+
+
+def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monkeypatch):
+    """TP-dedup keeps overlap enabled when one full-mesh gather can reconstruct the cache."""
+    mla = object.__new__(ttMLA)
+    mla.sp_factor = 2
+    mla.tp_factor = 2
+    mla.ccl_num_links = 2
+    mla._sparse_kv_gather_buffer = "persistent_output"
+    geometry = MlaKvCacheGeometry(latent_dim=512, rope_dim=64)
+    storage = SimpleNamespace(shape=(1, 1, 64, 576), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    gathered_storage = SimpleNamespace(shape=(1, 1, 256, 576), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    cache = MlaKvCache(MlaKvCacheFormat.BF16_RM, storage, geometry)
+    resources = SimpleNamespace(
+        gather_subdevice_id="gather_sd",
+        gather_core_grid="gather_grid",
+        ready_semaphore="ready",
+        data_valid_semaphore="valid",
+    )
+    captured = {}
+
+    def fake_gather(input_tensor, **kwargs):
+        captured["input"] = input_tensor
+        captured.update(kwargs)
+        return gathered_storage
+
+    monkeypatch.setattr(ttnn.experimental, "high_bw_all_gather", fake_gather)
+    result = mla._gather_kvpe_prefix_full_mesh(
+        cache,
+        cache_batch_idx=0,
+        populated_global=128,
+        block_cyclic_chunk_local=64,
+        overlap_resources=resources,
+    )
+
+    assert result.storage is gathered_storage
+    assert captured == {
+        "input": storage,
+        "dim": 2,
+        "output_tensor": "persistent_output",
+        "num_links": 2,
+        "cluster_axis": None,
+        "input_batch_index": 0,
+        "gathered_dim_size": 128,
+        "subdevice_id": "gather_sd",
+        "sub_core_grids": "gather_grid",
+        "ready_semaphore": "ready",
+        "data_valid_semaphore": "valid",
+    }
+
+
+def test_sparse_mla_overlap_tp_gather_fallback_fails_closed(monkeypatch, expect_error):
+    """Do not run the two-axis TP fallback under a manager whose resources it cannot honor."""
+    mla = object.__new__(ttMLA)
+    mla._kv_dedup = True
+    monkeypatch.setattr(mla, "_can_full_mesh_gather_kvpe", lambda _: False)
+    cache = SimpleNamespace(storage=object())
+
+    with expect_error(ValueError, "two-axis fallback does not support overlap resources"):
+        mla._gather_kvpe_prefix(
+            cache,
+            cache_batch_idx=0,
+            populated_global=128,
+            block_cyclic_chunk_local=64,
+            overlap_resources=object(),
+        )
+
+
 def test_matches_config_rejects_dense():
     """A dense DeepSeek-V3 / R1-style config (no index_* fields) must not look sparse."""
     dense = SimpleNamespace(q_lora_rank=1536, hidden_size=7168)
@@ -221,50 +601,319 @@ def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden)
     ).to(torch.bfloat16)
 
 
-def _new_kvpe(config, mesh_device, mesh_shape):
-    # Sparse attention (sparse_sdpa) reads the KVPE cache natively: it must be uncompressed bf16 and
-    # ROW_MAJOR (the sparse forward asserts this), not the init_kvpe_cache bf8/TILE default.
+def _new_kvpe(
+    config,
+    mesh_device,
+    mesh_shape,
+    seq_len=SEQ_LEN,
+    cache_format=MlaKvCacheFormat.BF16_RM,
+    tp_shard_kv=False,
+):
+    # Sparse attention reads both supported ROW_MAJOR cache formats natively. Keep BF16 as the default
+    # for the broad cache-loading suite, while overlap qualification explicitly covers scaled FP8 too.
     return init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=cache_format,
         hf_config=config,
         mesh_device=mesh_device,
-        seq_len=SEQ_LEN,
+        seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
         num_kvpe_cache_layers=1,
+        tp_axis=TP_AXIS if tp_shard_kv else None,
     )
 
 
-def _new_index_kv(config, mesh_device, mesh_shape):
-    # Caller-owned indexer key cache for the folded single-shot (block-cyclic) path: 1 layer / 1 user, so
-    # update_padded_kv_cache's num_slots = cache_batch / layer_num stays >= 1 with the MLA's layer_num=1.
+def _new_index_kv(config, mesh_device, mesh_shape, seq_len=SEQ_LEN, tp_shard_kv=False):
+    # Caller-owned indexer key cache for the folded single-shot (block-cyclic) path. V3.2/GLM-5.1 use
+    # one test layer; GLM-5.2 compacts this cache to its full-indexer layers, so its batch must contain
+    # every compact slot expected by update_padded_kv_cache.
+    index_cache_layers = sum(kind == "full" for kind in getattr(config, "indexer_types", ())) or 1
     return init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
         mesh_device=mesh_device,
-        seq_len=SEQ_LEN,
+        seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
-        num_kvpe_cache_layers=1,
+        num_kvpe_cache_layers=index_cache_layers,
         num_users=1,
         dtype=ttnn.bfloat8_b,
+        tp_axis=TP_AXIS if tp_shard_kv else None,
     )
 
 
-def _build_mla(config, state_dict, mesh_device, weight_cache_path):
+def _build_mla(
+    config,
+    state_dict,
+    mesh_device,
+    weight_cache_path,
+    *,
+    seq_len=SEQ_LEN,
+    is_chunked=False,
+    active_seq_len=None,
+    sparse_mla_overlap_profile=None,
+    sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+    tp_shard_kv=False,
+):
     return ttMLA(
         config,
         state_dict,
         mesh_device,
         layer_idx=0,
-        seq_len=SEQ_LEN,
+        seq_len=seq_len,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=weight_cache_path,
+        sparse_mla_overlap_profile=sparse_mla_overlap_profile,
+        sparse_kv_cache_format=sparse_kv_cache_format,
+        tp_shard_kv=tp_shard_kv,
+        is_chunked=is_chunked,
+        active_seq_len=active_seq_len,
         # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
         # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
         # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
         layer_num=1,
     )
+
+
+def _overlap_integration_cases():
+    worker_l1_size = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+
+    def fabric2d():
+        return {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "worker_l1_size": worker_l1_size,
+        }
+
+    return [
+        pytest.param(
+            (2, 2),
+            fabric2d(),
+            "qb2_80_30",
+            30,
+            256,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="qb2_80_30-full-mesh-tp-sharded-2x2",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d(),
+            "loudbox_80_40",
+            40,
+            512,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="loudbox_80_40-fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            fabric2d(),
+            "galaxy_80_40",
+            40,
+            512,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="galaxy_80_40-fabric2d-8x4",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,overlap_profile,expected_gather_cores,seq_len",
+    _overlap_integration_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm_5_2"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_sparse_mla_overlap_matches_serial(
+    mesh_device,
+    device_params,
+    overlap_profile,
+    expected_gather_cores,
+    seq_len,
+    variant,
+    config_only,
+):
+    """Each production/local manager runs the integrated GLM-5.2 path and preserves serial results.
+
+    The same layer instance is used for both runs so this comparison isolates scheduling from weights.
+    Fresh caller-owned KVPE/index caches keep the two forwards logically independent. The serial run
+    also warms the shared full-grid stages; the overlap run must compile and execute the exact split-grid
+    top-k and externally synchronized gather programs.
+    """
+    config = config_only
+    config.max_seq_len = seq_len
+    mesh_shape = list(mesh_device.shape)
+    weights = random_mla_weights(config)
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len, chunk_size_global=seq_len
+    )
+    torch.manual_seed(42)
+    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
+    tp_shard_kv = overlap_profile == "qb2_80_30"
+
+    mla = _build_mla(
+        config,
+        weights,
+        mesh_device,
+        weight_cache_path=None,
+        seq_len=seq_len,
+        sparse_mla_overlap_profile=overlap_profile,
+        tp_shard_kv=tp_shard_kv,
+    )
+    resources = mla._sparse_mla_overlap
+    assert resources is not None
+    assert resources.topk_core_grid.num_cores() == 80
+    assert resources.gather_core_grid.num_cores() == expected_gather_cores
+
+    try:
+        # Temporarily select the compatibility schedule for the numerical reference; restoring the
+        # resources exercises the production forward routing without constructing a second weight set.
+        mla._sparse_mla_overlap = None
+        serial = _forward(
+            mla,
+            mesh_device,
+            rope_tensors,
+            _new_kvpe(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv),
+            _new_index_kv(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv),
+            hidden,
+        )
+        mla._sparse_mla_overlap = resources
+        overlapped_cold = _forward(
+            mla,
+            mesh_device,
+            rope_tensors,
+            _new_kvpe(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv),
+            _new_index_kv(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv),
+            hidden,
+        )
+        # Repeat with the exact split-grid hashes cached. This also proves that the caller-owned
+        # semaphores return to a reusable state after the first collective completes.
+        overlapped_warm = _forward(
+            mla,
+            mesh_device,
+            rope_tensors,
+            _new_kvpe(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv),
+            _new_index_kv(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv),
+            hidden,
+        )
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        mla.release_sparse_mla_overlap_manager()
+
+    for run, overlapped in (("cold", overlapped_cold), ("warm", overlapped_warm)):
+        passed, pcc = comp_pcc(serial, overlapped, 0.999)
+        logger.info(f"[glm_5_2/{overlap_profile}] sparse MLA serial vs {run} overlap PCC: {pcc}")
+        assert passed, f"GLM-5.2 {run} overlapped sparse MLA diverged from serial scheduling: PCC={pcc}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,overlap_profile,expected_gather_cores,unused_single_seq_len",
+    _overlap_integration_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm_5_2"])
+@pytest.mark.parametrize(
+    "cache_format",
+    [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
+    ids=["kv_bf16", "kv_scaled_fp8"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
+    mesh_device,
+    device_params,
+    overlap_profile,
+    expected_gather_cores,
+    unused_single_seq_len,
+    variant,
+    cache_format,
+    config_only,
+):
+    """Two growing chunks retain both outputs and reuse every split-grid/format program hash."""
+    seq_len, chunk = 512, 256
+    config = config_only
+    config.max_seq_len = seq_len
+    mesh_shape = list(mesh_device.shape)
+    weights = random_mla_weights(config)
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len, chunk_size_global=chunk
+    )
+    torch.manual_seed(43)
+    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
+    tp_shard_kv = overlap_profile == "qb2_80_30"
+    shard_dims = [None, None]
+    shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+
+    mla = _build_mla(
+        config,
+        weights,
+        mesh_device,
+        weight_cache_path=None,
+        seq_len=seq_len,
+        is_chunked=True,
+        active_seq_len=chunk,
+        sparse_mla_overlap_profile=overlap_profile,
+        sparse_kv_cache_format=cache_format,
+        tp_shard_kv=tp_shard_kv,
+    )
+    resources = mla._sparse_mla_overlap
+    assert resources is not None
+    assert resources.topk_core_grid.num_cores() == 80
+    assert resources.gather_core_grid.num_cores() == expected_gather_cores
+
+    def run_chunks(overlap):
+        mla._sparse_mla_overlap = resources if overlap else None
+        kvpe_cache = _new_kvpe(config, mesh_device, mesh_shape, seq_len, cache_format, tp_shard_kv=tp_shard_kv)
+        index_kv_cache = _new_index_kv(config, mesh_device, mesh_shape, seq_len, tp_shard_kv=tp_shard_kv)
+        device_outputs = []
+        for start in range(0, seq_len, chunk):
+            tt_hidden = ttnn.from_torch(
+                hidden[:, start : start + chunk].unsqueeze(0),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+            device_outputs.append(
+                mla.forward(
+                    tt_hidden,
+                    rope_tensors,
+                    kvpe_cache,
+                    actual_start=start,
+                    index_kv_cache=index_kv_cache,
+                )
+            )
+
+        # Keep both results live until both overlap regions and their full-grid consumers finish.
+        # Distinct buffers plus delayed readback catch accidental reuse of a prior chunk's output.
+        ttnn.synchronize_device(mesh_device)
+        per_chunk_addresses = [
+            {tensor.buffer_address() for tensor in ttnn.get_device_tensors(output)} for output in device_outputs
+        ]
+        assert per_chunk_addresses[0].isdisjoint(per_chunk_addresses[1])
+        return [ttnn.to_torch(output, mesh_composer=composer).to(torch.bfloat16) for output in device_outputs]
+
+    try:
+        serial = run_chunks(False)
+        overlapped_cold = run_chunks(True)
+        cached_entries = mesh_device.num_program_cache_entries()
+        overlapped_warm = run_chunks(True)
+        assert mesh_device.num_program_cache_entries() == cached_entries
+    finally:
+        mla._sparse_mla_overlap = resources
+        mla.release_sparse_mla_overlap_manager()
+
+    for run_name, actual_chunks in (("cold", overlapped_cold), ("warm", overlapped_warm)):
+        for chunk_idx, (expected, actual) in enumerate(zip(serial, actual_chunks)):
+            passed, pcc = comp_pcc(expected, actual, 0.999)
+            logger.info(
+                f"[glm_5_2/{cache_format.name}/{overlap_profile}] sparse MLA growing-prefix serial vs {run_name} "
+                f"chunk {chunk_idx} PCC: {pcc}"
+            )
+            assert passed, f"GLM-5.2/{cache_format.name} {run_name} overlap chunk {chunk_idx} diverged: PCC={pcc}"
 
 
 @pytest.mark.parametrize(

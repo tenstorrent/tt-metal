@@ -15,6 +15,7 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 struct HighBwAllGatherUnicastFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::CoreCoord> worker_cores;
+        CoreRangeSet worker_core_range;
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore ready_sem;

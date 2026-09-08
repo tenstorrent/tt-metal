@@ -71,6 +71,12 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     slot; bytes outside those prefixes are left unchanged. ``gathered_dim_size``
                     is the total valid extent, not a contiguous output prefix: consumers must
                     preserve the fixed per-rank stride when locating every rank's valid data.
+                ready_semaphore: Optional caller-owned persistent startup semaphore. Must be
+                    supplied together with ``data_valid_semaphore`` and initialized to zero on
+                    the complete worker-core restriction before the first call.
+                data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
+                    Supplying both semaphore handles selects the allocation-free, no-internal-sync
+                    dispatch path intended for sub-device overlap.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -82,7 +88,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("num_links") = nb::none(),
         nb::arg("input_batch_index") = nb::none(),
-        nb::arg("gathered_dim_size") = nb::none());
+        nb::arg("gathered_dim_size") = nb::none(),
+        nb::arg("ready_semaphore") = nb::none(),
+        nb::arg("data_valid_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

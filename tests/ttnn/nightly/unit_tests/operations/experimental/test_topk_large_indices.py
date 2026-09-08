@@ -576,3 +576,216 @@ def test_topk_large_indices_valid_length_out_of_range_raises(device, expect_erro
     torch_input = _make_bf16_exact_input(num_rows=1, n=n)
     with expect_error(RuntimeError, "valid_length"):
         ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+
+def _rect_core_grid(start_x, end_x, end_y):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(start_x, 0), ttnn.CoreCoord(end_x, end_y))])
+
+
+def _run_topk_on_manager(device, tt_input, torch_input, core_grid, k=512):
+    manager = device.create_sub_device_manager([ttnn.SubDevice([core_grid])], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        result = ttnn.experimental.topk_large_indices(
+            tt_input,
+            k=k,
+            subdevice_id=ttnn.SubDeviceId(0),
+            sub_core_grids=core_grid,
+        )
+        ttnn.synchronize_device(device, sub_device_ids=[ttnn.SubDeviceId(0)])
+        _assert_topk_matches_torch(torch_input, result, k)
+    finally:
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
+def test_topk_large_indices_explicit_full_grid_backward_compatibility(device):
+    grid = device.compute_with_storage_grid_size()
+    full_grid = _rect_core_grid(0, grid.x - 1, grid.y - 1)
+    torch_input = _make_large_index_input(num_rows=127, n=1024, k=512)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        implicit = ttnn.experimental.topk_large_indices(tt_input, k=512)
+        ttnn.synchronize_device(device)
+        entries_after_implicit = device.num_program_cache_entries()
+        explicit = ttnn.experimental.topk_large_indices(
+            tt_input,
+            k=512,
+            subdevice_id=ttnn.SubDeviceId(0),
+            sub_core_grids=full_grid,
+        )
+        explicit_grid_only = ttnn.experimental.topk_large_indices(tt_input, k=512, sub_core_grids=full_grid)
+        ttnn.synchronize_device(device)
+
+        assert entries_after_implicit > 0
+        assert device.num_program_cache_entries() == entries_after_implicit
+        _assert_topk_matches_torch(torch_input, implicit, 512)
+        _assert_topk_matches_torch(torch_input, explicit, 512)
+        _assert_topk_matches_torch(torch_input, explicit_grid_only, 512)
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_topk_large_indices_restricted_rectangular_and_discontiguous_grids(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 11 or grid.y < 10:
+        pytest.skip(f"production top-k core profiles require at least an 11x10 worker grid, got {grid}")
+
+    origin_80 = _rect_core_grid(0, 7, 9)
+    non_origin_80 = _rect_core_grid(grid.x - 8, grid.x - 1, 9)
+    discontiguous_80 = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(grid.x - 4, 0), ttnn.CoreCoord(grid.x - 1, 9)),
+        ]
+    )
+    assert origin_80.num_cores() == non_origin_80.num_cores() == discontiguous_80.num_cores() == 80
+
+    # 163 rows force unequal row groups and exercise start-row accumulation across both
+    # ranges in row-wise corerange_to_cores traversal order.
+    base_row = _make_large_index_input(num_rows=1, n=1024, k=512)[0]
+    torch_input = torch.stack([torch.roll(base_row, shifts=row) for row in range(163)])
+    tt_input = _to_device(torch_input, device)
+    for core_grid in (origin_80, non_origin_80, discontiguous_80):
+        _run_topk_on_manager(device, tt_input, torch_input, core_grid)
+
+
+def test_topk_large_indices_rejects_invalid_subdevice_core_selection(device, expect_error):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 9:
+        pytest.skip(f"subdevice split test requires at least nine worker columns, got {grid}")
+
+    topk_grid = _rect_core_grid(0, 7, grid.y - 1)
+    gather_grid = _rect_core_grid(8, grid.x - 1, grid.y - 1)
+    manager = device.create_sub_device_manager(
+        [ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])],
+        0,
+    )
+    device.load_sub_device_manager(manager)
+    torch_input = _make_large_index_input(num_rows=32, n=512, k=512)
+    tt_input = _to_device(torch_input, device)
+    try:
+        escaped_grid = _rect_core_grid(7, 8, grid.y - 1)
+        with expect_error(RuntimeError, "must be fully contained"):
+            ttnn.experimental.topk_large_indices(
+                tt_input,
+                k=512,
+                subdevice_id=ttnn.SubDeviceId(0),
+                sub_core_grids=escaped_grid,
+            )
+        with expect_error(RuntimeError, "is not part of active subdevice manager"):
+            ttnn.experimental.topk_large_indices(
+                tt_input,
+                k=512,
+                subdevice_id=ttnn.SubDeviceId(2),
+            )
+        with expect_error(RuntimeError, "requires at least one TENSIX worker core"):
+            ttnn.experimental.topk_large_indices(
+                tt_input,
+                k=512,
+                subdevice_id=ttnn.SubDeviceId(0),
+                sub_core_grids=ttnn.CoreRangeSet([]),
+            )
+    finally:
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+    outside_device_grid = _rect_core_grid(grid.x, grid.x, 0)
+    with expect_error(RuntimeError, "must be fully contained"):
+        ttnn.experimental.topk_large_indices(tt_input, k=512, sub_core_grids=outside_device_grid)
+
+
+def test_topk_large_indices_program_cache_separates_resolved_core_grids(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 11 or grid.y < 10:
+        pytest.skip(f"production cache profiles require at least an 11x10 worker grid, got {grid}")
+
+    grid_80 = _rect_core_grid(0, 7, 9)
+    grid_30 = _rect_core_grid(grid.x - 3, grid.x - 1, 9)
+    manager_80 = device.create_sub_device_manager([ttnn.SubDevice([grid_80])], 0)
+    manager_30 = device.create_sub_device_manager([ttnn.SubDevice([grid_30])], 0)
+    torch_input = _make_large_index_input(num_rows=64, n=1024, k=512)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        default_output = ttnn.experimental.topk_large_indices(tt_input, k=512)
+        ttnn.synchronize_device(device)
+        entries_after_default = device.num_program_cache_entries()
+
+        device.load_sub_device_manager(manager_80)
+        output_80 = ttnn.experimental.topk_large_indices(tt_input, k=512, subdevice_id=ttnn.SubDeviceId(0))
+        ttnn.synchronize_device(device)
+        entries_after_80 = device.num_program_cache_entries()
+        assert entries_after_80 > entries_after_default
+
+        device.load_sub_device_manager(manager_30)
+        output_30 = ttnn.experimental.topk_large_indices(tt_input, k=512, subdevice_id=ttnn.SubDeviceId(0))
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() > entries_after_80
+        _assert_topk_matches_torch(torch_input, default_output, 512)
+        _assert_topk_matches_torch(torch_input, output_80, 512)
+        _assert_topk_matches_torch(torch_input, output_30, 512)
+    finally:
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager_80)
+        device.remove_sub_device_manager(manager_30)
+        device.disable_and_clear_program_cache()
+
+
+def test_topk_large_indices_restricted_grid_cache_hit_rebinds_shape_and_valid_length(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8 or grid.y < 10:
+        pytest.skip(f"80-core top-k profile requires at least an 8x10 worker grid, got {grid}")
+
+    grid_80 = _rect_core_grid(0, 7, 9)
+    manager = device.create_sub_device_manager([ttnn.SubDevice([grid_80])], 0)
+    cases = []
+    for num_rows, n, valid_length in ((2, 1024, 512), (163, 4096, 2048), (5, 8192, 4096)):
+        torch_input = torch.zeros((num_rows, n), dtype=torch.bfloat16)
+        torch_input[:, :valid_length] = _make_large_index_input(
+            num_rows=num_rows,
+            n=valid_length,
+            k=512,
+        )
+        torch_input[:, valid_length:] = 100.0
+        cases.append((torch_input, _to_device(torch_input, device), valid_length))
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    device.load_sub_device_manager(manager)
+    try:
+        cache_entries = []
+        for torch_input, tt_input, valid_length in cases:
+            output = ttnn.experimental.topk_large_indices(
+                tt_input,
+                k=512,
+                valid_length=valid_length,
+                subdevice_id=ttnn.SubDeviceId(0),
+                sub_core_grids=grid_80,
+            )
+            ttnn.synchronize_device(device, sub_device_ids=[ttnn.SubDeviceId(0)])
+            cache_entries.append(device.num_program_cache_entries())
+            _, expected = torch.topk(
+                torch_input[:, :valid_length].float(),
+                512,
+                dim=-1,
+                largest=True,
+                sorted=True,
+            )
+            _assert_indices(output, expected, [torch_input.shape[0], 512])
+
+        assert cache_entries[0] > 0
+        assert max(cache_entries) == min(cache_entries)
+    finally:
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+        device.disable_and_clear_program_cache()

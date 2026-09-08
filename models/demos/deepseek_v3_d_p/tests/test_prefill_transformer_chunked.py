@@ -1446,6 +1446,72 @@ def run_chunked_transformer_updated(
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
+
+    # Production overlap qualification asks this full-model harness to prove that the requested profile
+    # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
+    # behavior, while the checked qualification driver cannot report a win from two accidentally identical
+    # serial runs (or from only a subset of the GLM-5.2 full-indexer layers).
+    expected_overlap_profile = os.environ.get("TT_PREFILL_EXPECT_SPARSE_MLA_OVERLAP_PROFILE")
+    profile_call_counts = None
+    if expected_overlap_profile is not None:
+        expected_overlap_profile = expected_overlap_profile.lower()
+        worker_grid = mesh_device.compute_with_storage_grid_size()
+        eligible_layers = [
+            layer.mla.layer_idx
+            for layer in transformer.layers
+            if layer.mla._has_indexer and not layer.mla.kv_only and not layer.mla._indexer_reuse
+        ]
+        active = [
+            (layer.mla.layer_idx, layer.mla._sparse_mla_overlap)
+            for layer in transformer.layers
+            if layer.mla._sparse_mla_overlap is not None
+        ]
+        if expected_overlap_profile in ("", "0", "off", "none"):
+            assert not active, f"expected serialized sparse MLA, but overlap is active on {[idx for idx, _ in active]}"
+            observed_profile = "off"
+            observed_topk_cores = worker_grid.x * worker_grid.y
+            observed_gather_cores = 0
+        else:
+            active_layers = [idx for idx, _ in active]
+            assert active_layers == eligible_layers, (
+                f"profile {expected_overlap_profile!r}: expected overlap on eligible layers {eligible_layers}, "
+                f"got {active_layers}"
+            )
+            assert active, f"profile {expected_overlap_profile!r} did not create overlap resources"
+            profiles = {resources.profile for _, resources in active}
+            topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
+            gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
+            assert profiles == {expected_overlap_profile}, profiles
+            assert topk_cores == {80}, topk_cores
+            assert gather_cores == {40}, gather_cores
+            observed_profile = next(iter(profiles))
+            observed_topk_cores = next(iter(topk_cores))
+            observed_gather_cores = next(iter(gather_cores))
+        logger.info(
+            f"SPARSE_MLA_PROFILE_ASSERT variant={variant.name} expected={observed_profile} "
+            f"active_layer_count={len(active)} "
+            f"eligible_layer_count={len(eligible_layers)} worker_grid={worker_grid.x}x{worker_grid.y} "
+            f"mesh={sp}x{tp} topk_cores={observed_topk_cores} gather_cores={observed_gather_cores}"
+        )
+
+        # Count the actually dispatched serial/overlap branches per eligible layer. Construction-time
+        # resource checks alone would miss a future runtime fallback after model initialization.
+        profile_call_counts = {layer_idx: {"serial": 0, "overlap": 0} for layer_idx in eligible_layers}
+
+        def counted_call(method, layer_idx, path):
+            def wrapped(*args, **kwargs):
+                profile_call_counts[layer_idx][path] += 1
+                return method(*args, **kwargs)
+
+            return wrapped
+
+        for layer in transformer.layers:
+            if layer.mla.layer_idx not in profile_call_counts:
+                continue
+            layer.mla._indexer.forward = counted_call(layer.mla._indexer.forward, layer.mla.layer_idx, "serial")
+            layer.mla._sparse_chunked_attn_overlapped = counted_call(
+                layer.mla._sparse_chunked_attn_overlapped, layer.mla.layer_idx, "overlap"
+            )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
     profiler.end("tt_transformer_creation")
@@ -1690,6 +1756,24 @@ def run_chunked_transformer_updated(
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
+
+    if profile_call_counts is not None:
+        expected_calls_per_layer = n_chunks * num_iters
+        serial_counts = [counts["serial"] for counts in profile_call_counts.values()]
+        overlap_counts = [counts["overlap"] for counts in profile_call_counts.values()]
+        if expected_overlap_profile in ("", "0", "off", "none"):
+            assert serial_counts and set(serial_counts) == {expected_calls_per_layer}, serial_counts
+            assert set(overlap_counts) == {0}, overlap_counts
+            observed_profile = "off"
+        else:
+            assert set(serial_counts) == {0}, serial_counts
+            assert overlap_counts and set(overlap_counts) == {expected_calls_per_layer}, overlap_counts
+            observed_profile = expected_overlap_profile
+        logger.info(
+            f"SPARSE_MLA_EXECUTION_ASSERT expected={observed_profile} "
+            f"eligible_layer_count={len(profile_call_counts)} calls_per_layer={expected_calls_per_layer} "
+            f"serial_calls={sum(serial_counts)} overlap_calls={sum(overlap_counts)}"
+        )
 
     profiler.end("total_test_time")
     logger.success(

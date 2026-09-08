@@ -112,6 +112,9 @@ def glm_5_2_hf_config(max_seq: int = 8192):
         index_head_dim=GLM52Config.INDEX_HEAD_DIM,
         index_topk=GLM52Config.INDEX_TOPK,
         index_rope_interleave=True,
+        # Full indexer layers overlap their local TopK on 80 cores with the sparse-KV SP gather on
+        # the remaining 30 (QB2) or 40 (LoudBox/Galaxy) cores. Shared layers reuse those indices.
+        sparse_mla_overlap_profile="auto",
         # Indexer reuse: the per-layer full/shared map (length NUM_LAYERS) plus the params it derives
         # from. Consumers read `indexer_types` by layer index; absent on GLM-5.1 -> all layers full.
         indexer_types=GLM52Config.indexer_types(),
