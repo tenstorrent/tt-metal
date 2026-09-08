@@ -1873,8 +1873,7 @@ void TestConfigBuilder::expand_patterns_into_test(
             continue;
         }
 
-        // Per-pattern overrides layer on top of the test-wide defaults; the expanders only
-        // receive a traffic config, so anything set on the pattern must be folded in here.
+        // Fold per-pattern overrides into the config passed to expanders.
         ParsedTrafficPatternConfig defaults = test_defaults;
         if (pattern.vc_id.has_value()) {
             defaults.vc_id = pattern.vc_id;
