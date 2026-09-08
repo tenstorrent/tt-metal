@@ -662,6 +662,8 @@ class LinearDecode(DeepSeekV4Module):
         """``output_mem_config`` / ``output_core_grid`` (mutually exclusive) plus fused RMSNorm."""
         if self.output_core_grid is not None:
             kwargs = {"output_core_grid": self.output_core_grid}
+            if self.output_core_grid.num_cores() >= 2:
+                kwargs["output_mcast_two_hub"] = True
         else:
             kwargs = {"output_mem_config": output_memory_config}
         if self.fused_rms_norm_eps is not None:
