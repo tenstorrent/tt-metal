@@ -329,6 +329,29 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_BasicSmall) {
     CompareKernelVsReferenceWithShape({1, 1, 2, 32});
 }
 
+TEST_F(PolyNormOpTest, PolyNorm_FusedBackwardReturnsBfloat16ParameterGradients) {
+    using namespace ttml;
+    const auto data = make_case_data({1, 1, 2, 32});
+    auto* device = &autograd::ctx().get_device();
+
+    const auto input = core::from_xtensor(data.input, device);
+    const xt::xarray<float> dL_dout_data = xt::ones_like(data.input);
+    const auto dL_dout = core::from_xtensor(dL_dout_data, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+    auto [dL_dx, dL_dw, dL_db] = metal::polynorm3_bw(input, dL_dout, weight, 1e-5F);
+
+    EXPECT_EQ(dL_dx.dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(dL_dw.dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(dL_db.dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(dL_dx.logical_shape(), input.logical_shape());
+    EXPECT_EQ(dL_dw.logical_shape(), weight.logical_shape());
+    EXPECT_EQ(dL_db.logical_shape(), ttnn::Shape({1U, 1U, 1U, 1U}));
+
+    EXPECT_TRUE(xt::all(xt::isfinite(core::to_xtensor(dL_dx))));
+    EXPECT_TRUE(xt::all(xt::isfinite(core::to_xtensor(dL_dw))));
+    EXPECT_TRUE(xt::all(xt::isfinite(core::to_xtensor(dL_db))));
+}
+
 TEST_F(PolyNormOpTest, PolyNorm_Compare_FusedVsCompositeForward_Small) {
     using namespace ttml;
     const float epsilon = 1e-5F;

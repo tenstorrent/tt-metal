@@ -9,6 +9,7 @@
 
 #include "core/compute_kernel_config.hpp"
 #include "device/polynorm_bw_device_operation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttml::metal {
 
@@ -40,6 +41,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_bw(
         /*keep_dim=*/true,
         /*output_mem_config=*/std::nullopt,
         /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+    reduced_partials = ttnn::typecast(reduced_partials, input_tensor.dtype());
 
     // Extract dw0, dw1, dw2, db from the reduced partials on-device (no host roundtrip).
     // The reduced tensor is always (1,1,1,128) = 4 scalar tiles regardless of input size,
