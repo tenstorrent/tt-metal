@@ -31,10 +31,6 @@
 // Quasar FD assumes prefetcher and dispatcher share a Tensix. A split build must resolve:
 //   - Payload-before-credit ordering: fabric relay does not honour the NoC packet flush tag this file uses.
 //   - Credit return: NocReleasePolicy::release uses a local store, which reaches only a co-resident DM.
-<<<<<<< HEAD
-=======
-//     The NoC path is needed instead, and the reader moves to the uncached view with it.
->>>>>>> 0219f39d96e (optimizations)
 //   - DispatchSRelayInlineState shares cmd buf 0 with DispatchRelayInlineState, so both inherit one
 //     DEST_COORD; valid only while dispatch_s is co-resident.
 //   - Sub-command copies pass first_line_invalidated=!cmddat_wrap_enable, which is only free because the
@@ -2089,8 +2085,8 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     count++;
 
     WAYPOINT("PSW");
-    volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
