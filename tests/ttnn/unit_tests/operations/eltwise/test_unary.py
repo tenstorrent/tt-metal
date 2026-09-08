@@ -2631,7 +2631,7 @@ def test_unary_logit_streams_temporary_tiles(device, eps):
     output_tensor = ttnn.to_torch(ttnn.logit(input_tensor, eps=eps))
     golden_tensor = ttnn.get_golden_function(ttnn.logit)(in_data, eps=eps)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
