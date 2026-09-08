@@ -149,11 +149,11 @@ Available counter groups:
 - ``l1_0`` — L1 memory ports 0-7 (unpacker, packer, TDMA, NOC Ring 0)
 - ``l1_1`` — L1 memory ports 8-15 (extended unpacker, NOC Ring 1)
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
-- ``all`` — the architecture's full set (needs multiple passes, see below)
+- ``all``: the architecture's full set (needs multiple passes, see below)
 
 Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 client ports); on Blackhole ``all`` includes them.
 
-**Multi-pass capture**: two limits cap what one run can measure — the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share a hardware mux, so at most one L1 bank counts per run. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
+**Multi-pass capture**: two limits cap what one run can measure: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share a hardware mux, so at most one L1 bank counts per run. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
 
 ..  code-block:: sh
 
