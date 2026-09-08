@@ -20,9 +20,12 @@
 // uint32_t) signature and is in scope here via `using namespace ckernel`. See tt-metal#50386.
 void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-    copy_init(in_cb);
+    // Data formats must be reconfigured before the op init: llk_unpack_A_init asserts that the
+    // unpacker is already configured for in_cb (see #55052), and the preceding matmul left it
+    // configured for its own operands.
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
+    copy_init(in_cb);
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -56,6 +59,7 @@ void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles
 //
 // N_block_tiles must be even (enforced host-side).
 void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    CircularBuffer cb_out(out_cb);
 #ifdef FUSE_BIAS
     reconfig_data_format(in_cb, bias_cb);
 #else
@@ -95,7 +99,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             pack_tile(GATE_DST, out_cb);
             tile_regs_release();
         }
-        cb_push_back(out_cb, out_N_block_tiles);
+        cb_out.push_back(out_N_block_tiles);
     }
 }
 #endif  // FUSE_SWIGLU
@@ -111,9 +115,9 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
  */
 void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-    add_bcast_rows_init(in_cb, bias_cb);
     reconfig_data_format(in_cb, bias_cb);
     pack_reconfig_data_format(out_cb);
+    add_bcast_rows_init(in_cb, bias_cb);
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -162,9 +166,9 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    add_bcast_rows_init(intermediate_cb, bias_cb);
     reconfig_data_format(intermediate_cb, bias_cb);
     pack_reconfig_data_format(intermediate_cb);
+    add_bcast_rows_init(intermediate_cb, bias_cb);
 
     // Wait for ALL input data ONCE at the beginning
     cb_bias.wait_front(N_block_tiles);
@@ -210,6 +214,8 @@ void add_bias_and_addcmul_block(
         // === BROADCAST: single row, wait/pop once ===
         cb_ternary_b.wait_front(N_block_tiles);
 
+        reconfig_data_format(intermediate_cb, ternary_b_cb);
+        pack_reconfig_data_format(intermediate_cb);
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_cb, ternary_b_cb);
 #else
@@ -222,8 +228,6 @@ void add_bias_and_addcmul_block(
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb, ternary_b_cb);
-        pack_reconfig_data_format(intermediate_cb);
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -239,6 +243,7 @@ void add_bias_and_addcmul_block(
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
+                reconfig_data_format_srca(intermediate_cb);
                 copy_init(intermediate_cb);
                 copy_tile(intermediate_cb, tile_id, DST_ID);
 
@@ -259,12 +264,12 @@ void add_bias_and_addcmul_block(
         cb_ternary_b.pop_front(N_block_tiles);
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
+        reconfig_data_format(intermediate_cb, ternary_b_cb);
+        pack_reconfig_data_format(intermediate_cb);
 #ifndef TERNARY_B_IS_FLOAT32
         mul_init(intermediate_cb, ternary_b_cb);
 #endif
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb, ternary_b_cb);
-        pack_reconfig_data_format(intermediate_cb);
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -276,9 +281,11 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
+                reconfig_data_format_srca(ternary_b_cb);
                 copy_init(ternary_b_cb);
                 copy_tile(ternary_b_cb, n, TERNARY_B_DST_ID);
 
+                reconfig_data_format_srca(intermediate_cb);
                 copy_init(intermediate_cb);
                 copy_tile(intermediate_cb, tile_id, DST_ID);
 
@@ -306,9 +313,9 @@ void add_bias_and_addcmul_block(
 
     cb_intermediate.wait_front(out_block_num_tiles);
 
-    add_init(intermediate_cb, ternary_a_cb);
     reconfig_data_format(intermediate_cb, ternary_a_cb);
     pack_reconfig_data_format(out_cb);
+    add_init(intermediate_cb, ternary_a_cb);
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -467,6 +474,10 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
+            // Reconfig before init: on all but the first block the unpackers are still
+            // configured for the previous output stage's operands (see #55052).
+            reconfig_data_format(in1_cb, in0_cb);
+            pack_reconfig_data_format(intermediate_cb);
             matmul_block_init(
                 in0_cb,
                 in1_cb,
@@ -474,8 +485,6 @@ void kernel_main() {
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
-            reconfig_data_format(in1_cb, in0_cb);
-            pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
             cb_intermediate.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {

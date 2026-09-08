@@ -217,6 +217,10 @@ void JitBuildEnv::init(
         this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
+    if (this->arch_ == tt::ARCH::QUASAR && rtoptions.get_simulator_enabled() &&
+        rtoptions.get_simulator_path().extension() == ".so") {
+        this->defines_ += "-DNOC_API_V1 ";
+    }
 
     if (rtoptions.get_profiler_enabled()) {
         uint32_t profiler_options = 1;

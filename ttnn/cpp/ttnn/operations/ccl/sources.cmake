@@ -13,6 +13,7 @@ set(TTNN_OP_CCL_SRCS
     common/host/ccl_worker_builder.cpp
     common/host/ccl_command_stream_builders.cpp
     common/host/moe_utils.cpp
+    common/host/mesh_ring_plan.cpp
     all_broadcast/all_broadcast.cpp
     all_broadcast/device/all_broadcast_device_operation.cpp
     all_broadcast/device/all_broadcast_program_factory.cpp
@@ -58,10 +59,12 @@ set(TTNN_OP_CCL_API_HEADERS
     ccl_op_fusion.hpp
     common/host/ccl_command_stream_builders.hpp
     common/host/moe_utils.hpp
+    common/host/mesh_ring_plan.hpp
     common/types/ccl_types.hpp
     common/uops/ccl_command.hpp
     mesh_partition/mesh_partition.hpp
     shared_with_host/hetergeneous_data_structs.hpp
+    shared_with_host/snake_ring.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from

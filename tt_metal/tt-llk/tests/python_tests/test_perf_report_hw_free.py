@@ -22,10 +22,12 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from helpers.counters import _metal_root, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
     PerfReport,
+    _assert_matches_catalog,
     _ci_provenance,
     _prune_runs,
     _refresh_latest,
@@ -40,6 +42,10 @@ from helpers.perf.schema import (
     PerfSchemaError,
     assert_unique_columns,
     stat_column,
+)
+from helpers.perf.test_schemas import (
+    PERF_TEST_SCHEMAS,
+    PERF_TEST_SCHEMAS_QSR,
 )
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
@@ -420,6 +426,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     monkeypatch.setenv("CHIP_ARCH", "wormhole")
     monkeypatch.setenv("GITHUB_SHA", "testsha")
     monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)  # -> pipeline "nightly"
 
     # one raw per-worker CSV (the .gw* pattern combine globs for)
@@ -441,8 +448,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert (run_dir / "perf_x" / "perf_x.csv").exists()
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
-    # ...and a run-level Parquet batch alongside it.
-    # Named from the run tag, not run_id: run_id is shared by every shard.
+    # ...and a run-level Parquet batch alongside it, named from the run tag.
     parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
@@ -452,6 +458,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+    assert set(df["run_id"]) == {"testrun-wormhole-0"}
 
 
 def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
@@ -600,31 +607,44 @@ def test_run_tag_is_stable_within_a_process(tmp_path, monkeypatch):
     assert TestConfig.perf_run_tag() == TestConfig.perf_run_tag()
 
 
-def test_ci_run_id_still_wins_for_provenance(monkeypatch):
-    # All shards of one workflow must share run_id: it is a ROW_KEY column and
-    # the data team's notion of a run spans shards.
+def test_run_id_identifies_the_file_not_the_workflow(monkeypatch):
+    # The warehouse replays by RUN_ID, so a run_id of "999" would make each of
+    # the workflow's ten files erase the one loaded before it.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
-    assert _ci_provenance()["run_id"] == "999"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3"
+
+
+def test_shards_of_one_workflow_get_different_run_ids(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
+    wormhole_3 = _ci_provenance()["run_id"]
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-4")
+    wormhole_4 = _ci_provenance()["run_id"]
+    monkeypatch.setenv("PERF_RUN_TAG", "999-blackhole-3")
+    blackhole_3 = _ci_provenance()["run_id"]
+
+    assert len({wormhole_3, wormhole_4, blackhole_3}) == 3
+    assert all(r.startswith("999-") for r in (wormhole_3, wormhole_4, blackhole_3))
 
 
 def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
-    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID and bumps GITHUB_RUN_ATTEMPT.
-    # Attempt 2 is a second, different measurement: sharing attempt 1's ROW_KEY
-    # (test_name, commit_sha, arch, run_id) would collide with rows already
-    # published.
+    # A re-run keeps GITHUB_RUN_ID and PERF_RUN_TAG and bumps the attempt, so
+    # attempt 2 must not replay over attempt 1's rows.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
-    assert _ci_provenance()["run_id"] == "999-2"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3-2"
 
     # Attempt 1 stays bare, so rows already archived keep the identity they were
     # published with.
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
-    assert _ci_provenance()["run_id"] == "999"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3"
 
 
 def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
@@ -724,3 +744,109 @@ def test_distinct_sweep_keys_pass_through_unchanged():
     pd.testing.assert_frame_equal(
         _reject_duplicate_keys(frame, "perf_example.csv"), frame
     )
+
+
+# ── Two-way catalog check: the CSV a run produced vs its recorded schema ──
+
+_EXAMPLE = "perf_example"
+
+
+def _register(monkeypatch, columns):
+    """One throwaway entry in both catalogs, so the arch branch cannot matter."""
+    entry = {
+        "version": 7,
+        "columns": columns,
+        "aliases": {},
+        "test_name_aliases": {_EXAMPLE: _EXAMPLE},
+    }
+    for catalog in (PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR):
+        monkeypatch.setitem(catalog, _EXAMPLE, entry)
+
+
+def _frame(**extra):
+    """A report frame: sweep columns, then marker, then one metric column."""
+    sweep = {"dest_acc": ["Yes"], "tile_cnt": [8], **{k: [v] for k, v in extra.items()}}
+    return pd.DataFrame(
+        {**sweep, MARKER: ["TILE_LOOP"], stat_column(MEAN, "L1_TO_L1"): [100.0]}
+    )
+
+
+def test_catalog_check_passes_and_ignores_speed_of_light(monkeypatch):
+    # speed_of_light is run mode: in the CSV, deliberately not in the catalog.
+    _register(monkeypatch, ["dest_acc", "tile_cnt", MARKER])
+    _assert_matches_catalog(_frame(speed_of_light=True), _EXAMPLE, "perf_example.csv")
+
+
+def test_catalog_check_rejects_a_column_the_catalog_does_not_record(monkeypatch):
+    # The exact failure the static source reader could not see.
+    _register(monkeypatch, ["dest_acc", "tile_cnt", MARKER])
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
+        _assert_matches_catalog(_frame(full_rt_dim=4), _EXAMPLE, "perf_example.csv")
+    assert "full_rt_dim" in str(excinfo.value)
+    assert "not the catalog" in str(excinfo.value)
+
+
+def test_catalog_check_rejects_a_recorded_column_the_csv_lost(monkeypatch):
+    _register(monkeypatch, ["dest_acc", "num_faces", "tile_cnt", MARKER])
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
+        _assert_matches_catalog(_frame(), _EXAMPLE, "perf_example.csv")
+    assert "num_faces" in str(excinfo.value)
+    assert "not the CSV" in str(excinfo.value)
+
+
+def test_catalog_check_skips_a_base_name_with_no_entry():
+    # The static gate already fails a perf test missing from the catalog, and
+    # combine globs whatever is on disk, so this must not fail a partial run.
+    _assert_matches_catalog(_frame(), "perf_absent_from_catalog", "x.csv")
+
+
+def _cfg_header(*lines):
+    return "\n".join(f"constexpr std::uint32_t PERF_CFG_{line};" for line in lines)
+
+
+def test_perf_cfg_matches_the_device_header():
+    # Parity with the values counters.py used to hand-copy from counters.h.
+    header = _metal_root() / "tt_metal/tt-llk/tests/helpers/include/counters.h"
+    assert _parse_perf_cfg(header.read_text()) == {
+        "VALID_BIT": 1 << 31,
+        "L1_MUX_SHIFT": 17,
+        "L1_MUX_MASK": 0x7,
+        "COUNTER_SHIFT": 8,
+        "COUNTER_MASK": 0x1FF,
+        "BANK_MASK": 0xFF,
+    }
+
+
+def test_perf_cfg_accepts_every_literal_form():
+    # Same value written four legal ways, including a hex shift operand.
+    assert _parse_perf_cfg(
+        _cfg_header(
+            "A = 1u << 31",
+            "B = 1 << 0x1Fu",
+            "C = 0x80000000u",
+            "D = 2147483648",
+        )
+    ) == {"A": 1 << 31, "B": 1 << 31, "C": 1 << 31, "D": 1 << 31}
+
+
+def test_perf_cfg_rejects_anything_it_cannot_parse():
+    # Silent mis-parsing is the failure this module exists to prevent, so a form
+    # outside the documented grammar must raise rather than yield a wrong number.
+    for expr in (
+        "A = (1u << 31)",
+        "A = 1u << 31 | 0x7u",
+        "A = VALID_BIT",
+        "A = 1u + 1u",
+    ):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            RuntimeError, match="not a plain literal or shift"
+        ):
+            _parse_perf_cfg(_cfg_header(expr))
+
+
+def test_perf_cfg_missing_constant_is_absent_not_zero():
+    assert "VALID_BIT" not in _parse_perf_cfg(_cfg_header("BANK_MASK = 0xFFu"))

@@ -596,21 +596,13 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
 /**
- * @brief Enumerate up to `max_solutions` distinct multi-mesh mappings.
+ * @brief Enumerate up to `max_solutions` distinct multi-mesh mappings (thin batch wrapper over
+ *        MultiMeshSolutionEnumerator::next()).
  *
- * Like map_multi_mesh_to_physical, but returns multiple distinct full solutions instead of just the first.
- * Distinct inter-mesh placements (which physical meshes / hosts host each logical mesh) are enumerated with
- * the solver's blocking-clause search (see solve_topology_mapping_n); each placement is then completed with the
- * same per-mesh intra-mesh (fabric-node -> ASIC) mapping used by map_multi_mesh_to_physical. Placements whose
- * intra-mesh mapping is infeasible are skipped. Results are deduplicated by their full fabric-node -> ASIC
- * assignment and returned in solver-preference order.
- *
- * @param max_solutions Maximum number of solutions to return. 0 means "all" up to the solver's internal safety cap.
- *        When >0, the count may come back smaller if fewer distinct feasible solutions exist (or some enumerated
- *        inter-mesh placements fail intra-mesh mapping).
- * @param unique_shapes When true, count solutions by the set of physical meshes used (order-independent), so
- *        placements that occupy the same physical meshes/hosts but differ only in assignment collapse to one.
- *        Maps to the `unique_shapes` knob of solve_topology_mapping_n.
+ * @param max_solutions Maximum number of solutions to return. 0 means "all" up to the enumerator's safety cap.
+ *        The count is against COMPLETED (inter- + intra-mesh) solutions: a placement whose intra-mesh mapping
+ *        fails is forbidden/retried inside next(), never dropped from the count.
+ * @param unique_shapes When true, count solutions by the set of physical meshes used (order-independent).
  * @return Vector of successful TopologyMappingResults (empty if none exist). Each has success == true.
  */
 std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
@@ -625,7 +617,7 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
 /**
  * @brief Pull-based multi-solution enumerator: call next() to get one more distinct solution each time.
  *
- * A lazy, incremental alternative to map_multi_mesh_to_physical_n's collect-everything-then-return. Construct it once
+ * A lazy, incremental multi-solution enumerator over inter-mesh placements. Construct it once
  * with the logical/physical graphs + config, then call next() repeatedly:
  *
  *   MultiMeshSolutionEnumerator e(logical, physical, config, unique_shapes, asic_map, fnode_map);
@@ -634,12 +626,12 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
  *   }                                          // next() == std::nullopt => enumeration exhausted
  *
  * Internally it drives ONE persistent incremental SAT enumeration session (TopologyMappingEnumerationSession) — the
- * SAME SAT path, symmetry shortcuts, and minimal-host prime as map_multi_mesh_to_physical_n's batch solve, exposed
+ * SAME SAT path, symmetry shortcuts, and minimal-host prime as the single-solve inter-mesh solver, exposed
  * lazily instead of collected. The hard CNF is encoded and primed exactly ONCE (on the first next()); every later
  * next() is a warm solve on the same solver (reusing all learned clauses + phase saving) plus one blocking clause.
  * So enumerating N solutions this way costs the same as the batch path, but you get each solution as soon as it is
  * found and can stop at any time by simply not calling next() again. Selection of solutions is IDENTICAL to the
- * batch path (same session, constraints, unique_shapes, and full-assignment signature dedup).
+ * batch path (same session, constraints, and unique_shapes).
  *
  * Lifetime: the enumerator holds references to the graphs/config/rank maps passed to the constructor; the caller must
  * keep those alive for as long as the enumerator is used.
@@ -683,11 +675,15 @@ private:
     ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_;
 
     // One persistent incremental SAT session (same SAT path + shortcuts + minimal-host prime as the batch solve)
-    // plus the running exclusion / dedup bookkeeping.
+    // plus the running exclusion bookkeeping.
     ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session_;
     std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
-    std::set<std::string> seen_signatures_;
     std::size_t emitted_ = 0;
+    // One-shot relaxation of the hard minimal-host cap, mirroring the single-solve fallback: when the
+    // capped encoding is UNSAT, next() clears the cap and re-encodes a fresh session (see next()).
+    bool host_cap_relaxed_ = false;
+    // Intra-mesh forbid/retry state
+    std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
 };
 
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */

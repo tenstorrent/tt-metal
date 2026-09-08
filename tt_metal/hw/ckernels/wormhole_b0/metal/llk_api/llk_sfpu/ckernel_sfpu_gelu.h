@@ -207,21 +207,15 @@ void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
-        // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32):
-        // [0.0, 0.5): slope=0.1928, intercept=-0.000104  (lreg0)
-        // [0.5, 1.0): slope=0.4939, intercept=-0.1605  (lreg0 hi / lreg4 hi)
-        // [1.0, 1.5): slope=0.6189, intercept=-0.2797  (lreg1)
-        // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
-        // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
-        // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37E7322B);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB12286D8);
+        // LUT segments (6-entry piecewise linear)
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.1928f, 0.4939f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(-0.00010443f, -0.1604f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E138F3);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB437B479);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.6188f, 0.6099f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(-0.2796f, -0.2635f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003852);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afa4);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.5402f, 0.5f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(-0.1194f, 0.0f);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
@@ -231,31 +225,31 @@ void gelu_init() {
 
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;
         sfpi::vFloat half_in = in * half;
-        sfpi::vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
         result = half_in + result;
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 
-    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.

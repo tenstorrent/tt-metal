@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -31,9 +33,6 @@ constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYT
 
 // This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
-    auto mesh_device = devices_[0];
-    IDevice* device = mesh_device->get_devices()[0];
-
     const uint32_t signal_address = 100 * 1024;
     const uint32_t l1_result_addr = 200 * 1024;
     const uint32_t dram_address = 30000 * 1024;
@@ -44,21 +43,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
-    const uint32_t dram_channel = mesh_device->dram_channel_from_virtual_core(core);
+    const uint32_t dram_channel = this->device().dram_channel_from_virtual_core(core);
 
     // Initialize L1 signal so hart FIRST_USER_DM (2) can proceed first; the simple_tls_check
     // kernel chains the signal forward (signal_addr := hartid + 1) so hartids 2..7 run in order.
     std::vector<uint32_t> init_signal = {FIRST_USER_DM};
-    tt_metal::detail::WriteToDeviceL1(
-        device,
+    slow_dispatch::WriteToL1(
+        this->device(),
         core,
         signal_address,
         std::span(reinterpret_cast<const uint8_t*>(init_signal.data()), sizeof(uint32_t)),
         CoreType::WORKER);
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     const experimental::KernelSpecName DM_KERNEL_1{"dm_kernel_1"};
     const experimental::KernelSpecName DM_KERNEL_2{"dm_kernel_2"};
@@ -102,7 +97,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
         .kernels = {k1, k2, k3},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     auto make_kernel_run_params = [&]() {
         return experimental::ProgramRunArgs::KernelRunArgs{
@@ -125,12 +120,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     params.kernel_run_args = {kra1, kra2, kra3};
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dram_data;
-    tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_channel, dram_address, TOTAL_RESULT_BYTES, dram_data);
+    slow_dispatch::ReadFromDRAMChannel(this->device(), dram_channel, dram_address, TOTAL_RESULT_BYTES, dram_data);
 
     // Reference global addresses: DM 2-4 share one binary, DM 5-6 share another, DM 7 alone.
     auto slot_global_addr = [&dram_data](uint32_t dm) {
@@ -277,9 +270,6 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
-    auto mesh_device = devices_[0];
-    IDevice* device = mesh_device->get_devices()[0];
-
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
@@ -291,24 +281,20 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     constexpr uint32_t total_result_bytes = NUM_COMPUTE_SLOTS * TLS_CHECK_RESULT_SLOT_BYTES;
 
     std::vector<uint32_t> init_signal = {QUASAR_FIRST_COMPUTE_HARTID};
-    tt_metal::detail::WriteToDeviceL1(
-        device,
+    slow_dispatch::WriteToL1(
+        this->device(),
         core,
         signal_address,
         std::span(reinterpret_cast<const uint8_t*>(init_signal.data()), sizeof(uint32_t)),
         CoreType::WORKER);
 
     std::vector<uint32_t> init_data(total_result_bytes / sizeof(uint32_t), 0);
-    tt_metal::detail::WriteToDeviceL1(
-        device,
+    slow_dispatch::WriteToL1(
+        this->device(),
         core,
         l1_result_addr,
         std::span(reinterpret_cast<const uint8_t*>(init_data.data()), total_result_bytes),
         CoreType::WORKER);
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"compute_tls"};
     const experimental::NodeCoord node{0, 0};
@@ -337,7 +323,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -347,12 +333,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     }};
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> l1_data;
-    tt_metal::detail::ReadFromDeviceL1(device, core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
+    slow_dispatch::ReadFromL1(this->device(), core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
 
     auto slot_global_addr = [&l1_data](uint32_t slot) {
         const uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;

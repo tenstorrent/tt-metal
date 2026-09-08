@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+#include "barrier.h"
 #include "perf.h" // the PERF_COUNTERS_* L1 region constants
 
 #ifdef PERF_COUNTERS_COMPILED
@@ -70,7 +71,7 @@ constexpr std::uint32_t COUNTER_BANK_COUNT = 5;
 
 // Unbounded, a corrupt config word would hang every thread and surface only as TENSIX TIMED OUT.
 constexpr std::uint32_t MODE_REG_POLL_LIMIT = 1024;
-constexpr std::uint32_t COUNTER_SLOT_COUNT = PERF_COUNTERS_CONFIG_WORDS;
+constexpr std::uint32_t COUNTER_SLOT_COUNT  = PERF_COUNTERS_CONFIG_WORDS;
 
 constexpr std::uint32_t PERF_CFG_VALID_BIT     = 1u << 31; // bit 31: slot active
 constexpr std::uint32_t PERF_CFG_L1_MUX_SHIFT  = 17;       // bits 19:17
@@ -177,7 +178,6 @@ constexpr auto BUILTIN_COUNTER_CONFIG         = build_builtin_config();
 constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
-
 
 inline std::uint32_t get_active_bank_mask()
 {
@@ -418,12 +418,21 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
 }
 
-// L1_TO_L1/L1_CONGESTION: unpack arms (pipeline source), pack freezes (sink). ISOLATE: same thread arms and freezes.
-template <PerfRunType run_type>
-constexpr bool is_arm_thread()
+constexpr bool is_single_thread_runtype(PerfRunType run_type)
+{
+    return run_type == PerfRunType::UNPACK_ISOLATE || run_type == PerfRunType::MATH_ISOLATE || run_type == PerfRunType::PACK_ISOLATE;
+}
+
+// MATH and PACK_ISOLATE freeze on the measured thread; the rest need every thread stopped first.
+constexpr bool exit_barrier_for(PerfRunType run_type)
+{
+    return !is_single_thread_runtype(run_type) || run_type == PerfRunType::UNPACK_ISOLATE;
+}
+
+constexpr bool is_measured_thread(PerfRunType run_type)
 {
 #if defined(LLK_TRISC_UNPACK)
-    return run_type == PerfRunType::L1_TO_L1 || run_type == PerfRunType::L1_CONGESTION || run_type == PerfRunType::UNPACK_ISOLATE;
+    return run_type == PerfRunType::UNPACK_ISOLATE;
 #elif defined(LLK_TRISC_MATH)
     return run_type == PerfRunType::MATH_ISOLATE;
 #elif defined(LLK_TRISC_PACK)
@@ -433,26 +442,7 @@ constexpr bool is_arm_thread()
 #endif
 }
 
-template <PerfRunType run_type>
-constexpr bool is_freeze_thread()
-{
-#if defined(LLK_TRISC_UNPACK)
-    return run_type == PerfRunType::UNPACK_ISOLATE;
-#elif defined(LLK_TRISC_MATH)
-    return run_type == PerfRunType::MATH_ISOLATE;
-#elif defined(LLK_TRISC_PACK)
-    return run_type == PerfRunType::L1_TO_L1 || run_type == PerfRunType::L1_CONGESTION || run_type == PerfRunType::PACK_ISOLATE;
-#else
-    return false;
-#endif
-}
-
-// pc_buf-semaphore barriers: arm/freeze thread sempost ×N, non-active threads spinwait+semget.
-constexpr std::uint8_t PERF_ENTRY_SEM        = ckernel::semaphore::FPU_SFPU;
-constexpr std::uint8_t PERF_EXIT_SEM         = ckernel::semaphore::UNPACK_TO_DEST;
-constexpr std::uint32_t PERF_NUM_SPINWAITERS = 2;
-
-template <PerfRunType run_type>
+template <PerfRunType RUN_TYPE>
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
@@ -465,43 +455,27 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         ckernel::fence_compiler();
-        if constexpr (is_arm_thread<run_type>())
-        {
-            arm_all_counters();
-            for (std::uint32_t i = 0; i < PERF_NUM_SPINWAITERS; ++i)
-            {
-                ckernel::semaphore_post(PERF_ENTRY_SEM);
-            }
-        }
-        else
-        {
-            while (ckernel::semaphore_read(PERF_ENTRY_SEM) == 0)
-            {
-                asm volatile("nop");
-            }
-            ckernel::semaphore_get(PERF_ENTRY_SEM);
-        }
+        llk_barrier::rendezvous(llk_barrier::is_action_thread(), [] { arm_all_counters(); });
         ckernel::fence_compiler();
     }
 
     inline __attribute__((always_inline)) ~perf_counter_scoped()
     {
         ckernel::fence_compiler();
-        if constexpr (is_freeze_thread<run_type>())
+        const std::uint32_t zid = zone_id;
+        static_assert(
+            exit_barrier_for(RUN_TYPE) || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::PACK_ISOLATE,
+            "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");
+        if constexpr (!exit_barrier_for(RUN_TYPE))
         {
-            freeze_and_read_all_counters(zone_id);
-            for (std::uint32_t i = 0; i < PERF_NUM_SPINWAITERS; ++i)
+            if constexpr (is_measured_thread(RUN_TYPE))
             {
-                ckernel::semaphore_post(PERF_EXIT_SEM);
+                freeze_and_read_all_counters(zid);
             }
         }
         else
         {
-            while (ckernel::semaphore_read(PERF_EXIT_SEM) == 0)
-            {
-                asm volatile("nop");
-            }
-            ckernel::semaphore_get(PERF_EXIT_SEM);
+            llk_barrier::rendezvous(llk_barrier::is_action_thread(), [zid] { freeze_and_read_all_counters(zid); });
         }
         ckernel::fence_compiler();
     }
@@ -510,9 +484,9 @@ struct perf_counter_scoped
 
 } // namespace llk_perf
 
+#if defined(LLK_PROFILER)
 #define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
 #define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
-#if defined(LLK_PROFILER)
 #define MEASURE_PERF_COUNTERS(zone_name) \
     const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
 #else
@@ -521,9 +495,13 @@ struct perf_counter_scoped
 
 #else // !PERF_COUNTERS_COMPILED
 
+// rendezvous() only exists off Quasar, which reaches this branch with LLK_PROFILER but not counters.
+#if defined(LLK_PROFILER) && !defined(ARCH_QUASAR)
+#define MEASURE_PERF_COUNTERS(zone_name) llk_barrier::rendezvous(llk_barrier::is_action_thread());
+#else
 #define MEASURE_PERF_COUNTERS(zone_name)
+#endif
 
-// NC build stubs — let callers invoke unconditionally; compiler folds these to nothing.
 namespace llk_perf
 {
 inline void configure_and_arm_from_brisc()
