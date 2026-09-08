@@ -155,9 +155,7 @@ void kernel_main() {
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
     ckernel::topk_tile_init<false, rank_stamped>();
-    // Tie order follows the GLOBAL sort order, never the per-call idir.
-    constexpr auto tie_order =
-        (largest != 0) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
     DataflowBuffer input_val_dfb(input_val_dfb_index);
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);
@@ -391,9 +389,11 @@ void kernel_main() {
                         // Both tiles fresh (width chunks 0 and 1): plain positions [0, 64).
                         ckernel::topk_stamp_local_positions<largest != 0>(0);
                     } else {
-                        ckernel::topk_stamp_tile_rank_range<largest != 0>(0, 0, 32 * cascade_level);
+                        ckernel::topk_stamp_tile_rank_range<largest != 0>(
+                            0 /*idst*/, 0 /*dst_tile_index*/, 32 * cascade_level /*rank_base*/);
                         if (cascade_level == 0) {
-                            ckernel::topk_stamp_tile_rank_range<largest != 0>(0, 1, 32 * output_tiles);
+                            ckernel::topk_stamp_tile_rank_range<largest != 0>(
+                                0 /*idst*/, 1 /*dst_tile_index*/, 32 * output_tiles /*rank_base*/);
                         }
                     }
                 }

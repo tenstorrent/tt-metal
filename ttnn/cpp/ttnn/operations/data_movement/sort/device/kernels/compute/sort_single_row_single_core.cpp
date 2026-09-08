@@ -129,9 +129,7 @@ void kernel_main() {
     transpose_init(dfb::input_tensor);
 #endif
 
-    // Tie order follows the GLOBAL sort order, never the per-call idir.
-    constexpr auto tie_order =
-        (descending) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(descending);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;

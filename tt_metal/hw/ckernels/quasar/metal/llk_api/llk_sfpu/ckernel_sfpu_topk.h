@@ -770,6 +770,7 @@ inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t /*tile_index
 // the network entries), so this is unreachable; it exists only so the arch-independent
 // compute API (topk_strip_rank_tags) compiles.
 inline void _topk_strip_rank_tags_(std::uint32_t /*dst_tile_index*/) {}
+inline void _topk_finalize_hi16_index_tile_(std::uint32_t /*dst_tile_index*/) {}
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -392,8 +392,8 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
 template <bool largest>
 inline void _topk_stamp_local_positions_()
 {
-    _topk_stamp_tile_rank_range_<largest>(0, 0);
-    _topk_stamp_tile_rank_range_<largest>(1, 32);
+    _topk_stamp_tile_rank_range_<largest>(0 /*dst_tile_index*/, 0 /*rank_base*/);
+    _topk_stamp_tile_rank_range_<largest>(1 /*dst_tile_index*/, 32 /*rank_base*/);
 }
 
 // Clear the low 16 bits (stale rank tags) of one value tile, leaving exact
@@ -431,15 +431,18 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
 {
     TTI_SFPENCC(3, 0, 0, 10);
+    TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     const std::uint32_t base = dst_tile_index * 64;
     for (std::uint32_t off = base; off < base + 64; off += 2)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
-        TT_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_7, off);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, off);
+        TT_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_3, off);
     }
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0);
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }

@@ -393,8 +393,8 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
 template <bool largest>
 inline void _topk_stamp_local_positions_()
 {
-    _topk_stamp_tile_rank_range_<largest>(0, 0);
-    _topk_stamp_tile_rank_range_<largest>(1, 32);
+    _topk_stamp_tile_rank_range_<largest>(0 /*dst_tile_index*/, 0 /*rank_base*/);
+    _topk_stamp_tile_rank_range_<largest>(1 /*dst_tile_index*/, 32 /*rank_base*/);
 }
 
 // Clear the low 16 bits (stale rank tags) of one value tile, leaving exact
