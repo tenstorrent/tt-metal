@@ -1312,7 +1312,7 @@
     pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "resolution_480p and t2v" || fail=1
     pytest --timeout 3000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
-      -k "(4x8sp1tp0nl4_ring_is_fsdp1 or 2x2sp0tp1nl2_linear_is_fsdp1) and resolution_720p" || fail=1
+      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || fail=1
     pytest --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || fail=1
     exit $fail

@@ -1324,7 +1324,7 @@
   model_family: Wan
   skus:
     wh_galaxy:
-      timeout: 100
+      timeout: 130
       tier: 1
     bh_quietbox_2:
       timeout: 60
