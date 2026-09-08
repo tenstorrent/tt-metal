@@ -2758,3 +2758,48 @@ def test_softcap_zero_beta_guard(device, expect_error):
     # 1/beta is precomputed host-side, so a zero beta would reach the SFPU as inf.
     with expect_error(RuntimeError, "SOFTCAP requires a non-zero beta"):
         ttnn.softcap(input_tensor, 0.0)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([1, 1, 32, 32], [1, 1, 64, 64]),  # 1 page in, 4 pages out: the reader runs off the input buffer
+        ([1, 1, 64, 64], [1, 1, 32, 32]),  # 4 pages in, 1 page out: three quarters of the result is dropped
+        ([1, 1, 32, 64], [1, 1, 64, 32]),  # same volume, different shape
+        ([1, 1, 32, 32], [1, 1, 32, 96]),  # non-multiple page count
+        ([2, 1, 32, 32], [1, 1, 32, 32]),  # batch dropped
+    ],
+)
+@pytest.mark.parametrize("ttnn_function", [ttnn.exp, ttnn.relu, ttnn.sqrt])
+def test_unary_preallocated_output_shape_mismatch(device, expect_error, ttnn_function, input_shape, output_shape):
+    """A preallocated output whose logical shape differs from the input's must be rejected.
+
+    The work split is sized from the output (unary_program_factory.cpp), so an oversized
+    output_tensor makes the reader fetch pages past the end of the input buffer and an
+    undersized one silently truncates the result.
+    """
+    input_tensor = ttnn.from_torch(
+        torch.full(input_shape, 2.0, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "Preallocated output shape must match computed shape"):
+        ttnn_function(input_tensor, output_tensor=output_tensor)
+
+
+def test_unary_preallocated_output_shape_match(device):
+    """The matching case still runs and still writes the caller's buffer."""
+    shape = [1, 1, 32, 64]
+    torch_input = torch.linspace(-2.0, 2.0, 32 * 64, dtype=torch.bfloat16).reshape(shape)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    result = ttnn.exp(input_tensor, output_tensor=output_tensor)
+
+    assert list(result.shape) == shape
+    assert_with_pcc(torch.exp(torch_input.float()), ttnn.to_torch(output_tensor).float(), 0.999)

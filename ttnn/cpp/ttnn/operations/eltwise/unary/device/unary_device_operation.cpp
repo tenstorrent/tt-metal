@@ -99,7 +99,12 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
+        // Not compute_output_specs(): that returns the preallocated tensor's own spec whenever one
+        // is supplied, so taking the expected shape from it compares the tensor against itself and
+        // the TT_FATAL below can never fire. Unary ops are elementwise, so the shape the op would
+        // have produced is the input's logical shape -- which is exactly what compute_output_specs
+        // computes when no output tensor is preallocated.
+        const auto computed_output_shape = input_tensor.logical_shape();
         const auto preallocated_output_shape = output_tensor->logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
