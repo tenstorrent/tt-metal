@@ -285,9 +285,7 @@ def render_text(rows, unused, errors):
     widths = [max(len(h), *(len(row[i]) for row in cells)) if cells else len(h) for i, h in enumerate(HEADERS)]
 
     def line(values):
-        padded = [
-            v.rjust(widths[i]) if i in NUMERIC_COLUMNS else v.ljust(widths[i]) for i, v in enumerate(values)
-        ]
+        padded = [v.rjust(widths[i]) if i in NUMERIC_COLUMNS else v.ljust(widths[i]) for i, v in enumerate(values)]
         return "  ".join(padded).rstrip()
 
     header = line(HEADERS)
@@ -395,8 +393,7 @@ PROBLEM_KINDS = (
     (
         "missing_timeout",
         "SKU entry missing a timeout",
-        "Every SKU under `skus` needs a `timeout` in minutes — that is the number charged "
-        "against the budget.",
+        "Every SKU under `skus` needs a `timeout` in minutes — that is the number charged against the budget.",
     ),
     (
         "bad_budget_type",
@@ -495,13 +492,9 @@ def comment_body(problems):
                 keys = ", ".join(f"`{k}`" for k in item["missing"])
                 lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}** — missing {keys}")
             elif kind == "missing_timeout":
-                lines.append(
-                    f"- {yaml_link(item['yaml'])} → **{item['test']}** — SKU `{item['sku']}` has no `timeout`"
-                )
+                lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}** — SKU `{item['sku']}` has no `timeout`")
             elif kind == "bad_budget_type":
-                lines.append(
-                    f"- {yaml_link(item['yaml'])} → **{item['test']}** — got `{item['found']}`"
-                )
+                lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}** — got `{item['found']}`")
             else:
                 lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}**")
 

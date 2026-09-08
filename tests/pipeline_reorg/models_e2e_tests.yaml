@@ -1568,6 +1568,7 @@
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT Wan2.2-I2V-A14B single galaxy e2e tests
   cmd: |
@@ -1600,6 +1601,7 @@
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── LTX-2.3 (Black Hole single galaxy, bh_sc1) ───────────────────
 - name: TT-DiT LTX-2.3 Pro T2V e2e tests

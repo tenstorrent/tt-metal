@@ -1560,6 +1560,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests (single BH galaxy)
   cmd: |
@@ -1587,6 +1588,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # ----------------------------------------------------------------------------
 # WAN 2.2 multihost quad-galaxy tests (bh_sc4 / exabox-multihost-ci-sc4)

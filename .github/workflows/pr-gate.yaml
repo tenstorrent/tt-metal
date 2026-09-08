@@ -217,22 +217,39 @@ jobs:
       # a run that passes edits an existing comment to say so instead of leaving a
       # stale failure behind. A pass with no prior comment posts nothing.
       - name: Explain a time budget failure on the PR
-        if: ${{ always() && github.event_name == 'pull_request' && hashFiles(format('{0}/budget-report.md', runner.temp)) != '' }}
+        if: ${{ always() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
           REPO: ${{ github.repository }}
           BODY_FILE: ${{ runner.temp }}/budget-report.md
         run: |
           set -euo pipefail
+
+          if [ ! -f "$BODY_FILE" ]; then
+            echo "No report was written (the check did not get far enough); nothing to post."
+            exit 0
+          fi
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+              --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "No open PR for '$BRANCH'; nothing to post."
+            exit 0
+          fi
+
           existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            --jq 'map(select(.body | contains("<!-- time-budget-check"))) | .[-1].id // empty')
+            --jq '[.[] | select(.body | contains("<!-- time-budget-check")) | .id] | first // empty')
           if [ -n "$existing" ]; then
             gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
               -F "body=@$BODY_FILE" >/dev/null
-            echo "Updated existing time-budget comment $existing."
+            echo "Updated time-budget comment $existing on PR #$PR_NUMBER."
           elif grep -q "status=fail" "$BODY_FILE"; then
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+            echo "Posted a new time-budget comment on PR #$PR_NUMBER."
           else
             echo "Check passed and no existing comment to clear; nothing to post."
           fi
