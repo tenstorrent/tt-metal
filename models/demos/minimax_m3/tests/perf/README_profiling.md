@@ -10,8 +10,8 @@ MLP on the dense layers (0-2), and the full MSA + MoE breakdown on the sparse la
 cd $TT_METAL_HOME
 ```
 
-Needs: the tilized weight cache at `$HF_MODEL/tensor_cache_bfp8_MeshShape([8, 4])` (without it the run
-falls back to the ~869 GB bf16 source read), a golden trace to tile tokens from (defaults to
+Needs: the tilized weight cache at `$HF_MODEL/tensor_cache_bfp8_MeshShape([8, 4])` (the wrapper refuses to start without it;
+`M3_FORCE_LOAD_WEIGHTS=1` populates it from the ~869 GB bf16 source), a golden trace to tile tokens from (defaults to
 `$GOLDEN_DIR/longbook_qa_eng_prefill_56320_nopad`), ~50 GB free disk and ~150 GB free RAM.
 
 ## Two commands
@@ -78,7 +78,7 @@ Opening that path in an editor shows you HTML source, not the report — it need
 | `SKIP_PREFIX=1` | skip the prefill, attend a zeroed cache — fast but MoE routing is unrepresentative | off |
 | `STAGES=1\|2\|4` | intra-galaxy pipeline depth — see *Profiling a pipeline stage* | 1 |
 | `STAGE=k` | which stage's sub-mesh and layer slice to profile | 0 |
-| `FABRIC=1d\|1d_ring\|2d\|2d_torus_xy` | fabric config | 1d |
+| `FABRIC=1d\|1d_ring\|2d\|2d_torus_xy` | fabric config; ring and torus modes also switch to the torus-XY mesh descriptor | 1d |
 | `RESULTS_DIR=path` | where finished captures are moved | `prefill_profile_results/` |
 
 ### Detail levels

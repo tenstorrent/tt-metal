@@ -192,8 +192,8 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
     elif num_layers_override:
         num_layers = int(num_layers_override)
         assert num_layers <= per_stage, f"PROFILE_NUM_LAYERS={num_layers} exceeds the {per_stage} layers of a stage"
-        os.environ.setdefault("M3_LOAD_NLAYERS", str(num_layers))
-        os.environ.setdefault("M3_LOAD_LAYER_START", str(first_layer_idx))
+        os.environ["M3_LOAD_NLAYERS"] = str(num_layers)
+        os.environ["M3_LOAD_LAYER_START"] = str(first_layer_idx)
         print(
             f"[zone-prof] PROFILE_NUM_LAYERS={num_layers}: global layers "
             f"[{first_layer_idx}, {first_layer_idx + num_layers}) only",

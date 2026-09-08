@@ -58,11 +58,14 @@ STAGES="${STAGES:-1}"
 STAGE="${STAGE:-0}"
 FABRIC="${FABRIC:-1d}"
 export PROFILE_STAGES="$STAGES" PROFILE_STAGE="$STAGE" PROFILE_FABRIC="$FABRIC"
-# TODO(profiling): 2d / 2d_torus_xy are passed through but not yet validated on a carved sub-mesh; the
-# torus descriptor below is the untested guess at what FABRIC_2D_TORUS_XY needs.
+# TODO(profiling): 1d_ring / 2d / 2d_torus_xy are passed through but not yet validated on a carved sub-mesh.
+# FABRIC_1D_RING refuses a plain mesh descriptor on Blackhole (tt_metal/fabric/topology_mapper.cpp,
+# ring_requires_torus), so ring and torus modes select the torus-XY descriptor. The M3 CCLs still run
+# with Topology.Linear (TtPrefillRuntimeConfig.topology), so a ring fabric alone does not make them ring
+# collectives.
 _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 case "$FABRIC" in
-  2d_torus_*) _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
+  1d_ring|2d_torus_*) _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
 esac
 export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$_DESC_DEFAULT}"
 export EXPERT_DTYPE="${EXPERT_DTYPE:-bf4}"
@@ -116,17 +119,21 @@ die () { echo "ERROR: $*" >&2; exit 1; }
 command -v tt-smi >/dev/null     || die "tt-smi not on PATH — needed to reset the galaxy between runs"
 case "$STAGES" in 1|2|4) ;; *) die "STAGES must be 1, 2 or 4 (got $STAGES)" ;; esac
 [ "$STAGE" -ge 0 ] && [ "$STAGE" -lt "$STAGES" ] || die "STAGE=$STAGE out of range for STAGES=$STAGES"
-# The stage's sub-mesh needs its own tilized cache (keyed by mesh shape); check the first requested layer
-# is there instead of discovering a ~869 GB bf16 fallback read several minutes in. self_attn is the last
-# subtree the populate run writes, so its presence distinguishes a finished layer from an aborted one.
+# The tilized cache is keyed by mesh shape; check the first requested layer is there instead of
+# discovering a ~869 GB bf16 source read several minutes in. self_attn is the last subtree the populate
+# run writes, so its presence distinguishes a finished layer from an aborted one. M3_FORCE_LOAD_WEIGHTS=1
+# (cache populate) is the one case that means to read the source.
+M3_NUM_LAYERS=60   # MiniMax-M3 num_hidden_layers; the harness reads the real value from hf_config
 STAGE_ROWS=$((8 / STAGES))
 STAGE_CACHE="${TT_CACHE_PATH:-$HF_MODEL}/tensor_cache_bfp8_MeshShape([$STAGE_ROWS, 4])"
 FIRST_LAYER="${LAYER_IDS:-}"
 FIRST_LAYER="${FIRST_LAYER%%,*}"
-FIRST_LAYER="${FIRST_LAYER:-$((STAGE * 60 / STAGES))}"
-[ -d "$STAGE_CACHE/model.layers.$FIRST_LAYER/self_attn" ] || \
+FIRST_LAYER="${FIRST_LAYER:-$((STAGE * M3_NUM_LAYERS / STAGES))}"
+if [ "${M3_FORCE_LOAD_WEIGHTS:-0}" != "1" ] && [ ! -d "$STAGE_CACHE/model.layers.$FIRST_LAYER/self_attn" ]; then
   die "no tilized cache for layer $FIRST_LAYER at $STAGE_CACHE — set TT_CACHE_PATH to a root that has the" \
-      "([$STAGE_ROWS, 4]) cache (see models/demos/minimax_m3/docs/PIPELINE_PREFILL_TESTING.md)"
+      "([$STAGE_ROWS, 4]) cache (see models/demos/minimax_m3/docs/PIPELINE_PREFILL_TESTING.md), or" \
+      "M3_FORCE_LOAD_WEIGHTS=1 to populate it from the bf16 source"
+fi
 
 cd "$TT_METAL_HOME"
 # tracy-capture and tracy-csvexport are siblings of the harness, spawned by `python3 -m tracy`, so the
@@ -216,8 +223,13 @@ run_cfg () {  # $1=label  $2=cache_tokens
     # Park the CSV under RESULTS_DIR so generated/profiler/ can be wiped between experiments. The log
     # is copied in once the whole run has finished (see the end of the script).
     local dest="$RESULTS_DIR/${STAMP}_stages${STAGES}_stage${STAGE}_layers${LAYER_TAG}_cache${cache}_${FABRIC}_${EXPERT_DTYPE}"
-    mkdir -p "$dest" && mv "$csv" "$dest/" && csv="$dest/$(basename "$csv")"
-    DESTS+=("$dest")
+    if mkdir -p "$dest" && mv "$csv" "$dest/"; then
+      csv="$dest/$(basename "$csv")"
+      DESTS+=("$dest")
+    else
+      echo "# [$label] FAILED to move $csv into $dest — the capture is still at its original path" | tee -a "$LOG"
+      FAILED=1
+    fi
     { echo "# [$label] CSV: $csv"
       echo "# [$label] visualize: python3 $VISUALIZE $csv"; } | tee -a "$LOG"
     CSVS+=("$csv")
@@ -233,6 +245,7 @@ echo "logging to $LOG"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
   echo "  LAYERS=${PROFILE_LAYER_IDS:-${PROFILE_NUM_LAYERS:-all}}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
   echo "  STAGES=$STAGES  STAGE=$STAGE  FABRIC=$FABRIC  MESH=($STAGE_ROWS, 4)  CACHE_DIR=$STAGE_CACHE"
+  echo "  TT_MESH_GRAPH_DESC_PATH=$TT_MESH_GRAPH_DESC_PATH"
   echo "  RESULTS_DIR=$RESULTS_DIR"
   echo "  RLIMIT_NPROC soft=$(ulimit -Su) hard=$NPROC_HARD  user threads in use=$NPROC_IN_USE"
 } | tee "$LOG"
