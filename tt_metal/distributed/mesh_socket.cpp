@@ -413,7 +413,10 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return confi
 
 DeviceAddr MeshSocket::get_config_buffer_address() const {
     TT_FATAL(config_buffer_, "Socket has no config buffer; it was never allocated on this rank.");
-    if (!socket_endpoint_uses_per_core_allocation(config_, socket_endpoint_type_)) {
+    // Gate on the buffer's ACTUAL state (per-core MeshBuffers have no backing buffer): per-core
+    // allocation is applied only where required (co-owned meshes), so the requested memory config
+    // alone cannot tell us how this buffer was allocated.
+    if (config_buffer_->get_backing_buffer() != nullptr) {
         return config_buffer_->address();
     }
     // A per-core buffer's address lives on each device's Buffer, one per core; the mesh-level

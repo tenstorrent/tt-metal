@@ -247,7 +247,10 @@ bool socket_is_fully_per_core(const SocketConfig& config) {
 // shard is one page belonging to that core.
 std::unordered_map<CoreCoord, uint32_t> config_buffer_core_to_id(
     const std::shared_ptr<MeshBuffer>& config_buffer, const SocketConfig& config, SocketEndpoint socket_endpoint) {
-    if (socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
+    // Gate on the buffer's ACTUAL allocation state (a per-core MeshBuffer has no backing buffer),
+    // not on the requested memory config: per-core allocation is applied only where it is
+    // required (a co-owned mesh), so intent and state can legitimately differ.
+    if (config_buffer->get_backing_buffer() == nullptr) {
         const auto cores = socket_endpoint_cores(config, socket_endpoint);
         return {{cores.begin()->core_coord, 0}};
     }
@@ -293,7 +296,12 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     // co-owner allocates it (create_socket_pair, mesh-scoped sockets). Only the rank-scoped path
     // skips co-owners; that precondition is checked once in the MeshSocket constructor.
     auto sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED);
-    if (socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
+    // Per-core config buffers are only REQUIRED on a co-owned (joint) mesh, where a lockstep
+    // buffer would need every co-owner to reserve it while rank-scoped sockets skip non-endpoint
+    // co-owners entirely. On a single-owner mesh the config buffer stays lockstep: it is a few
+    // tens of bytes, and letting it go per-core perturbs the mesh lockstep allocation map for no
+    // benefit (observed to wedge stages whose lockstep allocation sequence is sensitive to it).
+    if (mesh_is_coowned(*device) && socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
         TT_FATAL(
             tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid(),
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
