@@ -18,6 +18,9 @@ DeviceAddr get_per_core_address(const Buffer& buffer, CoreCoord core);
 const std::unordered_map<CoreCoord, DeviceAddr>& get_per_core_addresses(const Buffer& buffer);
 void copy_per_core_addresses(Buffer& dst, const Buffer& src);
 
+// Return the shard base for either a per-core or ordinary lockstep buffer.
+DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core);
+
 // BufferShardingArgs free functions.
 
 BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable);

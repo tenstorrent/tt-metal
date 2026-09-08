@@ -518,6 +518,19 @@ void py_module(nb::module_& mod) {
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
             )doc")
         .def(
+            "worker_core_from_logical_core_at",
+            [](MeshDevice& self, const MeshCoordinate& mesh_coordinate, const CoreCoord& logical_core) {
+                auto* device = self.get_device(mesh_coordinate);
+                TT_FATAL(device, "Worker coordinate requested for MeshCoord {} not found.", mesh_coordinate);
+                return device->worker_core_from_logical_core(logical_core);
+            },
+            nb::arg("mesh_coordinate"),
+            nb::arg("logical_core"),
+            R"doc(
+                Convert a logical worker coordinate using one mesh coordinate's
+                harvested-core mapping.
+            )doc")
+        .def(
             "get_optimal_dram_bank_to_logical_worker_assignment",
             &MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment,
             nb::arg("noc"),
