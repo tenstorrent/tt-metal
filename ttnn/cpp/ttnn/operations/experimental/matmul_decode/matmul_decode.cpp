@@ -24,7 +24,8 @@ Tensor matmul_decode(
     bool output_mcast_two_hub,
     bool rms_norm,
     const std::optional<std::variant<float, Tensor>>& rms_norm_gamma,
-    float rms_norm_epsilon) {
+    float rms_norm_epsilon,
+    uint32_t rms_norm_group_size) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -41,7 +42,8 @@ Tensor matmul_decode(
         output_mcast_two_hub,
         rms_norm,
         rms_norm_gamma,
-        rms_norm_epsilon);
+        rms_norm_epsilon,
+        rms_norm_group_size);
 }
 
 }  // namespace ttnn::experimental
