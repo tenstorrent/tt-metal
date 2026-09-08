@@ -38,18 +38,14 @@ inline void _calculate_lrelu_(const int iterations, std::uint32_t slope)
 
 sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshold)
 {
-    sfpi::vFloat result = val;
-    v_if (result > threshold)
-    {
-        result = threshold;
-    }
-    v_endif;
-    v_if (result < 0.0f)
-    {
-        result = 0.0f;
-    }
-    v_endif;
-    return result;
+    // Branch-free clamp to [0, threshold]. min/max lower to SFPSWAP, so this replaces two
+    // SFPSETCC/SFPENCC predicate blocks (13 slots/element) with two SFPSWAPs (6 slots).
+    //
+    // Order matters: the predicated original clamped HIGH first and LOW second, so a
+    // negative threshold yields 0, not the threshold. max(min(..)) reproduces that;
+    // min(max(..)) does not -- which is also why sfpi::clamp() is not usable here: it is
+    // defined as min(max(val, lower), upper), the order this kernel must not use.
+    return sfpi::max(sfpi::min(val, threshold), 0.0f);
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
@@ -58,16 +54,32 @@ inline void _relu_max_impl_(const int iterations, VecType threshold)
     for (int d = 0; d < iterations; d++)
     {
         VecType result = sfpi::dst_reg[0];
-        v_if (result > threshold)
+        if constexpr (std::is_same_v<VecType, sfpi::vFloat>)
         {
-            result = threshold;
+            // See _relu_max_body_: branch-free clamp, high bound applied first.
+            result = sfpi::max(sfpi::min(result, threshold), 0.0f);
         }
-        v_endif;
-        v_if (result < 0)
+        else
         {
-            result = 0;
+            // sfpi::min/max cover vFloat and vSMag only on Wormhole/Blackhole: the vInt
+            // overloads sit inside `#if __riscv_xtttensixqsr` in sfpi's include/sfpi_lib.h
+            // -- min(vInt, int), max(vInt, int) and the vInt arm of min_max's enable_if
+            // (checked against sfpi 7.71/7.72). That header ships with the toolchain and is
+            // not checked in (tt_metal/tt-llk/tests/.gitignore), so grepping this repo for
+            // the macro finds nothing. SFPSWAP also orders operands as sign+magnitude, so a
+            // vInt clamp would need the 2's-complement conversion _relu_min_ does by hand.
+            // Left predicated.
+            v_if (result > threshold)
+            {
+                result = threshold;
+            }
+            v_endif;
+            v_if (result < 0)
+            {
+                result = 0;
+            }
+            v_endif;
         }
-        v_endif;
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
