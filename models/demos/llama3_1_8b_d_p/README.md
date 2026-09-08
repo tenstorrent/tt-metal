@@ -107,13 +107,23 @@ chunked==one-shot invariant, and the golden-cache round-trip.
 
 ### Performance
 
-Warm, 32 layers, 2048-token chunk, bf16: **~900 ms/chunk**, of which only **~62.5 ms is device
-kernel time**. Cost is linear in layers (28.4 ms/layer, R² 0.996) and flat in tokens per chunk — a
-latency-bound pipeline. Device time is 41% collectives, 30% matmul, 16% SDPA.
+Measured at the spec's shapes (chunk 4096, contexts to the full 131072), 32 layers, bf16.
 
-The prefill is host-dispatch-bound, so **trace mode is the largest available lever, and it is blocked
-by the GQA ring SDPA** (`docs/SPEC_NOTES.md` §8d). Full analysis, method and caveats in
-[`docs/PROFILING.md`](docs/PROFILING.md).
+Warm chunk: **~825 ms**, of which only **~62.9 ms is device kernel time** (7.6%) — a
+host-dispatch-bound pipeline. Cost is linear in layers (29.7 ms/layer/chunk, R² 0.997) and flat in
+tokens, so total work scales with **(layers x chunks)**. Per-chunk cost stays flat as the cache grows
+to 128K, so that conclusion holds at the target context. On the chunked path device time is
+34% matmul, 27% ring SDPA, 23% collectives.
+
+Two levers, in order:
+
+1. **Chunk size.** The spec's 4096 costs **3.5x** on full-context prefill: 131072 tokens take 28.7 s
+   at chunk 4096, 15.8 s at 8192, 8.2 s at 16384. No model change required (`docs/SPEC_NOTES.md` §8e).
+2. **Trace mode**, still **blocked by the GQA ring SDPA** (`docs/SPEC_NOTES.md` §8d).
+
+Note that the one-shot and chunked paths **run different ops** (`SDPAOperation` vs
+`RingJointSDPADeviceOperation`, and 5.1 vs 2.1 all-gathers per layer), so a one-shot profile does not
+describe the spec's path. Full analysis, method and caveats in [`docs/PROFILING.md`](docs/PROFILING.md).
 
 ### Known gaps
 
@@ -122,7 +132,11 @@ by the GQA ring SDPA** (`docs/SPEC_NOTES.md` §8d). Full analysis, method and ca
   trade-off can be measured. Defaults: attention **bfp8**, MLP **bfp4**.
 - **Attention weight precision is still contested** (spec `known_risks`): llm_perf says bfp4,
   tt_transformers' accuracy path says bfp8. Defaulted to the conservative bfp8.
-- **No performance numbers.** Out of bring-up scope, and the spec carries no targets to gate against.
+- **The spec's `chunk_size` and `per_layer_kv` are jointly unsatisfiable.** At chunk 4096, 3 of 32
+  layers miss the 0.99 KV gate on V by ~0.0002, while end-to-end output PCC is unchanged
+  (`docs/SPEC_NOTES.md` §6c). Gate calibration, not quality.
+- **No performance TARGETS** exist to gate against — the spec's `performance_targets` is deliberately
+  empty — so `docs/PROFILING.md` describes behaviour rather than passing or failing.
 - **A `(1,4)` submesh cannot bring fabric up on this Galaxy**, so TP-without-SP is untested. Not a
   configuration the spec targets.
 
