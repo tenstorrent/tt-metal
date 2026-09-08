@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from loguru import logger
 
 import ttnn
@@ -119,26 +121,46 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            _links = (
+                self.args.model_config[self.ag_config_key]["num_links"]
+                if self.ag_config_key and mode == "decode"
+                else self.tt_ccl.get_num_links(1)
+            )
+            _chunks = (
+                self.args.model_config[self.ag_config_key]["chunks_per_sync"]
+                if self.ag_config_key and mode == "decode"
+                else 10
+            )
+            _workers = (
+                self.args.model_config[self.ag_config_key]["num_workers_per_link"]
+                if self.ag_config_key and mode == "decode"
+                else 2
+            )
+            _ag_mem = input_mem_cfg
+            if mode == Mode.DECODE:
+                # QWEN36_NORM_AG_CFG="links,chunks,workers" overrides the decode all-gather tuning;
+                # QWEN36_NORM_AG_INTERLEAVED=1 gathers into L1 interleaved and reshards afterwards.
+                _cfg = os.environ.get("QWEN36_NORM_AG_CFG")
+                if _cfg:
+                    _links, _chunks, _workers = (int(v) for v in _cfg.split(","))
+                if os.environ.get("QWEN36_NORM_AG_INTERLEAVED") == "1" and sharded_output_config is not None:
+                    _ag_mem = ttnn.L1_MEMORY_CONFIG
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.args.model_config[self.ag_config_key]["num_links"]
-                if self.ag_config_key and mode == "decode"
-                else self.tt_ccl.get_num_links(1),
+                num_links=_links,
                 topology=self.args.ccl_topology(),
-                memory_config=input_mem_cfg,
+                memory_config=_ag_mem,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
-                if self.ag_config_key and mode == "decode"
-                else 10,
-                num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
-                if self.ag_config_key and mode == "decode"
-                else 2,
+                chunks_per_sync=_chunks,
+                num_workers_per_link=_workers,
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
+            if _ag_mem is not input_mem_cfg:
+                x = ttnn.to_memory_config(x, input_mem_cfg)
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 

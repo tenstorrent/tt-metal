@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
@@ -157,6 +159,10 @@ def tt_all_reduce(
         num_reduce_scatter_links = tt_ccl.get_num_links(cluster_axis)
     if num_all_gather_links is None:
         num_all_gather_links = tt_ccl.get_num_links(cluster_axis)
+    # QWEN36_RS_CFG="links,chunks,workers": decode-only (<= 32 rows) reduce-scatter tuning override
+    _rs_cfg = os.environ.get("QWEN36_RS_CFG")
+    if _rs_cfg and input_tensor.shape[-2] <= 32:
+        num_reduce_scatter_links, chunks_per_sync, num_workers_per_link = (int(v) for v in _rs_cfg.split(","))
 
     # Ensure dim 0 and 1 are 1
     original_shape = input_tensor.shape

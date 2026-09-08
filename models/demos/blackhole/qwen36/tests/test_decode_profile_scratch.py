@@ -60,6 +60,7 @@ def test_decode_profile(mesh_device, layers, steps):
     t0 = time.time()
     model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len, layer_indices=layer_indices)
     logger.info(f"[DECODE_PROF] model load {time.time() - t0:.1f}s layers={model.layer_indices}")
+    logger.info(f"[DECODE_PROF] ccl links axis0={model.tt_ccl.get_num_links(0)} axis1={model.tt_ccl.get_num_links(1)}")
     kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
