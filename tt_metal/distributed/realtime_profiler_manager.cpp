@@ -209,6 +209,16 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
+    if (metal.rtoptions().get_kernels_early_return()) {
+        log_debug(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: kernels-early-return mode is active "
+            "(set_kernels_early_return). DEBUG_EARLY_RETURN_KERNELS stubs every non-dispatch kernel, "
+            "including the RT profiler's own BRISC/NCRISC, so it could not respond to host syncs.",
+            device_id);
+        return {};
+    }
+
     if (metal.rtoptions().get_kernels_nullified()) {
         log_debug(
             tt::LogMetal,
