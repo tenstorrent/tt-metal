@@ -18,7 +18,7 @@
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/block_cyclic_remap.hpp"  // shared invP remap
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool auxiliary recipe
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 
@@ -498,10 +498,8 @@ void kernel_main() {
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
         if constexpr (block_pool) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_scaler,
-                ckernel::PoolType::MAX,
-                ckernel::ReduceDim::REDUCE_ROW>();
+            using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<bc_ct_base + 9>;
+            dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
         }
 
         WorkUnitSpan span;

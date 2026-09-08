@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/prepare_chunk_recurrence_program_factory.hpp"
 
 #include <algorithm>
@@ -62,6 +63,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
     const m2::DFBSpecName ones_dfb{"ones"};
+    const m2::DFBSpecName reduce_auxiliary_dfb{"reduce_auxiliary"};
     const m2::DFBSpecName block_masks_dfb{"block_masks"};
     const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
     const m2::DFBSpecName scan_decay_dfb{"scan_decay"};
@@ -109,6 +111,21 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             .num_entries = entries,
             .data_format_metadata = format};
     };
+    namespace rh = ttnn::kernel_lib::host;
+    const auto [reduce_fidelity, reduce_approx, reduce_fp32, reduce_l1_acc, reduce_full_sync] =
+        get_compute_kernel_config_args(arch, attrs.compute_kernel_config);
+    const TensorLayout reduce_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
+    auto reduce_plan = rh::make_reduce_plan(
+        TensorSpec(Shape{Ct * TILE_HEIGHT, attrs.key_dim}, reduce_layout),
+        TensorSpec(Shape{Ct * TILE_HEIGHT, 1}, reduce_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {arch, reduce_fp32, reduce_full_sync, device.l1_size_per_core()});
+    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+    const auto reduce_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+    const auto auxiliary_args = rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
         make_dfb(q_dfb, 2 * ck, bf16),
         make_dfb(k_dfb, 2 * ck, bf16),
@@ -118,6 +135,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
+        make_dfb(reduce_auxiliary_dfb, reduce_plan.auxiliary_tiles.size(), fp32),
         make_dfb(block_masks_dfb, 2, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(scan_decay_dfb, ck, fp32),
@@ -153,6 +171,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{reduce_auxiliary_dfb, "reduce_auxiliary", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
@@ -166,6 +185,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     m2::KernelSpec writer{
@@ -208,6 +228,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[ones_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[reduce_auxiliary_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[block_masks_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_0_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[scan_decay_dfb] = UnpackMode::UnpackToSrc;
@@ -243,6 +264,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{reduce_auxiliary_dfb, "reduce_auxiliary", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::CONSUMER},
@@ -288,6 +310,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
              {"EPS_BITS", 0x358637BDU}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_count"}},
         .hw_config = std::move(compute_hw),
+        .advanced_options = {.compile_time_varargs = reduce_args},
     };
 
     m2::KernelRunArgs reader_run{.kernel = READER};

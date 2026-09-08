@@ -26,6 +26,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 constexpr uint32_t max_dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -394,12 +395,10 @@ inline void reduce_squared_rows_to_inverse_norms(
         }
     };
 
-    compute_kernel_lib::
-        reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, SquaredDfb, dfb::ones, InverseNormsDfb>(
-            compute_kernel_lib::ReduceInputBlockShape::of(row_tiles, column_tiles),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            inverse_norm);
+    using Call = ttnn::kernel_lib::
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, SquaredDfb, dfb::reduce_auxiliary, InverseNormsDfb>;
+    ASSERT(row_tiles == Call::rows && column_tiles == Call::columns);
+    compute_kernel_lib::reduce<Call>(inverse_norm);
 }
 
 template <uint32_t RowTiles, uint32_t ColumnTiles, bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>

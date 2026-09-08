@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/sigmoid_gated_rms_norm_program_factory.hpp"
 
 #include <cstring>
@@ -75,6 +76,21 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         };
     };
 
+    namespace rh = ttnn::kernel_lib::host;
+    const auto [reduce_fidelity, reduce_approx, reduce_fp32, reduce_l1_acc, reduce_full_sync] =
+        get_compute_kernel_config_args(arch, attrs.compute_kernel_config);
+    const TensorLayout reduce_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
+    auto reduce_plan = rh::make_reduce_plan(
+        TensorSpec(Shape{1 * TILE_HEIGHT, attrs.value_dim}, reduce_layout),
+        TensorSpec(Shape{1 * TILE_HEIGHT, 1}, reduce_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F / attrs.value_dim,
+        ReduceFp32Mode::Fast,
+        {arch, reduce_fp32, reduce_full_sync, device.l1_size_per_core()});
+    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+    const auto reduce_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+    const auto auxiliary_args = rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     m2::Group<m2::DataflowBufferSpec> dfbs = {
         make_dfb(X_DFB, 2 * Vt, input_format),
         make_dfb(GATE_DFB, 2 * Vt, tt::DataFormat::Float16_b),
@@ -84,7 +100,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         make_dfb(INV_DFB, 1, tt::DataFormat::Float32),
         make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
         make_dfb(OUT_DFB, 2 * Vt, output_format),
-        make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
+        make_dfb(SCALER_DFB, reduce_plan.auxiliary_tiles.size(), tt::DataFormat::Float32),
         make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
     };
 
@@ -113,6 +129,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}, {"epsilon_bits", eps_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     m2::KernelSpec writer{
@@ -164,6 +181,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .compile_time_args = {{"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
+        .advanced_options = {.compile_time_varargs = reduce_args},
     };
 
     m2::KernelRunArgs reader_run_args{.kernel = READER};
