@@ -16,10 +16,6 @@ inputs:
     description: "Deprecated: ignored (artifacts are now downloaded into GITHUB_WORKSPACE)"
     required: false
     default: ""
-  create-pipeline-dir:
-    description: "Deprecated: ignored (callers must create PIPELINE_DIR themselves if needed)"
-    required: false
-    default: ""
   extra-pip-packages:
     description: >
       Extra packages to install alongside the ttnn wheel on every worker

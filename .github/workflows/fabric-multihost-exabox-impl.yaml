@@ -117,6 +117,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           check-mnt-models: "false"
 
+      - name: Create pipeline directory
+        shell: bash
+        run: mkdir -p "$PIPELINE_DIR"
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
