@@ -30,6 +30,12 @@ Env knobs (all optional):
                    expert, an off-by-one that hands expert i+1 expert i's weights is invisible.
                    Every expert writes the same output rows (offsets are all 0), so the graded
                    output is the LAST expert's -- which is the one a prefetch chain feeds last.
+  BENCH_COUNTS     comma list of PER-EXPERT token counts    default none (use BENCH_M)
+                   Overrides BENCH_M/BENCH_EXPERTS: one entry per local expert, so
+                   "512,0,251,1024" is a 4-expert RAGGED dispatch. Zero-count experts are
+                   skipped by the op entirely (no weight read), which is why sparsity is
+                   cheaper than balance at equal total tokens. Grading uses the LAST
+                   NON-ZERO expert, since every expert writes the same output rows.
   BENCH_EXPERTS    local experts in the ONE program            default 1
                    Every expert gets its own weight tensors (own DRAM addresses) and its own
                    count, so N experts is N sequential weight reads inside one dispatch --
@@ -211,6 +217,19 @@ def test_bench(device, active_tokens):
 
     torch.manual_seed(seed)
     n_experts = int(_env("BENCH_EXPERTS", "1"))
+    # Ragged dispatch: an explicit per-expert count list replaces the uniform one.
+    counts_env = _env("BENCH_COUNTS", "")
+    if counts_env:
+        count_list = [int(v) for v in counts_env.split(",") if v != ""]
+        n_experts = len(count_list)
+    else:
+        count_list = [active_tokens] * n_experts
+    # x must carry real data for the widest expert; grading uses the last expert that has work,
+    # because every expert writes the same output rows and so the last writer wins.
+    fill_tokens = max(count_list) if count_list else 0
+    nonzero = [e for e, c in enumerate(count_list) if c > 0]
+    grade_expert = nonzero[-1] if nonzero else 0
+    grade_tokens = count_list[grade_expert] if nonzero else 0
     distinct_w = _env("BENCH_DISTINCT_W", "0") == "1"
     base_weights = {
         "gate_proj": torch.randn(hidden, emb, dtype=torch.float32) * wscale,
@@ -221,26 +240,28 @@ def test_bench(device, active_tokens):
     def expert_scale(e):
         return (1.0 + e / 4.0) if distinct_w else 1.0
 
-    # The reference is the LAST expert's: every expert writes the same rows, so it wins.
-    weights = {k: v * expert_scale(n_experts - 1) for k, v in base_weights.items()}
-    torch_active = torch.randn(active_tokens, emb, dtype=torch.float32) * xscale
+    # The reference is the GRADED expert's: every expert writes the same rows, so the last
+    # one with work wins.
+    weights = {k: v * expert_scale(grade_expert) for k, v in base_weights.items()}
+    torch_active = torch.randn(fill_tokens, emb, dtype=torch.float32) * xscale
     if _env("BENCH_SPIKY", "0") == "1":
         # heavy-tailed activations: 1% of the positions carry 16x outliers, plus 8 outlier channels
         # (32x) shared by every token -- the block-float exponent-sharing worst case
-        mask = torch.rand(active_tokens, emb) < 0.01
+        mask = torch.rand(fill_tokens, emb) < 0.01
         torch_active = torch_active * (1 + 15 * mask.float())
         torch_active[:, torch.randperm(emb)[:8]] *= 32
     torch_input = torch.zeros(ALLOCATED_TOKENS, emb, dtype=torch.float32)
-    torch_input[:active_tokens] = torch_active
+    torch_input[:fill_tokens] = torch_active
 
     with torch.no_grad():
         if _env("BENCH_IDENTITY", "0") == "1":
             # pairs with MOE_FUSED_SWIGLU_DEFINES=MOE_DEBUG_NO_SILU: h = gate * up, no activation
-            g = torch_active @ weights["gate_proj"].T
-            u = torch_active @ weights["up_proj"].T
+            graded_x = torch_active[:grade_tokens]
+            g = graded_x @ weights["gate_proj"].T
+            u = graded_x @ weights["up_proj"].T
             ref = (g * u) @ weights["down_proj"].T
         else:
-            ref = TorchExpert(emb, hidden, weights, activation=ACTIVATION_SILU)(torch_active)
+            ref = TorchExpert(emb, hidden, weights, activation=ACTIVATION_SILU)(torch_active[:grade_tokens])
 
     def to_device(t, dtype, layout, memory_config=None):
         return ttnn.from_torch(
@@ -271,10 +292,10 @@ def test_bench(device, active_tokens):
     def idx_tensor(values):
         return to_device(torch.tensor(values, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
 
-    # Every local expert points at a DIFFERENT global id, and each carries the same count, so
-    # the dispatch does n_experts equal-sized passes.
+    # Every local expert points at a DIFFERENT global id and carries its own count, so the
+    # dispatch does n_experts sequential passes of the sizes in `count_list`.
     idx = idx_tensor(list(range(n_experts)))
-    counts = idx_tensor([active_tokens] * n_experts)
+    counts = idx_tensor(count_list)
     offsets = idx_tensor([0] * n_experts)
 
     def run_fused():
@@ -322,16 +343,20 @@ def test_bench(device, active_tokens):
         "shard_via": _env("BENCH_WSHARD_VIA", "reshard"),
         "shard_h": int(_env("BENCH_WSHARD_H", "1")),
         "experts": n_experts,
+        "counts": count_list,
+        "total_tokens": sum(count_list),
+        "graded_expert": grade_expert,
+        "graded_tokens": grade_tokens,
         "distinct_w": distinct_w,
     }
 
     # correctness first (also warms the JIT cache so the timed window is pure dispatch)
-    out = ttnn.to_torch(run_fused())[0, 0][:active_tokens]
+    out = ttnn.to_torch(run_fused())[0, 0][:grade_tokens]
     record["fused"] = _err_metrics(ref, out)
     if _env("BENCH_SAVE", ""):
         torch.save({"ref": ref, "out": out.float()}, _env("BENCH_SAVE", ""))
     if also_run_old:
-        out_old = ttnn.to_torch(run_old())[0, 0][:active_tokens]
+        out_old = ttnn.to_torch(run_old())[0, 0][:grade_tokens]
         record["old"] = _err_metrics(ref, out_old)
     ttnn.synchronize_device(device)
 

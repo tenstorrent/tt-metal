@@ -1177,3 +1177,204 @@ and only on the ND-sharded path where it fits.
 **Verification**: shipped functional suite 74/74; ragged multi-expert prefetch gate 4/4 with PCC
 matching pre-cleanup to ~1e-6 (`routed_expert_work/test_prefetch_ragged.py` -- the shipped suite is
 single-expert and never enters the prefetch path, which is why that file exists).
+
+## 10. Per-expert scaling, bf16 intermediate (2026-09-07)
+
+Expert count x M, ND-sharded bfp4 weights, distinct per-expert weights, x bf16 RM, 11x8, bf16
+partials, median of 5. Each expert gets its own count of M tokens, so per-expert = total / experts.
+
+**Both `GU_CHUNKS` settings, because the optimum moves with expert count.** At E=1 there is no next
+expert, so the prefetch is inert and gc=3 (the pre-prefetch optimum) is right; as E grows the prefetch
+starts paying and gc=2 takes over.
+
+Per expert (us), gc=2 / gc=3, and the best of the two:
+
+| M | e=1 | e=2 | e=4 | e=8 | e=16 |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 74.5 / 75.9 | 70.2 / 72.9 | 65.1 / 69.2 | 62.4 / 64.4 | 61.0 / 61.5 |
+| 256 | 116.8 / **104.9** | 106.4 / **103.0** | 98.9 / 99.6 | 96.4 / 97.0 | 95.0 / 96.4 |
+| 512 | 191.1 / **187.1** | 179.1 / **176.5** | 170.9 / **170.1** | 167.1 / 168.8 | 165.4 / 167.2 |
+| 1024 | 330.2 / 329.1 | 316.1 / 320.2 | 308.4 / 313.2 | 304.4 / 311.0 | 302.7 / 309.9 |
+| 2048 | 606.5 / 616.6 | 589.1 / 604.1 | 582.3 / 599.3 | 578.8 / 597.3 | 576.8 / 595.8 |
+
+gc=2 costs **11.3% at E=1, M=256** and 3.2% at E=2; it wins by 1.5-3.3% everywhere from e=4 up and at
+both ends of the M range. Do not ship gc=2 for single-expert dispatches.
+
+Marginal cost of one more expert (linear fit of total vs experts, best-of data): 59.9 / 94.1 / 163.9 /
+300.9 / 575.0 us at M = 64 / 256 / 512 / 1024 / 2048, with 16-30 us of M-independent fixed cost.
+Within 1% of the bfp8 sweep's 60.0 / 94.1 / 162.1 / 299.7 / 573.5 -- **the intermediate format does not
+move the steady-state per-expert cost.**
+
+### 10.1 The taper removal DID cost ~4% at E=1 -- 8.8's null is specific to the 8-expert regime
+
+Section 7's ND single-expert numbers were measured with the then-default `kr_taper = 4`. Re-running the
+same configuration now (ND, E=1, gc=3, bfp8 intermediate) with the taper deleted isolates its worth:
+
+| M | WORKLOG 7 (taper=4) | now (even split) | cost of removal |
+|---:|---:|---:|---:|
+| 64 | 76.5 | 76.4 | -0.1% (null) |
+| 256 | 100.7 | 105.0 | **+4.3%** |
+| 512 | 178.2 | 184.5 | **+3.5%** |
+| 1024 | 317.9 | 330.6 | **+4.0%** |
+| 2048 | 597.9 | 617.8 | **+3.3%** |
+
+That reproduces 3.18's original "-4% at M=256" claim exactly, and it means 8.8/8.10's "the taper is
+worth nothing measurable" is true ONLY with the prefetch on and 8 experts -- the regime those sweeps
+ran in. At E=1 the prefetch is inert, the weight stream is unhidden, and the taper's original
+justification applies. Production (kimi, 8 local experts) is the 8-expert regime, so the shipped
+even split is still the right default; but the knob was not worthless, it was worthless *given the
+prefetch*, and that distinction was missing from 8.8.
+
+This also fully accounts for the 116 us E=1/M=256 figure first reported: 100.7 -> 105.0 (taper removal,
++4.3%) -> 116.8 (gc=2 at E=1, +11.3%).
+
+### 10.2 bf16 vs bfp8 partials is a wash
+
+Same config (ND, E=1, gc=3), M = 64 / 256 / 512 / 1024 / 2048:
+bfp8 76.4 / 105.0 / 184.5 / 330.6 / 617.8 vs bf16 75.9 / 104.9 / 187.1 / 329.1 / 616.6 us.
+Within +-1.4% either way, no consistent winner -- matching section 6's interleaved result (111.4 bf16
+vs 111.8 bfp8 at M=256). Choose the intermediate format on accuracy, not speed.
+
+## 11. Ragged per-expert counts (2026-09-07)
+
+Real routing does not give every expert the same count. `BENCH_COUNTS` (new) takes an explicit
+per-expert list; grading uses the last non-zero expert, since all experts write the same output rows.
+Patterns and their predicted block counts are in `routed_expert_work/ragged_sweep.py`.
+
+The op quantises each expert to `ceil(count/32)` tiles and then to `ceil(tiles/M_BLOCK)` blocks with
+`M_BLOCK = 8`, i.e. **256 tokens**. The patterns below separate tokens, blocks and non-zero experts.
+ND-sharded bfp4 weights, bf16 partials, gc=2, 8 local experts, 11x8, median of 5. PCC 0.979 on every
+pattern.
+
+### 11.1 Total fixed at 2048 tokens, distribution varied
+
+| pattern | counts | nz | blocks | total us | ns/token | vs balanced |
+|---|---|---:|---:|---:|---:|---:|
+| balanced | 256 x8 | 8 | 8 | **768.6** | 375.3 | 1.000x |
+| mild_25pct | 192..304 | 8 | 12 | 888.1 | 433.6 | **0.865x** |
+| moderate_3x | 128..384 | 8 | 12 | 898.6 | 438.8 | **0.855x** |
+| heavy_hot | 1024,256x3,64x4 | 8 | 11 | 845.4 | 412.8 | 0.909x |
+| zipf | 757,376,251,188,150,125,107,94 | 8 | 11 | 884.6 | 432.0 | 0.869x |
+| sparse4 | 512 x4, 0 x4 | 4 | 8 | 701.2 | 342.4 | **1.096x** |
+| sparse2 | 1024 x2, 0 x6 | 2 | 8 | 652.2 | 318.5 | **1.178x** |
+| sparse1 | 2048, 0 x7 | 1 | 8 | 627.5 | 306.4 | **1.225x** |
+
+Two effects, opposite in sign:
+* **Skew costs 8.5-14.5% at identical total tokens** -- not because of the tokens but because uneven
+  counts straddle block boundaries: 12 blocks instead of 8. A zipf-shaped router (the realistic case)
+  costs 13.1%.
+* **Sparsity PAYS.** Every zero-count expert is skipped whole, weight read included, and that read is
+  the op's dominant cost at these sizes: 8 active experts -> 1 is **1.225x faster at the same 2048
+  tokens**. Fewer, fuller experts beat more, emptier ones.
+
+### 11.2 The 256-token staircase
+
+Uniform counts stepped across one block boundary:
+
+| pattern | tokens | blocks | total us | ns/token | vs unif_256 |
+|---|---:|---:|---:|---:|---:|
+| unif_224 | 1792 | 8 | 734.0 | 409.6 | 1.048x |
+| unif_251 | 2008 | 8 | 766.5 | 381.7 | 1.003x |
+| unif_256 | 2048 | 8 | **769.0** | 375.5 | 1.000x |
+| unif_257 | 2056 | 16 | **1026.9** | 499.5 | **0.749x** |
+| unif_288 | 2304 | 16 | 1024.5 | 444.7 | 0.751x |
+| unif_512 | 4096 | 16 | 1339.4 | 327.0 | 0.574x |
+
+* **Tile padding is free.** 251 vs 256 tokens per expert: 2% fewer tokens, identical time (766.5 vs
+  769.0). Any count in 225..256 costs what 256 costs.
+* **Block padding is a cliff.** 257 vs 256 is **+0.4% tokens for +33.5% time** -- one extra token per
+  expert doubles the block count. 257 costs the same as 288, and 77% of what 512 costs.
+* So per-expert cost is a **staircase with 256-token treads**. The best place to be is just under a
+  multiple of 256; the worst is just over.
+
+### 11.3 Cost model
+
+Least squares over all 14 patterns:
+
+    total_us = 254 + 45.9 * blocks + 15.6 * nonzero_experts
+
+Within +-5% on 12 of 14. It misses `unif_512` by -16.9%, and that miss is informative: blocks are NOT
+equal cost. Against the `unif_256` baseline, the 8 extra nearly-empty blocks of `unif_257` cost
+(1026.9-769.0)/8 = 32 us each, while the 8 extra FULL blocks of `unif_512` cost
+(1339.4-769.0)/8 = 71 us each. **A partial block costs ~45% of a full one** -- it is not free, which is
+exactly why the 257 cliff hurts, but it is not a full block either.
+
+### 11.4 Consequence for section 10
+
+Section 10's per-expert table is the BALANCED case and is therefore optimistic. With all 8 experts
+active and a realistic zipf-shaped router, add ~13% to the e=8 column. The pessimistic corner is
+uniform counts one token over a block boundary (+33%); the optimistic one is a sparse dispatch where
+most experts are empty (-18% at 2 active experts).
+
+## 12. Widening the x-stage protection to every cold block -- ACCEPTED (2026-09-07)
+
+Chasing the ~16 us/expert of "late x" above the 77.7 us compute floor (3.x), at E=1 where the weight
+stream is fully exposed in phase 1 (the prefetch has no next expert and is inert). ND weights, bf16
+partials, gc=3, M in {256, 512, 1024}.
+
+### 12.1 What did NOT work, and why the obvious reading was backwards
+
+| config | M=256 | M=512 |
+|---|---:|---:|
+| base (`WD_SPLIT=3`) | **105.0** | 187.1 |
+| `WG_AFTER_X=1` | 114.4 (-8.2%) | 190.6 (-1.9%) |
+| `WD_SPLIT=0` | 103.9 (+1.0%) | 187.3 (-0.1%) |
+| `WD_SPLIT=5` | 106.0 (-1.0%) | 182.0 (+2.8%) |
+| `WD_SPLIT=8` | 115.7 (-9.3%) | 192.4 (-2.7%) |
+| `WG_AFTER_X=1` + `WD_SPLIT=8` | 116.2 (-9.7%) | 187.7 (-0.3%) |
+
+Deferring W_gate past x costs **8.2%**: the weight read is not starving x, it is FILLING DRAM that
+would otherwise idle during x staging, and delaying it just makes compute wait. `WD_SPLIT=8` losing
+9.3% says NoC1 is not a free resource either -- `XPRIO` already defers W_up there, so adding W_down
+builds a NoC1 backlog that phase 2 waits on. (`WD_SPLIT=5` at M=512 and `WD_SPLIT=0` at M=256 are
+1-3% and M-dependent; not pursued, they need their own per-M story.)
+
+### 12.2 The actual gap: `protect_x_stage` was gated to `m_blocks == 1`
+
+`protect_x_stage` releases W_gate inside multicast round 0, only after every core in the row has
+staged x, so an early core cannot starve a lagging core on NoC0. It was restricted to
+`m_blocks == 1` on the reasoning that multi-block work has its later x prefetched -- true, but
+**block 0 never is** (`prefetch_next_x` requires `block_idx + 1 < m_blocks`). So at m_blocks > 1,
+block 0 staged x cold with W_gate already in flight: exactly the case the mechanism exists for.
+`!staged_early` alone is the correct condition and is what ships now.
+
+| M | m_blocks | before | after | speedup |
+|---:|---:|---:|---:|---:|
+| 256 | 1 | 105.0, 105.3, 104.1 | 105.3, 104.7, 104.0 | 1.003x (null -- already protected) |
+| 512 | 2 | 187.4, 184.1, 186.5 | 181.4, 181.1, 181.2 | **1.029x** |
+| 1024 | 4 | 329.0, 328.9, 326.8 | 323.7, 323.5, 323.1 | **1.017x** |
+
+Non-overlapping at M=512 and M=1024, and null at M=256 -- the exact signature the mechanism predicts,
+since M=256 was already protected. At **8 experts** it is 1.001x / 1.005x / 1.002x: neutral, no
+regression, and the small size is itself consistent -- with the prefetch the weight stream is largely
+already out of phase 1, so there is less interference left to remove.
+
+### 12.3 It lowers the curve, it does not flatten it
+
+`pf_x_barrier` per row at M=512, E=1, barrier only:
+
+| phys y | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | spread |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| before | 21.5 | **32.5** | 23.3 | 18.4 | 19.5 | 14.1 | 10.5 | 6.9 | 4.71x |
+| after | 19.4 | **24.0** | 18.7 | 14.7 | 13.6 | 9.7 | 7.0 | 5.1 | 4.66x |
+
+Every row improves and the slowest drops 32.5 -> 24.0 us, but the **spread is unchanged**. So this
+removes weight-stream interference from the x stream; it does not touch x's own inter-row arbitration,
+which stays at ~4.7x and remains the open item. 8.5 us off the slowest row for 4.6 us end-to-end at
+M=512 is the expected ratio -- not all of it is on the critical path, and only block 0 of two is
+protected.
+
+Verified 78/78 (shipped suite + ragged multi-expert gate) on the default build.
+
+### 12.4 Also settled here: the 8+1 vs 5+4 block split question
+
+Splitting m_t = 9 as 5+4 instead of 8+1 would be **worse**, not better. `m_tiles_eff` rounds the last
+block's remainder up to a POWER OF TWO (`while (p < rem) p <<= 1`), so with `m_eff_min = 1` the legal
+sizes are {1, 2, 4, 8}: 8+1 charges 9 m_eff units, 5+4 charges 8+4 = 12. The FPU work is
+`m_tiles_real` (9 either way, the real rows are a contiguous prefix) but every CB reserve/push/pop and
+the whole reduce-scatter slice plan are in m_eff units, so a balanced split moves 33% more data
+through the reduce for identical arithmetic. The pow2 ladder is load-bearing: the slice plan must
+divide M_BLOCK and agree across cores without communication.
+
+The real cost of m_t = 9 is the second block's FIXED cost, ~26 us (section 11.3: partial block 32 us,
+full 71 us). That is a per-block-overhead problem, not a tile-distribution one.

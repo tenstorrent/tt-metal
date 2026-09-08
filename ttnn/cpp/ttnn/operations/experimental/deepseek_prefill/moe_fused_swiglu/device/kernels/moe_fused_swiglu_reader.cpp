@@ -809,12 +809,25 @@ void kernel_main() {
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = gb + 1;
             }
 
-            // The row-wide release targets the latency-critical one-block dispatch. Multi-block work
-            // keeps the original pipeline: later X is prefetched, and perturbing its steady state costs
-            // more than protecting the first block saves. With no row multicast there is no collective
-            // rendezvous at all. Otherwise protect_x_stage releases W_gate inside round 0, only after
-            // every core in the row has staged X, so an early core cannot starve a lagging core on NoC0.
-            const bool protect_x_stage = (m_blocks == 1) && !staged_early && !WG_AFTER_XMCAST;
+            // The row-wide release targets every block that stages X from DRAM. protect_x_stage
+            // releases W_gate inside multicast round 0, only after every core in the row has staged X,
+            // so an early core cannot starve a lagging core on NoC0. With no row multicast there is no
+            // collective rendezvous at all.
+            //
+            // `!staged_early` is exactly the right condition and the only one needed: it names the
+            // blocks that read X from DRAM rather than from the previous block's prefetch. This used to
+            // be further restricted to `m_blocks == 1` on the reasoning that multi-block work has its
+            // later X prefetched -- true, but block 0 never is (`prefetch_next_x` needs
+            // block_idx + 1 < m_blocks), so at m_blocks > 1 block 0 was staging X cold with W_gate
+            // already in flight, which is the exact case the mechanism exists for. Lifting the
+            // restriction measured 1.029x at M=512 and 1.017x at M=1024 single-expert, neutral at
+            // M=256 (already protected) and at 8 experts. It lowers the whole per-row X-arrival curve
+            // rather than flattening it: slowest row 32.5 -> 24.0 us at M=512, spread unchanged at
+            // ~4.7x, i.e. it removes weight-stream interference, not X's own inter-row arbitration.
+            //
+            // Row-uniform, which the round-0 rendezvous requires: m_blocks, staged_early and
+            // WG_AFTER_XMCAST are identical on every core in the row.
+            const bool protect_x_stage = !staged_early && !WG_AFTER_XMCAST;
             if constexpr (!XMCAST_ACTIVE) {
                 issue_wg_chunk(0);
             } else if (!protect_x_stage && !WG_AFTER_XMCAST) {
