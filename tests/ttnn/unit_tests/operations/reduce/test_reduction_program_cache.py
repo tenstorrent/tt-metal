@@ -343,3 +343,24 @@ def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache
         )
 
     assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("op", [ttnn.std, ttnn.var])
+@pytest.mark.parametrize("dim", [-1, -2, [-2, -1]], ids=["W", "H", "HW"])
+def test_welford_cache_reuse_across_scalars_and_correction(device, isolate_program_cache, op, dim):
+    """Welford std/var: distinct scalars and both correction settings share one program.
+
+    WelfordReduceDeviceOperation::compute_program_hash excludes scalar and correction, which the
+    kernels read as runtime args (#54180), so these six configurations cost 1 entry instead of 6.
+    Numerics are covered by tests/ttnn/nightly/.../test_generic_ops_w_scalar.py.
+    """
+    torch.manual_seed(0)
+    torch_a = torch.rand([1, 1, 64, 64], dtype=torch.bfloat16) + 0.1
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with device.cache_entries_counter.measure():
+        for scalar in [1.0, 0.5, 2.0]:
+            for correction in [True, False]:
+                op(tt_a, dim=dim, keepdim=True, scalar=scalar, correction=correction)
+
+    assert device.cache_entries_counter.total == 1
