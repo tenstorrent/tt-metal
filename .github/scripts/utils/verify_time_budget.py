@@ -442,9 +442,7 @@ def comment_body(problems):
         f"{COMMENT_MARKER} status=fail -->",
         "## :rotating_light: Time budget check failed",
         "",
-        f"pr-gate's `verify-time-budgets` found {len(problems)} {plural}. It reads every "
-        "`tests/pipeline_reorg/*.yaml` at once, because the budget for a "
-        "`(team, budget_type, sku)` bucket is the sum across **all** yamls that charge it.",
+        f"pr-gate's `verify-time-budgets` found {len(problems)} {plural}.",
     ]
 
     overflows = by_kind.pop("overflow", [])
@@ -453,9 +451,7 @@ def comment_body(problems):
             "",
             f"### Budget exceeded ({len(overflows)})",
             "",
-            "A bucket can go over even when no single yaml grew much, since the allowance is "
-            "shared. Trim the timeouts below, or raise the budget in "
-            f"{BUDGET_FILE_LINK} with a justification in the PR description.",
+            f"Trim the timeouts below, or raise the budget in {BUDGET_FILE_LINK} with a justification in the PR description.",
             "",
             "| Budget bucket | Over by | Allocated | Budget | Test yamls charging it |",
             "|---|---:|---:|---:|---|",
