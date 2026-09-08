@@ -79,11 +79,11 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     must then split with ``kv_tied=True``, since the output is one section narrower.
     Falls back to the full weight when it was not built (GEMMA4_TIED_QKV=0, sliding layers).
     """
-    use_tied = kv_tied and weights.wqk is not None
-    projection = weights.wqk if use_tied else weights.wqkv
-    if isinstance(projection, DramShardedLinear):
-        return projection(hidden_states, out_memory_config=memory_config)
-    return ttnn.linear(hidden_states, projection, memory_config=memory_config)
+    if kv_tied and weights.wqk is not None:
+        return ttnn.linear(hidden_states, weights.wqk, memory_config=memory_config)
+    if isinstance(weights.wqkv, DramShardedLinear):
+        return weights.wqkv(hidden_states, out_memory_config=memory_config)
+    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
 
 
 def qkv_projection_is_tied(weights: AttentionWeights, kv_tied: bool = False) -> bool:
