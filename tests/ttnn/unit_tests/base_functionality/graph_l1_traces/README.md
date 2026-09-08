@@ -22,6 +22,8 @@ the program cache across 50 distinct programs with cold and warm persistent kern
 `GRADED_RUN_L1_OVERHEAD.md` measures the incremental cost of cache-off capture and peak reduction
 inside the real graded RMSNorm pass. `PERF_PROFILER_OVERHEAD.md` measures the existing eval
 device-performance profiler and its interaction with L1 collection.
+`REALTIME_PERF_PROFILER_OVERHEAD.md` measures the real-time streaming alternative and describes
+runtime-ID windows that avoid the standard profiler's synchronous per-case dumps.
 
 Tools in this directory:
 
