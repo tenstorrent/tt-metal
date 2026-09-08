@@ -30,6 +30,110 @@ from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_gri
 from models.demos.qwen3_tts.tt.mesh_utils import is_n150
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
+# Swept decode gate/up core grids, keyed by (K, per-chip N) so only the exact shapes
+# measured can match — same discipline as _N300_GATE_UP below.
+#
+# `find_grid_k_n` MAXIMISES the core count, and for a DRAM-sharded matmul
+# `in0_block_w = K_tiles / cores`. Maximising cores therefore MINIMISES in0_block_w,
+# which is the wrong end for a weight-bandwidth-bound M=1-tile matmul at bfloat8_b:
+# halving the bytes per tile stops hiding the per-read fixed cost. tt-perf-report says
+# it outright on these ops — "in0_block_w=1 is small, try in0_block_w=2 or above".
+#
+# Swept in isolation at the model's shapes (bfloat8_b, LoFi + fp32 accumulate, median of
+# 4 steady-state launches; tests/test_qwen3_tts_gate_up_sweep_n150.py):
+#
+#   (2048, 6144)  N150 / TP=1     shipped 1D  @64  in0_block_w=1   91.7 us  146 GB/s  50.6 %
+#                                 ->  dram    @16  in0_block_w=4   58.0 us  230 GB/s  80.0 %
+#                                 (dram @64, i.e. just flipping _n150_gate_up_1d off,
+#                                  is 132.3 us / 101 GB/s — WORSE than shipping)
+#   (2048, 3072)  N300 / TP=2     shipped dram @32 in0_block_w=2   45.2 us  148 GB/s  51.3 %
+#                                 ->  dram    @8   in0_block_w=8   30.7 us  218 GB/s  75.6 %
+#                                 (dram @16 is 30.9 us — tied within noise)
+#
+# Both SKUs land at 218-230 GB/s, i.e. the rate down_proj already gets. NOT bit-exact:
+# a different core count splits the K reduction differently.
+# QWEN3_TTS_DECODE_GATE_UP_CORES=<n> forces a grid; =0 restores find_grid_k_n.
+#
+# In the deployed traced-decode window (median of 3 captures each):
+#
+#   N150   443 -> 385 us/layer (-13.1 %), 28 -> 30 ops.  End to end 41.78 -> 39.95
+#          ms/frame (-4.4 %). PCC mlp_decode 0.999690 -> 0.999693; attention_decode
+#          and talker_chain digit-identical. Frame count 82 -> 83.  DEFAULT ON.
+#
+#   N300   352 -> 329 us/layer (-6.5 %), 32 -> 34 ops; matmul total 167.0 -> 138.1 us
+#          and the four CCLs measured 19 us in BOTH arms, so this is not CCL luck.
+#          End to end is only 39.39 -> 39.13 ms/frame (-0.7 %) -- the N300 layer
+#          carries ~76 us of CCL this does not touch, each chip's matmul is half the
+#          size, and the CodePredictor still dominates the frame. Take it for the
+#          -29 us of matmul, not for the wall clock.
+#
+# TP=2 had no numerics gate at all -- test_qwen3_tts_pcc.py opens
+# ttnn.open_device(device_id=0), so every test in it runs tp_size=1. Rather than treat
+# that as a reason to withhold the N300 arm, test_qwen3_tts_mlp_tp2_pcc.py now covers
+# it, and the two arms are indistinguishable on a real 2-chip mesh: PCC vs a
+# full-precision torch reference 0.99965531 -> 0.99965531 (identical to 8 digits),
+# relative RMS 4.693 -> 4.716 %, arm-to-arm PCC 0.99999285.
+#
+# Generation length does move (81 -> 94 frames on the perf-gate text, 81 -> 77 on the
+# QA text, each re-measured, so it is the numerics and not sampler noise) -- but it
+# moves in BOTH directions depending on the prompt, WER was 0.0 % in both arms and SIM
+# 0.9016 -> 0.9280 sits inside the +/-0.03 noise band of PERF_NOTES 2.9. That is what a
+# benign perturbation looks like, and it is a smaller move than the bfp8 promotion
+# (85 -> 79) or the CP fused-SDPA promotion (87 -> 68) that both shipped default ON.
+# PERF_NOTES 6.4's >=8-seed sweep is still the honest gate for all three.
+#
+# NOTE for whoever re-goldens the perf gate: N300 now measures 38.86 / 39.40 ms against
+# EXPECTED_STEADY_MS_PER_FRAME=40.1 +/-5 % = [38.09, 42.11]. It passes, but it is ~0.3 ms
+# nearer the LOWER bound, and that band breaks from below (see 2.8).
+_DECODE_GATE_UP_CORES = {
+    (2048, 6144): 16,  # N150 / TP=1
+    (2048, 3072): 8,  # N300 / TP=2
+}
+
+
+def _swept_decode_gate_up_grid(hidden, local_inter, k_tiles, n_tiles, cg, rows, cols):
+    """(rows, cols, swept_cores) for the decode gate/up matmul.
+
+    Returns the find_grid_k_n choice unchanged (and swept_cores=None) when this shape
+    has no swept entry or the requested count is not legal on this grid.
+    """
+    env = os.environ.get("QWEN3_TTS_DECODE_GATE_UP_CORES")
+    if env == "0":
+        return rows, cols, None
+    want = int(env) if env else _DECODE_GATE_UP_CORES.get((hidden, local_inter))
+    if not want or want == rows * cols:
+        return rows, cols, None
+    if k_tiles % want or n_tiles % want or want > cg.x * cg.y:
+        return rows, cols, None
+    for r in range(1, cg.y + 1):
+        if want % r == 0 and want // r <= cg.x:
+            return r, want // r, want
+    return rows, cols, None
+
+
+def _wide_intermediate_memcfg(n_tiles, swept_cores, cg):
+    """Widest legal width-shard of the intermediate, for re-parallelising the SiLU-mul.
+
+    A DRAM-sharded matmul writes ITS OWN grid and ignores the grid in the output
+    memory_config (verified: ask for 64 cores, get the 16-core shard back). So after a
+    narrow-grid gate/up the SiLU-mul inherits that narrow grid — and unlike RMSNorm the
+    mul is purely parallelism-bound, so it costs proportionally more there (measured on
+    N150: 9 us on 64 cores -> 33 us on 16). Resharding both operands wide first pays 2
+    ops to get that back, which measured net -18 us/layer.
+
+    None when gate/up kept its original grid, or nothing wider is legal.
+    QWEN3_TTS_DECODE_GATE_UP_WIDEN=0 leaves the mul on the matmul's grid.
+    """
+    if swept_cores is None or os.environ.get("QWEN3_TTS_DECODE_GATE_UP_WIDEN", "1") == "0":
+        return None
+    wide = next((c for c in range(cg.x * cg.y, swept_cores, -1) if n_tiles % c == 0), None)
+    if wide is None:
+        return None
+    for r in range(1, cg.y + 1):
+        if wide % r == 0 and wide // r <= cg.x:
+            return width_sharded_l1_memcfg(m_tiles=1, k_tiles=n_tiles, num_cores_x=wide // r, num_cores_y=r)
+    return None
+
 
 class MLP(LightweightModule):
     """SwiGLU MLP for Qwen3-TTS — down_proj(silu(gate(x)) * up(x))."""
@@ -221,6 +325,9 @@ class MLP(LightweightModule):
             self._decode_gate_up_n_padded = n_padded_gu
             k_tiles_gu, n_tiles_gu = k_gu // 32, n_padded_gu // 32
             rows_gu, cols_gu = find_grid_k_n(k_tiles_gu, n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
+            rows_gu, cols_gu, self._decode_gate_up_swept_cores = _swept_decode_gate_up_grid(
+                hidden_size, self.local_intermediate, k_tiles_gu, n_tiles_gu, _cg, rows_gu, cols_gu
+            )
             self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
                 m=32, k=k_gu, n=n_padded_gu, num_cores=rows_gu * cols_gu
             )
@@ -248,6 +355,9 @@ class MLP(LightweightModule):
                 m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
             )
             self._n150_gate_up_1d = False
+            self._decode_gate_up_wide_memcfg = _wide_intermediate_memcfg(
+                n_tiles_gu, self._decode_gate_up_swept_cores, _cg
+            )
             self._decode_residual_memcfg = None
             return
 
@@ -262,6 +372,9 @@ class MLP(LightweightModule):
         # find_grid_k_n must honor the actual compute grid (8x8 on WH N150, 13x10 on BH P150).
         _cg = device.compute_with_storage_grid_size()
         rows_gu, cols_gu = find_grid_k_n(k_tiles_gu, n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
+        rows_gu, cols_gu, self._decode_gate_up_swept_cores = _swept_decode_gate_up_grid(
+            hidden_size, self.local_intermediate, k_tiles_gu, n_tiles_gu, _cg, rows_gu, cols_gu
+        )
         self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_gu, n=n_padded_gu, num_cores=rows_gu * cols_gu
         )
@@ -271,6 +384,7 @@ class MLP(LightweightModule):
         self._decode_gate_up_out_memcfg = width_sharded_l1_memcfg(
             m_tiles=1, k_tiles=n_tiles_gu, num_cores_x=cols_gu, num_cores_y=rows_gu
         )
+        self._decode_gate_up_wide_memcfg = _wide_intermediate_memcfg(n_tiles_gu, self._decode_gate_up_swept_cores, _cg)
 
         down_w_kn = state_dict[f"{layer_prefix}.mlp.down_proj.weight"].transpose(-2, -1).contiguous()
         self.down_proj_dram_sharded, k_d, n_padded_d = build_dram_sharded_weight(down_w_kn, device, dtype=weight_dtype)
@@ -286,12 +400,12 @@ class MLP(LightweightModule):
         self._decode_down_out_memcfg = width_sharded_l1_memcfg(
             m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
         )
-        # N150: 1D mcast on the full compute grid. DRAM-sharded gate/up is pinned
-        # to the WH bank count (12) with in0_block_w=1. Other cards keep that path.
+        # N150 decode gate/up: DRAM-sharded on the swept narrow grid when the override
+        # above found one, else 1D mcast on the full compute grid (the pre-sweep path).
         # Residual dest is the same N150-only choice: slice padded-N into the
         # decode RMSNorm shard spec so the next layer skips I2S.
         _n150 = is_n150(device)
-        self._n150_gate_up_1d = _n150
+        self._n150_gate_up_1d = _n150 and self._decode_gate_up_swept_cores is None
         self._decode_residual_memcfg = decode_hidden_width_memcfg(device, hidden_size) if _n150 else None
         if self._n150_gate_up_1d:
             self._decode_gate_up_1d_progcfg = make_linear_1d_program_config(
@@ -370,12 +484,27 @@ class MLP(LightweightModule):
             )
             if _own_x_sharded:
                 ttnn.deallocate(x_sharded)
+            # The narrow DRAM-sharded gate/up grid is right for the MATMULS and wrong
+            # for the SiLU·mul that follows. A DRAM-sharded matmul writes its own grid
+            # and ignores the output memory_config's grid (verified: asking for 64 cores
+            # still returns a 16-core shard), so the mul inherits 16 cores and, being
+            # purely parallelism-bound, costs 4x more there: 9 us on 64 cores -> 33 us
+            # on 16. Widening both operands first pays 2 reshards to get that back.
+            _mul_memcfg = self._decode_gate_up_out_memcfg
+            if self._decode_gate_up_wide_memcfg is not None:
+                gate_wide = ttnn.to_memory_config(gate_sharded, self._decode_gate_up_wide_memcfg)
+                ttnn.deallocate(gate_sharded)
+                gate_sharded = gate_wide
+                up_wide = ttnn.to_memory_config(up_sharded, self._decode_gate_up_wide_memcfg)
+                ttnn.deallocate(up_sharded)
+                up_sharded = up_wide
+                _mul_memcfg = self._decode_gate_up_wide_memcfg
             # gate/up sharding == down in0 sharding (same K). Mul preserves layout.
             hidden_sharded = ttnn.mul(
                 gate_sharded,
                 up_sharded,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-                memory_config=self._decode_gate_up_out_memcfg,
+                memory_config=_mul_memcfg,
             )
             ttnn.deallocate(gate_sharded)
             ttnn.deallocate(up_sharded)
@@ -384,7 +513,7 @@ class MLP(LightweightModule):
             # TILE*dram_cores). True on BH P150 (dram_cores=8, hidden=2048) but
             # not on Wormhole (dram_cores=12 → hidden pads 2048→2304, giving
             # down a different num_cores). Reshard when they differ.
-            if self._decode_gate_up_out_memcfg != self._decode_down_in0_memcfg:
+            if _mul_memcfg != self._decode_down_in0_memcfg:
                 hidden_for_down = ttnn.to_memory_config(hidden_sharded, self._decode_down_in0_memcfg)
                 ttnn.deallocate(hidden_sharded)
             else:
