@@ -364,7 +364,9 @@ $PY $T/analyze_prefill_kv_ramp.py      <ops_perf_results.csv> "label"
 ```
 
 **Logs and captures for this run:** `/data/kmabee/mistral4_bringup_pp4_bh-glx-120-b03u02/`
-(`pass1/`, `pass2_warm/`, `profile/{1rank_deep,pp4_deep}/`). Not committed — multi-GB.
+(`pass1/`, `pass2_warm/`, `profile/{1rank_deep,pp4_deep}/`) — provenance only: one author's box, not
+a shared location, and not committed at multi-GB. The reduced captures in `tests/perf/captures/` are
+the durable copy of the §2 data.
 
 `tt-perf-report` was **not** available on this machine (`~/.local/bin` is local disk per box), so the
 op tables above come from the in-tree analyzers. Both were validated first against the committed
