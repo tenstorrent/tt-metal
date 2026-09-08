@@ -144,6 +144,22 @@ sfpi_inline void logsigmoid_x2(sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat& r
         sfpi::vFloat t1 = _sfpu_exp_fp32_accurate_(n1);
         logsigmoid_residual_fp32_x2(residual0, residual1, t0, t1);
     } else {
+        // The <is_fp32_dest_acc_en> here resolves to <false>, so the exponential ends on a
+        // convert<vFloat16b>. That cast is load-bearing and is not the DEST pre-rounding its
+        // own comment describes. Modelling _sfpu_exp_21f_bf16_ from its source puts a
+        // systematic relative bias of 1.65e-3 on it -- 0.30 of a bfloat16 ULP on average,
+        // 0.44 at worst, not the 2^-21 the name suggests -- so it sits under the half-ULP
+        // that round-to-nearest absorbs, and rounding t to bfloat16 quantizes it away
+        // instead of letting it through the residual.
+        // Measured on ttsim over every finite bfloat16 input with x <= 87 (49710 points),
+        // passing <true> here trades a max of 1.43 ULP for 0.88 but takes the mean from
+        // 0.29 to 0.35 and the count of not-correctly-rounded results from 1009 to 28584.
+        // Refitting the residual against <true> does not recover it -- a bounded search
+        // found nothing under 0.88 -- and the reason to expect that is structural: on the
+        // positive tail the residual is t itself and P(0) = 1 is imposed, so the
+        // exponential's relative error passes through whatever the polynomial does.
+        // This branch only compiles when DEST is bfloat16, so the output quantum and the
+        // cast's quantum are the same one.
         sfpi::vFloat t0 = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(n0);
         sfpi::vFloat t1 = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(n1);
         logsigmoid_residual_bf16_x2(residual0, residual1, t0, t1);

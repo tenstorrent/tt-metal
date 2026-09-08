@@ -313,3 +313,34 @@ def test_log_sigmoid(device, h, w, low, high):
     output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
 
     assert_with_ulp(torch_output_tensor, output_tensor, 4)
+
+
+def test_log_sigmoid_float32_special_values(device):
+    # The bfloat16 special-values test in test_activation.py covers the branch that
+    # carries the explicit NaN restore. This one covers the other branch: an fp32
+    # input forces fp32_dest_acc_en, which selects the fp32 residual and skips that
+    # restore, so NaN propagation here rests on _sfpu_exp_fp32_accurate_ alone -- and
+    # that function's underflow path is written differently on the two architectures.
+    # fp32 in / fp32 DEST is also the one configuration that carries a NaN to L1
+    # unrounded, so this is where the question is decidable at all.
+    torch_input_tensor = torch.zeros((32, 32), dtype=torch.float32)
+    torch_input_tensor.flatten()[:6] = torch.tensor(
+        [float("nan"), -float("nan"), float("inf"), -float("inf"), 0.0, -0.0], dtype=torch.float32
+    )
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+    output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
+
+    # NaN in must stay NaN out. Asserted separately from the ULP comparison because
+    # a lane that came back as a finite 0.0 is the specific regression guarded here,
+    # and a ULP check on a NaN reference would not distinguish it.
+    assert torch.isnan(output_tensor.flatten()[:2]).all(), "log_sigmoid(NaN) must be NaN"
+    assert_with_ulp(torch_output_tensor, output_tensor, 4, allow_nonfinite=True)

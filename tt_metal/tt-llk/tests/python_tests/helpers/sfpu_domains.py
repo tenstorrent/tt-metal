@@ -2472,11 +2472,13 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     # to say whether the golden or the kernel's inf path is wrong, before either is touched.
     MathOperation.SfpuIsclose: "golden and kernel both claim torch.isclose semantics and "
     "disagree at a non-finite operand; needs a per-cell read-back to say which is wrong.",
-    # (4) Not a binary op in the sense this probe assumes. The kernel reads in1 only on its x > 4
-    # branch and the golden ignores operand B outright -- verified: logsigmoid(1, y) is constant
-    # in y. A special injected into B is therefore not a stimulus for anything.
-    MathOperation.SfpuLogsigmoid: "effectively unary -- operand B is read only on the x > 4 "
-    "branch and the golden ignores it, so a cat-B probe in B asserts nothing.",
+    # (4) Not a binary op in the sense this probe assumes. The production kernel is unary and
+    # reaches the legacy binary harness through an adapter that ignores operand B outright, as
+    # does the golden -- verified: logsigmoid(1, y) is constant in y. A special injected into B
+    # is therefore not a stimulus for anything.
+    MathOperation.SfpuLogsigmoid: "effectively unary -- the kernel is reached through a "
+    "binary adapter that ignores operand B, as does the golden, so a cat-B probe in B "
+    "asserts nothing.",
 }
 
 assert not (

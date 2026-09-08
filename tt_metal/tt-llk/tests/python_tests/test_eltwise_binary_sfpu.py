@@ -1087,11 +1087,22 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
     # aborts in its Float32 unpack path:
     #
     #                            | this kernel | pre-fix kernel | bound  | margin
-    #   bf16 in, bf16 DEST       |   7.81e-3   |    1.54e-2     | 1.1e-2 | 1.41x / 1.40x
+    #   bf16 in, bf16 DEST       |   7.81e-3   |    1.54e-2     | 1.3e-2 | 1.66x / 1.18x
     #   bf16 in, fp32 DEST, bf16 |   0         |    1.46e-2     | 8e-3   |  inf  / 1.82x
     #   bf16 in, fp32 DEST, fp32 |   3.84e-3   |    1.46e-2     | 8e-3   | 2.08x / 1.82x
-    #   fp32 in, bf16 out        |   3.87e-3   |    1.19e-2     | 7e-3   | 1.81x / 1.70x
+    #   fp32 in, bf16 out        |   3.87e-3   |    1.19e-2     | 9e-3   | 2.33x / 1.32x
     #   fp32 in, fp32 out        |   1.25e-7   |    9.02e-3     | 1e-5   |   80x /  902x
+    #
+    # Two of these bounds carry one bfloat16 quantum of slack on purpose. The measurements
+    # behind them are simulator-backed, and a bound whose headroom is under a single
+    # bfloat16 rounding (2^-8 = 3.9e-3) is one silicon-vs-simulator rounding away from
+    # failing on a kernel that is fine. Applying that test to all five rows: bf16/bf16 had
+    # 3.19e-3 of headroom and fp32-in/bf16-out had 3.13e-3, so both are widened until the
+    # headroom clears a quantum; they still reject the pre-fix kernel at 1.18x and 1.32x, so
+    # the regression gate is unchanged in kind. The bf16-operand fp32-DEST rows keep 8e-3
+    # (4.16e-3 of headroom, just clear). The fp32/fp32 row keeps 1e-5: its headroom is
+    # 9.9e-6, but nothing on that path is stored at bfloat16, so the quantum that applies
+    # to it is the fp32 one and 9.9e-6 is ~80x that.
     #
     # The pre-fix kernel is measured with exp(-|x|) on operand B, which is what it reads;
     # see _logsigmoid_stimuli_spec. Against an unrounded float64 reference the same runs put
@@ -1103,11 +1114,11 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
         if formats.output_format == DataFormat.Float32:
             atol, rtol = 0.0, 1e-5
         else:
-            atol, rtol = 0.0, 7e-3
+            atol, rtol = 0.0, 9e-3
     elif dest_acc == DestAccumulation.Yes:
         atol, rtol = 0.0, 8e-3
     else:
-        atol, rtol = 0.0, 1.1e-2
+        atol, rtol = 0.0, 1.3e-2
 
     # Same dimensions sfpu_binary would pick by default, named here because
     # _logsigmoid_stimuli_spec has to build a face_specs list that covers this exact
