@@ -5,7 +5,7 @@
 import csv
 import re
 import time
-from os import listdir
+from os import environ, listdir
 from os.path import isfile, join
 
 import git
@@ -16,6 +16,22 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 today = time.strftime("%Y_%m_%d")
 
 
+def get_branch_and_hash():
+    """Branch and commit for the report header.
+
+    A prebuilt test image carries the source tree without `.git`, so GitPython
+    raises instead of returning metadata. Fall back to what CI already exports
+    rather than failing a perf merge over two header lines.
+    """
+    try:
+        repo = git.Repo(search_parent_directories=True)
+    except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError):
+        return environ.get("GITHUB_REF_NAME", "unknown"), environ.get("GITHUB_SHA", "unknown")
+
+    branch = "detached HEAD" if repo.head.is_detached else str(repo.active_branch)
+    return branch, repo.head.object.hexsha
+
+
 def merge_perf_files(fname, perf_fname, expected_cols):
     mypath = "./"
     csvfiles = [
@@ -24,14 +40,11 @@ def merge_perf_files(fname, perf_fname, expected_cols):
         if isfile(join(mypath, f)) and re.match(f"{perf_fname}_.*_{today}.csv", f) is not None
     ]
 
-    repo = git.Repo(search_parent_directories=True)
+    branch, commit = get_branch_and_hash()
 
     merge_res = open(fname, "w")
-    if not repo.head.is_detached:
-        merge_res.write(f"branch: {repo.active_branch} \n")
-    else:
-        merge_res.write(f"branch: detached HEAD \n")
-    merge_res.write(f"hash: {repo.head.object.hexsha} \n")
+    merge_res.write(f"branch: {branch} \n")
+    merge_res.write(f"hash: {commit} \n")
     cols = ", ".join(expected_cols)
     merge_res.write(f"{cols} \n")
 
