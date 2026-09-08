@@ -359,6 +359,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
+    // The host work plan already derives its geometry from kv_stripe_split, but the kernels still take
+    // the Q slab as the cache-region stride and read ring_size as the Q rank count, so a split > 1 would
+    // have host and device disagree and silently mis-position every read. Refuse it until the kernel
+    // side (kv_region_Nt compile arg + Q-rank indexing) lands.
+    TT_FATAL(
+        args.kv_stripe_split == 1,
+        "kv_stripe_split ({}) > 1 is not supported yet: the device kernels still derive the cache region "
+        "from the Q slab. Host-side geometry is in place; see the kernel plumbing follow-up.",
+        args.kv_stripe_split);
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         TT_FATAL(!ag.cluster_axis.has_value(), "Full-mesh RingJointSDPA must not carry a cluster axis");

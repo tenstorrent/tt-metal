@@ -76,6 +76,12 @@ struct RingJointRuntimeDerivation {
     uint32_t ring_size = 0;
     uint32_t q_local_padded_Nt = 0;
     uint32_t kv_local_padded_Nt = 0;
+    // TP-deduped KV: the ring transports ring_size shards but Q owns only ring_size/kv_stripe_split of
+    // them, so the cache's per-rank per-chunk region is that many times narrower than Q's slab. Both
+    // reduce to today's values at kv_stripe_split == 1.
+    uint32_t kv_stripe_split = 1;
+    uint32_t q_ring_size = 0;     // distinct Q shards = ring_size / kv_stripe_split
+    uint32_t kv_region_Nt = 0;    // cache tiles per rank per chunk = q_local_padded_Nt / kv_stripe_split
     uint32_t q_chunk_group_tile_count = 0;
     uint32_t num_local_k_chunks = 0;
     uint32_t k_chunk_tile_count = 0;
@@ -319,7 +325,7 @@ RingWorkPlan build_ring_work_plan(
                     ring_id,
                     local_tile_start,
                     derivation.q_chunk_group_tile_count,
-                    derivation.q_local_padded_Nt,
+                    derivation.kv_region_Nt,
                     derivation.kv_local_padded_Nt) < derivation.logical_nt) {
                 valid_spatial_kv_chunks++;
             }
@@ -329,9 +335,13 @@ RingWorkPlan build_ring_work_plan(
         // tightens this to valid chunks so empty pad slabs can be skipped.
         const bool has_kv_work =
             (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
+        // Causality is a Q-rank relation: this device's Q slab vs the slab the incoming shard belongs to.
+        // At kv_stripe_split > 1 several shards share one Q rank, so both sides divide down to it.
+        const uint32_t my_q_rank = ring_write_plan.tensor_rank / derivation.kv_stripe_split;
+        const uint32_t shard_q_rank = ring_id / derivation.kv_stripe_split;
         const bool ring_iter_does_work =
             (has_kv_work || joint_contributes) &&
-            !(derivation.kernel_is_causal && ring_write_plan.tensor_rank < ring_id && !is_balanced);
+            !(derivation.kernel_is_causal && my_q_rank < shard_q_rank && !is_balanced);
         if (ring_iter_does_work) {
             plan.masks.active_ring_iter_mask |= (1u << ring_iter);
             plan.last_active_ring_iter = ring_iter;
@@ -462,7 +472,22 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     derivation.q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     derivation.kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
-    derivation.q_chunk_group_tile_count = derivation.q_local_padded_Nt * derivation.ring_size;
+    derivation.kv_stripe_split = args.kv_stripe_split;
+    TT_FATAL(
+        derivation.kv_stripe_split >= 1 && derivation.ring_size % derivation.kv_stripe_split == 0,
+        "kv_stripe_split ({}) must be >= 1 and divide ring_size ({})",
+        derivation.kv_stripe_split,
+        derivation.ring_size);
+    TT_FATAL(
+        derivation.q_local_padded_Nt % derivation.kv_stripe_split == 0,
+        "kv_stripe_split ({}) must divide the Q slab of {} tiles; a partial cache region would straddle "
+        "a rank boundary",
+        derivation.kv_stripe_split,
+        derivation.q_local_padded_Nt);
+    derivation.q_ring_size = derivation.ring_size / derivation.kv_stripe_split;
+    derivation.kv_region_Nt = derivation.q_local_padded_Nt / derivation.kv_stripe_split;
+    // The global chunk is the same width either way: q_ring_size Q slabs == ring_size cache regions.
+    derivation.q_chunk_group_tile_count = derivation.kv_region_Nt * derivation.ring_size;
     derivation.num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
     // Sharded joint: each ring iteration delivers one L/P shard, so num_joint_k_chunks counts
@@ -503,9 +528,9 @@ RingJointRuntimePlan build_runtime_plan(
         plan.kv_pad_q_mapping = build_kv_pad_q_mapping(
             kv_actual_tile_count,
             derivation.logical_nt,
-            derivation.ring_size,
+            derivation.q_ring_size,
             derivation.q_local_padded_Nt,
-            ring_write_plan.tensor_rank);
+            ring_write_plan.tensor_rank / derivation.kv_stripe_split);
     }
 
     if (args.has_sliding_window()) {

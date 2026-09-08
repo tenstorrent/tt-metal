@@ -39,6 +39,12 @@ struct RingJointSDPAParams {
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
+    // KV striped this many times finer than Q is sharded (TP-deduped KV cache): the ring transports
+    // ring_size shards while Q owns ring_size/kv_stripe_split of them. 1 = the classic layout, where
+    // the cache is sharded exactly like Q. Deliberately separate from ring_size: the causal geometry
+    // indexes by the Q (SP) rank, so folding the split into the ring would shift every diagonal.
+    // Mirrors indexer_score's key_stripe_split.
+    uint32_t kv_stripe_split = 1;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -61,7 +67,8 @@ struct RingJointSDPAParams {
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
-        std::optional<uint32_t> sliding_window_size = std::nullopt) :
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
+        uint32_t kv_stripe_split = 1) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -81,7 +88,8 @@ struct RingJointSDPAParams {
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
-        sliding_window_size(sliding_window_size) {}
+        sliding_window_size(sliding_window_size),
+        kv_stripe_split(kv_stripe_split) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -92,6 +100,11 @@ struct RingJointSDPAParams {
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
+
+    // Q ranks: how many distinct Q sequence shards the ring's transport ranks map onto.
+    std::uint32_t q_ring_size() const { return static_cast<std::uint32_t>(ring_size) / kv_stripe_split; }
+
+    bool has_kv_stripe_split() const { return kv_stripe_split > 1; }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
@@ -109,6 +122,7 @@ struct RingJointSDPAParams {
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
         "sliding_window_size",
+        "kv_stripe_split",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -128,6 +142,7 @@ struct RingJointSDPAParams {
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
+            std::cref(kv_stripe_split),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
