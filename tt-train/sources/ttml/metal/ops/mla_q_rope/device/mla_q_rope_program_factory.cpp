@@ -220,7 +220,7 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     auto* q_out_buffer = q_out.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
+        Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32, dst_batch_heads};
     tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
