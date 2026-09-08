@@ -71,8 +71,9 @@ void validate_in0_row_major_height_sharded(
         "matmul_decode replicated-A path requires ROW_MAJOR shard orientation");
     const auto b_grid = weight_core_grid(operation_attributes, input_tensor_b);
     TT_FATAL(
-        a_shard.grid == b_grid,
-        "matmul_decode replicated-A path requires input tensor A's core grid {} to match input tensor B's core grid {}",
+        a_shard.grid.contains(b_grid),
+        "matmul_decode replicated-A path requires input tensor A's core grid {} to contain input tensor B's core grid "
+        "{}",
         a_shard.grid.str(),
         b_grid.str());
     TT_FATAL(

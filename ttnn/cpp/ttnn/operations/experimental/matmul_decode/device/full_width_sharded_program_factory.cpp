@@ -193,10 +193,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     }
     if (in0_rm_hs) {
         TT_FATAL(
-            inputA_core_range_set == inputB_core_range_set,
-            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires A's core grid {} to match B's core grid {}",
+            inputA_core_range_set.contains(inputB_core_range_set),
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires A's core grid {} to contain B's core grid {}",
             inputA_core_range_set.str(),
             inputB_core_range_set.str());
+        // Extra replica cores (e.g. q_a's 32-core broadcast reused by kv's 16-core weight)
+        // already hold A but have no B; run the matmul only on B.
+        inputA_core_range_set = inputB_core_range_set;
     }
 
     auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set).merge(output_core_range_set);

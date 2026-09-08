@@ -60,6 +60,7 @@ add_subdirectory(copy)
 add_subdirectory(deepseek/mla/matmul_wo)
 add_subdirectory(deepseek/hyperconnection)
 add_subdirectory(deepseek/mix_streams)
+add_subdirectory(deepseek/width_to_height_shard)
 add_subdirectory(deepseek/moe/deepseek_moe_gate)
 add_subdirectory(deepseek/moe/fused_experts)
 add_subdirectory(deepseek/moe/generalized_moe_gate)
@@ -109,6 +110,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::DeepSeek::HyperConnection
         TTNN::Ops::Experimental::DeepSeek::MixStreams
+        TTNN::Ops::Experimental::DeepSeek::WidthToHeightShard
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
         TTNN::Ops::Experimental::DeepSeek::MoE::FusedExperts
         TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
@@ -163,6 +165,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::HyperConnection>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MixStreams>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::WidthToHeightShard>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::FusedExperts>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate>

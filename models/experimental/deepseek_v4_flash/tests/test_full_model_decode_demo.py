@@ -182,7 +182,7 @@ def _build_and_prefill(
         max_layers=max_layers,
         use_submeshes=True,
         system_config=system_config,
-        use_prefetcher=False,
+        use_prefetcher=None,
         tp_size=tp_size,
     )
     lm_head = Linear(
