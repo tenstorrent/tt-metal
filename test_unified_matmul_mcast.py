@@ -27,7 +27,7 @@ KERNEL = "unified_kernels/matmul_mcast.cpp"
 TILE = 32
 
 
-def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in1_thread=0, seed=0):
+def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in1_thread=0, seed=0, fidelity=None):
     torch.manual_seed(seed)
     # K blocks per core row / column, laid out block-major as r*K + k and c*K + k.
     a_blocks = [(torch.rand([1, 1, rt * TILE, kt * TILE]) - 0.5).to(torch.bfloat16) for _ in range(grid_h * k_blocks)]
@@ -68,6 +68,9 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
             ("MM_IN1_THREAD", str(in1_thread)),
         ]
         + ([("MM_ACC_L1", "1")] if mode == "l1" else []),
+        # So a benchmark can pin this to the same fidelity it pins ttnn to; the spec's
+        # default is HiFi4 and comparing that against ttnn's HiFi2 measures the fidelity.
+        **(fidelity or {}),
     )
 
     logger.info(

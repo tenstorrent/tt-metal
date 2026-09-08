@@ -38,8 +38,15 @@ MATMUL_ARGS = ["--rt", "1", "4", "8", "--ct", "1", "4", "8", "--kt", "8", "32", 
 # causal, summed over q-chunks. One sequence length, because the shape table is the axis.
 MODELS_ARGS = ["--seq", "512"]
 
-# Each benchmark logs its table through loguru at a known line number; these pick the rows out.
-MATMUL_ROW = re.compile(r"main:214 - \s*(\w+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+([\d.]+)us")
+# Each benchmark logs its table through loguru; these pick the rows out.
+#
+# NOT keyed on the logger's line number any more. It was `main:214`, and adding anything to
+# bench_matmul.py above that line silently matched nothing -- which surfaces as "no rows
+# parsed" rather than as wrong numbers, but only after a fifteen-minute run. The row SHAPE is
+# the stable thing: a mode word, four integers, the MAC count, then our microseconds. The
+# mcast table cannot collide with it because its rows lead with a grid (`8x8 dst ...`), so the
+# mode word is followed by another word rather than by an integer.
+MATMUL_ROW = re.compile(r"main:\d+ - \s*(\w+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+([\d.]+)us")
 MODELS_ROW = re.compile(r"main:206 - \s*(.+?)\s+(\d+)\s+(\d+)\s+\d+\s+([\d.]+)us")
 
 
