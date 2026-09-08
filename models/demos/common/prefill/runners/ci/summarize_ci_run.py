@@ -10,6 +10,10 @@ _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+in
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
 
+# Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
+# so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
+_TPUT_WINDOW = 8
+
 
 def _iter_lines(root):
     for dirpath, _dirs, files in os.walk(root):
@@ -126,7 +130,7 @@ def _cell_metrics(kept, disp):
         s0 = [kept[r][inv[0]][0] for r in kept if inv[0] in kept[r] and kept[r][inv[0]][0] is not None]
         t0 = min(s0) if s0 else None
     ttft = {d: end[d] - t0 for d in end} if t0 is not None else {}
-    return ct, ttft
+    return ct, ttft, end
 
 
 def _occupancy(kept):
@@ -194,7 +198,7 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
         return [], {}
     max_seq = n * chunk_size
     ranks = len(kept)
-    ct, ttft = _cell_metrics(kept, disp)
+    ct, ttft, end = _cell_metrics(kept, disp)
     rec = {
         "chunk_size": chunk_size,
         "num_chunks": n,
@@ -238,14 +242,21 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
         if d in ttft:
             rec["ttft_s"][lbl] = ttft[d]
 
-    out.append(f"throughput = {ranks} rank(s) x {chunk_size} tok / that chunk's rank0-start -> last-rank-end span")
+    out.append(f"throughput = tokens / wall time across up to {_TPUT_WINDOW} chunk completions centred on the probe")
     for lbl, d in probes((0, 50000, max_seq // 2, max_seq)):
-        if d not in ct or ct[d] <= 0:
+        # The rate is the completion cadence. A chunk's own latency covers every stage at once and so
+        # carries no information about how many chunks are in flight; only the interval between
+        # completions does. The window absorbs one slow chunk while staying short enough that the
+        # attention cost, which grows with depth, barely drifts across it.
+        lo, hi = max(0, d - _TPUT_WINDOW // 2), min(n - 1, d + _TPUT_WINDOW // 2)
+        if hi - lo < 1 or end.get(lo) is None or end.get(hi) is None or end[hi] <= end[lo]:
             out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {'-':>12}")
             continue
-        span = ct[d] / 1000.0
-        tput = ranks * chunk_size / span
-        out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {tput:>12,.1f} tok/s  ({span:.3f} s)")
+        span = end[hi] - end[lo]
+        tput = (hi - lo) * chunk_size / span
+        out.append(
+            f"  throughput {lbl:>14} (chunk {d:>3}): {tput:>12,.1f} tok/s" f"  ({hi - lo} chunks over {span:.3f} s)"
+        )
         rec["throughput_tok_s"][lbl] = tput
 
     # Occupancy compares a rank against its own timeline, so it is meaningless without a pipeline.
