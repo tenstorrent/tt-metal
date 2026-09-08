@@ -386,12 +386,15 @@ jobs:
           # beyond the base. Generous headroom: this guards against a COPYed
           # payload, not drift.
           MAX_MIB: "600"
-          # One per layer-adding instruction in Dockerfile.prebuilt-tests-env:
-          # the pyproject COPY, the dependency RUN, seven churn-tier COPYs, the
-          # excluding COPY of the remainder, and the payload RUN. Bump this only
-          # when that file deliberately changes shape - it is what catches an
+          # Expected per profile, because they differ by one: the dependency RUN
+          # is guarded on PROFILE=full, so under wheel it changes nothing and
+          # BuildKit omits the empty layer entirely. full counts the pyproject
+          # COPY, the dependency RUN, the source COPY and the payload RUN; wheel
+          # is the same less the dependency RUN. Bump these only when the
+          # Dockerfile deliberately changes shape - they are what catches an
           # accidental COPY, which is the regression that would undo the saving.
-          EXPECT_LAYERS: "11"
+          EXPECT_LAYERS_FULL: "4"
+          EXPECT_LAYERS_WHEEL: "3"
         run: |
           set -euo pipefail
           layers() {  # digest<TAB>size for the amd64 image, one per line
@@ -402,14 +405,14 @@ jobs:
             docker manifest inspect "$ref" | jq -r '.layers[] | "\(.digest)\t\(.size)"'
           }
           layers "$BASE" | cut -f1 | sort > /tmp/base.txt
-          for pair in "full:$FULL" "wheel:$WHEEL"; do
-            name="${pair%%:*}"; ref="${pair#*:}"
+          for pair in "full:$FULL:$EXPECT_LAYERS_FULL" "wheel:$WHEEL:$EXPECT_LAYERS_WHEEL"; do
+            name="${pair%%:*}"; rest="${pair#*:}"; ref="${rest%:*}"; want="${rest##*:}"
             layers "$ref" > /tmp/img.txt
             extra=$(join -v1 -t"$(printf '\t')" <(sort -k1,1 /tmp/img.txt) /tmp/base.txt || true)
             n=$(printf '%s' "$extra" | grep -c . || true)
             mib=$(printf '%s' "$extra" | awk -F'\t' '{s+=$2} END {printf "%d", s/1048576}')
             echo "${name}: ${n} layers beyond the base, ${mib} MiB"
-            [ "$n" -eq "$EXPECT_LAYERS" ] || { echo "::error::${name} adds ${n} layers, expected ${EXPECT_LAYERS}; an unintended COPY would do this, and a deliberate one means updating EXPECT_LAYERS"; exit 1; }
+            [ "$n" -eq "$want" ] || { echo "::error::${name} adds ${n} layers, expected ${want}; an unintended COPY would do this, and a deliberate one means updating EXPECT_LAYERS_${name}"; exit 1; }
             [ "$mib" -le "$MAX_MIB" ] || { echo "::error::${name} payload is ${mib} MiB, over ${MAX_MIB}"; exit 1; }
           done
 
