@@ -1700,20 +1700,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         h, dh = self.local_num_heads, self.head_dim
         _profile(self.device)
         # matmul_decode's full-width hub mode reads A as ROW_MAJOR HEIGHT_SHARDED with the
-        # whole of K replicated on each of the weight's B cores, so its rows are the packed
-        # tokens repeated once per core. The replica stays inside this projection: the
-        # compressor further down the step reads the packed ``tokens`` itself, and a
-        # partial-width weight cannot take this layout at all (there the call below hands
-        # back ``tokens`` untouched).
-        qkv_tokens = self.q_a_proj.to_replicated_rm_hs_activation(tokens)
+        # whole of K replicated on each of the weight's B cores. Untilize+broadcast once onto
+        # q_a's (larger) B grid and reuse that replica for kv: every kv B core is in that
+        # rectangle. A partial-width weight cannot take this layout (the helper is a no-op).
+        qkv_tokens = ttnn.experimental.deepseek.width_to_height_shard(tokens, self.q_a_proj.b_core_grid())
         q_a_raw = self.q_a_proj(qkv_tokens, mesh_coords=self.q_projection_mesh_coords)
         if self.dedicated_qkv_ranks:
             q_a_raw = _replicate_from_tp_rank(q_a_raw, self.device, self.q_projection_rank, self.tp_size)
         elif self.balanced_qkv:
             q_a_raw = _gather_tp_width(q_a_raw, self.device)
 
-        if qkv_tokens is not tokens:
-            ttnn.deallocate(qkv_tokens)
         # ``None`` when the q_a matmul already normalized and mcast a replica onto
         # every q_b B core (see __init__).
         q_a = q_a_raw if self.q_a_norm is None else self.q_a_norm(q_a_raw)
@@ -1736,14 +1732,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a
         # prefetched matmul that runs out of turn pops another weight's page (see
-        # ``prefetch_weights``).
-        # The fused norm below is only correct on a one-row tile, which is what the
-        # replicated ROW_MAJOR activation gives the matmul. Its own replica, not q_a's:
-        # the two projections hold their weights on different core grids.
-        kv_tokens = self.kv_proj.to_replicated_rm_hs_activation(tokens) if self.fuse_kv_norm else tokens
-        kv_raw = self.kv_proj(kv_tokens, mesh_coords=self.kv_projection_mesh_coords)
-        if kv_tokens is not tokens:
-            ttnn.deallocate(kv_tokens)
+        # ``prefetch_weights``). Reuse q_a's replicated activation; kv's B cores are a
+        # subset of that grid.
+        kv_raw = self.kv_proj(qkv_tokens, mesh_coords=self.kv_projection_mesh_coords)
+        if qkv_tokens is not tokens:
+            ttnn.deallocate(qkv_tokens)
 
         if self.dedicated_qkv_ranks:
             kv_raw = _replicate_from_tp_rank(kv_raw, self.device, self.kv_projection_rank, self.tp_size)

@@ -232,6 +232,12 @@ def _receiver_cores_in_order(core_range_set: ttnn.CoreRangeSet):
     return cores
 
 
+def _core_grid_contains(outer: ttnn.CoreRangeSet, inner: ttnn.CoreRangeSet) -> bool:
+    """True if every core in ``inner`` is in ``outer``."""
+    outer_cores = {(c.x, c.y) for c in _receiver_cores_in_order(outer)}
+    return all((c.x, c.y) in outer_cores for c in _receiver_cores_in_order(inner))
+
+
 def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_pages: int = 2):
     """One GCB that several :class:`LinearDecode` weights can be prefetched through.
 
@@ -696,6 +702,9 @@ class LinearDecode(DeepSeekV4Module):
         A no-op for a layer whose weight the op cannot pair with this layout, so a caller
         can build it unconditionally and every projection still gets an A it accepts.
         """
+        print(
+            f"Replicating input to LinearDecode, with shape {x.shape}, memory_config {x.memory_config()}, layout {x.layout}"
+        )
         if not self._can_matmul_decode_rm_hs():
             return x
         grid = self.b_core_grid()
@@ -740,7 +749,11 @@ class LinearDecode(DeepSeekV4Module):
     def _prepare_decode_activation(self, x: ttnn.Tensor) -> tuple:
         """``(x, M, use_rm_hs)``. M is the matmul row count (shard height when replicated)."""
         if self._is_replicated_rm_hs(x) and self._can_matmul_decode_rm_hs():
-            if x.memory_config().shard_spec.grid != self.b_core_grid():
+            a_grid = x.memory_config().shard_spec.grid
+            b_grid = self.b_core_grid()
+            # A replica on a larger grid is reusable as long as every B core already holds it
+            # (q_a and kv share one untilize+broadcast onto q_a's cores).
+            if a_grid != b_grid and not _core_grid_contains(a_grid, b_grid):
                 x = self.to_replicated_rm_hs_activation(self._unreplicate_rm_hs_activation(x))
             return x, x.memory_config().shard_spec.shape[0], True
         if self._is_replicated_rm_hs(x):
