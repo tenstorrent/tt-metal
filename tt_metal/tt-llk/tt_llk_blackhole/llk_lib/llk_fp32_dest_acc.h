@@ -27,10 +27,11 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
  * Dest-acc CFG is MATH-owned. tensix_sync drains each thread's Tensix FIFO (including FPU / SFPU /
  * packer); the mailbox then holds RISC so no new work is issued until MATH has written dest-acc:
  *   1. UNPACK/PACK tensix_sync, signal MATH, and wait.
- *   2. MATH tensix_syncs, waits for both, programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL, and releases
- *      UNPACK/PACK.
- *   3. Every thread STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until those
- *      writes are visible.
+ *   2. MATH tensix_syncs, waits for both, programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL, drains until
+ *      those writes have retired, and only then releases UNPACK/PACK. The release is a RISC store,
+ *      so the drain -- not a stall mask -- is what orders it behind the writes.
+ *   3. UNPACK/PACK STALLWAIT on CFGEXU, holding unpacker / packer / FPU / SFPU behind any
+ *      Configuration Unit work still in flight.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
@@ -41,7 +42,7 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "_llk_set_fp32_dest_acc_ requires a TRISC thread");
 
-    constexpr std::uint32_t dest_acc_stall = p_stall::STALL_UNPACK | p_stall::STALL_PACK | p_stall::STALL_MATH | p_stall::STALL_SFPU;
+    constexpr std::uint32_t dest_acc_stall = p_stall::STALL_UNPACK | p_stall::STALL_PACK | p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_CFG;
 
     tensix_sync();
 
@@ -50,14 +51,18 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
+        // Dest-acc CFG is MATH-owned, so this waits on the global Configuration Unit condition,
+        // which covers writes issued by any thread.
+        TTI_STALLWAIT(dest_acc_stall, p_stall::CFGEXU);
     }
     else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
+        // Dest-acc CFG is MATH-owned, so this waits on the global Configuration Unit condition,
+        // which covers writes issued by any thread.
+        TTI_STALLWAIT(dest_acc_stall, p_stall::CFGEXU);
     }
     else
     {
@@ -69,7 +74,10 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
+
+        // The releases below are RISC stores, which the Wait Gate does not gate. Drain so the
+        // config writes have retired before either thread is let go.
+        tensix_sync();
 
         mailbox_write(ThreadId::UnpackThreadId, fp32_dest_acc::MATH_DONE);
         mailbox_write(ThreadId::PackThreadId, fp32_dest_acc::MATH_DONE);
