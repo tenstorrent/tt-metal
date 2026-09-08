@@ -88,8 +88,14 @@ audit.
   near-zero log-softmax gradients allow one BF16 ULP at unit intermediate scale.
   All 108 passed; results in
   `generated/test_reports/reduce-migration-h6zf0w0c/summary.json`.
-- In progress: Moreh gradient clipping and the shared layer/group normalization
-  kernels, replacing their manual accumulation with planned block reductions.
+- Moreh gradient clipping step 1 (S056, DP002): per-input host plans describe
+  bounded transformed blocks and cross-call accumulation, replacing the manual
+  tile-add loop. Retained the two-dimensional source mask around the power
+  transform. Native build, SM020, and all 20 full T051 cases passed. Results:
+  `generated/test_reports/reduce-migration-h6zf0w0c/summary.json`.
+- In progress: shared Moreh layer/group normalization kernels. Layer-norm
+  SM026/SM027 passed. Group-norm SM022/SM023 hit an unconditional upstream skip
+  inside the test helper ("libstdc++ issue"); direct coverage is being added.
 
 ## Remaining work
 

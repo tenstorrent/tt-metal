@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
+
+#include <algorithm>
 #include <bit>
 #include <vector>
 
@@ -83,7 +86,6 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const uint32_t in0_t = 1;  // input(==x)
-    const uint32_t in1_t = 1;  // one
     const uint32_t in2_t = 1;  // decimal
     const uint32_t in3_t = 2;  // mask_h_w
 
@@ -91,13 +93,51 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
 
     const uint32_t im0_t = 1;  // |x|
     const uint32_t im1_t = 1;  // |x|^p
-    const uint32_t im2_t = 1;  // Add[|x|^p * exp(log(|x|) * decimal)]
+    constexpr uint32_t reduce_block_tiles = 8;
+    constexpr uint32_t im2_t = 2 * reduce_block_tiles - 1;  // resident transformed input
     const uint32_t im3_t = 1;  // log(|x|)
     const uint32_t im4_t = 1;  // exp(log(|x|) * decimal)
     const uint32_t im5_t = 1;  // |x|^p * exp(log(|x|) * decimal)
 
     const auto cb_data_format = datatype_to_dataformat_converter(tmp_pow_sum.dtype());
     const uint32_t cb_tile_size = tile_size(cb_data_format);
+
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const TensorLayout reduce_layout(tmp_pow_sum.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    std::vector<reduce_host::ReduceSequencePlan> reductions;
+    uint32_t auxiliary_tiles = 0;
+    for (const auto& input : inputs) {
+        const uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+        const uint32_t num_blocks = std::max(1U, num_tiles / reduce_block_tiles);
+        const uint32_t num_descriptors = std::min(num_blocks, 3U);
+        std::vector<reduce_host::ReduceCbConfig> calls;
+        for (uint32_t i = 0; i < num_descriptors; ++i) {
+            const uint32_t block_tiles =
+                i + 1 == num_descriptors ? num_tiles - (num_blocks - 1) * reduce_block_tiles : reduce_block_tiles;
+            // Compute retains the two-dimensional source mask before the
+            // power transform; the reduction sees complete, identity-padded tiles.
+            calls.emplace_back(
+                26,
+                reduce_host::ReduceCallConfig{
+                    TensorSpec(Shape{32, block_tiles * 32}, reduce_layout),
+                    TensorSpec(Shape{1, 1}, reduce_layout),
+                    ReduceOpMath::SUM,
+                    ReduceOpDim::HW,
+                    1.0F,
+                    ReduceFp32Mode::Fast,
+                    im2_t * cb_tile_size});
+        }
+        auto sequence = reduce_host::make_reduce_sequence_plan(
+            calls,
+            {.auxiliary_cb_id = 1, .accumulator_cb_id = 30, .output_cb_id = 16},
+            {.arch = device->arch(), .available_l1_bytes = 32 * cb_tile_size});
+        sequence.calls.back().accumulation_index = num_blocks - 1;
+        for (auto& call : sequence.calls) {
+            call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+        }
+        auxiliary_tiles = std::max(auxiliary_tiles, static_cast<uint32_t>(sequence.auxiliary.tiles.size()));
+        reductions.push_back(std::move(sequence));
+    }
 
     ProgramDescriptor desc;
 
@@ -108,7 +148,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
             .buffer_index = tt::CBIndex::c_0, .data_format = cb_data_format, .page_size = cb_tile_size}}},
     });  // input(==x)
     desc.cbs.push_back(CBDescriptor{
-        .total_size = in1_t * cb_tile_size,
+        .total_size = auxiliary_tiles * cb_tile_size,
         .core_ranges = core_group_1,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_1, .data_format = cb_data_format, .page_size = cb_tile_size}}},
@@ -168,21 +208,16 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
             .buffer_index = tt::CBIndex::c_29, .data_format = cb_data_format, .page_size = cb_tile_size}}},
     });  // |x|^p * exp(log(|x|) * decimal)
 
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_30, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // cross-call accumulator
+
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // Use inputs.at(0) for compile-time accessor args (all inputs share same buffer layout)
-    KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*inputs.at(0).buffer()).append_to(reader_ct_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = READER_KERNEL_PATH;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_group_1;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.reserve(num_cores_to_be_used);
-
     KernelDescriptor::CompileTimeArgs writer_ct_args;
     TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
 
@@ -193,21 +228,6 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_ct_args);
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.runtime_args.reserve(num_cores_to_be_used);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      ComputeKernel SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_group_1;
-    compute_desc.compile_time_args = {num_inputs_per_core_group_1};
-    compute_desc.defines = KernelDescriptor::Defines{
-        {"REDUCE_OP", "PoolType::SUM"},
-        {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
-    };
-    compute_desc.config = ComputeConfigDescriptor{};
-    compute_desc.runtime_args.reserve(num_cores_to_be_used);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
@@ -222,24 +242,40 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
-        // reader
+        const auto& reduction = reductions.at(i);
+        const CoreRangeSet core_range{CoreRange{core, core}};
+        auto reader_ct_args = reduction.get_auxiliary_compile_time_args();
+        TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+        KernelDescriptor reader_desc;
+        reader_desc.kernel_source = READER_KERNEL_PATH;
+        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reader_desc.core_ranges = core_range;
+        reader_desc.compile_time_args = std::move(reader_ct_args);
+        reader_desc.config = ReaderConfigDescriptor{};
         reader_desc.emplace_runtime_args(
             core, {input.buffer(), num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
+        desc.kernels.push_back(std::move(reader_desc));
 
         // writer
         writer_desc.emplace_runtime_args(core, {tmp_pow_sum.buffer(), tile_offset});
 
-        // compute
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = core_range;
+        compute_desc.compile_time_args = {
+            reduce_block_tiles, im2_t, static_cast<uint32_t>(reduction.auxiliary.tiles.size())};
+        reduction.append_to(compute_desc.compile_time_args);
+        compute_desc.config = ComputeConfigDescriptor{};
         compute_desc.runtime_args.emplace_back(
             core,
             KernelDescriptor::CoreRuntimeArgs{num_tiles, p, static_cast<uint32_t>(p_is_negative), origin_h, origin_w});
 
+        desc.kernels.push_back(std::move(compute_desc));
         tile_offset++;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
 }
