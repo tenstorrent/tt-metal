@@ -4,6 +4,13 @@
 >
 > Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
 
+## August 25, 2026
+
+### [EXAONE 4.5](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for EXAONE-4.5-33B text inference on Blackhole LoudBox (8xP150) to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers), including hybrid sliding window / global attention and 128K context length.
+- Added an experimental on-device vision tower in [models/experimental/exaone45_vl](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/exaone45_vl) and a host-vision hybrid demo ([exaone_45_vision_hybrid.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/demo/exaone_45_vision_hybrid.py)).
+- Added a text-only vLLM generator class (`Exaone4_5_ForConditionalGeneration`) in [generator_vllm.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/tt/generator_vllm.py).
+
 ## December 8, 2025
 
 ### [Qwen3-32B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
