@@ -602,6 +602,11 @@ _RUNG_PRIORITY = {
     "dispatch": ("host", "grid", "block", "fidelity", "dtype", "shard", "structural", "tt-lang", "cpp"),
     "": ("grid", "block", "dtype", "shard", "fidelity", "host", "structural", "tt-lang", "cpp"),
 }
+# TWO SPELLINGS FOR ONE STATE. A profile tags an op waiting on the launch loop `dispatch`, while the
+# whole-run bucket for the same wait is tagged `host`. Both mean the chip is idle, so both owe the
+# rung above -- and reading only one of them sends the other to tune arithmetic it is not spending
+# its time on. Named once so a third reader cannot pick a different half.
+_DISPATCH_BOUND = frozenset({"host", "dispatch"})
 # `block` sits immediately after `grid` because it is the half of the same decision that `grid` does
 # not make. Occupying every core says nothing about how the work is CARVED across them, and on
 # voxtral_mini_3b_2507 the difference is the whole remaining gap: its prefill projection already runs
@@ -1520,8 +1525,20 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # here -- clear on a MEASURED win, or after PERF_MCP_MAX_HOST_ATTEMPTS real tries so a genuinely
     # irreducible dispatch residual cannot loop forever. Wedged attempts count toward the cap, matching
     # how _decode_gate treats a cache that crashes every time.
-    if bound == "host" or (open_op.get("bucket") or "").lower() == "host_fallback":
-        _host_kinds = {"structural", "trace", "trace-capture"}
+    # The synthetic whole-run op stands for the launch gap itself and has no arithmetic to sweep, so
+    # for it this rung IS the ladder. A real op only leads with it: _RUNG_PRIORITY lists the knobs
+    # after `host` as the completeness sweep, so once this rung is settled the op falls through to
+    # them rather than retiring -- otherwise widening the branch above would retire every
+    # dispatch-tagged op the moment the run's third launch attempt landed, on any op at all.
+    _is_launch_gap = (open_op.get("bucket") or "").lower() == "host_fallback"
+    if bound in _DISPATCH_BOUND or _is_launch_gap:
+        # RECORDED UNDER THE RUNG'S OWN NAME AS WELL AS THE LEVER'S. The agent is told to record this
+        # one as `trace-capture`, but it also records it as `host` -- the rung it was handed -- and
+        # both are the same attempt. Counting only the lever spelling is the same defect as the bound
+        # tag above, one layer down: on voxtral_mini_3b_2507 (2026-09-08) the rung was offered 322
+        # times and 2 attempts were recorded, none of them counted, so the cap was never approached.
+        # That is harmless while the rung reaches almost nothing and unbounded once it does.
+        _host_kinds = {"structural", "trace", "trace-capture", _RUNG_PRIORITY["dispatch"][0]}
         # COUNTED THE WAY THE LEVER IS APPLIED, NOT THE WAY THE TARGET IS NAMED.
         #
         # This rung is offered on the bucket `host_overhead` -- idle time between launches, which is
@@ -1569,14 +1586,16 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 "this bucket is REDUNDANT RECOMPUTE, which trace does NOT remove — that is handled by the SEPARATE "
                 "generation_loop 'kv-cache' target, not here.",
             )
-        return (
-            True,
-            "done",
-            "DISPATCH lever %s -> remaining DISPATCH residual is bounded by the loop transform. "
-            "This does NOT clear a repeat_prefill RECOMPUTE gap: if the generation_loop 'kv-cache' target is still "
-            "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible)."
-            % ("WON a measured reduction" if _host_won else "tried %d time(s), the cap" % len(_host_tried)),
-        )
+        if _is_launch_gap:
+            return (
+                True,
+                "done",
+                "DISPATCH lever %s -> remaining DISPATCH residual is bounded by the loop transform. "
+                "This does NOT clear a repeat_prefill RECOMPUTE gap: if the generation_loop 'kv-cache' target is "
+                "still blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT "
+                "irreducible)."
+                % ("WON a measured reduction" if _host_won else "tried %d time(s), the cap" % len(_host_tried)),
+            )
     tries = {k: _rung_tries.get(k, 0) for k in _KNOBS}
     # A DEEPER RUNG ON FILE SPENDS THE SECOND-VARIANT ALLOWANCE. _MAX_KNOB_RETRIES exists so a
     # preferred knob can be tried twice -- the first attempt reads the profile, the second acts on what
@@ -5518,7 +5537,9 @@ def record_kernel_attempt(
         # this set -- and it is the rung _op_ladder_status literally NAMES for the host bucket.
         # Omitting it deadlocked that bucket: the host ladder clears on a win or on
         # PERF_MCP_MAX_HOST_ATTEMPTS (3) real tries out of _host_kinds = {structural, trace,
-        # trace-capture}, but _rung_allowance permits ONE attempt per non-knob rung, so only
+        # trace-capture, host} -- the rung's own name is in that set because the agent records the
+        # attempt under it as often as under the lever -- but _rung_allowance permits ONE attempt
+        # per non-knob rung, so only
         # `trace` and `structural` were ever recordable -- 2 of a required 3. The third try was
         # refused for having no `generic_op`/`@ttl`/`.cpp` marker in the model source, which a loop
         # transform correctly does not have, and host_overhead was re-emitted as next_target
@@ -7020,7 +7041,7 @@ def _ceiling_armed(target, rep: dict) -> tuple:
     dom_bound = str(((dom or {}).get("tags") or {}).get("bound") or "").lower()
     dom_id = str((dom or {}).get("id") or "")
     # host_overhead dominating means the run is dispatch-bound whatever the op tags say.
-    if dom_id == "host_overhead" or dom_bound in ("host", "dispatch"):
+    if dom_id == "host_overhead" or dom_bound in _DISPATCH_BOUND:
         if bound != "dispatch":
             return False, "profile is dominated by %s, but the ceiling is %s-bound" % (dom_id or dom_bound, bound)
     return True, ""

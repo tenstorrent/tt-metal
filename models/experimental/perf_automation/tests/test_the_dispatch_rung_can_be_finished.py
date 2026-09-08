@@ -85,7 +85,10 @@ def test_a_wedged_lever_still_spends_the_allowance():
 def test_the_try_counter_no_longer_filters_by_op():
     """The one line that was wrong. `matches` is the op-filtered list; trace kinds must not use it."""
     src = (_CC / "perf_mcp.py").read_text(encoding="utf-8")
-    i = src.index('_host_kinds = {"structural", "trace", "trace-capture"}')
+    # anchored on the assignment, not on what is assigned: the set gained the rung's own name when
+    # the bound tag `dispatch` started reaching this branch, and pinning its contents here made two
+    # tests fail on a change neither was about.
+    i = src.index("_host_kinds = ")
     code = "\n".join(ln for ln in src[i : i + 2600].splitlines() if not ln.strip().startswith("#"))
     tried = code[code.index("_host_tried = ") : code.index("_host_won")]
     assert "for a in attempts" in tried, "trace kinds are being filtered by op again"
@@ -94,7 +97,10 @@ def test_the_try_counter_no_longer_filters_by_op():
 
 def test_no_stage_or_model_name_is_typed_into_the_rung():
     src = (_CC / "perf_mcp.py").read_text(encoding="utf-8")
-    i = src.index('_host_kinds = {"structural", "trace", "trace-capture"}')
+    # anchored on the assignment, not on what is assigned: the set gained the rung's own name when
+    # the bound tag `dispatch` started reaching this branch, and pinning its contents here made two
+    # tests fail on a change neither was about.
+    i = src.index("_host_kinds = ")
     code = "\n".join(ln for ln in src[i : i + 2600].splitlines() if not ln.strip().startswith("#"))
     for typed in ("decode", "prefill", "encode", "voxtral"):
         assert typed not in code.lower(), typed
