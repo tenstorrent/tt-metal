@@ -975,6 +975,25 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         target.linker_opt_level = default_linker_opt_level_;
     }
 
+    if (settings != nullptr && target_name_.starts_with("trisc") &&
+        settings->get_full_kernel_name().find("dsv4_csa_moe_layer_") != std::string::npos) {
+        // This unusually large fused CSA translation unit causes pathological
+        // GCC LTO memory growth in temporal socket specializations. Keep the
+        // workaround local to CSA compute-kernel objects; keep O3 because SFPI
+        // requires its constant folding for instruction-immediate constraints.
+        // BRISC/NCRISC need their normal LTO link against weakened firmware,
+        // and all other kernels retain the standard recipe.
+        const auto disable_lto = [](std::string flags) {
+            constexpr std::string_view from = "-flto=auto";
+            constexpr std::string_view to = "-fno-lto -Wno-error=array-bounds";
+            if (const auto pos = flags.find(from); pos != std::string::npos) {
+                flags.replace(pos, from.size(), to);
+            }
+            return flags;
+        };
+        target.cflags = disable_lto(std::move(target.cflags));
+    }
+
     // Build defines: start with build-state base, then enrich with kernel-specific defines.
     std::vector<std::string> defines = tt::jit_build::utils::tokenize_flags(defines_);
     if (settings && process_defines_at_compile_) {
