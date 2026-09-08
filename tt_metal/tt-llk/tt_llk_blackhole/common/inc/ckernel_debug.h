@@ -272,7 +272,7 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
         TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 0); // Save dest addr 0 (even cols) to LREG_3
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_3
+        TTI_SFPLOAD(p_sfpu::LREG4, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_4
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
@@ -363,7 +363,7 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     if (array_id == dbg_array_id::SRCA)
     {
         TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 0); // Restore dest addr 0 (even cols) from LREG_3
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_3
+        TTI_SFPSTORE(p_sfpu::LREG4, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_4
         // Move to the current bank
         TTI_CLEARDVALID(1, 0);
     }
