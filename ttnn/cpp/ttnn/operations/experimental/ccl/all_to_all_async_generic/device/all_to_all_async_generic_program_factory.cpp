@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/equal_cost_unicast.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <set>
@@ -512,9 +513,40 @@ AllToAllAsyncGenericProgram::create_at(
     }
     const uint32_t num_direction_groups = static_cast<uint32_t>(direction_group_to_physical_direction.size());
     TT_FATAL(num_direction_groups > 0, "All-to-all collective has no remote direction groups");
-    // Fabric2D route selection and encoding are owned by Fabric. Until Fabric exposes an arc-constrained routing API,
-    // send each antipodal destination through canonical unicast routing instead of constructing a route in TTNN.
-    const bool split_antipode_across_arcs = is_ring && !is_fabric_2d;
+    // TTNN names the two neighbors and divides the transfer. Fabric only returns a
+    // pair when both routes are supported and have canonical unicast's hop count.
+    auto antipodal_routes = [&](const MeshCoordinate& source_coord, int32_t half_ring) {
+        auto node_at_offset = [&](int32_t offset) {
+            const auto coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_tensor, source_coord, offset, effective_topology, operation_attributes.cluster_axis);
+            TT_FATAL(coord, "Missing all-to-all ring coordinate");
+            return device->get_fabric_node_id(*coord);
+        };
+        return tt::tt_metal::experimental::fabric::get_equal_cost_unicast_routes(
+            device->get_fabric_node_id(source_coord),
+            node_at_offset(half_ring),
+            {node_at_offset(1), node_at_offset(-1)});
+    };
+    bool split_antipode_across_arcs = is_ring && !is_fabric_2d;
+    tt::tt_metal::experimental::fabric::UnicastRoute positive_antipode_route;
+    tt::tt_metal::experimental::fabric::UnicastRoute negative_antipode_route;
+    if (is_ring && is_fabric_2d && operation_attributes.num_devices > 2 && operation_attributes.num_devices % 2 == 0) {
+        const int32_t half_ring = static_cast<int32_t>(operation_attributes.num_devices / 2);
+        split_antipode_across_arcs = true;
+        for (uint32_t source_device = 0; source_device < operation_attributes.num_devices; ++source_device) {
+            MeshCoordinate source_coord = mesh_coordinate;
+            source_coord[cluster_axis] = source_device;
+            const auto routes = antipodal_routes(source_coord, half_ring);
+            if (!routes || (*routes)[0].num_hops() != half_ring) {
+                split_antipode_across_arcs = false;
+                break;
+            }
+            if (source_coord == mesh_coordinate) {
+                positive_antipode_route = (*routes)[0];
+                negative_antipode_route = (*routes)[1];
+            }
+        }
+    }
 
     const uint32_t max_useful_workers_per_direction =
         is_ring ? preferred_workers_per_direction
@@ -554,6 +586,13 @@ AllToAllAsyncGenericProgram::create_at(
         workers_per_direction = 0;
     }
     const bool use_direction_owned_schedule = workers_per_direction > 0;
+    if (is_fabric_2d && !use_direction_owned_schedule) {
+        split_antipode_across_arcs = false;
+    }
+    const uint32_t fabric_route_args =
+        is_fabric_2d && split_antipode_across_arcs
+            ? std::max(positive_antipode_route.runtime_args().size(), negative_antipode_route.runtime_args().size())
+            : 0;
     const bool use_worker_mux = workers_per_direction > 1;
     const uint32_t mux_cores_per_direction = workers_per_direction + 1;
     const uint32_t direction_senders_per_link = num_direction_groups * workers_per_direction + 1;
@@ -908,6 +947,7 @@ AllToAllAsyncGenericProgram::create_at(
             is_fabric_2d,                                // is_fabric_2d
             sender_stream_direction_masks[stream],       // fabric_direction_mask
             number_pages_per_packet,                     // max_pages_per_packet
+            fabric_route_args,                           // fabric_route_args
             use_multicast_initialization                 // use_multicast_initialization
         };
 
@@ -997,6 +1037,14 @@ AllToAllAsyncGenericProgram::create_at(
                 // The low-latency 1D header uses the second route field as a hop count.
                 sender_writer_rt_args.push_back(0);
                 sender_writer_rt_args.push_back(std::abs(device_offset));
+            }
+            if (fabric_route_args > 0) {
+                const auto route = std::abs(device_offset) * 2 == operation_attributes.num_devices
+                                       ? (device_offset > 0 ? positive_antipode_route : negative_antipode_route)
+                                       : tt::tt_metal::experimental::fabric::UnicastRoute{};
+                auto args = route.runtime_args();
+                args.resize(fabric_route_args, 0);
+                sender_writer_rt_args.insert(sender_writer_rt_args.end(), args.begin(), args.end());
             }
         }
         const bool is_remote_sender = sender_stream != local_sender_stream || num_senders_per_link == 1;
