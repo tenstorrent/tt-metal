@@ -32,6 +32,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_layernorm_stats_selector.cpp
     test_matmul.cpp
     test_normalization.cpp
+    test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
