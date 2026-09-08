@@ -3,8 +3,8 @@
 
 """
 Correctness of the ring-fused indexer_score op (ttnn.experimental.ring_indexer_score_dsa) on Blackhole.
-The legacy suite covers the LoudBox 2x4 -> 1x4 axis ring; full-mesh coverage uses the complete 2x4 as one
-snake and adds exact-physical 2x2 plus opt-in 8x4 Galaxy gates. One op co-schedules the ring_attention
+Coverage includes a LoudBox 2x4 -> 1x4 axis ring, the complete 2x4 mesh, exact-physical 2x2, and opt-in
+8x4 Galaxy gates. One op co-schedules the ring_attention
 all-gather with the score; the reader gates each K band on only the SP shards it touches and dual-sources its
 own slab from k_local. Checked against the same DSA references as the two-op path, including both K layouts,
 indexed caches, straddle, kv_len, program-cache reuse, placement, and host validation.
@@ -43,6 +43,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.ring_in
     _close_ring4_ccl,
     _persistent_buffer,
     _shard_k,
+    _to_tp_inner_reconstructed,
     RING,
     SP_AXIS,
     CHUNK_GLOBAL,
@@ -692,39 +693,6 @@ LB_SPTP_CHUNK_LOCAL = LB_SPTP_CHUNK // LB_SPTP_SP
 LB_SPTP_K_CHUNK = 320
 
 
-def _to_tp_inner_reconstructed(
-    k_natural,
-    *,
-    sp=LB_SPTP_SP,
-    tp=LB_SPTP_TP,
-    chunk_local=LB_SPTP_CHUNK_LOCAL,
-):
-    """Pack natural K in the physical order produced by a TP-inner then SP-outer gather."""
-    capacity = k_natural.shape[2]
-    assert capacity % (sp * tp) == 0
-    assert chunk_local % tp == 0
-    physical_shard_capacity = capacity // sp
-    tp_stripe_capacity = physical_shard_capacity // tp
-    stripe_chunk = chunk_local // tp
-    assert tp_stripe_capacity % stripe_chunk == 0
-
-    physical_to_logical = []
-    for sp_rank in range(sp):
-        physical_offset = torch.arange(physical_shard_capacity)
-        tp_rank = physical_offset // tp_stripe_capacity
-        within_tp = physical_offset % tp_stripe_capacity
-        slab = within_tp // stripe_chunk
-        within_chunk = within_tp % stripe_chunk
-        logical = (slab * sp + sp_rank) * chunk_local + tp_rank * stripe_chunk + within_chunk
-        physical_to_logical.append(logical)
-    physical_to_logical = torch.cat(physical_to_logical)
-    assert torch.equal(torch.sort(physical_to_logical).values, torch.arange(capacity))
-
-    reconstructed = k_natural.clone()
-    reconstructed[0, 0] = k_natural[0, 0, physical_to_logical]
-    return reconstructed
-
-
 def _sptp_loudbox_inputs(
     mesh,
     k_capacity,
@@ -862,7 +830,7 @@ def _sptp_loudbox_output(out):
 
 @pytest.mark.parametrize("tp_sharded", [False, True], ids=["control", "tp_sharded"])
 def test_indexer_score_sptp_loudbox_tp_sharded_kv_repro(tp_sharded):
-    """Reduced SP2 x TP4 fused score; the TP-enabled variant hung before the mapping fix."""
+    """Score a TP-inner reconstructed K cache on a LoudBox SP2 x TP4 mesh."""
     if ttnn.get_num_devices() != 8:
         pytest.skip("SP2 x TP4 fused indexer reproduction requires an exact eight-device LoudBox")
     assert LB_SPTP_CHUNK_LOCAL == 640
