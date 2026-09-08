@@ -41,7 +41,7 @@
 - name: tt-train cpp distributed unit tests
   cmd: |
     mkdir -p generated/test_reports
-    export TT_MESH_GRAPH_DESC_PATH=tt-train/configs/mgd/bh_galaxy_1_2_line_line.textproto
+    export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_1_2_line_line.textproto
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml
   skus:
     bh_quietbox_2:
