@@ -45,6 +45,7 @@ set(TTNN_OP_MOREH_SRCS
     moreh_layer_norm_backward/moreh_layer_norm_backward.cpp
     moreh_layer_norm/device/moreh_layer_norm_device_operation.cpp
     moreh_layer_norm/device/moreh_layer_norm_program_factory.cpp
+    moreh_layer_norm/device/kernels/moreh_layer_norm_reduce.hpp
     moreh_layer_norm/moreh_layer_norm.cpp
     moreh_linear_backward/device/moreh_linear_backward_device_operation.cpp
     moreh_linear_backward/device/moreh_linear_backward_multi_core_program_factory.cpp

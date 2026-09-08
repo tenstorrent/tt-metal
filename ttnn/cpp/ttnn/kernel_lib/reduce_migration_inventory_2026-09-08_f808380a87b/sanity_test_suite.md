@@ -292,20 +292,20 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py::test_moreh_dot
 
 Lane: `common`. Primary kernels: `S059`, `DP004`.
 
-Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked.
+Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.
 
 ```text
-tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[23, 23]-C_num_groups=[4, 1]-N=2]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py::test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-small]
 ```
 
 ### SM023 — Moreh group_norm
 
 Lane: `common`. Primary kernels: `S058`, `DP003`.
 
-Groupnorm large algorithm; N=2,C=4,groups=1,H=W=512 exceeds resident L1 buffers.
+Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.
 
 ```text
-tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[512, 512]-C_num_groups=[4, 1]-N=2]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py::test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-large]
 ```
 
 ### SM024 — Moreh group_norm
