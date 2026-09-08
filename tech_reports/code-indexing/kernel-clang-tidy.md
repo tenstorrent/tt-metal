@@ -319,8 +319,14 @@ Both are driven by CodeChecker, in
 `tt_metal/jit_build/kernel_clang_tidy/codechecker.json`, not by a check list in
 `.clang-tidy`.
 
-**Selection** is `--enable-all` (CodeChecker's ~477 known clang-tidy checkers)
-minus a short `--disable` list. Twelve of the entries are whole families that
+**Selection** is `--enable-all` minus a short `--disable` list. Note that
+`--enable-all` is not literally all: of the 1,510 checkers CodeChecker knows,
+1,288 run. Of the 222 that do not, 128 are the disables below, 44 are aliases of
+a disabled original, and **50 are excluded by `--enable-all` itself** because
+they carry the `profile:extreme` label, which it skips by design. 492 checkers
+carry that label in total, so most of them are disabled for other reasons as
+well, but the exclusion is silent and worth knowing about — see the note on
+old-style casts for a case where the checker behind it is the more useful one. Twelve of the entries are whole families that
 cannot apply to bare-metal RISC-V device code — `abseil`, `altera`, `android`,
 `boost`, `darwin`, `fuchsia`, `linuxkernel`, `llvmlibc`, `mpi`, `objc`,
 `openmp`, `zircon` — 72 checkers between them. The other three are specific to
@@ -606,6 +612,30 @@ The 416 findings span 38 files across `fabric`, `ccl`, `tt-llk`, `hw/inc` and th
 TTNN kernel trees, and layouts and behaviour classes are mixed *within* files —
 `ckernel_addrmod.h` reads as a behaviour-heavy file by member-function count, yet
 all 27 of its findings are on genuine aggregates. Left enabled in full.
+
+**Not acted on: `clang-diagnostic-old-style-cast`** (766). Recorded because the
+analysis is easy to redo badly. Of the 546 findings that resolve to a concrete
+cast, 73% are value conversions that would become `static_cast` — `(uint32_t)`
+alone is 170 — and 27% are pointer casts that would become `reinterpret_cast`,
+led by `(tt_l1_ptr uint32_t*)` at 72; 99 involve `tt_l1_ptr`/`tt_reg_ptr` and 26
+`volatile`.
+
+The case for converting is not that the C++ spelling is prettier, because it is
+longer. It is that the two groups are written identically today: `(uint32_t)x`
+narrows a value and `(tt_l1_ptr uint32_t*)addr` reinterprets an integer as an L1
+pointer, with the alignment and aliasing consequences that implies. Converting
+separates them by name and makes the second greppable, which a C-style cast
+never is — worth something in a codebase where `performance-no-int-to-ptr` finds
+694 such conversions.
+
+If it is ever taken on, switch checker first. The compiler diagnostic emits one
+message, "use of old-style cast", with no fix. `google-readability-casting`
+covers the same ground, names the replacement (`use static_cast`,
+`use reinterpret_cast`) and emits FixIts for the mechanical cases, while
+deliberately declining to fix integer-to-pointer casts — those get an ambiguous
+`use static_cast/const_cast/reinterpret_cast` and no replacement, which puts the
+risky quarter in front of a human by construction. It is off here only because
+it carries `profile:extreme`; one `--enable` line turns it on.
 
 **Fixed in the generator, not the config.**
 `clang-diagnostic-missing-prototypes` (542) is the largest diagnostic remaining,
