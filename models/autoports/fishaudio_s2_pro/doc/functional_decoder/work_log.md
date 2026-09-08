@@ -41,3 +41,7 @@
   chip) - 10 dependent steps x collectives dominate a 400M model. New default on multi-chip meshes: run it on a 1x1
   submesh of the mesh (FISH_S2_FAST_SUBMESH=1): PCC 0.9996, 102 ms/frame on the QB2 (no upload hang for these
   small weights). Argmax-agreement bar lowered to 0.70 (informational; 0.79-0.85 measured, PCC is the gate).
+- 22:27 fast decoder on a 1x1 submesh works standalone but HANGS (device timeout on a host->device write) when the
+  parent 1x4 mesh also runs the slow tower (server warmup) - same signature as the first-day submesh upload hang.
+  Multi-chip default reverted to TP for the fast decoder (correct, 181 ms/frame on 4 chips). Phase D: a replicated
+  single-device fast decoder that does not need a submesh (per-device weights via replicate mappers).

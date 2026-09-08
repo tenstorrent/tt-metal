@@ -45,7 +45,7 @@ runtime:
     - "pyyaml"
     - "transformers"                      # tt_transformers.ModelArgs reads the config/tokenizer with it (pinned by the lock)
     - "pytest"                            # models/common/utility_functions imports it at module level
-  # lock: requirements.lock              # set after the first successful build
+  lock: requirements.lock                # frozen by the first build on 2026-09-08 (torch 2.11.0+cpu, numpy 1.26.4, transformers 5.16.1)
 
 serve:
   port: 8000

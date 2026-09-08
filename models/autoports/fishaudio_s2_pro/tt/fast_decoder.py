@@ -88,7 +88,9 @@ class TTFastDecoder:
         # more in collectives than it saves (49 ms on 1 chip vs 129/181 ms on 2/4 chips), so on a multi-chip mesh
         # it runs on ONE device (a 1x1 submesh) by default; FISH_S2_FAST_SUBMESH=0 forces TP over the mesh.
         if single_device is None:
-            single_device = os.environ.get("FISH_S2_FAST_SUBMESH", "1") == "1"
+            single_device = (
+                os.environ.get("FISH_S2_FAST_SUBMESH", "0") == "1"
+            )  # default OFF: a 1x1 submesh hangs on host->device writes while the parent mesh runs the slow tower
         self.parent = mesh_device
         if single_device and mesh_device.get_num_devices() > 1:
             mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
