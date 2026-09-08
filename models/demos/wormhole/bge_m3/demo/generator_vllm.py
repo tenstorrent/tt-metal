@@ -8,6 +8,7 @@ from typing import Iterator, Optional
 
 import torch
 import transformers
+from ttnn.device import is_wormhole_b0 as ttnn_is_wormhole_b0
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
@@ -125,15 +126,20 @@ class BgeM3ForEmbedding:
         )
 
     def _mesh_is_dp2(self) -> bool:
-        """True when the device is the 2-chip mesh that the serving path needs.
+        """True when the device is the 2-chip Wormhole mesh that the serving path needs.
 
         ModelArgs rejects data_parallel on any other mesh, so a single chip and a
-        larger mesh both keep the base path.
+        larger mesh both keep the base path. The shape alone does not name the card,
+        so ask for Wormhole as well: the S8192 programs and encoder SDPA target the
+        N300, and another 2-chip card keeps the base path.
         """
-        try:
-            return self.device.get_num_devices() == 2 and tuple(self.device.shape) == (2, 1)
-        except AttributeError:
+        if self.device is None:
             return False
+        return (
+            self.device.get_num_devices() == 2
+            and tuple(self.device.shape) == (2, 1)
+            and ttnn_is_wormhole_b0(self.device)
+        )
 
     def _initialize_model(self) -> None:
         if self._is_initialized and self.model is not None:
@@ -340,6 +346,17 @@ class BgeM3ForEmbedding:
         chunk_batch_size: int,
     ) -> dict[str, torch.Tensor]:
         """Replay the captured trace on new inputs."""
+        # The kernel takes one valid length per row and rebuilds a prefix mask from
+        # it, so a mask that keeps its tokens elsewhere would attend to the wrong
+        # ones while pooling still reads the mask as given. The base path takes the
+        # whole mask, but it needs a model built without data_parallel, because the
+        # JiT modules expect the sharded batch.
+        if not _mask_is_prefix(attention_mask):
+            raise NotImplementedError(
+                "The traced data-parallel path takes an attention mask that keeps its "
+                "tokens in one run from index 0. Left padding and holes need a model "
+                "built with data_parallel=False."
+            )
         # _pad_inputs returns None for either id tensor when the caller omits it, but
         # the trace records a fixed set of buffers, so both must exist.
         if token_type_ids is None:
@@ -784,6 +801,21 @@ def _slice_optional_batch_tensor(
     if tensor.shape[0] == 1:
         return tensor
     return tensor[start:end]
+
+
+def _mask_is_prefix(attention_mask: torch.Tensor) -> bool:
+    """True when every row keeps its tokens in one run that starts at index 0.
+
+    The traced path sends one valid length per row, and the kernel rebuilds a prefix
+    mask from it. That count cannot express left padding or a hole, so [0, 0, 1, 1]
+    and [1, 1, 0, 0] reach the kernel as the same mask while pooling still reads the
+    original. Such a request attends to the wrong tokens, so it keeps the base path,
+    which takes the whole mask.
+    """
+    keep = attention_mask.to(torch.bool)
+    lengths = keep.sum(dim=1, keepdim=True)
+    prefix = torch.arange(keep.shape[1], device=keep.device).unsqueeze(0) < lengths
+    return bool(torch.equal(keep, prefix))
 
 
 def _concatenate_chunk_outputs(chunk_outputs: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:

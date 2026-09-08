@@ -165,6 +165,40 @@ def test_replay_follows_the_valid_lengths(mesh_device, reset_seeds):
 
 @MESH_PARAMS
 @DEVICE_PARAMS
+def test_rejects_a_non_prefix_mask(mesh_device, expect_error, reset_seeds):
+    """A mask that does not start at index 0 must raise, not answer wrongly.
+
+    The kernel takes one valid length per row, so it cannot tell [0, 0, 1, 1] from
+    [1, 1, 0, 0]. Pooling still reads the mask as given, and the two answers differ
+    by cosine 0.05, so the wrapper rejects the request.
+    """
+    model = _build(mesh_device)
+    try:
+        prefix_ids, prefix_mask = _fixed_length_batch(64)
+        model.forward(input_ids=prefix_ids, attention_mask=prefix_mask)
+
+        # The same tokens and the same count, moved off index 0.
+        offset_ids = torch.roll(prefix_ids, shifts=64, dims=1)
+        offset_mask = torch.roll(prefix_mask, shifts=64, dims=1)
+        with expect_error(NotImplementedError, "one run from index 0"):
+            model.forward(input_ids=offset_ids, attention_mask=offset_mask)
+
+        # A hole inside the run is refused as well.
+        holed_mask = prefix_mask.clone()
+        holed_mask[:, 10] = 0
+        with expect_error(NotImplementedError, "one run from index 0"):
+            model.forward(input_ids=prefix_ids, attention_mask=holed_mask)
+
+        # The refusal leaves the wrapper usable.
+        again = model.forward(input_ids=prefix_ids, attention_mask=prefix_mask)["dense_vecs"]
+        assert again.shape == (DP_BATCH_SIZE, EMBED_DIM)
+        assert torch.isfinite(again).all()
+    finally:
+        model.release()
+
+
+@MESH_PARAMS
+@DEVICE_PARAMS
 def test_release_frees_the_trace(mesh_device, reset_seeds):
     """release() returns the trace region, so the wrapper can be rebuilt."""
     input_ids, attention_mask = _fixed_length_batch(128)
