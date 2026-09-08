@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -12,6 +13,7 @@
 
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
 
 namespace tt::tt_metal {
 
@@ -41,6 +43,30 @@ public:
     void set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators);
     void clear_hybrid_device_allocators();
 
+    // Per-bank ranges reserved on devices this rank does not drive, appended to the locally
+    // gathered ranges in allocate_buffer(). set_hybrid_device_allocators() reaches only local
+    // devices, so on a submesh co-owned by several ranks each co-owner would otherwise subtract a
+    // smaller occupied set and place the same replicated buffer at a different address over the
+    // same physical L1. MeshBuffer::create collects these by all-gather over the co-owning ranks.
+    // Empty on a single-rank mesh.
+    void set_hybrid_remote_occupied_ranges(std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges);
+    void clear_hybrid_remote_occupied_ranges();
+
+    // Claim/release the HYBRID allocation span. The two setters above pass state into
+    // allocate_buffer, so a hybrid allocation is a set -> allocate -> teardown protocol rather
+    // than one atomic call, and per-method locking cannot make it safe: a second thread's
+    // teardown lands between the first's set and its allocate, the first then places without the
+    // per-core reservations, and its buffer overlaps one on the same core. Concurrent hybrid
+    // allocations on a mesh are therefore unsupported, and this reports the violation instead of
+    // leaving it silent.
+    //
+    // try_begin returns false when a span is already open; the caller is expected to fail. Fails
+    // rather than blocking because on a co-owned mesh the span contains a collective, and a
+    // blocking guard would park every other thread behind a rank that never arrives. LOCKSTEP
+    // mode sets none of this state and is unaffected.
+    [[nodiscard]] bool try_begin_hybrid_allocation(const std::vector<AllocatorImpl*>& device_allocators);
+    void end_hybrid_allocation();
+
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
@@ -63,10 +89,6 @@ public:
     // get_bank_ids_from_logical_core(), but reports absence instead of throwing, for callers
     // validating a core before they need its bank ids.
     bool has_bank(BufferType buffer_type, const CoreCoord& logical_core) const;
-
-    // One lookup where has_bank() followed by get_bank_ids_from_logical_core() is two. Null when
-    // the core has no bank of this type.
-    const std::vector<uint32_t>* find_bank_ids(BufferType buffer_type, const CoreCoord& logical_core) const;
 
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
@@ -131,6 +153,10 @@ public:
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
 
+    // Device-global L1 arena for allocations that outlive individual programs.
+    PersistentL1Arena& persistent_l1() { return persistent_l1_; }
+    const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
+
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
     // this is to ease transition so we keep the pointer-to-allocator semantics.
     const std::unique_ptr<Allocator>& view() const;
@@ -168,10 +194,19 @@ private:
     // HYBRID mode: device allocators to query per-bank ranges during lockstep allocation.
     std::vector<AllocatorImpl*> hybrid_device_allocators_;
 
+    // HYBRID mode: per-bank ranges occupied on co-owning ranks' devices (see the setter).
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> hybrid_remote_occupied_ranges_;
+
+    // Set while a HYBRID allocation span is open (see try_begin_hybrid_allocation). Not a mutex:
+    // a same-thread re-entry must report a bug, not deadlock or hit try_lock's UB.
+    std::atomic<bool> hybrid_allocation_in_progress_{false};
+
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //
     // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
     std::unique_ptr<AllocatorConfig> config_;
+
+    PersistentL1Arena persistent_l1_;
 
     // External view of the allocator, this shouldn't need to be a unique_ptr, but currently kept as so to preserve API
     // stability

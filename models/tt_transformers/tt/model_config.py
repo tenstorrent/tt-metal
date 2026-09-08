@@ -596,6 +596,7 @@ class ModelArgs:
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+            "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
@@ -660,6 +661,17 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Post-norm decoder (EXAONE-4.x): no input_layernorm; norms are applied to the
+        # attention/MLP outputs before the residual adds. Set in _set_model_specific_params().
+        self.use_post_norm = False
+        # Hybrid-rope inversion (EXAONE-4.x): sliding layers use the (llama3-scaled)
+        # rope while full-attention layers are NoPE. rope_scaling_local feeds the local
+        # rope setup; use_global_nope neutralizes the global setup's cos/sin to identity.
+        self.rope_scaling_local = None
+        self.use_global_nope = False
+        # Text-only port of a multimodal checkpoint: keeps is_multimodal False so the
+        # text pipeline (AutoModel class choice aside) is used end-to-end.
+        self.force_text_only = False
         # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
         # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
         # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
@@ -1427,6 +1439,9 @@ class ModelArgs:
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
+                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
+                            TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
+                        ),
                     )
         elif mode == Mode.PREFILL:
             return self.matmul_config(
@@ -1480,6 +1495,7 @@ class ModelArgs:
                         k=self.hidden_dim // self.cluster_shape[1],
                         n=self.dim,
                         num_cores=self.mlp2_core_grid.num_cores,
+                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
                     )
         elif mode == Mode.PREFILL:
             if seq_len > 128:
@@ -1797,6 +1813,9 @@ class ModelArgs:
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
                     num_cores=self.attn_input_grid.num_cores,
+                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
+                        TensorGroup.WQKV, self.qkv_size // self.num_devices
+                    ),
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
@@ -2090,6 +2109,7 @@ class ModelArgs:
                     k=(self.n_heads * self.head_dim) // self.num_devices,
                     n=self.dim,
                     num_cores=self.n_heads // self.num_devices,
+                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.WO, self.dim),
                 )
         elif mode == Mode.PREFILL:
             return None
@@ -2540,6 +2560,9 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                # Large single-chunk prefill matters for EXAONE: chunked prefill is
+                # unsupported on sliding-window layers (48 of its 64 layers).
+                "EXAONE-4.5-33B": {"P150x8": 128},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2824,6 +2847,25 @@ class ModelArgs:
             self.sdpa_decode_k_chunk_size = 64
             self.sdpa_decode_use_default_compute_config = True
 
+        # EXAONE-4.x (incl. the EXAONE-4.5 text decoder, whose text model_type is
+        # exaone4): post-norm residual order with no input_layernorm —
+        #   h = x + post_attention_layernorm(attn(x)); out = h + post_feedforward_layernorm(mlp(h))
+        # — and hybrid rope inverted vs Gemma-3: RoPE (llama3-scaled, theta 1e6) is
+        # applied ONLY on sliding_attention layers while full_attention layers are
+        # NoPE (no positional encoding). See HF modeling_exaone4.py.
+        if self.model_type is not None and str(self.model_type).lower() in ("exaone4", "exaone4_5", "exaone4_5_text"):
+            self.use_post_norm = True
+            # Sliding (local) layers take the checkpoint's rope scaling; global
+            # (full-attention) layers take identity cos/sin via use_global_nope.
+            self.rope_scaling_local = self.rope_scaling
+            self.rope_scaling = None
+            self.use_global_nope = True
+            # EXAONE-4.5 checkpoints ship a vision tower (model.visual.*) and an MTP
+            # module (mtp.*); this port runs the text decoder only. transformers
+            # itself drops mtp.* on load (_keys_to_ignore_on_load_unexpected).
+            self.force_text_only = True
+            self.is_multimodal = False
+
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
         self.image_token_index = config.get("image_token_index", None)
@@ -2924,6 +2966,10 @@ class ModelArgs:
                 "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                # 27392/8 = 3424 = 107 tiles (prime) -> find_grid_k_n degenerates to a
+                # single core (1x1 norm grid overflows L1; 1-core MLP matmuls). Pad to
+                # 28672 (112 tiles/device, gcd(160,112)=16 -> 16-core grids).
+                "EXAONE-4.5-33B": 16,
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
@@ -2989,7 +3035,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = not self.force_text_only and ("vision_config" in config or self.is_vision())
         self.vision_chunk_size = config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
         if "vision_num_cross_attention_layers" in config:
@@ -3124,7 +3170,7 @@ class ModelArgs:
                     merged_vision_config = merge_vision_config(config)
                     self._set_vision_params({"vision_config": merged_vision_config})
 
-            self.is_multimodal = "vision_config" in config or self.is_vision()
+            self.is_multimodal = not self.force_text_only and ("vision_config" in config or self.is_vision())
         else:
             self._set_params_from_dict(config)
 
@@ -3395,6 +3441,14 @@ class ModelArgs:
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
+            # Text-only ports of multimodal checkpoints (e.g. EXAONE-4.5): the
+            # composite config class only maps to an image-text-to-text model —
+            # load that; text-only inputs bypass its vision tower entirely.
+            if (
+                type(self.hf_config) not in AutoModelForCausalLM._model_mapping
+                and type(self.hf_config) in AutoModelForImageTextToText._model_mapping
+            ):
+                return AutoModelForImageTextToText
             return AutoModelForCausalLM
 
         # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
@@ -3483,6 +3537,14 @@ class ModelArgs:
                     # Standard: convert to Meta format
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
+            if self.force_text_only:
+                # Text-only port of a multimodal checkpoint (e.g. EXAONE-4.5): drop
+                # the vision tower and auxiliary heads (MTP) before key sniffing —
+                # vision `attn.qkv` keys would otherwise trip fuse_qkv, and mtp.layers.*
+                # keys would collide with the layer-trim loop below.
+                state_dict = {
+                    k: v for k, v in state_dict.items() if not (k.startswith(("model.visual.", "visual.", "mtp.")))
+                }
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
@@ -3674,7 +3736,27 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
+    def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
+        """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
+        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+            return 1
+
+        if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
+            return 1
+
+        num_workers = 2
+        shard_width_tiles = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+        return num_workers if shard_width_tiles % num_workers == 0 else 1
+
+    def dram_matmul_config(
+        self,
+        m: int,
+        k: int,
+        n: int,
+        num_cores=None,
+        fused_activation=None,
+        num_workers_per_dram_bank: int = 1,
+    ):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -3688,6 +3770,7 @@ class ModelArgs:
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
+            num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
 
     def matmul_1d_ring_config(
@@ -3894,6 +3977,7 @@ class ModelArgs:
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
             "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
+            "EXAONE-4.5-33B": "LGAI-EXAONE/EXAONE-4.5-33B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
