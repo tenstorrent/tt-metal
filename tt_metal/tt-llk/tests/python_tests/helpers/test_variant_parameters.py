@@ -1246,6 +1246,34 @@ class INPUT_DIMENSIONS(RuntimeParameter):
 
 
 @dataclass
+class INPUT_OUTPUT_DIMENSIONS(RuntimeParameter):
+    """Record input/output matrix shapes in tiles for perf sweep identity."""
+
+    input_rt_dim: int = 0
+    input_ct_dim: int = 0
+    output_rt_dim: int = 0
+    output_ct_dim: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t INPUT_RT_DIM = {self.input_rt_dim};",
+            f"constexpr std::uint32_t INPUT_CT_DIM = {self.input_ct_dim};",
+            f"constexpr std::uint32_t OUTPUT_RT_DIM = {self.output_rt_dim};",
+            f"constexpr std::uint32_t OUTPUT_CT_DIM = {self.output_ct_dim};",
+        ]
+        return "\n".join(lines)
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        lines: list[str] = [
+            "std::uint32_t INPUT_RT_DIM;",
+            "std::uint32_t INPUT_CT_DIM;",
+            "std::uint32_t OUTPUT_RT_DIM;",
+            "std::uint32_t OUTPUT_CT_DIM;",
+        ]
+        return "\n".join(lines), "IIII"
+
+
+@dataclass
 class LOOP_FACTOR(RuntimeParameter):
     loop_factor: int = 1
 

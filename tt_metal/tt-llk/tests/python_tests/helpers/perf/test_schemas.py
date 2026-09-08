@@ -41,7 +41,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "broadcast_type",
             "dest_acc",
@@ -55,8 +55,10 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "input_ct_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
+            "input_rt_dim",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -69,6 +71,8 @@ PERF_TEST_SCHEMAS = {
             "num_tiles_in_block",
             "output_num_blocks",
             "output_num_tiles_in_block",
+            "output_ct_dim",
+            "output_rt_dim",
             "reuse_dest_type",
             "tile_cnt",
             "unpack_to_dest",

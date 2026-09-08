@@ -14,7 +14,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_binary import (
     BASE_PERF_MATH_OPS,
-    BFP4_MATH_OPS,
+    BFP4_PERF_MATH_OPS,
     DEST_REUSE_MATH_OPS,
     INT8_FORMAT,
     INT8_MATH_OPS,
@@ -101,7 +101,7 @@ def test_perf_eltwise_binary(
         BroadcastType.Column,
         BroadcastType.Scalar,
     ],
-    math_op=BFP4_MATH_OPS,
+    math_op=BFP4_PERF_MATH_OPS,
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     transpose_srca=[Transpose.No],
     tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
