@@ -409,7 +409,8 @@ H2DSocket::H2DSocket(
     const MeshCoreCoord& recv_core,
     BufferType buffer_type,
     uint32_t fifo_size,
-    H2DMode h2d_mode) :
+    H2DMode h2d_mode,
+    bool defer_data_buffer) :
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
@@ -426,8 +427,8 @@ H2DSocket::H2DSocket(
 
     std::string shm_name = generate_shm_name("h2d");
 
-    PinnedBufferInfo bytes_acked_info = {};
-    PinnedBufferInfo data_info = {};
+    PinnedBufferInfo& bytes_acked_info = deferred_bytes_acked_info_;
+    PinnedBufferInfo& data_info = deferred_data_info_;
     if (h2d_mode_ == H2DMode::DEVICE_PULL) {
         data_info = init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_info = data_info;
@@ -445,11 +446,11 @@ H2DSocket::H2DSocket(
     enable_mock_flow_control(*mesh_device);
 
     init_config_buffer(mesh_device);
-    init_data_buffer(mesh_device, pcie_alignment);
-    write_socket_metadata(mesh_device, bytes_acked_info, data_info);
-    init_receiver_tlb(mesh_device);
-
     config_buffer_address_ = config_buffer_->address();
+    data_buffer_materialized_ = false;
+    if (!defer_data_buffer) {
+        materialize_data_buffer();
+    }
 
     // Initialize the persistent connector-state struct living in SHM.
     // NamedShm::create zero-initialized the region; we stamp the version and
@@ -459,6 +460,20 @@ H2DSocket::H2DSocket(
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
     connector_state_->clean_shutdown = 1;
+}
+
+void H2DSocket::materialize_data_buffer() {
+    if (data_buffer_materialized_) {
+        return;
+    }
+    TT_FATAL(is_owner_, "Only an owner H2DSocket can materialize its device FIFO.");
+    TT_FATAL(mesh_device_ != nullptr, "Deferred H2DSocket has no owning MeshDevice.");
+
+    auto mesh_device = mesh_device_->shared_from_this();
+    init_data_buffer(mesh_device, pcie_alignment_);
+    write_socket_metadata(mesh_device, deferred_bytes_acked_info_, deferred_data_info_);
+    init_receiver_tlb(mesh_device);
+    data_buffer_materialized_ = true;
 }
 
 H2DSocket::H2DSocket(

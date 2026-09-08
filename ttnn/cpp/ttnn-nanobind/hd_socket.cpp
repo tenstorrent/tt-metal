@@ -40,12 +40,14 @@ void py_module_types(nb::module_& mod) {
                 const tt::tt_metal::distributed::MeshCoreCoord&,
                 tt::tt_metal::BufferType,
                 uint32_t,
-                tt::tt_metal::distributed::H2DMode>(),
+                tt::tt_metal::distributed::H2DMode,
+                bool>(),
             nb::arg("mesh_device"),
             nb::arg("recv_core"),
             nb::arg("buffer_type"),
             nb::arg("fifo_size"),
             nb::arg("h2d_mode"),
+            nb::arg("defer_data_buffer") = false,
             R"doc(
                 Construct an H2DSocket for streaming data from host to a device core.
 
@@ -55,6 +57,13 @@ void py_module_types(nb::module_& mod) {
                     buffer_type (BufferType): Memory type for the device-side FIFO buffer (L1 or DRAM).
                     fifo_size (int): Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
                     h2d_mode (H2DMode): Transfer mode: HOST_PUSH or DEVICE_PULL.
+            )doc")
+        .def(
+            "materialize_data_buffer",
+            &tt::tt_metal::distributed::H2DSocket::materialize_data_buffer,
+            R"doc(
+                Allocate and initialize the device FIFO for a socket constructed
+                with defer_data_buffer=True.
             )doc")
         .def(
             nb::init<

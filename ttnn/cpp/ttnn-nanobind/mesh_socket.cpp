@@ -240,6 +240,7 @@ void py_module(nb::module_& mod) {
         nb::arg("sender_mesh_device"),
         nb::arg("receiver_mesh_device"),
         nb::arg("socket_config"),
+        nb::arg("defer_data_buffer") = false,
         R"doc(
             Create a pair of sockets between two mesh devices.
 
@@ -251,6 +252,15 @@ void py_module(nb::module_& mod) {
             Returns:
                 Tuple[MeshSocket, MeshSocket]: The pair of sockets.
             )doc");
+    mod.def(
+        "materialize_socket_pair",
+        &tt::tt_metal::distributed::MeshSocket::materialize_socket_pair,
+        nb::arg("sender_socket"),
+        nb::arg("receiver_socket"),
+        R"doc(
+            Allocate the receiver FIFO and populate both endpoint configs for a
+            pair created with defer_data_buffer=True.
+        )doc");
 }
 
 }  // namespace ttnn::mesh_socket

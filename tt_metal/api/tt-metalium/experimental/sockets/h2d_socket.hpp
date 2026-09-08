@@ -91,7 +91,8 @@ public:
         const MeshCoreCoord& recv_core,
         BufferType buffer_type,
         uint32_t fifo_size,
-        H2DMode h2d_mode);
+        H2DMode h2d_mode,
+        bool defer_data_buffer = false);
 
     /**
      * @brief Constructs an H2DSocket targeting an L2CPU receiver.
@@ -181,6 +182,9 @@ public:
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
     uint32_t get_fifo_size() const { return fifo_size_; }
+
+    /** Complete device FIFO allocation for a socket constructed with defer_data_buffer=true. */
+    void materialize_data_buffer();
 
     bool has_space(std::optional<uint32_t> num_bytes_to_check);
 
@@ -287,6 +291,8 @@ private:
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
+    PinnedBufferInfo deferred_bytes_acked_info_{};
+    PinnedBufferInfo deferred_data_info_{};
     // Set only when recv_core_ is a claimed service core; the dtor releases them to the per-core allocator.
     std::optional<DeviceAddr> svc_config_l1_addr_;
     std::optional<DeviceAddr> svc_data_l1_addr_;
@@ -315,6 +321,7 @@ private:
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;
+    bool data_buffer_materialized_ = true;
     // Non-zero when the recv_core is a DRAM programmable core: every NOC write
     // from host to its L1 must add this offset on top of the local L1 address.
     // Zero for worker recv cores (worker L1 has local==NOC space). Captured
