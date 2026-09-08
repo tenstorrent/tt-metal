@@ -64,6 +64,7 @@ def matmul_decode(
     rms_norm: bool = False,
     rms_norm_gamma: Optional[Union[float, "ttnn.Tensor"]] = None,
     rms_norm_epsilon: float = 1e-6,
+    rms_norm_group_size: int = 0,
 ) -> "OpDescriptor":
     """Create a ``matmul_decode`` op descriptor.
 
@@ -95,6 +96,9 @@ def matmul_decode(
         rms_norm_gamma: Scalar or WIDTH_SHARDED TILE 1x32 gamma on the weight grid.
             Required if ``rms_norm`` is True.
         rms_norm_epsilon: RMSNorm epsilon.
+        rms_norm_group_size: When nonzero and ``rms_norm`` is True, normalize within
+            groups of this many elements along N. Must be <= N, divisible by 32, and
+            divide N evenly. ``0`` (default) preserves legacy full-row normalization.
 
     Returns:
         OpDescriptor with the matmul_decode program descriptor and IO tensors.
@@ -125,6 +129,7 @@ def matmul_decode(
     attrs.output_mcast_two_hub = output_mcast_two_hub
     attrs.rms_norm = rms_norm
     attrs.rms_norm_epsilon = rms_norm_epsilon
+    attrs.rms_norm_group_size = rms_norm_group_size
     gamma_tensor = None
     if isinstance(rms_norm_gamma, (int, float)):
         attrs.rms_norm_gamma = float(rms_norm_gamma)
