@@ -12,6 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -302,6 +303,14 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- Attention norm ---
+        use_glm52_l1_attn_norm = (
+            is_blackhole()
+            and is_chunked
+            and seq_len // mesh_device.shape[sp_axis] == 640
+            and config.num_attention_heads == 64
+            and config.q_lora_rank == 2048
+            and getattr(config, "indexer_types", None) is not None
+        )
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -312,6 +321,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
         )
 
         # --- MLA ---

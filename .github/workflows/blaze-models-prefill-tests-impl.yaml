@@ -205,7 +205,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          create-pipeline-dir: "false"
           auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
           hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
           triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
