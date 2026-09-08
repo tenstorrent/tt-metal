@@ -14,7 +14,7 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.ccl import CCLManager
-from models.demos.gemma4.tt.dflash.attention import build_attention_mask_additive
+from models.demos.gemma4.tt.dflash.attention import build_attention_mask_additive, project_and_cache_context_delta
 from models.demos.gemma4.tt.dflash.config import Gemma4DFlashDrafterConfig
 from models.demos.gemma4.tt.dflash.layer import dflash_layer_forward
 from models.demos.gemma4.tt.dflash.weights import load_gemma4_dflash_weights
@@ -53,8 +53,17 @@ def test_dflash_layer0_t3k(mesh_device, device_params):
 
     context_tt = to_tt(context_torch.unsqueeze(0))  # [1,1,ctx_len,hidden]
     noise_tt = to_tt(noise_torch.unsqueeze(0))  # [1,1,block_size,hidden]
-    cos_tt = to_tt(cos_torch.unsqueeze(0))  # [1,1,ctx_len+block_size,head_dim]
-    sin_tt = to_tt(sin_torch.unsqueeze(0))
+    cos_full_tt = to_tt(cos_torch.unsqueeze(0))  # [1,1,ctx_len+block_size,head_dim]
+    sin_full_tt = to_tt(sin_torch.unsqueeze(0))
+    # cos/sin split: context's own positions (first ctx_len rows) feed the one-shot cache
+    # write below; noise's own positions (last block_size rows) feed the layer forward
+    # call itself -- see attention.py's module docstring (context K is RoPE'd once, at
+    # cache-write time, never re-rotated when read back).
+    head_dim = config.head_dim
+    cos_ctx_tt = ttnn.slice(cos_full_tt, [0, 0, 0, 0], [1, 1, ctx_len, head_dim])
+    sin_ctx_tt = ttnn.slice(sin_full_tt, [0, 0, 0, 0], [1, 1, ctx_len, head_dim])
+    cos_noise_tt = ttnn.slice(cos_full_tt, [0, 0, ctx_len, 0], [1, 1, ctx_len + block_size, head_dim])
+    sin_noise_tt = ttnn.slice(sin_full_tt, [0, 0, ctx_len, 0], [1, 1, ctx_len + block_size, head_dim])
 
     mask_torch = build_attention_mask_additive(ctx_len, block_size, is_causal, sliding_window)
     mask_tt = to_tt(mask_torch)
@@ -62,12 +71,34 @@ def test_dflash_layer0_t3k(mesh_device, device_params):
     num_local_heads = config.num_attention_heads // mesh_config.tp
     num_local_kv_heads = config.num_key_value_heads // mesh_config.tp
 
-    out_tt = dflash_layer_forward(
+    # One-shot (k_cache, v_cache) pair, EXACTLY ctx_len-wide (no padding/masking needed
+    # here -- this test's mask is the plain static one, already sized to the real
+    # content), seeded once from the real context via the same mechanism generate.py
+    # uses incrementally every iteration.
+    k_cache = to_tt(torch.zeros(1, num_local_kv_heads, ctx_len, head_dim))
+    v_cache = to_tt(torch.zeros(1, num_local_kv_heads, ctx_len, head_dim))
+    project_and_cache_context_delta(
         context_tt,
+        ctx_len,
+        weights.layers[0].attn,
+        cos_ctx_tt,
+        sin_ctx_tt,
+        k_cache,
+        v_cache,
+        offset=0,
+        num_local_heads=num_local_heads,
+        num_local_kv_heads=num_local_kv_heads,
+        head_dim=head_dim,
+        eps=config.rms_norm_eps,
+    )
+
+    out_tt = dflash_layer_forward(
+        k_cache,
+        v_cache,
         noise_tt,
         weights.layers[0],
-        cos_tt,
-        sin_tt,
+        cos_noise_tt,
+        sin_noise_tt,
         mask_tt,
         mesh_config,
         ccl_manager,

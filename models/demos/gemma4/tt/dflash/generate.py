@@ -11,27 +11,22 @@ tests/dflash/test_dflash_*.py for the individual PCC/exact-match checks):
 
 - Steps 1-5: weight loading, context extraction, drafter forward, logits/softcap/argmax.
 - Step 6 (verify.py): verify/accept/commit against the real target, one block.
-- Multi-iteration GROWING context: the drafter's "context" input accumulates every
-  iteration's newly-committed-token taps -- it is NEVER replaced. CORRECTED: an earlier
-  version of this file claimed the opposite (a sliding window, replaced each iteration,
-  citing reference dflash/dflash.py:305) based on a misread of that reference. Line 305
-  (``target_hidden = extract_context_feature(...)[:, :produced, :]``) is only the NEW
-  delta being fed into that one call; the reference's ``past_key_values_draft`` (created
-  ONCE outside its generation loop, never recreated) is what actually accumulates the
-  attended context -- ``past_key_values.update()`` APPENDS each call's projected
-  context-tap K/V onto everything from every prior call, and the reference's own
-  ``_crop_to(past_key_values_draft, start)`` (using ``start``'s PRE-increment value) only
-  strips that SAME call's transient noise-block K/V, never the context contribution. So
-  the reference's drafter attends to the full history back to prefill, not a bounded
-  recent window -- losing that (as this file did) starves the drafter of context on every
-  iteration after the first and tanks acceptance (observed: ~0.15-1.0/15 vs. reference's
-  ~7.5 tokens/iter). Implemented here as a FIXED-size (max_seq_len-wide) persistent
-  buffer whose first ``context_len`` rows are real and grow every iteration (never
-  sliding), with the rest masked out via ``context_valid_len_tt`` -- see
-  ``_write_context_tap`` below and attention.py's dynamic-mask docstring. A fixed-size
-  buffer with a dynamic valid-length mask, rather than a tensor that changes shape every
-  iteration, is what keeps this compatible with Metal trace capture (see
-  ``_traced_steady_state``).
+- Multi-iteration GROWING context via a genuinely INCREMENTAL per-layer K/V cache: the
+  drafter attends to the full history back to prefill (never a bounded recent window),
+  matching the reference's own growing ``past_key_values_draft`` -- see
+  attention.py's module docstring and ``project_and_cache_context_delta`` for the
+  mechanism, and drafter.py's ``dflash_drafter_update_kv_caches`` for how this file
+  drives it once per iteration. Each drafter layer holds its OWN persistent
+  ``[1,num_local_kv_heads,max_seq_len,head_dim]`` (k_cache, v_cache) pair -- real content
+  in the first ``context_len`` rows (growing every iteration), masked-out padding in the
+  rest via ``context_valid_len_tt`` (a fixed-size buffer with a dynamic valid-length
+  mask, rather than a tensor that changes shape every iteration, is what keeps this
+  compatible with Metal trace capture -- see ``_traced_steady_state``). Only the NEW
+  iteration's own delta (produced-length rows) is ever projected/normed/RoPE'd each
+  call -- older rows are read straight from cache, never recomputed -- matching the
+  reference's actual O(new tokens) per-iteration compute profile rather than
+  reprojecting the WHOLE history every call (an earlier version of this file did that;
+  correct but ~2.7x slower in eager mode, see docs/dflash_design.md).
 - Noise-block embedding: ``model.raw_embed`` (the target's own on-device embedding
   table, tied to the drafter's), undoing the target's baked-in sqrt(hidden) scale --
   the reference's ``_raw_input_embeddings`` is unscaled, unlike ``model.embed_tokens``.
@@ -65,11 +60,12 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.dflash.attention import build_attention_mask_static_parts
 from models.demos.gemma4.tt.dflash.context import ContextAccumulator, split_fc_slices
-from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
+from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward, dflash_drafter_update_kv_caches
 from models.demos.gemma4.tt.dflash.lm_head import argmax_last_dim, compute_dflash_argmax
 from models.demos.gemma4.tt.dflash.rope_cache import (
     build_dflash_rope_cache_2d,
     gather_rope_from_buffer,
+    gather_rope_on_device,
     gather_rope_on_device_buffered,
     make_rope_gather_index_buffer,
     refresh_rope_gather_buffer,
@@ -88,52 +84,23 @@ def _to_tt(mesh_device, x, dtype=ttnn.bfloat16):
     )
 
 
-def _make_context_buffer(mesh_device, max_seq_len: int, hidden_size: int) -> ttnn.Tensor:
-    """Persistent [1,1,max_seq_len,hidden] context buffer -- the drafter's growing,
-    never-replaced attended-context accumulator (see module docstring). Zero-initialized;
-    only the first ``context_len`` rows are ever meaningful at any point, the rest being
-    masked-out padding via ``context_valid_len_tt`` (attention.py)."""
+def make_drafter_kv_caches(mesh_device, num_layers: int, num_local_kv_heads: int, max_seq_len: int, head_dim: int):
+    """One persistent, zero-initialized ``(k_cache, v_cache)`` pair per drafter layer --
+    each ``[1,num_local_kv_heads,max_seq_len,head_dim]``, real content in the first
+    ``context_len`` rows (see attention.py's ``project_and_cache_context_delta``), the
+    rest masked-out padding via ``context_valid_len_tt``."""
     mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(mesh_device, "shape") else None
-    return ttnn.from_torch(
-        torch.zeros((1, 1, max_seq_len, hidden_size), dtype=torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=mapper,
-    )
 
+    def _buf():
+        return ttnn.from_torch(
+            torch.zeros((1, num_local_kv_heads, max_seq_len, head_dim), dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mapper,
+        )
 
-def _write_context_tap(context_buf: ttnn.Tensor, tap: ttnn.Tensor, offset: int, length: int, max_seq_len: int) -> None:
-    """Write ``tap``'s first ``length`` rows into ``context_buf`` at
-    [offset:offset+length], leaving every other row untouched -- the drafter-side
-    analogue of the reference's growing ``past_key_values_draft``
-    (``past_key_values.update()`` appends; nothing before the newly-written region is
-    ever disturbed). Implemented as an eager slice+concat+``ttnn.copy`` (python-int
-    bounds are fine: ``offset``/``length`` are only known after each iteration's own
-    host-side accept decision, so this never runs inside a captured trace -- see
-    generate.py's module docstring and _traced_steady_state)."""
-    hidden = context_buf.shape[-1]
-    tap_slice = tap if tap.shape[-2] == length else ttnn.slice(tap, [0, 0, 0, 0], [1, 1, length, hidden])
-    pieces = []
-    head = tail = None
-    if offset > 0:
-        head = ttnn.slice(context_buf, [0, 0, 0, 0], [1, 1, offset, hidden])
-        pieces.append(head)
-    pieces.append(tap_slice)
-    tail_start = offset + length
-    if tail_start < max_seq_len:
-        tail = ttnn.slice(context_buf, [0, 0, tail_start, 0], [1, 1, max_seq_len, hidden])
-        pieces.append(tail)
-    updated = ttnn.concat(pieces, dim=2) if len(pieces) > 1 else pieces[0]
-    ttnn.copy(updated, context_buf)
-    if len(pieces) > 1:
-        ttnn.deallocate(updated)
-    if head is not None:
-        ttnn.deallocate(head)
-    if tail is not None:
-        ttnn.deallocate(tail)
-    if tap_slice is not tap:
-        ttnn.deallocate(tap_slice)
+    return [(_buf(), _buf()) for _ in range(num_layers)]
 
 
 def _tap_context(model, weights, fc_slices, forward_fn):
@@ -190,9 +157,9 @@ def dflash_generate(
     inputs to compile/capture against), capture the steady-state iteration ONCE as a Metal trace
     (following spec_decode.py's ``_capture_fused_trace``/``_generate_fused_traced``
     pattern) and replay it for every subsequent block instead of re-issuing the whole op
-    sequence eagerly each time. Requires the fixed-size dynamically-masked context
-    window (see attention.py/drafter.py) -- a trace's tensor shapes must stay fixed
-    across every replay, which the steady state now guarantees.
+    sequence eagerly each time. Requires the fixed-size dynamically-masked K/V caches
+    (see attention.py/drafter.py) -- a trace's tensor shapes must stay fixed across every
+    replay, which the steady state now guarantees.
 
     Returns (output_ids: list[int] (generated tokens only, not the prompt), acceptance_lengths: list[int]).
     """
@@ -209,7 +176,32 @@ def dflash_generate(
     stop_tokens = set(stop_token_ids or [])
 
     max_seq_len = input_ids_padded.shape[-1]
-    cos_2d, sin_2d = build_dflash_rope_cache_2d(mesh_device, head_dim, config.rope_theta, max_seq_len)
+    # The drafter's OWN K/V cache and attention mask never need to be wider than the
+    # largest absolute position this session's REAL (committed) content could ever reach
+    # (ctx_len + max_new_tokens) -- often meaningfully smaller than max_seq_len, which is
+    # sized for the TARGET's own paged-attention KV cache, a session-wide bound unrelated
+    # to how many tokens THIS call actually asked for. SDPA cost scales with cache width
+    # regardless of how much of it is real content vs masked-out padding, so tightening
+    # this is a genuine, safe speedup: it changes no result (the extra columns were
+    # always masked out and unattended either way), only how much oversized padding gets
+    # computed at all. Capped at max_seq_len since real content can never exceed what the
+    # target's own KV cache supports.
+    drafter_max_seq_len = min(max_seq_len, ctx_len + max_new_tokens)
+    # The RoPE table, by contrast, must NOT be capped at max_seq_len: the noise block's
+    # own gather reaches up to start+block_size-1, i.e. up to block_size-1 positions
+    # PAST the last real committed position -- these are speculative draft positions
+    # that never get written into the target's own KV cache (so max_seq_len's hardware
+    # constraint doesn't apply to them), but the drafter's forward pass still computes
+    # RoPE for the full noise block every call regardless of how many of those
+    # predictions end up used. Building this table only max_seq_len rows wide (as an
+    # earlier version of this file did) let that gather read past the table's end
+    # whenever ctx_len+max_new_tokens landed close to max_seq_len -- confirmed as a real
+    # bug via repeated runs: undefined/uninitialized memory read there produced
+    # correct-looking output most of the time but occasionally flipped a token deep into
+    # a long generation, with no reliable reproduction (consistent with reading
+    # whatever happened to be at an address, rather than a deterministic logic error).
+    rope_table_len = max(max_seq_len, ctx_len + max_new_tokens + block_size)
+    cos_2d, sin_2d = build_dflash_rope_cache_2d(mesh_device, head_dim, config.rope_theta, rope_table_len)
 
     # Persistent, reused-every-iteration device buffers (see verify.py's module
     # docstring): allocated once here, refreshed in place via
@@ -253,8 +245,8 @@ def dflash_generate(
             anchor_buf,
         )
 
-    # context_valid_len_buf: how many of context_tt's max_seq_len rows are real so far
-    # (the rest is masked-out padding, see attention.py's
+    # context_valid_len_buf: how many of each layer's max_seq_len-row K/V cache are real
+    # so far (the rest is masked-out padding, see attention.py's
     # build_attention_mask_additive_device_dynamic) -- refreshed from host every
     # iteration including the first, since this cumulative count only ever grows. This is
     # the SECOND (and last) per-iteration host->device write, alongside anchor_buf.
@@ -277,14 +269,14 @@ def dflash_generate(
             context_valid_len_buf,
         )
 
-    # context_tt (below) is ALWAYS a FIXED-size, max_seq_len-wide buffer -- real content
-    # in the first context_len rows (growing every iteration), masked-out padding in the
-    # rest -- so every iteration's combined context+noise RoPE gather is ALWAYS exactly
-    # max_seq_len+block_size positions, uniformly from the very first iteration onward.
-    # context_tt's row i is always true absolute position i (writes only ever append
-    # starting at row 0), so the context half of this range is the same [0, max_seq_len)
-    # every call -- only the noise half ([start, start+block_size)) actually changes.
-    rope_idx_buf = make_rope_gather_index_buffer(mesh_device, max_seq_len + block_size)
+    # One persistent (k_cache, v_cache) pair per drafter layer -- see module docstring.
+    # RoPE for the steady state only ever needs the NOISE block's own block_size-wide
+    # position range: context's own K is already RoPE'd once, at cache-write time (see
+    # project_and_cache_context_delta), and never re-rotated when read back later.
+    kv_caches = make_drafter_kv_caches(
+        mesh_device, len(layer_configs), num_local_kv_heads, drafter_max_seq_len, head_dim
+    )
+    rope_idx_buf = make_rope_gather_index_buffer(mesh_device, block_size)
     # weights.fc sliced into one [hidden,hidden] block per tapped layer -- constant for
     # the whole session, built once (see context.py::ContextAccumulator).
     fc_slices = split_fc_slices(weights, config.target_layer_ids, config.hidden_size)
@@ -324,12 +316,28 @@ def dflash_generate(
     real_first_token = int(real_first_torch.reshape(-1)[0].item())
     _write_anchor(real_first_token)
 
-    context_tt = _make_context_buffer(mesh_device, max_seq_len, config.hidden_size)
-    _write_context_tap(context_tt, context_padded, offset=0, length=ctx_len, max_seq_len=max_seq_len)
+    # Seed every layer's K/V cache with the real prefill's own context (a ONE-OFF, wider
+    # write -- ctx_len can exceed block_size, unlike every later iteration's delta).
+    cos_prefill, sin_prefill = gather_rope_on_device(mesh_device, list(range(0, ctx_len)), cos_2d, sin_2d, head_dim)
+    dflash_drafter_update_kv_caches(
+        context_padded,
+        ctx_len,
+        weights,
+        cos_prefill,
+        sin_prefill,
+        kv_caches,
+        offset=0,
+        num_local_heads=num_local_heads,
+        num_local_kv_heads=num_local_kv_heads,
+        head_dim=head_dim,
+        eps=config.rms_norm_eps,
+    )
     ttnn.deallocate(context_padded)
-    # context_len: cumulative count of real (non-padding) rows in context_tt -- NOT a
-    # sliding window's width. Every iteration appends its newly-committed-token tap here
-    # (see module docstring); context_len only ever grows, in lockstep with `start`.
+    ttnn.deallocate(cos_prefill)
+    ttnn.deallocate(sin_prefill)
+    # context_len: cumulative count of real (non-padding) rows in every layer's cache --
+    # NOT a sliding window's width. Every iteration appends its newly-committed-token tap
+    # here (see module docstring); context_len only ever grows, in lockstep with `start`.
     context_len = ctx_len
 
     # output_ids[0] (real_first_token) is a genuine generated token (position ctx_len,
@@ -358,23 +366,16 @@ def dflash_generate(
         if noise_tt.layout != ttnn.TILE_LAYOUT:
             noise_tt = ttnn.to_layout(noise_tt, ttnn.TILE_LAYOUT)
 
-        # context_tt is ALWAYS max_seq_len-wide with its first context_len rows real,
-        # growing every iteration (see _write_context_tap) -- so its RoPE positions are
-        # ALWAYS the fixed range [0, max_seq_len) (row i is always true absolute position
-        # i, since writes only ever append, never slide), concatenated with noise's own
-        # block_size range starting at `start`. Uniform from iteration 0 onward -- no
-        # separate "first iteration" static-mask/one-off-gather path needed anymore, since
-        # there's no more variable-width context to special-case.
-        positions_context = list(range(0, max_seq_len))
+        # Only the noise block's own RoPE positions are needed here -- context's K is
+        # already RoPE'd once, at cache-write time, and read as-is (see module docstring).
         positions_noise = list(range(start, start + block_size))
         cos_tt, sin_tt = gather_rope_on_device_buffered(
-            mesh_device, rope_idx_buf, positions_context + positions_noise, cos_2d, sin_2d, head_dim
+            mesh_device, rope_idx_buf, positions_noise, cos_2d, sin_2d, head_dim
         )
         _write_context_valid_len(context_len)
-        context_valid_len_tt = context_valid_len_buf
 
         drafter_out = dflash_drafter_forward(
-            context_tt,
+            kv_caches,
             noise_tt,
             weights,
             cos_tt,
@@ -387,7 +388,8 @@ def dflash_generate(
             head_dim,
             config.rms_norm_eps,
             layer_configs,
-            context_valid_len_tt=context_valid_len_tt,
+            drafter_max_seq_len,
+            context_valid_len_tt=context_valid_len_buf,
         )
         final_out = weights.norm(drafter_out)
         draft_ids_tt = compute_dflash_argmax(
@@ -449,12 +451,25 @@ def dflash_generate(
 
         # next_context_padded is ALREADY exactly block_size-wide (ttnn_verify_forward
         # always processes exactly block_size candidates); its first `produced` rows are
-        # real. APPEND them into context_tt at the current context_len offset -- growing
-        # the accumulator, not replacing it (see module docstring) -- then advance
-        # context_len/start together (they stay equal: context_len is always the count of
-        # real rows accumulated so far, which is exactly the next absolute position).
-        _write_context_tap(
-            context_tt, next_context_padded, offset=context_len, length=produced, max_seq_len=max_seq_len
+        # real. Project THROUGH EVERY LAYER's own k_proj/v_proj/k_norm + RoPE (reusing
+        # this iteration's own cos_tt/sin_tt -- the delta's positions are exactly the
+        # first `produced` rows of noise's own range, see module docstring) and APPEND
+        # into each layer's cache at the current context_len offset -- growing the
+        # accumulator, never replacing it -- then advance context_len/start together
+        # (they stay equal: context_len is always the count of real rows accumulated so
+        # far, which is exactly the next absolute position).
+        dflash_drafter_update_kv_caches(
+            next_context_padded,
+            produced,
+            weights,
+            cos_tt,
+            sin_tt,
+            kv_caches,
+            offset=context_len,
+            num_local_heads=num_local_heads,
+            num_local_kv_heads=num_local_kv_heads,
+            head_dim=head_dim,
+            eps=config.rms_norm_eps,
         )
         ttnn.deallocate(next_context_padded)
         context_len += produced
@@ -485,14 +500,14 @@ def dflash_generate(
             cos_2d=cos_2d,
             sin_2d=sin_2d,
             fc_slices=fc_slices,
-            context_tt=context_tt,
+            kv_caches=kv_caches,
             context_len=context_len,
             start=start,
             output_ids=output_ids,
             acceptance_lengths=acceptance_lengths,
             stop_tokens=stop_tokens,
             max_new_tokens=max_new_tokens,
-            max_seq_len=max_seq_len,
+            max_seq_len=drafter_max_seq_len,
             block_size=block_size,
             head_dim=head_dim,
             num_local_heads=num_local_heads,
@@ -524,7 +539,7 @@ def _traced_steady_state(
     cos_2d,
     sin_2d,
     fc_slices,
-    context_tt,
+    kv_caches,
     context_len,
     start,
     output_ids,
@@ -543,13 +558,14 @@ def _traced_steady_state(
     """Capture the steady-state iteration as ONE Metal trace, replay it for every
     subsequent block -- mirrors spec_decode.py's ``_capture_fused_trace``/
     ``_generate_fused_traced`` exactly: a compile pass (eager, warms the program cache)
-    using the REAL first steady-state inputs (``context_tt`` is already iteration 0's
-    real output at this point), then ``begin_trace_capture``/``end_trace_capture`` binds
-    that same real call's result to persistent output buffers, then a replay loop
-    refreshes only the small per-iteration inputs between ``execute_trace`` calls --
-    ``context_tt`` itself is never reassigned after this point; its CONTENTS grow in
-    place every replay (``_write_context_tap``, appending that replay's own newly-tapped
-    rows at the current ``context_len`` offset -- never replacing what's already there),
+    using the REAL first steady-state inputs (``kv_caches`` already hold everything up
+    through iteration 0's own commit at this point), then
+    ``begin_trace_capture``/``end_trace_capture`` binds that same real call's result to
+    persistent output buffers, then a replay loop refreshes only the small per-iteration
+    inputs between ``execute_trace`` calls -- each layer's cache is never reassigned
+    after this point; its CONTENTS grow in place every replay
+    (``dflash_drafter_update_kv_caches``, appending that replay's own newly-tapped rows
+    at the current ``context_len`` offset -- never replacing what's already there),
     exactly matching the main loop's own accumulation (see module docstring)."""
     from loguru import logger as _lg
 
@@ -578,7 +594,7 @@ def _traced_steady_state(
         cos_tt, sin_tt = gather_rope_from_buffer(rope_idx_buf, cos_2d, sin_2d, head_dim)
 
         drafter_out = dflash_drafter_forward(
-            context_tt,
+            kv_caches,
             noise_tt,
             weights,
             cos_tt,
@@ -591,6 +607,7 @@ def _traced_steady_state(
             head_dim,
             config.rms_norm_eps,
             layer_configs,
+            max_seq_len,
             context_valid_len_tt=context_valid_len_buf,
             mask_static_parts=mask_static_parts,
         )
@@ -622,30 +639,35 @@ def _traced_steady_state(
         ttnn.deallocate(logits)
         next_context = accumulator.finalize()
 
-        return draft_ids, posterior_tt, next_context
+        # cos_tt/sin_tt are returned too: the eager cache-update step between replays
+        # (below) needs THIS SAME replay's noise-position RoPE values (the delta's
+        # positions are a prefix of noise's own range, see module docstring), and can't
+        # recompute them itself without re-reading rope_idx_buf's contents at a point
+        # where they may have already been refreshed for the NEXT iteration.
+        return draft_ids, posterior_tt, next_context, cos_tt, sin_tt
 
     def _refresh_inputs():
-        # context_tt's rows are always true absolute positions [0, max_seq_len) -- fixed,
-        # since writes only ever append starting at row 0 (see _write_context_tap) --
-        # only the noise half of the gather actually changes iteration to iteration.
-        positions_context = list(range(0, max_seq_len))
+        # Only the noise block's own RoPE positions are needed -- context's K is already
+        # RoPE'd once, at cache-write time, and read as-is (see module docstring).
         positions_noise = list(range(start, start + block_size))
-        refresh_rope_gather_buffer(mesh_device, rope_idx_buf, positions_context + positions_noise)
+        refresh_rope_gather_buffer(mesh_device, rope_idx_buf, positions_noise)
         refresh_verify_positions(mesh_device, verify_buffers, start)
         write_context_valid_len(context_len)
 
     _refresh_inputs()
 
     _lg.info("[dflash-trace] compile run")
-    d0, p0, c0 = _fused_body()
+    d0, p0, c0, cos0, sin0 = _fused_body()
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(d0)
     ttnn.deallocate(p0)
     ttnn.deallocate(c0)
+    ttnn.deallocate(cos0)
+    ttnn.deallocate(sin0)
 
     _lg.info("[dflash-trace] begin_trace_capture")
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    draft_ids_out, posterior_out, next_context_out = _fused_body()
+    draft_ids_out, posterior_out, next_context_out, cos_out, sin_out = _fused_body()
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     _lg.info("[dflash-trace] capture done")
 
@@ -683,13 +705,26 @@ def _traced_steady_state(
                 break
         acceptance_lengths.append(accept)
 
-        # Append this replay's newly-tapped rows into context_tt BEFORE advancing
-        # context_len -- context_len here is still the offset this tap belongs at
-        # (mirrors the main loop's identical pattern). next_context_out is a
-        # trace-bound persistent output tensor, safe to read now: the blocking
+        # Project this replay's newly-tapped rows through every layer's own
+        # k_proj/v_proj/k_norm + RoPE (reusing THIS replay's own cos_out/sin_out --
+        # trace-bound persistent output tensors, safe to read now: the blocking
         # to_torch() reads above already guarantee this replay's execute_trace has
-        # completed.
-        _write_context_tap(context_tt, next_context_out, offset=context_len, length=produced, max_seq_len=max_seq_len)
+        # completed) and append into each layer's cache -- BEFORE advancing
+        # context_len -- context_len here is still the offset this tap belongs at
+        # (mirrors the main loop's identical pattern).
+        dflash_drafter_update_kv_caches(
+            next_context_out,
+            produced,
+            weights,
+            cos_out,
+            sin_out,
+            kv_caches,
+            offset=context_len,
+            num_local_heads=num_local_heads,
+            num_local_kv_heads=num_local_kv_heads,
+            head_dim=head_dim,
+            eps=config.rms_norm_eps,
+        )
         context_len += produced
         start += produced
 

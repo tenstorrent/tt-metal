@@ -10,7 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
     apply_allreduce,
@@ -34,6 +34,34 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
+
+
+def _qkv_norm_island_memcfg(batch, use_embedding_rope):
+    """Memory config for the per-head q/k/v norm + RoPE island at decode.
+
+    ``nlp_create_qkv_heads_decode`` hands back Q/K/V height-sharded in L1, and
+    both consumers of the normed+rotated tensors (``paged_update_cache``,
+    ``sdpa_decode``) want L1 too — yet the norms and RoPE in between were staged
+    through **DRAM interleaved**. Those ops run on one core over a
+    ``[1, 1, heads_local, head_dim]`` tensor (a few tiles), so they are
+    latency-bound and a DRAM round-trip is pure latency.
+
+    Keeping the island in L1 interleaved feeds the *same* kernels the *same*
+    bits — only the buffer type moves — so it is bit-exact by construction.
+    ``GEMMA4_DECODE_QKV_L1=0`` restores the DRAM staging.
+
+    RESTRICTED to ``batch == 1`` on the embedding-RoPE path, because those are
+    the only rotations that accept a ``memory_config``. ``apply_rope_decode_peruser``
+    (batch > 1) and the legacy 4D-cache ``apply_rope`` both return a tensor
+    following their INPUT's buffer type, so an L1 input would hand
+    ``sdpa_decode`` an L1 Q and trip its ``Q_memcfg.buffer_type() == DRAM``
+    assert. Those paths keep the DRAM staging, byte-for-byte as before.
+    """
+    if os.environ.get("GEMMA4_DECODE_QKV_L1", "1").lower() in ("0", "false", "no"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    if batch != 1 or not use_embedding_rope:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -94,29 +122,45 @@ def decode_forward(
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # 1. Fused QKV projection. Land the output straight in L1: the only consumer
+    # is ``nlp_create_qkv_heads_decode``, which needs an L1 input anyway (see
+    # split_qkv_heads_decode). Writing DRAM and copying back cost one extra
+    # CopyDeviceOperation per layer plus a full DRAM round-trip of the fused
+    # QKV. At decode M=32 the tensor is
+    # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms (un-shard for rms_norm, restore sharded for the KV write).
+    # The staging buffer is L1 at batch=1 — see _qkv_norm_island_memcfg. Both
+    # inputs to that decision are known here: the split puts batch in dim 1, and
+    # the RoPE flavour follows from the cos-cache rank (step 4 re-derives it).
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    island_mem = _qkv_norm_island_memcfg(
+        batch=int(tt_q.shape[1]),
+        use_embedding_rope=bool(rope_presliced or len(cos_cache.shape) == 2),
+    )
+    island_is_l1 = island_mem.buffer_type == ttnn.BufferType.L1
+    tt_q = ttnn.to_memory_config(tt_q, island_mem)
+    tt_q = apply_per_head_norm(
+        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+    )
 
     if is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = ttnn.to_memory_config(tt_k, island_mem)
+        tt_v = ttnn.to_memory_config(tt_v, island_mem)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=island_mem)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -143,9 +187,9 @@ def decode_forward(
             cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
             sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
-        def _rope(t):
+        def _rope(t, memory_config=None):
             if batch == 1:
-                return apply_rope(t, cos_pos, sin_pos, token_index=0)
+                return apply_rope(t, cos_pos, sin_pos, token_index=0, memory_config=memory_config)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
@@ -154,9 +198,16 @@ def decode_forward(
         # trace replay it regressed throughput (~3%): host dispatch is already
         # free under replay, so it only added concat+split device kernels while
         # removing one tiny rope kernel. Keep separate rotations.
-        tt_q = _rope(tt_q)
+        # Q's rotated result goes straight to sdpa_decode, which hard-asserts
+        # "Q tensor buffer type must be DRAM when not sharded"
+        # (sdpa_decode_device_operation.cpp) — so when the island is on L1, Q's
+        # rotation must still write DRAM; only its norm stays on L1. K feeds
+        # paged_update_cache via a reshard to the height-sharded spec, which is
+        # happy in L1. When the island is DRAM these are None, i.e. the exact
+        # pre-optimization calls.
+        tt_q = _rope(tt_q, memory_config=ttnn.DRAM_MEMORY_CONFIG if island_is_l1 else None)
         if not is_kv_shared:
-            tt_k = _rope(tt_k)
+            tt_k = _rope(tt_k, memory_config=island_mem if island_is_l1 else None)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -299,6 +350,7 @@ def decode_forward(
         k_chunk_size=64,
         exp_approx_mode=False,
     )
+    sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
 
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -312,6 +364,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -331,6 +384,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 
@@ -446,6 +500,11 @@ def _packed_verify_sdpa(
     # there so the packed path stays identical to upstream.
     _dev = k.device()
     _num_dev = getattr(_dev, "get_num_devices", lambda: 1)()
+    # Single-device ONLY, as originally shipped. Forcing fp32_dest_acc on a
+    # MESH was tried against the long-S_k greedy drift (128k packed verify
+    # diverges at ~tok 41 with op defaults) and made it far worse -- 0.06/5
+    # accepted, divergent from token 0 -- so the mesh keeps the op default and
+    # the drift is handled by gating packed verify per ISL tier instead.
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
@@ -629,8 +688,12 @@ def packed_decode_forward(
     H_local = config.num_attention_heads // tp
     head_dim = config.head_dim
     nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-    if config.cache_position_modulo is not None:
-        raise NotImplementedError("packed verify does not support bounded sliding KV caches")
+    # Bounded sliding is supported: the caller provides ring-aware inputs (the
+    # sliding mask spans RING slots, hot_pt names pages in the ring pool with a
+    # wrapped spill block, and page_table is this layer's own pool). The SDPA
+    # here is position-free -- causality/window live entirely in the explicit
+    # additive mask -- and the staging fill writes physical pages, so neither
+    # needs cache_position_modulo.
     if kv_cache is None:
         raise ValueError("packed_decode_forward requires a KV cache (it attends through the paged cache)")
     l1 = ttnn.L1_MEMORY_CONFIG
@@ -743,6 +806,13 @@ def packed_decode_forward(
             k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
             v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
             if page_table is not None:
+                # Bounded ring: wrap absolute write positions into the ring
+                # (same contract as decode_forward's paged_modulo_kwargs).
+                _mod = (
+                    {"cache_position_modulo": config.cache_position_modulo}
+                    if config.cache_position_modulo is not None
+                    else {}
+                )
                 ttnn.experimental.paged_update_cache(
                     k_cache_w,
                     k_p,
@@ -750,6 +820,7 @@ def packed_decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=nkv_local,
+                    **_mod,
                 )
                 ttnn.experimental.paged_update_cache(
                     v_cache_w,
@@ -758,6 +829,7 @@ def packed_decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=nkv_local,
+                    **_mod,
                 )
             else:
                 ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])
@@ -790,12 +862,25 @@ def packed_decode_forward(
     q_packed = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_q)
 
+    # GEMMA4_PV_K_CHUNK: experiment knob only; keep the default 64. The
+    # rescale-count theory of the packed long-S_k greedy drift was TESTED and
+    # FALSIFIED: k_chunk=128 diverges at exactly the same token as 64 (char 165
+    # at 128k) with the same acceptance, and k_chunk=256 TT_THROWs at program
+    # build. The drift is inherent packed-vs-decode path numerics; it is handled
+    # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
+    _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
+    # The flash cross-core reduction CBs scale with PNHt * cores_per_head_batch.
+    # At PNHt<=2 (<=64 packed query rows) 16 cores fit L1; at PNHt=4 (the B>1
+    # dFlash fold, 128 rows) 16 cores overflow (~2.06 MB > 1.5 MB) and head
+    # splits can't help when nkv_local > 1 (31B sliding: 16 kv heads / tp8 = 2),
+    # so trade reduction parallelism for L1: 8 cores fits (~1.29 MB).
+    _pnht = (H_local * P + 31) // 32
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
         q_chunk_size=32,
-        k_chunk_size=64,
+        k_chunk_size=_k_chunk,
         exp_approx_mode=False,
-        max_cores_per_head_batch=16,
+        max_cores_per_head_batch=16 if _pnht <= 2 else 8,
     )
     _grid = sdpa_program_config.compute_with_storage_grid_size
     n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)

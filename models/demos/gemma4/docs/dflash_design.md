@@ -306,14 +306,73 @@ position inside an already-touched KV-cache tile, and a measured acceptance-rate
 improvement on a longer benchmark (0.29→0.55 mean accepted/15) consistent with the
 drafter now seeing real history instead of a truncated recent window.
 
-KNOWN GAP vs. the reference (not yet closed): the TT port recomputes each layer's
-context K/V projection over the FULL `max_seq_len`-wide buffer every iteration (mostly
-re-deriving unchanged historical rows), rather than caching already-projected K/V and
-only projecting the new delta like the reference's real incremental cache does. This is
-mathematically identical (confirmed) but computationally wasteful -- measured ~2.7x
-eager slowdown from widening context 16→128 rows. A true per-layer incremental KV cache
-(project+write only the new delta each iteration, read the rest straight from a
-persistent per-layer cache) would close most of this gap; scoped but not yet built.
+**Incremental per-layer K/V cache, closing the earlier compute gap** (`attention.py`'s
+`project_and_cache_context_delta`/`dflash_attention_forward`, `drafter.py`'s
+`dflash_drafter_update_kv_caches`): each drafter layer now holds its OWN persistent,
+already-projected+RoPE'd `(k_cache, v_cache)` pair; only the NEW iteration's delta
+(≤`block_size` rows) is ever projected/normed/RoPE'd, matching the reference's actual
+O(new tokens) per-iteration compute profile instead of reprojecting the whole
+`max_seq_len`-wide history every call. Validated exact-match against all of Steps 3-6's
+torch references (re-run against the new per-layer-cache interface) and the 2-iteration
+multi-iteration reference (both eager and traced). Also tightened `drafter_max_seq_len`
+(the cache/mask width) to `min(max_seq_len, ctx_len + max_new_tokens)` rather than always
+`max_seq_len` -- SDPA cost scales with cache width regardless of how much is real vs
+masked padding, so this is a genuine, safe speedup when a session's real bound is smaller
+than the target's own paged-attention cap.
+
+**Two real bugs found and fixed via extended (60+ iteration) hardware stress-testing**,
+beyond what the 2-iteration reference alone exercises:
+
+1. RoPE table built only `max_seq_len` rows wide, but the noise block's own gather
+   reaches `start+block_size-1` -- up to `block_size-1` positions PAST the last real
+   committed position (speculative draft positions, never written into the target's own
+   KV cache, so `max_seq_len`'s hardware constraint doesn't apply to them). Whenever
+   `ctx_len+max_new_tokens` landed close to `max_seq_len`, this read past the table's
+   end, producing undefined values -- correct-looking most of the time, occasionally
+   flipping a token deep into a long generation, with no reliable single reproduction
+   (consistent with reading whatever happened to be at an address). Fixed by building
+   the RoPE table `max(max_seq_len, ctx_len+max_new_tokens+block_size)` rows wide,
+   uncapped by `max_seq_len` since it's a purely internal, drafter-side lookup array with
+   no hardware tie to the target's cache capacity. Measured improvement on a 96-token
+   stress test (10 traced runs each): 6/10 disagreeing with each other before the fix,
+   2/10 after.
+2. `ContextAccumulator.tap` (`context.py`) fed the live mid-graph hidden state straight
+   into `ttnn.linear` without first forcing it to DRAM. `model.py`'s own `layer_probe`
+   docstring requires this ("holding a sharded L1 copy starves later programs' circular
+   buffers") -- the earlier, validated dict-based probe (`test_dflash_verify.py`'s
+   `_probe`) did this correctly via `ttnn.to_memory_config`; the newer accumulate-as-you-
+   go version omitted it. Fixed by adding the same `ttnn.to_memory_config(hidden_states,
+   ttnn.DRAM_MEMORY_CONFIG)` call before use. Measured improvement on the same 96-token
+   stress test: roughly 30% run-to-run agreement before this fix, 60-80% after (two
+   16-run batches), up from the pre-RoPE-fix baseline's ~30%.
+
+KNOWN OPEN ISSUE (not fully resolved): even with both fixes above, long (60+ iteration)
+generations still show a residual, less frequent (roughly 20-40% in repeated 96-token
+stress tests) run-to-run divergence, always in the same shape -- output matches some
+other run's exactly up to a point, then both sides' posterior values become obviously
+implausible (e.g. `[1, 28, 1, 1, 1, 2, 1, 1, 496, 0, 0, 0, ...]`) and never recover.
+Confirmed via extensive elimination testing to be:
+ - NOT specific to Metal trace capture (eager shows the same magnitude of instability).
+ - NOT caused by the drafter's own new incremental K/V cache-update code (freezing that
+   code entirely, i.e. never updating the drafter's cache between replays, made the
+   instability WORSE, not better).
+ - NOT general CCL/hardware floating-point non-determinism (plain single-token greedy
+   decode, which shares the same target model, same TP=8 CCL calls, same hardware, is
+   perfectly stable across 6/6 repeated 96-token runs).
+ - NOT the documented "batched `paged_update_cache` races when candidates share one page
+   block" hazard (confirmed `sequential_kv_write` correctly defaults to `True`, the safe
+   serialized mode, for DFlash's calls).
+The divergence point is reproducible across independent runs (several instances of
+different runs hitting the exact same position with the exact same wrong value), which
+rules out pure randomness, but the exact position varies somewhat between test batches
+rather than being pinned to one fixed iteration count. The leading hypothesis is a
+cumulative resource-exhaustion effect in the shared batched-verify + `layer_probe` path
+(the one thing every DFlash iteration does that plain single-token decode never does) --
+consistent with the fact that the DRAM fix above measurably delayed but did not
+eliminate the effect. Confirming this would need lower-level tooling (memory/program-
+cache profiling across iterations) beyond what black-box log comparison can resolve;
+scoped as a follow-up, not blocking on it for the eager/traced multi-iteration
+correctness this section otherwise validates.
 
 KNOWN LATENT LIMITATION (separate from the above, not yet fixed, currently unobservable
 at any tested scale): the attention mask's position grid is relative to each call's own
@@ -334,16 +393,20 @@ pushes past the model's actual stopping point into degenerate continuation):
 
 | | tokens | verify iters | mean accepted | ms/token | tok/s/user |
 |---|---|---|---|---|---|
-| Plain          | 64 | -- | -- | 298 | 3.35 |
-| DFlash, eager  | 64 | 42 | 0.55/15 | 1882 | 0.53 |
-| DFlash, traced | 64 | 42 | 0.55/15 | 256 | 3.90 |
+| Plain          | 64 | -- | -- | 271 | 3.69 |
+| DFlash, eager  | 64 | 42 | 0.55/15 | 585 | 1.71 |
+| DFlash, traced | 64 | 42 | 0.57/15 | 251 | 3.98 |
 
-DFlash eager is well below plain decode here -- expected, since eager pays the drafter's
-full (now correctly wider) per-iteration compute plus host-dispatch overhead every call,
-with only ~1.55 tokens/iteration to amortize it against. Metal trace capture (see below)
-removes the host-dispatch overhead and gets DFlash modestly ahead of plain decode
-(1.16x); closing the gap further needs either a genuinely incremental drafter KV cache
-(see above) or a higher-acceptance (non-degenerate) generation to amortize against.
+(Numbers above are with the incremental per-layer K/V cache; eager improved substantially
+over an earlier, whole-buffer-reprojection version of this same fix, ~1882ms -> 585ms,
+since the incremental cache removes most of the redundant per-iteration projection work
+that eager mode -- unlike traced mode -- pays in full every call.) DFlash eager is still
+below plain decode here -- expected, since eager still pays full host-dispatch overhead
+every call, with only ~1.55-1.57 tokens/iteration to amortize it against on this
+degenerate (past-EOS) benchmark. Metal trace capture removes the host-dispatch overhead
+and gets DFlash modestly ahead of plain decode (~1.08x); the remaining gap is now
+dominated by SDPA's own cost (which scales with cache width regardless of caching
+strategy) and this benchmark's low acceptance rate, not by redundant K/V projection.
 
 **Metal trace capture, validated on real hardware** (`generate.py`'s `use_trace` param /
 `_traced_steady_state`, mirroring `spec_decode.py`'s `_capture_fused_trace`/

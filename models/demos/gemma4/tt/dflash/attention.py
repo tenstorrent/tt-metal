@@ -5,6 +5,13 @@
 the noise/draft block; key and value are the concatenation of the (fixed) context and the
 noise block's own key/value -- see models/demos/gemma4/docs/dflash_design.md section 1.
 
+Context's K/V are a genuinely INCREMENTAL per-layer cache (see
+``project_and_cache_context_delta``): projected+normed+RoPE'd ONCE, when each iteration's
+newly-committed-token tap arrives, and read as-is (no reprojection) by every later
+attention forward call -- matching the reference's own ``past_key_values_draft``
+(dflash.py) compute profile, not the earlier (correct but wasteful) approach of
+reprojecting the WHOLE context buffer from scratch on every call.
+
 Head reshape/RoPE/SDPA call pattern mirrors gated_attention_forward_ttnn
 (models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py), already
 proven on real T3K hardware for the architecturally-similar Qwen3-style Qwen3.6 MTP head --
@@ -220,13 +227,98 @@ def _apply_rope_single(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tt
     return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(rotate_half_ttnn(x), sin))
 
 
+def _write_seq_slice(buf: ttnn.Tensor, new_rows: ttnn.Tensor, offset: int, length: int) -> None:
+    """Write ``new_rows`` (exactly ``length`` rows along the sequence axis, dim=2) into
+    ``buf`` at [offset:offset+length], leaving every other row untouched -- an
+    in-place-content update (``ttnn.copy``) of a persistent, fixed-shape buffer. Shape
+    generic: works for a per-layer K/V cache ([1,heads,seq,head_dim]) or any other
+    [B,H,seq,D]-shaped persistent buffer. Runs eagerly (offset/length are only known
+    after each iteration's own host-side accept decision), so plain python-int slice
+    bounds are fine -- see generate.py's module docstring."""
+    b, h, max_len, d = buf.shape
+    pieces = []
+    head = tail = None
+    if offset > 0:
+        head = ttnn.slice(buf, [0, 0, 0, 0], [b, h, offset, d])
+        pieces.append(head)
+    pieces.append(new_rows)
+    tail_start = offset + length
+    if tail_start < max_len:
+        tail = ttnn.slice(buf, [0, 0, tail_start, 0], [b, h, max_len, d])
+        pieces.append(tail)
+    updated = ttnn.concat(pieces, dim=2) if len(pieces) > 1 else pieces[0]
+    ttnn.copy(updated, buf)
+    if len(pieces) > 1:
+        ttnn.deallocate(updated)
+    if head is not None:
+        ttnn.deallocate(head)
+    if tail is not None:
+        ttnn.deallocate(tail)
+
+
+def project_and_cache_context_delta(
+    delta: ttnn.Tensor,  # [1,1,>=length,hidden] -- sliced internally to the first `length` rows
+    length: int,
+    weights: AttentionWeights,
+    cos_delta: ttnn.Tensor,  # [1,1,>=length,head_dim] -- sliced internally to match `length`
+    sin_delta: ttnn.Tensor,
+    k_cache: ttnn.Tensor,  # [1,num_local_kv_heads,max_seq_len,head_dim], written at [offset:offset+length]
+    v_cache: ttnn.Tensor,
+    offset: int,
+    num_local_heads: int,
+    num_local_kv_heads: int,
+    head_dim: int,
+    eps: float,
+) -> None:
+    """Project this iteration's newly-committed-token context tap (``delta``, already
+    ``hidden_norm(fc(...))``'d -- see context.py) through THIS layer's own k_proj/v_proj
+    (via the fused ``wqkv`` weight) + k_norm + RoPE (at the delta's own true absolute
+    positions), then write the result into ``k_cache``/``v_cache`` -- the persistent,
+    incremental analogue of what ``dflash_attention_forward`` used to recompute from
+    scratch, over the FULL context buffer, on every single attention forward call.
+
+    RoPE and k_norm are both per-position/per-row operations (no cross-row mixing), so
+    projecting+normalizing+rotating just the new delta here and concatenating it with
+    already-cached rows at attention time is mathematically identical to reprojecting
+    the whole history every call -- confirmed against the whole-buffer-reprojection
+    version this replaces. Runs eagerly (offset/length only known after this iteration's
+    own host-side accept decision), matching generate.py's write-timing conventions."""
+    hidden = delta.shape[-1]
+    delta = delta if delta.shape[-2] == length else ttnn.slice(delta, [0, 0, 0, 0], [1, 1, length, hidden])
+    if cos_delta.shape[-2] != length:
+        cos_delta = ttnn.slice(cos_delta, [0, 0, 0, 0], [1, 1, length, head_dim])
+        sin_delta = ttnn.slice(sin_delta, [0, 0, 0, 0], [1, 1, length, head_dim])
+
+    q_w = num_local_heads * head_dim
+    kv_w = num_local_kv_heads * head_dim
+
+    qkv_delta = ttnn.linear(delta, weights.wqkv)  # [1,1,length, q_w+2*kv_w] -- the q slice is unused, same as before
+    k_delta = ttnn.slice(qkv_delta, [0, 0, 0, q_w], [1, 1, length, q_w + kv_w])
+    v_delta = ttnn.slice(qkv_delta, [0, 0, 0, q_w + kv_w], [1, 1, length, q_w + 2 * kv_w])
+    ttnn.deallocate(qkv_delta)
+
+    k_delta = ttnn.reshape(k_delta, [1, length, num_local_kv_heads, head_dim])
+    k_delta = ttnn.rms_norm(k_delta, weight=weights.k_norm_weight, epsilon=eps)
+    k_delta = ttnn.transpose(k_delta, 1, 2)  # [1, num_local_kv_heads, length, head_dim]
+    k_delta = _apply_rope_single(k_delta, cos_delta, sin_delta)
+
+    v_delta = ttnn.reshape(v_delta, [1, length, num_local_kv_heads, head_dim])
+    v_delta = ttnn.transpose(v_delta, 1, 2)  # v is never RoPE'd, matching the reference
+
+    _write_seq_slice(k_cache, k_delta, offset, length)
+    _write_seq_slice(v_cache, v_delta, offset, length)
+    ttnn.deallocate(k_delta)
+    ttnn.deallocate(v_delta)
+
+
 def dflash_attention_forward(
-    context: ttnn.Tensor,  # [1,1,ctx_len,hidden], full-width replicated
+    k_cache: ttnn.Tensor,  # [1,num_local_kv_heads,max_seq_len,head_dim], already projected+normed+RoPE'd
+    v_cache: ttnn.Tensor,  # [1,num_local_kv_heads,max_seq_len,head_dim], already projected
     noise: ttnn.Tensor,  # [1,1,q_len,hidden], full-width replicated (already input_layernorm'd)
     weights: AttentionWeights,
-    cos_full: ttnn.Tensor,  # [1,1,ctx_len+q_len,head_dim], replicated
-    sin_full: ttnn.Tensor,
-    attn_mask: ttnn.Tensor,  # [1,1,q_len,ctx_len+q_len], replicated (build_attention_mask_additive, uploaded)
+    cos_noise: ttnn.Tensor,  # [1,1,q_len,head_dim], replicated
+    sin_noise: ttnn.Tensor,
+    attn_mask: ttnn.Tensor,  # [1,1,q_len,max_seq_len+q_len], replicated
     mesh_config,
     ccl_manager,
     num_local_heads: int,
@@ -234,50 +326,42 @@ def dflash_attention_forward(
     head_dim: int,
     eps: float,
 ) -> ttnn.Tensor:
+    """Context's K/V come straight from the persistent, already-projected+RoPE'd
+    per-layer cache (no projection here at all -- see ``project_and_cache_context_delta``
+    for where/when that happens) -- only the noise block's own Q/K/V are computed live
+    here, exactly as every call already did before this cache existed."""
     scale = head_dim**-0.5
     q_w = num_local_heads * head_dim
     kv_w = num_local_kv_heads * head_dim
 
     q_len = noise.shape[-2]
-    ctx_len = context.shape[-2]
+    ctx_len = k_cache.shape[-2]
 
     qkv_noise = ttnn.linear(noise, weights.wqkv)  # [1,1,q_len, q_w+2*kv_w] per device
-    qkv_ctx = ttnn.linear(context, weights.wqkv)  # [1,1,ctx_len, q_w+2*kv_w] per device
 
     q = ttnn.slice(qkv_noise, [0, 0, 0, 0], [1, 1, q_len, q_w])
     k_noise = ttnn.slice(qkv_noise, [0, 0, 0, q_w], [1, 1, q_len, q_w + kv_w])
     v_noise = ttnn.slice(qkv_noise, [0, 0, 0, q_w + kv_w], [1, 1, q_len, q_w + 2 * kv_w])
     ttnn.deallocate(qkv_noise)
 
-    k_ctx = ttnn.slice(qkv_ctx, [0, 0, 0, q_w], [1, 1, ctx_len, q_w + kv_w])
-    v_ctx = ttnn.slice(qkv_ctx, [0, 0, 0, q_w + kv_w], [1, 1, ctx_len, q_w + 2 * kv_w])
-    ttnn.deallocate(qkv_ctx)
-
-    k = ttnn.concat([k_ctx, k_noise], dim=-2)  # [1,1,ctx_len+q_len, kv_w]
-    v = ttnn.concat([v_ctx, v_noise], dim=-2)
-    ttnn.deallocate(k_ctx)
-    ttnn.deallocate(k_noise)
-    ttnn.deallocate(v_ctx)
-    ttnn.deallocate(v_noise)
-
     # heads: [1,1,seq,W] -> [1,seq,heads,head_dim] -> norm (last axis) -> transpose -> [1,heads,seq,head_dim]
     q = ttnn.reshape(q, [1, q_len, num_local_heads, head_dim])
     q = ttnn.rms_norm(q, weight=weights.q_norm_weight, epsilon=eps)
     q = ttnn.transpose(q, 1, 2)
+    q = _apply_rope_single(q, cos_noise, sin_noise)
 
-    k = ttnn.reshape(k, [1, ctx_len + q_len, num_local_kv_heads, head_dim])
-    k = ttnn.rms_norm(k, weight=weights.k_norm_weight, epsilon=eps)
-    k = ttnn.transpose(k, 1, 2)
+    k_noise = ttnn.reshape(k_noise, [1, q_len, num_local_kv_heads, head_dim])
+    k_noise = ttnn.rms_norm(k_noise, weight=weights.k_norm_weight, epsilon=eps)
+    k_noise = ttnn.transpose(k_noise, 1, 2)
+    k_noise = _apply_rope_single(k_noise, cos_noise, sin_noise)
 
-    v = ttnn.reshape(v, [1, ctx_len + q_len, num_local_kv_heads, head_dim])
-    v = ttnn.transpose(v, 1, 2)
+    v_noise = ttnn.reshape(v_noise, [1, q_len, num_local_kv_heads, head_dim])
+    v_noise = ttnn.transpose(v_noise, 1, 2)
 
-    # RoPE: q only ever needs the LAST q_len positions' rotation; k spans the full range.
-    total = ctx_len + q_len
-    cos_q = ttnn.slice(cos_full, [0, 0, total - q_len, 0], [1, 1, total, head_dim])
-    sin_q = ttnn.slice(sin_full, [0, 0, total - q_len, 0], [1, 1, total, head_dim])
-    q = _apply_rope_single(q, cos_q, sin_q)
-    k = _apply_rope_single(k, cos_full, sin_full)
+    k = ttnn.concat([k_cache, k_noise], dim=2)  # [1,num_local_kv_heads,ctx_len+q_len,head_dim]
+    v = ttnn.concat([v_cache, v_noise], dim=2)
+    ttnn.deallocate(k_noise)
+    ttnn.deallocate(v_noise)
 
     attn_out = ttnn.transformer.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=False, scale=scale)
     ttnn.deallocate(q)
