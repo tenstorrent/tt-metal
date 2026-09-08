@@ -11,6 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import collect_device_perf
 from models.demos.deepseek_v3.tests.test_moe import generate_reference_io
 from models.demos.deepseek_v3.tt.moe import MoE
@@ -88,6 +89,8 @@ def test_ds_moe_forward(
     # trace can trigger forbidden compile/program writes during capture.
     if trace_mode and not program_cache_enabled:
         pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
+
+    log_fabric_setup(mesh_device, device_params["fabric_config"])
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()

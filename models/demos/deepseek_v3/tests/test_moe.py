@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.tt.moe_optimized import MoEOptimized
@@ -116,6 +117,8 @@ def run_test_forward_pass_moe(
     device_params,
 ):
     """Test forward pass against reference model."""
+
+    log_fabric_setup(mesh_device, device_params["fabric_config"])
 
     moe_cls = _moe_cls(mesh_device, device_params["fabric_config"])
     reference_model = build_reference_model(hf_config)

@@ -24,6 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
@@ -110,6 +111,7 @@ def run_all_to_all_dispatch_metadata_test(
     seq_len,
     num_iters,
     trace_mode,
+    requested_fabric,
     num_links=4,
     scheme="random_sequential_experts",
     dtype=ttnn.bfloat16,
@@ -119,6 +121,7 @@ def run_all_to_all_dispatch_metadata_test(
     """Run dispatch test on TG mesh."""
     torch.manual_seed(2003)
     random.seed(2003)
+    log_fabric_setup(mesh_device, requested_fabric, num_links)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
 
@@ -413,7 +416,7 @@ def run_all_to_all_dispatch_metadata_test(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("experts_per_device", [2])
-def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
+def test_correctness(device_params, mesh_device, mesh_shape, cluster_axis, experts_per_device):
     """Correctness test for TG dispatch."""
     batches_per_device = 32
     num_devices = mesh_shape[0] * mesh_shape[1]  # Total devices = 32 for 4x8
@@ -440,6 +443,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
         seq_len,
         num_iters,
         trace_mode,
+        device_params["fabric_config"],
         num_links=num_links,
         scheme=scheme,
         dtype=dtype,

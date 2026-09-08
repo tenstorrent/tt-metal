@@ -17,6 +17,7 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -134,6 +135,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
     ["model.layers.3.mlp.experts.0-255"],
 )
 def test_forward_pass(
+    device_params,
     mode: str,
     batch_size_per_row: int,
     seq_len: int,
@@ -147,6 +149,8 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
+    log_fabric_setup(mesh_device, device_params.get("fabric_config"))
+
     num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 

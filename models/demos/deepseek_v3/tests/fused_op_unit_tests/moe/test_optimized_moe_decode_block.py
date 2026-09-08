@@ -19,6 +19,7 @@ from ttnn.experimental.moe_compute_utils import (
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -552,6 +553,7 @@ def verify_output(
 )
 @torch.no_grad()
 def test_optimized_moe_decode_block(
+    device_params,
     mesh_shape,
     mesh_device,
     cluster_axis,
@@ -577,6 +579,8 @@ def test_optimized_moe_decode_block(
 
     torch.manual_seed(2005)
     random.seed(2005)
+
+    log_fabric_setup(mesh_device, device_params["fabric_config"], requested_num_links=4)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]

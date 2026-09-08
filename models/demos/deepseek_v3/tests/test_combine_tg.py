@@ -24,6 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 
 # Import helper functions from the reference test
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import (
@@ -49,6 +50,7 @@ def run_combine_test(
     num_links,
     mux_core_range,
     num_test_iters,
+    requested_fabric,
 ):
     """
     Run MoE combine test on TG 4x8 mesh.
@@ -83,6 +85,8 @@ def run_combine_test(
     logger.info(f"  Selected experts K: {select_experts_k}")
     logger.info(f"  Hidden size: {hidden_size}")
     logger.info("=" * 80)
+
+    log_fabric_setup(mesh_device, requested_fabric, num_links)
 
     # Create core ranges
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
@@ -268,6 +272,7 @@ def run_combine_test(
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
 @pytest.mark.parametrize("num_test_iters", [3])
 def test_combine_correctness(
+    device_params,
     mesh_device,
     mesh_shape,
     batch,
@@ -299,4 +304,5 @@ def test_combine_correctness(
         num_links,
         mux_core_range,
         num_test_iters,
+        device_params["fabric_config"],
     )

@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3.tests.fabric_setup_log import log_fabric_setup
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
@@ -87,6 +88,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
     ],
 )
 def test_forward_pass(
+    device_params,
     mode,
     batch_size_per_row,
     seq_len,
@@ -98,6 +100,8 @@ def test_forward_pass(
     force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
+
+    log_fabric_setup(mesh_device, device_params.get("fabric_config"))
 
     module_path = "model.layers.3.mlp"
     reference_model = ReferenceMoEGate(hf_config)
