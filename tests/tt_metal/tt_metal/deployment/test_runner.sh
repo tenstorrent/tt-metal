@@ -139,6 +139,17 @@ emit_section() {
 	emit "$RULE_LIGHT"
 }
 
+# emit_setup: print the effective configuration for this run.
+emit_setup() {
+	if [ "$SKIP_RESET" -eq 1 ]; then using_board_resets=false; else using_board_resets=true; fi
+	if [ "${ETH_TEST_EXPECTED_LINKS:-10}" -eq 0 ]; then checking_eth_links=false; else checking_eth_links=true; fi
+	emit "$(printf '%-24s %s' 'Output:' "$LOGDIR")"
+	emit "$(printf '%-24s %s' 'Number of iterations:' "$ITERATIONS")"
+	emit "$(printf '%-24s %s' 'Using board resets:' "$using_board_resets")"
+	emit "$(printf '%-24s %s' 'Continue on failure:' "$([ "$CONTINUE_ON_FAILURE" -eq 1 ] && echo true || echo false)")"
+	emit "$(printf '%-24s %s' 'Checking eth links:' "$checking_eth_links")"
+}
+
 # emit_status <text> <passed|failed>: print a line ending in a pass/fail verdict.
 emit_status() {
 	case "$2" in
@@ -220,18 +231,11 @@ run_tests() {
 	return 0
 }
 
-if [ "$SKIP_RESET" -eq 1 ]
-then
-	MODE="$ITERATIONS iteration(s), no board reset"
-else
-	MODE="$ITERATIONS iteration(s), $RESET_CMD before each"
-fi
-
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
 emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
-emit "$(printf '%-12s %s' 'Mode:' "$MODE")"
+emit_setup
 emit "$(printf '%-12s %s' 'Run log:' "$RUN_LOG")"
 emit "$RULE_HEAVY"
 
@@ -284,6 +288,7 @@ done
 
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
 emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
+emit_setup
 emit "$RULE_LIGHT"
 emit "$(printf '%-20s %s' 'Board resets:'     "$((iterations_run - reset_failures))/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
