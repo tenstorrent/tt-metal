@@ -132,6 +132,7 @@
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: vllm
 
 # 31B tp=8 on the BH LoudBox. Unlike 12B, 31B keeps the gated (traced
 # sequential prefill) default — it is immune to the 12B 1x8 wedge and this is
@@ -156,6 +157,7 @@
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: vllm
 
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
