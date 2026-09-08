@@ -27,6 +27,23 @@ namespace compute_kernel_lib {
 
 namespace detail {
 
+// The native ROW mask keeps column zero in every face. SFPU reductions may
+// leave partial sums in the right faces, so explicitly disable those packers
+// for wide tiles. A reduced output contains only its first column/row/scalar.
+template <ReduceDim dim, uint32_t output_dfb_id>
+ALWI void configure_reduced_output_mask() {
+    PACK((llk_pack_reduce_mask_config<dim, PackMode::Default>(output_dfb_id)));
+#if defined(UCK_CHLKC_PACK) && !defined(ARCH_QUASAR)
+    if constexpr (dim == ReduceDim::REDUCE_ROW && pack_tile_c_dim[output_dfb_id] > 16) {
+        ckernel::packer::pck_edge_offset_u edge = {.val = 0};
+        edge.f.tile_row_set_select_pack0 = 1;
+        edge.f.tile_row_set_select_pack2 = 1;
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+        cfg_reg_rmw_tensix<PCK_EDGE_OFFSET_SEC0_mask_ADDR32, 0, 0xffffffff>(edge.val);
+    }
+#endif
+}
+
 // SFPU MAX fold
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
@@ -416,6 +433,23 @@ ALWI void reduce_accumulate_via_add(
         post_reduce_op(dst_idx);
     };
 
+    // Finalized outputs have the same packer-zero contract as ReduceTile.
+    // Intermediate cross-call sums and Skip outputs retain all their elements.
+    auto configure_output_mask = [&]() {
+        if constexpr (within_tile == ReduceWithinTile::Collapse) {
+            if (do_finalize) {
+                configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+            }
+        }
+    };
+    auto clear_output_mask = [&]() {
+        if constexpr (within_tile == ReduceWithinTile::Collapse) {
+            if (do_finalize) {
+                PACK((llk_pack_reduce_mask_clear()));
+            }
+        }
+    };
+
     if constexpr (grouped_col) {
         // The COL reader emits N, W-group, H, W-within-group order. Keep the complete output group in DEST,
         // synchronize one row chunk at a time, and fold each column independently. Unlike WaitAndPopPerTile,
@@ -520,6 +554,7 @@ ALWI void reduce_accumulate_via_add(
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+                configure_output_mask();
                 for (uint32_t out = 0; out < current_outputs; ++out) {
                     output_dfb.reserve_back(1);
                     pack_tile(out, output_dfb_id);
@@ -528,6 +563,7 @@ ALWI void reduce_accumulate_via_add(
                 tile_regs_release();
             }
         }
+        clear_output_mask();
         return;
     }
 
@@ -800,6 +836,7 @@ ALWI void reduce_accumulate_via_add(
 
         tile_regs_commit();
         tile_regs_wait();
+        configure_output_mask();
         if constexpr (reserves_output_per_tile) {
             // Input-popping policies naturally stream outputs. Accumulating no-pop calls also use this path so
             // an intermediate call can pop and replace each tile of an in-place accumulator without first
@@ -821,6 +858,7 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (helper_pops_block) {
         input_dfb.pop_front(in_tiles);  // only BulkWaitBulkPop pops the resident block
     }
+    clear_output_mask();
 }
 
 }  // namespace detail
@@ -1197,10 +1235,6 @@ ALWI void reduce(
     const uint32_t full_scaler_idx = auxiliary_tile_offset;
     const uint32_t partial_scaler_idx = auxiliary_tile_offset + (has_partial_scaler ? 1u : 0u);
     scaler_dfb.wait_front(auxiliary_tile_offset + scaler_tile_count);
-    if constexpr (is_sfpu) {
-        PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
-    }
-
     constexpr uint32_t onetile = 1;
 
     // Pattern dispatch based on reduce_dim
@@ -1279,6 +1313,9 @@ ALWI void reduce(
             output_dfb.reserve_back(onetile);
             tile_regs_commit();
             tile_regs_wait();
+            if constexpr (is_sfpu) {
+                detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+            }
             pack_tile(get_dst_index(accumulate), output_dfb_id);
             tile_regs_release();
             output_dfb.push_back(onetile);
@@ -1413,6 +1450,9 @@ ALWI void reduce(
                 output_dfb.reserve_back(onetile);
                 tile_regs_commit();
                 tile_regs_wait();
+                if constexpr (is_sfpu) {
+                    detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+                }
                 pack_tile(dst_idx, output_dfb_id);
                 tile_regs_release();
                 output_dfb.push_back(onetile);
@@ -1575,6 +1615,9 @@ ALWI void reduce(
 
                 tile_regs_commit();
                 tile_regs_wait();
+                if constexpr (is_sfpu) {
+                    detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+                }
                 for (uint32_t i = 0; i < current_chunk; ++i) {
                     output_dfb.reserve_back(onetile);
                     pack_tile(base_dst + i, output_dfb_id);

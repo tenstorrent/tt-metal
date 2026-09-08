@@ -844,7 +844,13 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
         [*device_inputs, output],
         ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
     )
-    actual = _meaningful_output(case, ttnn.to_torch(result))
+    physical_output = ttnn.to_torch(result)
+    # Fused consumers can reduce these statistics again, so every datum
+    # outside the reduced row/column/scalar must be exactly zero.
+    padding = physical_output.clone()
+    _meaningful_output(case, padding).zero_()
+    assert torch.count_nonzero(padding).item() == 0, f"{case.name}: nonzero reduction output padding"
+    actual = _meaningful_output(case, physical_output)
     return actual, _golden(case, logical_chunks)
 
 
