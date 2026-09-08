@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <string>
+
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
@@ -30,12 +33,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    const bool do_mask_h = (output_grad_shape_wo_padding[-2] % constants::TILE_HEIGHT) != 0;
-    const uint32_t mask_h =
-        do_mask_h ? output_grad_shape_wo_padding[-2] % constants::TILE_HEIGHT : constants::TILE_HEIGHT;
-    const bool do_mask_w = (output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH) != 0;
-    const uint32_t mask_w =
-        do_mask_w ? output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH : constants::TILE_WIDTH;
+    const uint32_t logical_height = output_grad_shape_wo_padding[-2];
+    const bool has_partial_height = logical_height % constants::TILE_HEIGHT != 0;
 
     const auto& output_grad_shape = output_grad.padded_shape();
     uint32_t batch_num = output_grad.physical_volume() / output_grad_shape[-2] / output_grad_shape[-1];
@@ -70,9 +69,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     // writer_moreh_bias_backward.cpp is bound by both factories — the two specs must agree on them.
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName SCALER_DFB{"scaler"};
-    const DFBSpecName MASK_H_W_DFB{"mask_h_w"};
     const DFBSpecName OUT_DFB{"out"};
-    const DFBSpecName INTERMED0_DFB{"intermed0"};
     const DFBSpecName INTERMED1_DFB{"intermed1"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -88,14 +85,38 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     //                         DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const uint32_t in0_t = 2;
-    const uint32_t in1_t = 1;
-    const uint32_t in2_t = 2;  // mask_h_w
 
     const uint32_t out0_t = 1;
-    const uint32_t im0_t = 1;
     const uint32_t im1_t = 1;
     auto dfb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : dfb_data_format;
+
+    namespace reduce_host = ttnn::kernel_lib::host;
+    // Full-height batches form one contiguous column. A partial height must
+    // be handled at each batch boundary, using explicit accumulating calls.
+    const uint32_t reduce_repetitions = has_partial_height ? batch_num : 1;
+    const uint32_t call_height = has_partial_height ? logical_height : batch_num * logical_height;
+    const TensorLayout input_layout(output_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout output_layout(bias_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const reduce_host::ReduceCallConfig reduction{
+        TensorSpec(Shape{call_height, 32}, input_layout),
+        TensorSpec(Shape{1, 32}, output_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::H,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        in0_t * tile_size(dfb_data_format)};
+    std::vector<reduce_host::ReduceCbConfig> reductions(std::min(reduce_repetitions, 3U), {0, reduction});
+    auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
+        reductions,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.arch = arch,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 16 * tile_size(dfb_data_format)});
+    reduce_sequence.calls.back().accumulation_index = reduce_repetitions - 1;
+    const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0_DFB,
@@ -105,30 +126,16 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     });  // output_grad
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
-        .entry_size = tile_size(dfb_data_format),
-        .num_entries = in1_t,
-        .data_format_metadata = dfb_data_format,
+        .entry_size = auxiliary->page_size,
+        .num_entries = auxiliary_tiles,
+        .data_format_metadata = auxiliary->data_format,
     });  // scaler
-    // Unlike the single-core factory, this one reserves the mask buffer on every core whether or not
-    // a mask applies. Preserved as-is: tightening it would change the op's L1 footprint.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = MASK_H_W_DFB,
-        .entry_size = tile_size(dfb_data_format),
-        .num_entries = in2_t,
-        .data_format_metadata = dfb_data_format,
-    });  // mask_h_w
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = tile_size(dfb_data_format),
         .num_entries = out0_t,
         .data_format_metadata = dfb_data_format,
     });  // bias_grad
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INTERMED0_DFB,
-        .entry_size = tile_size(dfb_data_format),
-        .num_entries = im0_t,
-        .data_format_metadata = dfb_data_format,
-    });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INTERMED1_DFB,
         .entry_size = tile_size(fp32_dest_acc_en_data_format),
@@ -165,19 +172,13 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
                     .accessor_name = "scaler",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = MASK_H_W_DFB,
-                    .accessor_name = "mask_h_w",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "src0"}},
         // `batch_num` names the kernel-side local it lands in; the value is batch_num * Ht, the
         // number of tiles in one full column.
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {"batch_num", "Wt", "Wt_per_core", "start_id", "mask_h", "mask_w", "do_mask_h", "do_mask_w"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_num", "Wt", "Wt_per_core", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -196,14 +197,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    KernelSpec::CompilerOptions::Defines compute_defines = {
-        {"REDUCE_OP", "PoolType::SUM"},
-        {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
-    };
-    if (fp32_dest_acc_en) {
-        compute_defines.emplace("FP32_DEST_ACC_EN", "1");
-    }
-
     // Style A: the op resolves a TTNN DeviceComputeKernelConfig, so the TTNN helper carries its
     // values across (including the math_approx_mode bool -> Precision mapping and the
     // dst_full_sync_en -> double_buffer_dest inversion).
@@ -221,8 +214,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     ComputeUnpackModes dfb_unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {SCALER_DFB, UnpackMode::UnpackToSrc},
-        {MASK_H_W_DFB, UnpackMode::UnpackToSrc},
-        {INTERMED0_DFB, UnpackMode::UnpackToSrc},
         {INTERMED1_DFB, UnpackMode::UnpackToSrc},
     };
     if (fp32_dest_acc_en) {
@@ -248,7 +239,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
             // O3 is the legacy ComputeConfigDescriptor default; Metal 2.0's CompilerOptions defaults
             // to O2, so the level has to be stated explicitly on each spec to keep the compute
             // kernels where they were.
-            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {
                     DFBBinding{
@@ -262,27 +253,11 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                     DFBBinding{
-                        .dfb_spec_name = MASK_H_W_DFB,
-                        .accessor_name = "mask_h_w",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
-                    DFBBinding{
                         .dfb_spec_name = OUT_DFB,
                         .accessor_name = "out",
                         .endpoint_type = DFBEndpointType::PRODUCER,
                     },
-                    // intermed0 stages the masked input tile: this kernel packs it and immediately
-                    // re-reads it as the reduce input, so it binds both endpoints (self-loop).
-                    DFBBinding{
-                        .dfb_spec_name = INTERMED0_DFB,
-                        .accessor_name = "intermed0",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = INTERMED0_DFB,
-                        .accessor_name = "intermed0",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
+
                     // intermed1 holds the running reduction result: written as the reduce output and
                     // read back by the next iteration's accumulation. Also a self-loop.
                     DFBBinding{
@@ -296,14 +271,12 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                 },
-            // The kernel reads no compile-time argument; this per-group count is passed twice, and
-            // the compile-time copy goes unread. The distinct unique_ids already tell the two specs
-            // apart; what this differing compile-time arg preserves is that the JIT builds the
-            // source twice, once per group, as the legacy two-descriptor split did. Kept for that
-            // reason, and because dropping it is an owner decision, not a port change.
-            .compile_time_args = {{"units_per_core", units_per_core}},
-            .runtime_arg_schema = {.runtime_arg_names = {"batch_num", "Ht", "Wt_per_core", "do_mask_h", "do_mask_w"}},
+            .compile_time_args =
+                {{"units_per_core", units_per_core},
+                 {"reduce_repetitions", reduce_repetitions},
+                 {"reduce_auxiliary_tiles", auxiliary_tiles}},
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = reduce_sequence.get_compile_time_args()},
         };
     };
 
@@ -331,8 +304,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     ProgramRunArgs run_args;
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
-    KernelRunArgs compute_g1_run_args{.kernel = COMPUTE_G1};
-    KernelRunArgs compute_g2_run_args{.kernel = COMPUTE_G2};
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -346,53 +317,19 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
 
-        bool core_has_last_wt = (tile_offset + num_cols_per_core == Wt) ? (true) : (false);
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"batch_num", num_tiles},
-             {"Wt", Wt},
-             {"Wt_per_core", num_cols_per_core},
-             {"start_id", tile_offset},
-             {"mask_h", mask_h},
-             {"mask_w", mask_w},
-             {"do_mask_h", static_cast<uint32_t>(do_mask_h)},
-             {"do_mask_w", static_cast<uint32_t>(do_mask_w && core_has_last_wt)}});
+            {{"batch_num", num_tiles}, {"Wt", Wt}, {"Wt_per_core", num_cols_per_core}, {"start_id", tile_offset}});
 
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"num_tiles", num_cols_per_core}, {"start_id", tile_offset}});
 
-        if (core_group_1.contains(core)) {
-            AddRuntimeArgsForNode(
-                compute_g1_run_args.runtime_arg_values,
-                core,
-                {{"batch_num", batch_num},
-                 {"Ht", Ht},
-                 {"Wt_per_core", num_cols_per_core},
-                 {"do_mask_h", static_cast<uint32_t>(do_mask_h)},
-                 {"do_mask_w", static_cast<uint32_t>(do_mask_w && core_has_last_wt)}});
-        } else if (core_group_2.contains(core)) {
-            TT_ASSERT(has_core_group_2);
-            AddRuntimeArgsForNode(
-                compute_g2_run_args.runtime_arg_values,
-                core,
-                {{"batch_num", batch_num},
-                 {"Ht", Ht},
-                 {"Wt_per_core", num_cols_per_core},
-                 {"do_mask_h", static_cast<uint32_t>(do_mask_h)},
-                 {"do_mask_w", static_cast<uint32_t>(do_mask_w && core_has_last_wt)}});
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
-        }
         tile_offset += num_cols_per_core;
     }
 
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
-    run_args.kernel_run_args.push_back(std::move(compute_g1_run_args));
-    if (has_core_group_2) {
-        run_args.kernel_run_args.push_back(std::move(compute_g2_run_args));
-    }
 
     run_args.tensor_args.emplace(OUTPUT_GRAD_TENSOR, TensorArgument{output_grad_mesh});
     run_args.tensor_args.emplace(BIAS_GRAD_TENSOR, TensorArgument{bias_grad_mesh});

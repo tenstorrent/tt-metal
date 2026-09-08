@@ -17,7 +17,9 @@ audit.
 - `tt-smi -ls` reports an N300 with two Wormhole chips. Common, Wormhole, and
   N300 test lanes can run here. Other architecture/topology lanes still need
   their supported environments; their results must be reported separately.
-- Claude reviews have not started yet.
+- Claude reviews have not started yet. An availability check succeeded with
+  `claude --model claude-opus-5 --effort high --no-session-persistence`; the
+  result's model usage confirms `claude-opus-5`. This was not a code review.
 
 ## Implementation checkpoints
 
@@ -60,7 +62,16 @@ audit.
 - Added the 60 norm regressions and nine planned callback checks to the full
   manifest (T057/T170): three additional definitions and 69 cases beyond the
   original base inventory's count.
-- In progress: vector/scalar bias-gradient factories and their kernels.
+- Moreh vector/scalar bias gradients (S063/S064, DF026/DP013): migrated both
+  factories, readers, and compute kernels. The vector path combines complete
+  batches and handles each partial height through a planned call. The scalar
+  HW path retains its two-dimensional input mask, which the current one-axis
+  partial recipes cannot represent. Both use planned accumulation descriptors.
+  Native build and SM030/SM031 passed. Full group T055 passed 173 enabled cases
+  with 168 upstream skips (341 collected); results
+  `generated/test_reports/reduce-migration-15umv7i2/summary.json`.
+- In progress: small Moreh softmax H/W paths; replace split MAX reductions
+  with one partial-aware plan, and plan SUM with the fused log/reciprocal op.
 
 ## Remaining work
 
