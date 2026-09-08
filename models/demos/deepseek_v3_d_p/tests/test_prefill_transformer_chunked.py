@@ -1303,12 +1303,31 @@ def test_kimi_prefill_transformer_chunked_padded(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        pytest.param(
+            (8, 4),
+            # NON-torus FABRIC_2D, same 8x4 shape. This is SC4's fabric, and it is the reason SC4 takes
+            # the two-stage TP KV gather rather than the snake ring: _snake_ring_can_close((8,4)) needs a
+            # torus, so on this profile it fails NATURALLY -- no env-var forcing, the same routing SC4
+            # actually runs. Only meaningful with tp_shard_kv, which is where the two routes exist.
+            fabric2d_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=1216,
+                trace_region_size=512 * 1024 * 1024,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
 # the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+# The TP-deduped KVPE prefix has two gather routes: ONE full-mesh snake ring where the mesh can close it,
+# and a TP-inner -> SP-outer pair where it cannot. An 8x4 torus always takes the snake, so the fallback --
+# which is what SC4-shaped meshes actually run -- had no coverage at all. `fallback` forces it here.
+@pytest.mark.parametrize("kv_gather", ["snake", "fallback"], ids=["snake", "fallback"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -1323,8 +1342,15 @@ def test_glm_prefill_transformer_chunked(
     preload_isl,
     num_links,
     tp_shard_kv,
+    kv_gather,
     use_trace,
+    monkeypatch,
 ):
+    if kv_gather == "fallback":
+        # Only the TP-deduped path has two routes; without dedup there is one gather and nothing to force.
+        if not tp_shard_kv:
+            pytest.skip("kv_gather=fallback is only meaningful with tp_shard_kv (the deduped KVPE gather)")
+        monkeypatch.setenv("TT_MLA_DISABLE_SNAKE_KV_GATHER", "1")
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
         variant,

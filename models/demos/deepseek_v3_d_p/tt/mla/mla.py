@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -1954,7 +1955,11 @@ class ttMLA:
         """Whether one snake ring can replace the two-stage sp*tp KV-prefix gather.
 
         Every condition here mirrors a hard TT_FATAL in high_bw_all_gather, so the guard degrades to the
-        two-stage route instead of crashing. The op does not fail softly on any of them."""
+        two-stage route instead of crashing. The op does not fail softly on any of them.
+
+        TT_MLA_DISABLE_SNAKE_KV_GATHER=1 forces the two-stage route on a mesh that could take the snake.
+        The fallback is what SC4-shaped meshes actually run and has no other coverage, so this is how a
+        test on a snake-capable mesh exercises it."""
         def _no(reason):
             # Which condition rejected the snake decides whether traced TP is possible at all on this
             # mesh (the two-stage fallback has no metadata path), so name it rather than silently
@@ -1962,6 +1967,8 @@ class ttMLA:
             logger.info(f"[kvpe gather] full-mesh snake unavailable, using two-stage TP gather: {reason}")
             return False
 
+        if os.environ.get("TT_MLA_DISABLE_SNAKE_KV_GATHER", "0") == "1":
+            return _no("forced off by TT_MLA_DISABLE_SNAKE_KV_GATHER=1")
         if self._sparse_kv_gather_buffer is None:
             return _no("no persistent sparse-KV gather buffer")
         # The snake lands the gather in mesh row-major order, which equals the sp*tp order only for the
