@@ -344,7 +344,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const DFBSpecName MAPPING{"mapping"};  // reader-produces / writer-consumes mapping-page FIFO
     const DFBSpecName IN_TILES{"in_tiles"};  // reader-produces / writer-consumes input-tile FIFO
                                              // (distinct from tensor::input, the input tensor)
-    const DFBSpecName WORKING{"working"};  // writer-only L1 scratch page (self-loop)
+    const ScratchpadSpecName WORKING{"working"};  // writer-private L1 scratch page
     const TensorParamName INPUT_T{"input"};
     const TensorParamName MAPPING_T{"map"};  // the op-owned page-mapping tensor
     const TensorParamName OUTPUT_T{"output"};
@@ -353,8 +353,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     spec.name = "reshape_view_tiled";
 
     // DFBs (placement derived from bindings; no core_ranges). The mapping metadata DFB stages
-    // mapping pages on the fly; the input DFB stages input tiles; the output/working DFB is an L1
-    // scratch page the writer both fills and drains (self-loop).
+    // mapping pages on the fly; the input DFB stages input tiles. The working buffer is a
+    // writer-private L1 scratch page (formerly a self-loop DFB the writer filled and drained;
+    // that FIFO synchronized nothing and is rejected on Quasar) — now a Scratchpad.
     spec.dataflow_buffers = {
         DataflowBufferSpec{
             .unique_id = MAPPING,
@@ -368,11 +369,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
             .num_entries = reader_dfb_len,
             .data_format_metadata = input_dfb_data_format,
         },
-        DataflowBufferSpec{
+    };
+    spec.scratchpads = {
+        ScratchpadSpec{
             .unique_id = WORKING,
-            .entry_size = output_tile_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = output_dfb_data_format,
+            .size_per_node = output_tile_size_bytes,  // entry_size * num_entries (1)
         },
     };
 
@@ -409,10 +410,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                     .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
                     .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = WORKING, .accessor_name = "working"},
             },
         .tensor_bindings =
             {
