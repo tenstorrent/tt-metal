@@ -268,6 +268,13 @@ def test_concat_routes_an_accepted_case_to_codegen(device, shapes, kwargs, dtype
     assert_equal(golden, ttnn.to_torch(out))
     msg = "routed an in-scope case to native (program cache grew); expected the codegen program"
     assert device.num_program_cache_entries() == entries_before, msg
+    # "The count held" only means "codegen ran" while native has no program of its own for this
+    # spec; the fixture shares one device and never clears the cache, so an earlier test holding
+    # that key would make the assertion above pass on a native route. Force native last and
+    # require it to build: if it were already resident, nothing above proved anything.
+    assert_equal(golden, ttnn.to_torch(_force_native(xs, **kwargs)))
+    vacuous = "native was already cached for this spec, so the assertion above could not see a native route"
+    assert device.num_program_cache_entries() > entries_before, vacuous
 
 
 @pytest.mark.parametrize("shapes,kwargs,dtype,layout", _ROUTING, ids=_ROUTING_IDS)
@@ -488,7 +495,11 @@ def test_concat_codegen_l1_interleaved_output(device, shapes, kwargs):
 def test_concat_codegen_declines_execution_controls(device):
     # No builder honours sub_core_grids -- every one of them places work over the full
     # compute_with_storage_grid_size -- so a caller asking for a core subset must reach native.
-    shapes, dim = [[1, 32, 32], [1, 32, 64]], 2
+    # Shapes no other case here uses: codegen carries no core-grid field, so a route that dropped
+    # sub_core_grids would land on the plain (shapes, dim) codegen key. Were that key already
+    # resident from another test, the dropped control would produce the same values against an
+    # unchanged count and pass.
+    shapes, dim = [[1, 32, 48], [1, 32, 80]], 2
     xs = _inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     golden = ttnn.to_torch(_force_native(xs, dim=dim, sub_core_grids=grid))
@@ -497,6 +508,9 @@ def test_concat_codegen_declines_execution_controls(device):
     assert_equal(golden, ttnn.to_torch(out))
     msg = "routed a sub_core_grids request to codegen, which ignores it"
     assert device.num_program_cache_entries() == entries_before, msg
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))
+    vacuous = "codegen was already cached for this spec, so the assertion above could not see a codegen route"
+    assert device.num_program_cache_entries() > entries_before, vacuous
 
 
 def test_concat_codegen_replans_when_l1_occupancy_changes(device):
