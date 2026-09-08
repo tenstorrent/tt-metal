@@ -95,15 +95,12 @@ jobs:
 
       - name: Install clang-tidy + CodeChecker
         run: |
-          command -v clang-tidy-20 >/dev/null 2>&1 || { apt-get update || true; apt-get install -y clang-tidy-20 clang-20 || true; }
+          # CodeChecker resolves `clang` even though only clang-tidy runs; see
+          # the matching step in ttnn-sanity-tests-impl.yaml.
           for tool in clang clang++ clang-tidy; do
-            update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100 || true
+            update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100
           done
-          if command -v uv >/dev/null 2>&1; then
-            uv pip install codechecker==6.27.1
-          else
-            pip3 install codechecker==6.27.1
-          fi
+          uv pip install codechecker==6.27.1
 
       - name: Download per-leg captures
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

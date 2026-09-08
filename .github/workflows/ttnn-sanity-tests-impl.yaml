@@ -328,31 +328,17 @@ jobs:
       # JIT kernel compiles and lints them, like collect-coverage does.
       # See tech_reports/code-indexing/kernel-clang-tidy.md.
       - name: Install clang-tidy + CodeChecker (kernel clang-tidy)
-        id: kernel-tidy-tools
         if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         run: |
-          # The ci-test image is not the dev image, so the toolchain may be absent.
-          command -v clang-tidy-20 >/dev/null 2>&1 || { apt-get update || true; apt-get install -y clang-tidy-20 clang-20 || true; }
-          # Unversioned names, so CodeChecker resolves the binaries itself
-          # (ClangSA.analyzer_binary() is consulted even when only clang-tidy
-          # runs, and None crashes compilation-db parsing).
+          # The image ships clang-20/clang-tidy-20 under versioned names only.
+          # CodeChecker needs to resolve `clang` even though only clang-tidy runs:
+          # ClangSA.analyzer_binary() is consulted unconditionally, and None
+          # crashes compilation-database parsing.
           for tool in clang clang++ clang-tidy; do
-            update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100 || true
+            update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100
           done
-          if command -v uv >/dev/null 2>&1; then
-            uv pip install codechecker==6.27.1 || true
-          else
-            pip3 install codechecker==6.27.1 || pip install codechecker==6.27.1 || true
-          fi
-          tidy_ready=false
-          if command -v clang-tidy >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 \
-             && command -v CodeChecker >/dev/null 2>&1; then
-            tidy_ready=true
-          else
-            echo "::warning::clang-tidy/clang/CodeChecker unavailable; kernel clang-tidy will be skipped."
-          fi
-          echo "tidy_ready=$tidy_ready" >> "$GITHUB_OUTPUT"
+          uv pip install codechecker==6.27.1
 
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
@@ -477,7 +463,7 @@ jobs:
       # Translate the captured SFPI-GCC compile commands for clang and run
       # clang-tidy through CodeChecker, exporting an HTML report. Non-blocking.
       - name: Run clang-tidy via CodeChecker on captured JIT kernel compiles (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         timeout-minutes: 45
         env:
