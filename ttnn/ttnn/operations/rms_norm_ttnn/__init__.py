@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from .program_config import (
+    RMSNormDefaultProgramConfig,
+    RMSNormShardedMultiCoreProgramConfig,
+)
 from .rms_norm_ttnn import (
     EXCLUSIONS,
     INPUT_TAGGERS,
@@ -15,6 +19,8 @@ from .rms_norm_ttnn import (
 
 __all__ = [
     "rms_norm_ttnn",
+    "RMSNormDefaultProgramConfig",
+    "RMSNormShardedMultiCoreProgramConfig",
     "torch_rms_norm_ttnn",
     "validate",
     "default_compute_kernel_config",

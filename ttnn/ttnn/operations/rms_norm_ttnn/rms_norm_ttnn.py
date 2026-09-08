@@ -258,6 +258,11 @@ SUPPORTED = {
         "bias",
         "residual",
         "gamma_bias_residual",
+        # HACK 2026-09-08: the other two of the eight combinations. The label
+        # above is derived generically, so these were only ever absent from
+        # this list -- nothing else needed changing.
+        "gamma_residual",
+        "bias_residual",
     ],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],

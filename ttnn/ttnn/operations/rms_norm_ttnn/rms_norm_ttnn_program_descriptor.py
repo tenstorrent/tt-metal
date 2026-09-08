@@ -2326,25 +2326,32 @@ def per_channel_form(operand, width: int):
 
       flat     (1, 1, 1, Wg), Wg >= W -- legal at either layout; channel extent
                is the logical last dim.
-      blocked  (Wt, 32) ROW_MAJOR, Wt = ceil(W / 32) -- one tile COLUMN per row,
-               the trailing lanes of the last row zero-padded; channel extent is
-               Wt * 32.
+      blocked  ROW_MAJOR with last dim 32 and element count Wt * 32, where
+               Wt = ceil(W / 32) -- one tile COLUMN per row, the trailing lanes
+               of the last row zero-padded; channel extent is Wt * 32.
 
-    The detection is deliberately four conjuncts wide (rank 2, trailing 32,
-    leading == Wt, ROW_MAJOR) because reading the blocked form's trailing `32` as
-    its channel count would refuse every blocked operand with W > 32, and
-    treating a flat rank-2 vector as blocked would fetch it column-wise.  Where
-    the two are genuinely indistinguishable -- W <= 32, so Wt == 1 and the shape
-    is (1, 32) either way -- both readings produce the SAME staged bytes, so the
-    ambiguity costs nothing.
+    The blocked test is a RULE over last dim and element count, never a shape
+    literal: rank is FREE, so (Wt, 32) and (1, 1, Wt, 32) are the same operand
+    and both must be accepted.  Requiring rank 2 refused the 4-D spelling every
+    real caller uses (upstream builds it as reshape(1, 1, W // 32, 32)) while
+    every golden case, written to the same shape literal, passed.  Reading the
+    trailing `32` as the channel count is the opposite error -- it would refuse
+    every blocked operand with W > 32 -- so the element-count conjunct carries
+    the discrimination that rank was wrongly carrying.  Where the two forms are
+    genuinely indistinguishable -- W <= 32, so Wt == 1 -- both readings produce
+    the SAME staged bytes, so the ambiguity costs nothing.
 
     ONE definition, imported by validate() for the support floor and read here
     for the reader's fetch granularity.
     """
     shape = list(operand.shape)
     wt = _div_up(max(1, int(width)), TILE_DIM)
-    if operand.layout == ttnn.ROW_MAJOR_LAYOUT and len(shape) == 2 and shape[-1] == TILE_DIM and shape[0] == wt:
-        return True, shape[0] * TILE_DIM
+    if operand.layout == ttnn.ROW_MAJOR_LAYOUT and len(shape) >= 2 and shape[-1] == TILE_DIM:
+        folded = 1
+        for dim in shape[:-1]:
+            folded *= dim
+        if folded == wt:
+            return True, folded * TILE_DIM
     return False, (shape[-1] if shape else 1)
 
 
@@ -2520,14 +2527,11 @@ def resolve_program_config(input_tensor, *, program_config, memory_config, dest_
         )
 
     inplace = bool(getattr(program_config, "inplace", False))
-    if inplace and memory_config is not None and not _same_placement(memory_config, input_tensor):
-        # X-03: under `inplace` the output IS the input, so its placement is the
-        # input's.  Refuse a placement the op would have to discard.
-        raise ValueError(
-            f"rms_norm_ttnn: program_config.inplace=True makes the output the INPUT tensor, whose "
-            f"placement is {input_tensor.memory_config()}; the supplied memory_config "
-            f"{memory_config} disagrees with it and would be discarded"
-        )
+    # X-03, corrected 2026-09-08: under `inplace` the output IS the input, so a
+    # requested output placement describes an allocation that never happens.
+    # The entry asked to ADOPT that aliasing and STATE it -- not to refuse the
+    # call.  Refusing narrowed the op against the target for every caller that
+    # passes both (120 reference cases).  So: accept, ignore, and say so here.
     return ResolvedProgramConfig(subblock_w=subblock_w, inplace=inplace)
 
 
@@ -3189,7 +3193,7 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
                 continue
             w_start = i * shard_w_t
             assignment.append(
-                _work_tile_axis(core, 0, Rt, w_start, min(shard_w_t, Wt - w_start), i == 0, i, W=W, R_rm=R_rm)
+                _work_tile_axis(core, 0, Rt, w_start, max(0, min(shard_w_t, Wt - w_start)), i == 0, i, W=W, R_rm=R_rm)
             )
         all_cores = bbox_crs
         mcast = (
@@ -3223,7 +3227,7 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
                     min(row_start, Rt),
                     max(0, min(shard_h_t, Rt - row_start)),
                     w_start,
-                    min(shard_w_t, Wt - w_start),
+                    max(0, min(shard_w_t, Wt - w_start)),
                     x == 0,
                     x,
                     W=W,
