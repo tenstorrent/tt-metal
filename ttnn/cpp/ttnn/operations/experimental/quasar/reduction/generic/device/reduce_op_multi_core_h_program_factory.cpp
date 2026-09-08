@@ -106,7 +106,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             1,
             false);
     };
-    const auto reduction = plan_reduction(1);
+    const auto reduction = plan_reduction(num_cols_per_core_group_1);
     std::vector<uint32_t> auxiliary_args;
     reduction.append_auxiliary_to(auxiliary_args);
     const uint32_t auxiliary_tiles = reduction.auxiliary.tiles.size();
@@ -167,7 +167,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                  .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
-            {{"Ht", Ht}, {"Wt", Wt}, {"HtWt", HtWt}, {"scaler_bits", scaler_bits}, {"use_welford", 0u}},
+            {{"Ht", Ht},
+             {"Wt", Wt},
+             {"HtWt", HtWt},
+             {"scaler_bits", scaler_bits},
+             {"use_welford", 0u},
+             {"reduce_output_tiles", reduction.calls.front().plan.chunk.output_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config =
             ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),

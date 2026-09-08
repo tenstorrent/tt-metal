@@ -193,7 +193,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
-    const auto reduce_plans = make_softmax_reduce_plans(
+    auto reduce_plans = make_softmax_reduce_plans(
         Wt,
         use_large_kernel ? dfb_length : Wt,
         input_tensor.dtype(),
@@ -201,6 +201,12 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         {arch, fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
         (use_large_kernel ? compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile
                           : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop));
+    if (!use_large_kernel) {
+        // The small kernel already packs intermediates in the MAX output format.
+        for (auto& call : reduce_plans.max.calls) {
+            call.plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+        }
+    }
     const auto reduce_compute_args = reduce_plans.compute_args();
     const auto reduce_auxiliary_args = reduce_plans.auxiliary_args();
 

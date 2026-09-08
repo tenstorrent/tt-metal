@@ -673,6 +673,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             ReduceFp32Mode::Fast,
             reduce_hardware);
         plan.input_policy = policy;
+        plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
         return rh::ReduceCallPlan{
             .input_cb_id = 0, .auxiliary_cb_id = 1, .output_cb_id = 2, .accumulator_cb_id = std::nullopt, .plan = plan};
     };
@@ -976,6 +977,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             compute_args.push_back((uint32_t)is_second_stage_reader);
             compute_args.push_back((uint32_t)(!(use_two_stage_reduce && (!is_second_stage_reader))));
             compute_args.push_back((uint32_t)num_distributed_devices);
+            TT_FATAL(compute_args[1] == 1, "RMS all-gather stats calls require one output tile per worker");
+            TT_FATAL(
+                compute_args[5] == post_call.plan.Wt,
+                "RMS all-gather distributed block count must match the post-reduction descriptor");
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
         } else {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
@@ -1164,11 +1169,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             writer_mcast_sender_args.push_back(mcast_start.y);
             writer_mcast_sender_args.push_back(mcast_end.x);
             writer_mcast_sender_args.push_back(mcast_end.y);
-            if (use_two_stage_reduce && (!(width_index < 1))) {
-                writer_mcast_sender_args.push_back(cinv_one_bits);
-            } else {
-                writer_mcast_sender_args.push_back(cinv_pre_bits);
-            }
+            // Select the recipe by the worker's role, independently of its scalar encoding.
+            writer_mcast_sender_args.push_back(static_cast<uint32_t>(use_two_stage_reduce && width_index < 1));
             writer_mcast_sender_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(), all_gather_rts.begin(), all_gather_rts.end());

@@ -158,8 +158,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const auto planned_fp32_mode = planned_sfpu && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en
                                        ? ReduceFp32Mode::Accurate
                                        : ReduceFp32Mode::Fast;
-    // These kernels use the legacy double-buffered DEST configuration.
-    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()};
+    const rh::ReduceHardwareConfig reduce_hardware{
+        device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()};
     auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),
@@ -175,7 +175,10 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             operation_attributes.negate || planned_sfpu,
             rm_path ? &plan : nullptr);
     };
-    const auto reduce_unit = make_unit(rm_path ? slice_Ht : Ht, num_cols_per_core_group_1, 1);
+    const auto reduce_unit = make_unit(
+        rm_path ? slice_Ht : Ht,
+        use_width_sharding ? num_cols_per_core_group_1 / NC : num_cols_per_core_group_1,
+        use_width_sharding ? NC : 1);
     const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
     scaler_cb_data_format = auxiliary_cb->data_format;
     scaler_single_tile_size = auxiliary_cb->page_size;
@@ -498,7 +501,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     }
 
     if (!rm_path) {
-        reader_ct_args.emplace("reduce_output_tiles", use_fpu_negate ? (fp32_dest_acc_en ? 4U : 8U) : 1U);
+        reader_ct_args.emplace(
+            "reduce_output_tiles", use_fpu_negate ? chunk_size : reduce_unit.calls.front().plan.chunk.output_tiles);
     }
 
     spec.kernels.push_back(KernelSpec{
@@ -686,6 +690,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         } else {
             ct_args = {
                 {"Ht", Ht},
+                {"reduce_output_tiles", chunk_size},
                 {"Wt", group_compute_Wt},
                 {"NC", group_compute_NC},
                 // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)

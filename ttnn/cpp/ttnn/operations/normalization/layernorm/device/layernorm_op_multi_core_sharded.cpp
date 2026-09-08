@@ -268,8 +268,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // the physical 128).
     float winv = (grid.num_blocks == 1) ? (1.0f / logical_K) : (static_cast<float>(grid.num_blocks) / logical_K);
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / grid.num_blocks);
-    auto bfloat_cinv = bfloat16(cinv);
-    auto bfloat_cinv_one = bfloat16(1.0f);
     auto bfloat_winv = bfloat16(winv);
 
     // Build mcast NOC coordinates
@@ -365,7 +363,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
             const rh::ReduceHardwareConfig hardware{
                 device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()};
-            const uint32_t last_tiles = tt::div_up(logical_K, tile_width) - (grid.num_blocks - 1) * block_wt;
+            const uint32_t logical_tiles = tt::div_up(logical_K, tile_width);
+            TT_FATAL(Kt == logical_tiles, "Sharded layernorm reduction requires tile-rounded logical width");
+            TT_FATAL(
+                logical_tiles > (grid.num_blocks - 1) * block_wt && logical_tiles <= grid.num_blocks * block_wt,
+                "Sharded layernorm reduction requires a nonempty final width block");
+            const uint32_t last_tiles = logical_tiles - (grid.num_blocks - 1) * block_wt;
             // The existing elementwise column mask also zeros output padding.
             // Describe full tiles here; the final shard can own fewer tiles.
             for (uint32_t tiles : {block_wt, last_tiles}) {
@@ -430,8 +433,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .core_ranges = core_ranges,
         .mcast_noc_x = std::move(mcast_noc_x),
         .mcast_noc_y = std::move(mcast_noc_y),
-        .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),
-        .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
         .eps_u = eps_u,
         .single_tile_size = single_tile_size,

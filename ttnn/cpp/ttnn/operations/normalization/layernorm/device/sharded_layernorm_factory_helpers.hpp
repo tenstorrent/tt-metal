@@ -372,8 +372,6 @@ struct RuntimeArgsContext {
     std::vector<uint32_t> mcast_noc_y;
 
     // Packed values for writer
-    uint32_t packed_cinv_value = 0;
-    uint32_t packed_cinv_value_one = 0;
     uint32_t packed_winv_value = 0;
     uint32_t eps_u = 0;
 

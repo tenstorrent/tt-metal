@@ -1317,7 +1317,7 @@ void add_kernel_and_work_unit_specs(
     auto writer_schema = [&]() {
         m2::KernelSpec::RuntimeArgSchema schema;
         if (!c.use_welford) {
-            schema.runtime_arg_names.push_back("scalar_c");
+            schema.runtime_arg_names.push_back("skip_global_scale");
             schema.runtime_arg_names.push_back("scalar_w");
             if (!c.is_pre_all_gather) {
                 schema.runtime_arg_names.push_back("eps");
@@ -1732,6 +1732,13 @@ RunArgsAndWriterVarargs build_run_args(
         // Compute
         //------------------------------------------------------------------
         auto& compute = is_all_to_all ? compute_all_to_all : *compute_not_all_to_all;
+        if (!config.use_welford && !config.is_post_all_gather) {
+            const uint32_t last_tiles =
+                tt::div_up(ctx.logical_K, TILE_WIDTH) - (ctx.grid.num_blocks - 1) * ctx.block_wt;
+            TT_FATAL(
+                idx.num_reduce_tiles_per_block_h == ctx.block_wt || idx.num_reduce_tiles_per_block_h == last_tiles,
+                "Sharded layernorm runtime width must match the full or final reduction descriptor");
+        }
         m2::AddRuntimeArgsForNode(
             compute.runtime_arg_values, core, {{"num_reduce_tiles_per_block_h", idx.num_reduce_tiles_per_block_h}});
         if (is_all_to_all) {
@@ -1832,12 +1839,12 @@ RunArgsAndWriterVarargs build_run_args(
         if (!config.use_welford) {
             // A two-stage reduce's second-stage cores have already had the cross-core average applied
             // by the first stage, so they must not apply it again.
-            const uint32_t packed_cinv = (is_all_to_all && ctx.grid.use_two_stage_reduce &&
-                                          idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage)
-                                             ? ctx.packed_cinv_value_one
-                                             : ctx.packed_cinv_value;
+            const bool skip_global_scale = is_all_to_all && ctx.grid.use_two_stage_reduce &&
+                                           idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage;
             m2::AddRuntimeArgsForNode(
-                writer.runtime_arg_values, core, {{"scalar_c", packed_cinv}, {"scalar_w", ctx.packed_winv_value}});
+                writer.runtime_arg_values,
+                core,
+                {{"skip_global_scale", static_cast<uint32_t>(skip_global_scale)}, {"scalar_w", ctx.packed_winv_value}});
             if (!config.is_pre_all_gather) {
                 m2::AddRuntimeArgsForNode(writer.runtime_arg_values, core, {{"eps", ctx.eps_u}});
             }

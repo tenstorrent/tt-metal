@@ -79,6 +79,9 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
          .fp32_dest_acc_en = fp32_dest_acc_en,
          .dst_full_sync_en = dst_full_sync_en,
          .available_l1_bytes = 16 * cb_tile_size});
+    for (auto& call : reduce_sequence.calls) {
+        call.plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::NONE;
+    }
     reduce_sequence.calls.back().accumulation_index = num_tiles - 1;
     const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();

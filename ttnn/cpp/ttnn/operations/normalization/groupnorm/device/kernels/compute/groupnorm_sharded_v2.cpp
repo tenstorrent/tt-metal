@@ -114,7 +114,7 @@ void kernel_main() {
 
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
     // always-present CBs otherwise.
-    constexpr uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_26;
+    constexpr uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_7;
     constexpr uint32_t dfb_mask_last_id = has_row_mask ? tt::CBIndex::c_19 : tt::CBIndex::c_7;
 
     // output cb
