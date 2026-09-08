@@ -129,7 +129,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
-            chunk_size=params.chunk_size,
+            default_chunk_size=params.chunk_size,  # engine contract stays chunk_size; ours names the default
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

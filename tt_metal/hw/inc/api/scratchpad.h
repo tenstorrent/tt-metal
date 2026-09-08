@@ -205,4 +205,9 @@ struct noc_traits_t<Scratchpad<T>> {
         static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
     }
 };
+
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v<Scratchpad<T>> = true;
+template <typename T>
+inline constexpr bool is_scratchpad_v<Scratchpad<T>> = true;
 #endif  // !defined(COMPILE_FOR_TRISC)

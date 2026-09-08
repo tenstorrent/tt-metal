@@ -35,14 +35,10 @@ void apply_input_dtype_defines(DataType dtype, std::map<std::string, std::string
     }
 }
 
-void pack_first_op_scalars(
-    const EltwiseUnaryWithParam& op,
-    DataType input_dtype,
-    uint32_t& packed_scalar1,
-    uint32_t& packed_scalar2,
-    std::map<std::string, std::string>& unary_defines) {
+bool pack_first_op_scalars(
+    const EltwiseUnaryWithParam& op, DataType input_dtype, uint32_t& packed_scalar1, uint32_t& packed_scalar2) {
     if (op.empty()) {
-        return;
+        return false;
     }
     switch (op.type()) {
         case UnaryOpType::WHERE_TSS:
@@ -78,12 +74,13 @@ void pack_first_op_scalars(
                 }
                 packed_scalar1 = pack_scalar_runtime_arg_impl(lo, input_dtype);
                 packed_scalar2 = pack_scalar_runtime_arg_impl(hi, input_dtype);
-                unary_defines["CLAMP"] = "clamp_tile";
+                return true;
             }
             break;
         }
         default: break;
     }
+    return false;
 }
 
 bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
@@ -420,8 +417,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
     CMAKE_UNIQUE_NAMESPACE::apply_input_dtype_defines(input.dtype(), unary_defines);
-    CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(
-        ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2, unary_defines);
+    const bool logit_clamp_enabled =
+        CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
     const std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
@@ -509,6 +506,15 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     compute_desc.kernel_source = compute_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
+    if (ops_chain[0].type() == UnaryOpType::HARDSWISH) {
+        compute_desc.compile_time_args = {
+            static_cast<uint32_t>(unary_defines.contains("INP_FLOAT32")),
+            static_cast<uint32_t>(unary_defines.contains("INP_INT32") || unary_defines.contains("INP_UINT32")),
+        };
+    } else if (ops_chain[0].type() == UnaryOpType::LOGIT) {
+        compute_desc.compile_time_args = {static_cast<uint32_t>(logit_clamp_enabled)};
+    }
+    compute_desc.compile_time_args.push_back(static_cast<uint32_t>(cb_data_format));
     compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
@@ -595,9 +601,8 @@ void UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     // A changed split can flip a core between noop and active, so write every slot create_descriptor
     // writes rather than only the ones that usually move -- otherwise a flipped core keeps stale args.
     uint32_t packed_scalar1 = 0, packed_scalar2 = 0;
-    std::map<std::string, std::string> unused_defines;
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(
-        operation_attributes.op_chain[0], input.dtype(), packed_scalar1, packed_scalar2, unused_defines);
+        operation_attributes.op_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
     enumerate_core_rt_args(
         operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {

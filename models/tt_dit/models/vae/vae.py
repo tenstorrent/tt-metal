@@ -12,9 +12,9 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ...layers.conv2d import Conv2d
-from ...layers.linear import ColParallelLinear, RowParallelLinear
+from ...layers.linear import ColParallelLinear, RowParallelLinear, _apply_activation_fn
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.normalization import DistributedRMSNorm, GroupNorm, RMSNorm
+from ...layers.normalization import DistributedGroupNorm, DistributedRMSNorm, GroupNorm, RMSNorm
 from ...parallel.manager import CCLManager
 from ...utils import tensor
 from ...utils.conv3d import get_conv3d_config
@@ -109,8 +109,11 @@ def _get_neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tens
 
 
 class VaeRmsNorm(Module):
-    def __init__(self, num_channels: int, *, eps: float, ctx: VaeContext) -> None:
+    def __init__(self, num_channels: int, *, eps: float, ctx: VaeContext, activation_fn: str | None = None) -> None:
         super().__init__()
+
+        # Neither RMSNorm path here fuses an activation, so it always runs as a separate op.
+        self.activation_fn = activation_fn
 
         tp_axis_size = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
 
@@ -156,7 +159,7 @@ class VaeRmsNorm(Module):
             bs, h, w, c = x.shape
             x = ttnn.reshape(x, [1, 1, bs * h * w, c])
             x = self.inner.forward(x)
-            return ttnn.reshape(x, [bs, h, w, c])
+            return _apply_activation_fn(ttnn.reshape(x, [bs, h, w, c]), self.activation_fn)
 
         norm = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
 
@@ -171,7 +174,7 @@ class VaeRmsNorm(Module):
             norm = norm * (1 / n)
 
         norm = ttnn.rsqrt(norm + self._eps)
-        return x * (norm * self.gamma.data)
+        return _apply_activation_fn(x * (norm * self.gamma.data), self.activation_fn)
 
 
 class _VaeConv2dConv3d(Module):
@@ -391,9 +394,9 @@ class VaeResnetBlock(Module):
     def __init__(self, *, in_channels: int, out_channels: int, norm: VaeNormDesc, ctx: VaeContext) -> None:
         super().__init__()
 
-        self.norm1 = _norm(norm, num_channels=in_channels, ctx=ctx)
+        self.norm1 = _norm(norm, num_channels=in_channels, ctx=ctx, activation_fn="silu")
         self.conv1 = VaeConv2d(in_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
-        self.norm2 = _norm(norm, num_channels=out_channels, ctx=ctx)
+        self.norm2 = _norm(norm, num_channels=out_channels, ctx=ctx, activation_fn="silu")
         self.conv2 = VaeConv2d(out_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
 
         self.conv_shortcut = (
@@ -416,11 +419,9 @@ class VaeResnetBlock(Module):
         h = x
 
         h = self.norm1.forward(h)
-        h = ttnn.silu(h, output_tensor=h)
         h = self.conv1.forward(h)
 
         h = self.norm2.forward(h)
-        h = ttnn.silu(h, output_tensor=h)
         h = self.conv2.forward(h)
 
         if self.conv_shortcut is not None:
@@ -664,22 +665,41 @@ class VaeUpBlock(Module):
 
 
 class _VaeSpatialGroupNorm(Module):
-    """GroupNorm wrapper that AGs sharded H/W for correct stats and repartitions after.
+    """GroupNorm for spatially sharded VAE activations.
 
-    Uses HiFi4 compute config (matching Wan/Mochi convention for norms) and trims any
-    tile-padding rows added by mesh_partition before computing statistics, restoring them
-    after so that _partition_hw receives the same padded shape as before.
-    Channel TP is preserved on the inner ``GroupNorm`` via ``mesh_axis=ctx.tp_axis``.
+    ``DistributedGroupNorm`` all-gathers Welford stats on one mesh axis (H if H is
+    sharded, otherwise W). Activations stay sharded on that axis. If both H and W
+    are sharded, activations are all-gathered on the *other* spatial dim only so the
+    fused stats reduction still sees the full spatial extent, then re-partitioned.
+
+    Channel TP is preserved via ``mesh_axis=ctx.tp_axis``. HiFi4 matches Wan/Mochi norms.
     """
 
-    def __init__(self, num_groups: int, num_channels: int, *, eps: float, ctx: VaeContext) -> None:
+    def __init__(
+        self,
+        num_groups: int,
+        num_channels: int,
+        *,
+        eps: float,
+        ctx: VaeContext,
+        activation_fn: str | None = None,
+    ) -> None:
         super().__init__()
-        self.inner = GroupNorm(
+        h_sp = ctx.h_factor > 1
+        w_sp = ctx.w_factor > 1
+        # Stats AG prefers H when both are sharded (matches Flux2 H+TP).
+        cluster_axis = ctx.h_mesh_axis if h_sp else ctx.w_mesh_axis
+        # 2-D SP: gather the non-cluster spatial dim of the activations, not both.
+        self._gather_w = h_sp and w_sp
+        self.inner = DistributedGroupNorm(
             num_groups=num_groups,
             num_channels=num_channels,
             eps=eps,
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
+            cluster_axis=cluster_axis,
+            ccl_manager=ctx.ccl_manager,
+            activation_fn=activation_fn,
         )
         self._ctx = ctx
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -694,36 +714,47 @@ class _VaeSpatialGroupNorm(Module):
         rename_substate(state, "", "inner")
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # logical_h_full: unpadded full-H = local H * h_factor. Used to detect and strip
-        # zero-padding rows that mesh_partition may have added for tile alignment.
-        logical_h_full = x.shape[1] * self._ctx.h_factor
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        x = _all_gather_hw(self._ctx, x)  # → [N, H_gathered, W, C], TILE_LAYOUT
-
-        padded_h = x.shape[1]
-        needs_trim = padded_h > logical_h_full
-        if needs_trim:
-            x = x[:, :logical_h_full, :, :]
+        if self._gather_w:
+            assert self._ctx.ccl_manager is not None
+            x = self._ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=True)
 
         x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
 
-        # Restore padding rows so _partition_hw receives the same padded shape.
-        if needs_trim:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.pad(x, [(0, 0), (0, padded_h - logical_h_full), (0, 0), (0, 0)], value=0.0)
+        if self._gather_w:
+            original_layout = x.layout
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.mesh_partition(x, dim=2, cluster_axis=self._ctx.w_mesh_axis, memory_config=x.memory_config())
+            if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, original_layout)
 
-        return _partition_hw(self._ctx, x)
+        return x
 
 
-def _norm(norm: VaeNormDesc, num_channels: int, *, ctx: VaeContext) -> GroupNorm | _VaeSpatialGroupNorm | VaeRmsNorm:
+def _norm(
+    norm: VaeNormDesc,
+    num_channels: int,
+    *,
+    ctx: VaeContext,
+    activation_fn: str | None = None,
+) -> GroupNorm | _VaeSpatialGroupNorm | VaeRmsNorm:
+    """Build the norm module.
+
+    ``activation_fn`` is applied after the norm; the module folds it into the fused GN op
+    when that path is used and runs it separately otherwise. Callers just call ``forward``.
+    """
     if isinstance(norm, VaeNormDescGroup):
-        # SP-active: wrap to AG H+W for correct stats; SP-inactive: plain GroupNorm.
+        # SP-active: fused DistributedGroupNorm (stats AG on one spatial axis).
         if ctx.h_factor > 1 or ctx.w_factor > 1:
             return _VaeSpatialGroupNorm(
                 num_groups=norm.num_groups,
                 num_channels=num_channels,
                 eps=norm.eps,
                 ctx=ctx,
+                activation_fn=activation_fn,
             )
         return GroupNorm(
             num_groups=norm.num_groups,
@@ -731,10 +762,11 @@ def _norm(norm: VaeNormDesc, num_channels: int, *, ctx: VaeContext) -> GroupNorm
             eps=norm.eps,
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
+            activation_fn=activation_fn,
         )
     if isinstance(norm, VaeNormDescRms):
         # VaeRmsNorm normalizes per spatial position over the channel dim → SP-safe as-is.
-        return VaeRmsNorm(num_channels=num_channels, eps=norm.eps, ctx=ctx)
+        return VaeRmsNorm(num_channels=num_channels, eps=norm.eps, ctx=ctx, activation_fn=activation_fn)
 
     msg = f"invalid VaeNormDesc: {norm}"
     raise ValueError(msg)

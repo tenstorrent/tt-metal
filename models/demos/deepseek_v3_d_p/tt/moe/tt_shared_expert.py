@@ -8,9 +8,10 @@ TTNN implementation of Shared Expert module with multi-chip sharding and CCL.
 This module demonstrates:
 - Multi-chip tensor parallelism with proper weight sharding
 - Collective communication operations (all-gather, reduce-scatter)
-- SiLU activation fusion
+- SiLU activation fusion, or Kimi-K3's SiTU-GLU (see ``situ_glu``)
 """
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,40 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
+# GLU activations this module can run over its gate/up pair. Spelled as the HF ``hidden_act``
+# and as the torch reference (reference/tt/moe/expert.py), so a model config's string maps across
+# without translation -- unlike the routed expert, whose fused kernel needs an enum.
+ACTIVATION_SILU = "silu"
+ACTIVATION_SITU = "situ"
+SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU)
+
+
+def situ_glu(
+    gate_out: ttnn.Tensor,
+    up_out: ttnn.Tensor,
+    situ_beta: float,
+    situ_linear_beta: float,
+    sub_core_grids: Optional[ttnn.CoreRangeSet] = None,
+) -> ttnn.Tensor:
+    """Kimi-K3's SiTU-GLU over a raw gate/up matmul pair, consuming (deallocating) both.
+
+        softcap(gate, situ_beta) * sigmoid(gate) * softcap(up, situ_linear_beta)
+
+    ``ttnn.situ_glu`` is the math; this wrapper exists only to free the two matmul accumulators,
+    which an op may not do to its own inputs.
+
+    Blackhole only, since ``ttnn.softcap`` is.
+
+    ``sub_core_grids`` confines every composed step to the shared expert's sub-device, so this can
+    run overlapped with the MoE dispatch. It also keeps the intermediates in DRAM: the op's L1 fast
+    path allocates interleaved, i.e. on the dispatch sub-device's cores as well.
+    """
+    activated = ttnn.situ_glu(gate_out, up_out, situ_beta, situ_linear_beta, sub_core_grids=sub_core_grids)
+    ttnn.deallocate(gate_out)
+    ttnn.deallocate(up_out)
+    return activated
+
+
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
@@ -30,79 +65,100 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
-    """Program configs for the gate / up / down matmuls on Blackhole."""
-    grid = ttnn.CoreCoord(11, 9)
-    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-    )
-    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
-    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=1,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=down_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
-    return gate, up, down
+# Larger K blocks keep getting faster, but the gate matmul's PCC slides from 0.9998 at 16 tiles to
+# 0.9994 at 56: bf16 dest accumulates more terms before the packer flushes. 16 keeps ~97% of the
+# speed at the best accuracy.
+MAX_IN0_BLOCK_W = 16
 
 
-def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
-    """Program configs for the gate / up / down matmuls on Wormhole."""
-    grid = ttnn.CoreCoord(8, 7)
-    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-    )
-    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
-    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=1,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        out_block_h=1,
-        out_block_w=1,
-        per_core_M=per_core_M,
-        per_core_N=down_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
+def _in0_block_w(k_tiles: int) -> int:
+    """Largest K block that tiles k_tiles without a remainder.
+
+    The in0/in1 CBs are double-buffered only when K splits into more than one block, so 24 tiles
+    over one pass is the same L1 as 12 over two. Full K is therefore free exactly when the capped
+    block would have needed two passes. Of the shapes in this family only DeepSeek-V4-Pro's 24-tile
+    down projection is changed by it -- 12 becomes 24, worth 9.1%; Kimi-K3's 48 tiles would overflow
+    L1 by 3.8% and stay capped.
+
+    A ratio rather than an L1 budget, so it holds without tracking the factory's buffering depth,
+    tile alignment and unreserved base.
+    """
+    assert k_tiles > 0, f"k_tiles must be positive, got {k_tiles}"
+    capped = 1
+    for w in range(min(MAX_IN0_BLOCK_W, k_tiles), 0, -1):
+        if k_tiles % w == 0:
+            capped = w
+            break
+    return k_tiles if k_tiles <= 2 * capped else capped
+
+
+def _out_subblock(per_core_M: int, per_core_N: int, deep_k: bool) -> tuple[int, int]:
+    """Subblock tiling the per-core output block within the 8-tile DST budget.
+
+    Which shape wins splits on K, measured across every model's gate and down projection: the
+    gate's deep K (128-224 tiles) prefers one tall column, the down's shallow K (16-48) prefers the
+    widest block that fits.
+
+    The search below is the down projections' rule -- gate and up return above it. Only a per_core_M
+    past the DST budget sends deep K into it: unreachable below a ~2300-token chunk, unreported above.
+    """
+    if deep_k and per_core_M <= 8:
+        return (per_core_M, 1)
+    best = (1, 1)
+    for h in range(1, per_core_M + 1):
+        for w in range(1, per_core_N + 1):
+            if per_core_M % h or per_core_N % w or h * w > 8:
+                continue
+            if (h * w, w) > (best[0] * best[1], best[1]):
+                best = (h, w)
+    return best
+
+
+def get_program_configs(
+    grid: ttnn.CoreCoord,
+    m_tiles: int,
+    k_tiles: int,
+    gate_n_tiles: int,
+    down_k_tiles: int,
+    down_n_tiles: int,
+    fuse_silu: bool = True,
+):
+    """2D program configs for the gate / up / down matmuls.
+
+    ``fuse_silu=False`` leaves the gate matmul's accumulator raw, for a GLU activation that is
+    binary over (gate, up) and so has no ``UnaryOpType`` to fuse -- SiTU-GLU.
+
+    A 1D factory splits one axis only, so its core count caps at ``max(m_tiles, n_tiles)``. At the
+    prefill chunk depth m_tiles is 20 and the shared expert's gate is 48 tiles wide, both far under
+    the 99 cores of an overlapped sub-device. The 2D factory splits M over the grid's rows and N over
+    its columns, so the two multiply.
+
+    Each per-core extent rounds up, which costs cores rather than correctness: the launched grid is
+    ``ceil(m_tiles / per_core_M) x ceil(n_tiles / per_core_N)``, so a per_core_M of 3 over 20 M-tiles
+    lights 7 rows, not 9. Measured still beats every 1D arrangement of these shapes.
+    """
+
+    def cfg(k: int, n: int, activation=None):
+        per_core_M = math.ceil(m_tiles / grid.y)
+        per_core_N = math.ceil(n / grid.x)
+        # Across every model the gate/up projections sit at K/N >= 4.7 and the down projections at
+        # <= 0.21, so the threshold falls in a wide empty gap rather than near either cluster.
+        subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N, deep_k=k >= 2 * n)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=_in0_block_w(k),
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fuse_batch=False,
+            fused_activation=activation,
+        )
+
+    gate = cfg(k_tiles, gate_n_tiles, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if fuse_silu else None)
+    up = cfg(k_tiles, gate_n_tiles)
+    down = cfg(down_k_tiles, down_n_tiles)
     return gate, up, down
 
 
@@ -114,7 +170,8 @@ class TtSharedExpert(LightweightModule):
         Input: x [batch, seq_len, emb_dim] (replicated across mesh columns)
         1. gate_out = x @ gate_proj → [batch, seq_len, hidden_dim / num_devices]
         2. up_out = x @ up_proj → [batch, seq_len, hidden_dim / num_devices]
-        3. activated = silu(gate_out) * up_out → [batch, seq_len, hidden_dim / num_devices]
+        3. activated = glu_activation(gate_out, up_out) → [batch, seq_len, hidden_dim / num_devices]
+           (SiLU fused into the gate matmul, or SiTU-GLU over both raw accumulators)
         4. output_full = activated @ down_proj → [batch, seq_len, emb_dim]
         5. Reduce-scatter output across mesh columns → [batch, seq_len, emb_dim / num_devices]
 
@@ -239,6 +296,9 @@ class TtSharedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         subdevice_id: Optional[ttnn.SubDeviceId] = None,
         subdevice_cores: Optional[ttnn.CoreRangeSet] = None,
+        activation: str = ACTIVATION_SILU,
+        situ_beta: Optional[float] = None,
+        situ_linear_beta: Optional[float] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -255,6 +315,11 @@ class TtSharedExpert(LightweightModule):
             compute_kernel_config: Compute kernel configuration
             weight_cache_path: Optional path for caching TTNN weight tensors
             cache_name_prefix: Optional prefix for cache file names
+            activation: GLU activation over the gate/up pair -- "silu" (default, every model but
+                Kimi-K3) or "situ" for K3's SiTU-GLU. Unlike the routed expert this is a plain
+                string: both paths are composed from Python-level ttnn ops, not a fused kernel.
+            situ_beta / situ_linear_beta: SiTU softcap betas (K3: 4.0 / 25.0). Required, and
+                non-zero, when activation == "situ"; ignored otherwise.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -269,6 +334,24 @@ class TtSharedExpert(LightweightModule):
         self.subdevice_id = subdevice_id
         self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
+
+        if activation not in SUPPORTED_ACTIVATIONS:
+            raise ValueError(f"unknown activation {activation!r}; expected one of {SUPPORTED_ACTIVATIONS}")
+        if activation == ACTIVATION_SITU:
+            # ttnn.softcap, which both SiTU halves go through, is Blackhole-only. Raise rather than
+            # fall back to SiLU: a silently different activation is a wrong model, not a slow one.
+            if not is_blackhole():
+                raise ValueError(f"activation {activation!r} needs ttnn.softcap, which is Blackhole-only")
+            # softcap precomputes 1/beta, so a zero (or missing) beta would emit inf.
+            if not situ_beta or not situ_linear_beta:
+                raise ValueError(
+                    f"activation {activation!r} requires non-zero situ_beta / situ_linear_beta, "
+                    f"got {situ_beta} / {situ_linear_beta}"
+                )
+        self.activation = activation
+        self.situ_beta = situ_beta
+        self.situ_linear_beta = situ_linear_beta
+
         # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
         # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
         # shared experts) — see forward() and TT_CCL.get_shared_rs_intermediate.
@@ -415,29 +498,29 @@ class TtSharedExpert(LightweightModule):
             self.gate_proj.shape[-1] == self.down_proj.shape[-2]
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
-        # ===== Inlined shared expert FFN — height-sharded sub-device matmuls =====
-        # Available compute grid: BH = 11x9, WH = 8x7.
+        # ===== Inlined shared expert FFN — 2D sub-device matmuls =====
         TILE = 32
-        max_cores = 11 * 9 if is_blackhole() else 8 * 7
+        # The grid these matmuls may use: the sub-device's when the expert is overlapped with the MoE
+        # dispatch, the whole device's otherwise. Deriving it also drops a hardcoded 11x9 that was a
+        # row short of Blackhole's 11x10 whenever there was no sub-device to be confined to.
+        grid = (
+            self.subdevice_cores.bounding_box().grid_size()
+            if self.subdevice_cores is not None
+            else self.mesh_device.compute_with_storage_grid_size()
+        )
 
-        # Pick the largest divisor of M_tiles that fits in the sub-device — gives
-        # max parallelism with no padding waste.
         m_tiles = x.padded_shape[-2] // TILE
-        num_cores = m_tiles
-        while num_cores > max_cores or m_tiles % num_cores != 0:
-            num_cores -= 1
-        per_core_M = m_tiles // num_cores
-
-        gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
-        down_n_tiles = self.down_proj.padded_shape[-1] // TILE
-        if is_blackhole():
-            gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles
-            )
-        else:
-            gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles
-            )
+        gate_program_config, up_program_config, down_program_config = get_program_configs(
+            grid,
+            m_tiles,
+            self.gate_proj.padded_shape[-2] // TILE,
+            self.gate_proj.padded_shape[-1] // TILE,
+            self.down_proj.padded_shape[-2] // TILE,
+            self.down_proj.padded_shape[-1] // TILE,
+            # SiTU-GLU is binary over (gate, up), so it cannot ride along as the gate matmul's fused
+            # unary; the gate accumulator has to come out raw and be combined below.
+            fuse_silu=self.activation == ACTIVATION_SILU,
+        )
 
         # 1) Compute gate and up projections
         gate_out = ttnn.matmul(
@@ -455,19 +538,30 @@ class TtSharedExpert(LightweightModule):
             sub_device_id=self.subdevice_id,
         )
 
-        # 2) Multiply gate and up projection
-        ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
-        ttnn.deallocate(up_out)
+        # 2) Combine the gate and up projections through the GLU activation
+        if self.activation == ACTIVATION_SITU:
+            activated = situ_glu(
+                gate_out,
+                up_out,
+                self.situ_beta,
+                self.situ_linear_beta,
+                sub_core_grids=self.subdevice_cores,
+            )
+        else:
+            # gate_out already carries the matmul-fused SiLU.
+            ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
+            ttnn.deallocate(up_out)
+            activated = gate_out
 
         # 3) Compute down projection
         output_full = ttnn.matmul(
-            gate_out,
+            activated,
             self.down_proj,
             program_config=down_program_config,
             compute_kernel_config=self.compute_kernel_config,
             sub_device_id=self.subdevice_id,
         )
-        ttnn.deallocate(gate_out)
+        ttnn.deallocate(activated)
 
         # 4) Reduce-scatter across mesh columns when TP > 1.
         if self.mesh_device.shape[1] > 1:

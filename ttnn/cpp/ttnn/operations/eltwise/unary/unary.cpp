@@ -11,6 +11,18 @@
 
 namespace ttnn::operations::unary::detail {
 
+namespace {
+// Mixed-dtype preallocated output is only validated for these formats.
+bool is_supported_mixed_float_dtype(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT8_B: return true;
+        default: return false;
+    }
+}
+}  // namespace
+
 Tensor unary_impl(
     const Tensor& input_tensor,
     const std::vector<unary::EltwiseUnaryWithParam>& op_chain,
@@ -23,6 +35,23 @@ Tensor unary_impl(
     if (op_chain.back().type() == unary::UnaryOpType::TYPECAST ||
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
+        if (optional_output_tensor.has_value()) {
+            TT_FATAL(
+                output_dtype == optional_output_tensor->dtype(),
+                "Preallocated output tensor dtype {} does not match the typecast/bitcast target dtype {}.",
+                optional_output_tensor->dtype(),
+                output_dtype);
+        }
+    } else if (optional_output_tensor.has_value()) {
+        output_dtype = optional_output_tensor->dtype();
+        TT_FATAL(
+            (output_dtype == input_dtype) ||
+                (is_supported_mixed_float_dtype(output_dtype) && is_supported_mixed_float_dtype(input_dtype)),
+            "Preallocated output dtype {} is not compatible with input dtype {}. "
+            "Integer and float dtypes cannot be mixed; mixed floating-point output is limited to "
+            "BFLOAT16, FLOAT32, and BFLOAT8_B.",
+            output_dtype,
+            input_dtype);
     }
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||

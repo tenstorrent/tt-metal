@@ -13,7 +13,6 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 
@@ -41,16 +40,6 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
-    if constexpr (type == DataCopyType::A2D)
-    {
-        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
-    }
-    else
-    {
-        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
-    }
-    llk::san::operation_check<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, dst_format);
-
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
@@ -65,7 +54,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
         // zero-substitution flag via the math state tracker.
-        math::_configure_mov_ops_zero_flag_state_();
+        math::_configure_preserve_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -191,11 +180,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
 
-        // This 32b hi16/lo16 MOV sequence drove the Src zero-substitution flag (and the SrcA format
-        // override bank) directly for the duration of the block; invalidate the tracked state so the
-        // next configurator re-applies the flag from a known baseline instead of taking its
-        // skip-if-set fast path (matches the Blackhole path).
-        math::_invalidate_src_zero_flag_state_();
+        // The sequence above only touches the SrcA format-override bank, not the zero-flag: no
+        // instruction can change ALU_ACC_CTRL_Zero_Flag_disabled_src as a side effect (it moves only on
+        // an explicit cfg write), so the tracked value is still coherent -- no invalidate needed.
     }
     else
     {
@@ -490,16 +477,6 @@ template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-
-    if constexpr (type == DataCopyType::A2D)
-    {
-        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
-    }
-    else
-    {
-        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
-    }
-    llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, dst_format);
 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 

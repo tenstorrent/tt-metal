@@ -529,8 +529,6 @@
     { "job-name-component": "t3k ViT Gemma3 perf tests op to op", "owner": { "id": "U094PKWHNJ0", "name": "Petar Milojevic" } },
     { "job-name-component": "t3000-unit-tests / t3k tt metal multiprocess tests", "owner": { "id": "U0709049XNK", "name": "Aditya Saigal" } },
     { "job-name-component": "t3k tt metal multiprocess tests", "owner": { "id": "U0709049XNK", "name": "Aditya Saigal" } },
-    { "job-name-component": "t3000-unit-tests / t3k dits tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
-    { "job-name-component": "t3k dits tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
     { "job-name-component": "t3000-unit-tests / t3k gpt-oss unit tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
     { "job-name-component": "t3k gpt-oss unit tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
     { "job-name-component": "t3000-unit-tests / t3k deepseek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },

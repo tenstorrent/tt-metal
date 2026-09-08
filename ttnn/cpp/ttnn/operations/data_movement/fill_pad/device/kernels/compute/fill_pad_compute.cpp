@@ -22,10 +22,10 @@ ALWI void process_masked_tile(
     dfb_data_out.reserve_back(1);
     tile_regs_acquire();
 
-    copy_tile_to_dst_init_short(dfb_data_in.get_id());
+    copy_init(dfb_data_in.get_id());
     copy_tile(dfb_data_in.get_id(), 0, CB_DATA_IN);  // data → DST[0]
 
-    copy_tile_to_dst_init_short(dfb_mask.get_id());
+    copy_init(dfb_mask.get_id());
     copy_tile(dfb_mask.get_id(), 0, CB_MASK);  // mask → DST[2]
 
     fill_tile_init();
@@ -60,13 +60,13 @@ ALWI void process_corner_tile(
     dfb_data_out.reserve_back(1);
     tile_regs_acquire();
 
-    copy_tile_to_dst_init_short(dfb_data_in.get_id());
+    copy_init(dfb_data_in.get_id());
     copy_tile(dfb_data_in.get_id(), 0, CB_DATA_IN);  // data       → DST[0]
 
-    copy_tile_to_dst_init_short(dfb_right_mask.get_id());
+    copy_init(dfb_right_mask.get_id());
     copy_tile(dfb_right_mask.get_id(), 0, CB_RIGHT_MASK);  // right_mask → DST[2]
 
-    copy_tile_to_dst_init_short(dfb_bot_mask.get_id());
+    copy_init(dfb_bot_mask.get_id());
     copy_tile(dfb_bot_mask.get_id(), 0, CB_BOTTOM_MASK);  // bot_mask   → DST[3]
 
     fill_tile_init();
@@ -120,7 +120,8 @@ void kernel_main() {
     DataflowBuffer dfb_data_out(dfb::data_out);
 
     // Standard init for unary-style SFPU compute with one primary input DFB.
-    unary_op_init_common(dfb::data_in, dfb::data_out);
+    compute_kernel_hw_startup(dfb::data_in, dfb::data_out);
+    copy_init(dfb::data_in);
 
     // Wait for persistent mask tiles pushed once by the writer. They are popped
     // once at cleanup; during the main loop they are reused persistently.

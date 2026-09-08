@@ -27,6 +27,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multiple_programs.cpp
     test_pack_relu.cpp
     test_quasar_compute_kernels.cpp
+    test_quasar_fds.cpp
     test_quasar_events.cpp
     test_quasar_mesh_buffers.cpp
     test_quasar_mesh_workloads.cpp
@@ -39,5 +40,8 @@ set(UNIT_TESTS_LEGACY_SRC
     test_transpose_hc.cpp
     test_unaligned_read_write_core.cpp
     test_riscv_atomics.cpp
+    test_noc_self_atomic.cpp
+    test_noc_atomic_ops.cpp
+    test_sem_scope.cpp
     test_globals_tls.cpp
 )

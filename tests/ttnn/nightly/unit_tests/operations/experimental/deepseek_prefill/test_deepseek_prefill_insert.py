@@ -15,6 +15,10 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
+
+
+pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
 
 GLOBAL_ROWS = 128

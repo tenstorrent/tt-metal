@@ -103,13 +103,19 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
      */
     // BLOCK/WIDTH-sharded outputs split a logical row across shards - the writer's
     // noc_async_write_sharded needs the per-shard page size (shard width in bytes), not the full
-    // row size, to do that split correctly. HEIGHT-sharded and interleaved outputs keep a whole row
-    // per page, same as the full row size.
+    // row size, to do that split correctly. A HEIGHT-sharded output keeps a whole row per page, but
+    // the sharded accessor strides by exactly the page size it is handed and the allocator pads
+    // each row up to the buffer alignment. It needs the padded stride, not the row size. Interleaved
+    // outputs keep a whole row per page, same as the full row size.
     uint32_t writer_page_size = unpadded_row_size_bytes;
     const auto& out_mem_config = output.memory_config();
-    if (out_mem_config.is_sharded() && (out_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                                        out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
-        writer_page_size = out_mem_config.shard_spec().value().shape[1] * output.element_size();
+    if (out_mem_config.is_sharded()) {
+        if (out_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            writer_page_size = out_mem_config.shard_spec().value().shape[1] * output.element_size();
+        } else {
+            writer_page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+        }
     }
     std::vector<uint32_t> writer_ct_args = {
         (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or

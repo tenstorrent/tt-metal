@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        ckernel::llk_math_eltwise_unary_sfpu_init<ckernel::SfpuType::unused, is_fp32_dest_acc_en>();
+        ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::unused, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {

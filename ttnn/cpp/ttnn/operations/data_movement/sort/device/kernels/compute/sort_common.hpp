@@ -162,7 +162,7 @@ void transpose_and_pack(
 }
 
 /**
- * @brief Helper function to manage copy_tile_to_dst_init_short_with_dt() calls.
+ * @brief Helper function to manage reconfig_data_format_srca() + copy_init() calls.
  *
  * This function prepares the destination buffer for a new tile copy operation by
  * invoking a helper function to handle the initialization with the appropriate data type.
@@ -173,7 +173,8 @@ void transpose_and_pack(
  */
 FORCE_INLINE
 void copy_tile_to_dst_init_with_cb_update(uint32_t new_cb, uint32_t& global_old_cb) {
-    copy_tile_to_dst_init_short_with_dt(global_old_cb, new_cb);
+    reconfig_data_format_srca(global_old_cb, new_cb);
+    copy_init(new_cb);
     global_old_cb = new_cb;
 }
 

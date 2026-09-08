@@ -2,24 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test for instantiating both reference CPU and TT device MLA modules with the same weights.
-This test verifies that both modules can be created and weights are loaded correctly.
+MLA device tests: chunked prefill against the CPU torch reference / a recorded GPU trace, plus the
+chunked perf gate. ``run_mla_inference`` is the shared single-shot forward helper, also used by
+tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 """
 
 import os
-from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
-from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
-from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -28,7 +25,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_positions,
     create_balanced_chunk_order,
     reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -40,15 +36,8 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
-from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
-
-
-def _local_fabric2d_params():
-    return fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE)
 
 
 def run_mla_inference(
@@ -181,321 +170,6 @@ def run_mla_inference(
     return tt_output, hidden_states, chunk_order, shard_dims
 
 
-def run_model(
-    variant,
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-):
-    if use_pretrained and not variant.supports_pretrained:
-        pytest.skip(f"{variant.name!r}: pretrained weights not available")
-
-    weight_type = "Pretrained" if use_pretrained else "Random"
-    logger.info("=" * 80)
-    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights, variant={variant.name})")
-    logger.info("=" * 80)
-
-    # Conditionally load fixtures - only load what we need!
-    if use_pretrained:
-        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
-    else:
-        config, weights = request.getfixturevalue("random_weights")
-
-    topology = per_axis_topology(device_params["fabric_config"])
-
-    production_mesh = [32, 4]
-    sp_axis = 0
-    tp_axis = 1
-
-    mesh_shape = list(mesh_device.shape)
-
-    if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
-
-    # temp hack
-    config.max_seq_len = seq_len
-
-    # Create reference MLA
-    if use_pretrained:
-        logger.info("Creating reference MLA with pretrained weights...")
-        mla_ref = create_mla_reference(
-            config=config,
-            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-            layer_idx=0,
-            module_path="model.layers.0.self_attn",
-        )
-    else:
-        logger.info("Creating reference MLA with random weights...")
-        mla_ref = create_mla_reference(
-            config=config,
-            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-            layer_idx=0,
-            module_path="model.layers.0.self_attn",
-        )
-
-    # Verify reference MLA exists
-    assert mla_ref is not None, "Reference MLA should exist"
-
-    # Test forward pass comparison
-    logger.info("=" * 80)
-    logger.info(f"Testing forward pass comparison (seq_len={seq_len})")
-    logger.info("=" * 80)
-
-    # Initialize KVPE cache
-    tt_kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BFP8_TILE,
-        hf_config=config,
-        mesh_device=mesh_device,
-        seq_len=seq_len,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
-    )
-
-    # Run MLA inference using utility function
-    tt_output, hidden_states, chunk_order, shard_dims = run_mla_inference(
-        config=config,
-        weights=weights,
-        mesh_device=mesh_device,
-        seq_len=seq_len,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_balanced=is_balanced,
-        topology=topology,
-        tt_kvpe_cache=tt_kvpe_cache,
-    )
-
-    batch_size = 1
-
-    # Host comparison: Run reference forward pass if needed
-    if skip_host_comparison == False:
-        # Check for cached reference results to avoid expensive host attention computation
-        env = variant.mla_ref_cache_env or "DEEPSEEK_V3_MLA_REF_CACHE"
-        cache_dir = Path(os.environ.get(env, f"/tmp/{variant.name}_mla_ref_cache"))
-        cache_path = cache_dir / f"{weight_type.lower()}_seq{seq_len}.pt"
-
-        if cache_path.exists():
-            logger.info(f"Loading cached reference results from {cache_path}")
-            cached = torch.load(cache_path, weights_only=True)
-            ref_output = cached["ref_output"]
-            ref_kvpe = cached["ref_kvpe"]
-            logger.info(f"✓ Loaded cached reference results")
-            logger.info(f"  Output shape: {ref_output.shape}")
-        else:
-            assert not (
-                (is_ci_env or is_ci_v2_env) and not scale_down_sl
-            ), "We should not execute CPU computation in the CI for max sl, output cache is missing"
-
-            # Create position IDs
-            position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
-
-            # Run reference forward pass with cache to capture KVPE
-            # Uses F.scaled_dot_product_attention with is_causal=True (no explicit mask needed)
-            logger.info("Running reference CPU forward pass...")
-            mla_ref = mla_ref.eval().to(torch.bfloat16)
-            ref_cache = DynamicCache()
-            with torch.no_grad():
-                ref_output, _, ref_cache = mla_ref(
-                    hidden_states=hidden_states,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-
-            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
-
-            if not (is_ci_env or is_ci_v2_env):
-                # Save to cache for future runs
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
-                logger.info(f"✓ Saved reference results to {cache_path}")
-
-            logger.info(f"✓ Reference forward pass complete")
-            logger.info(f"  Input shape:  {hidden_states.shape}")
-            logger.info(f"  Output shape: {ref_output.shape}")
-            logger.info(f"  Output dtype: {ref_output.dtype}")
-            logger.info(f"  Output mean:  {ref_output.mean().item():.4f}")
-            logger.info(f"  Output std:   {ref_output.std().item():.4f}")
-
-        # Compare TT output with reference output
-        tt_output_cpu = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
-        ).to(torch.bfloat16)
-
-        if is_balanced:
-            tt_output_cpu = reverse_reorder_tensor_chunks(tt_output_cpu, chunk_order, seq_dim=2)
-
-        _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.98)
-        logger.info(f"Output PCC is {pcc_message}")
-
-        # Validate KVPE cache contents
-        # Reference KVPE: [batch, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
-        # ref_kvpe is already available (loaded from cache or computed above)
-
-        # Read back KVPE cache from device
-        # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
-        tt_kvpe_cache_torch = ttnn.to_torch(
-            tt_kvpe_cache.storage,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-        ).to(torch.bfloat16)
-        tt_kvpe_cache_torch = tt_kvpe_cache_torch[:1, :1, :, :]
-
-        logger.info("Starting synchronize call")
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Synchronize call ended")
-
-        logger.debug("  Distributed synchronization started")
-        ttnn.distributed_context_barrier()
-        logger.debug("✓ Distributed synchronization completed")
-
-        if is_balanced:
-            tt_kvpe_cache_torch = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch, chunk_order, seq_dim=2)
-
-        # Check PCC separately for KV (latent) and PE (rope) parts
-        kv_lora_rank = config.kv_lora_rank
-        _, kv_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache_torch[:, :, :, :kv_lora_rank], 0.99
-        )
-        logger.info(f"KVPE cache KV part PCC is {kv_pcc_message}")
-        _, pe_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99
-        )
-        logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
-
-        # MLA reference check. Returns None when the variant has no reference.
-        # Only run reference for shorter sequence lengths so we don't go OOM on host.
-        if seq_len <= 5 * 1024:
-            position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-            logger.info(f"Running MLA reference (model={variant.name})")
-            ref_out = run_reference_mla(
-                variant,
-                config=config,
-                weights=weights,
-                hidden_states=hidden_states,
-                position_ids=position_ids_ref,
-            )
-            if ref_out is not None:
-                _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
-                logger.info(f"[reference_output] PCC: {ref_pcc_message}")
-                del ref_out
-        else:
-            logger.info(f"Skipping MLA reference comparison for seq_len={seq_len}")
-    else:
-        logger.info("Starting synchronize call")
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Synchronize call ended")
-
-        logger.debug("  Distributed synchronization started")
-        ttnn.distributed_context_barrier()
-        logger.debug("✓ Distributed synchronization completed")
-
-    logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
-
-
-# sp x tp
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        # Multi-host 32x4 is a four-Galaxy scale-out diagnostic. There is no certified descriptor
-        # that closes this entire logical mesh into one XY torus, so it remains unwrapped Fabric2D.
-        pytest.param((32, 4), _local_fabric2d_params(), id="fabric2d-32x4"),
-        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
-        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.timeout(0)
-def test_ds_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
-        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
@@ -560,6 +234,7 @@ def _run_chunked_prefill(
     use_metadata_tensor=False,
     determinism_check=False,
     profile=False,
+    tight_cache=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -617,12 +292,35 @@ def _run_chunked_prefill(
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
+    max_real_end = 0
     for g in groups:
         ka = prefill_len
         for v in g:
             max_window = max(max_window, ka + chunk_size_global)
             ka += v
+            max_real_end = max(max_real_end, ka)
+    if tight_cache:
+        # Cache sized to the REAL tokens, not the padded window, so a late iteration's window runs past
+        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and ring_mla
+        # caps logical_n at the cache.
+        write_end = -(-max_real_end // tile) * tile
+        max_window = max(chunk_size_global * 2, write_end)
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
+    if tight_cache:
+        overruns = [
+            ka
+            for g in groups
+            for ka in [prefill_len + sum(g[:i]) for i in range(len(g))]
+            if ka + chunk_size_global > seq_len_cache
+        ]
+        assert overruns, (
+            f"tight_cache scenario does not actually overrun: cache {seq_len_cache}, chunk "
+            f"{chunk_size_global}, real end {max_real_end} -- no iteration's padded window passes the cache"
+        )
+        logger.info(
+            f"tight_cache: cache {seq_len_cache} for {max_real_end} real tokens; "
+            f"{len(overruns)} iteration(s) pad past it, worst {max(overruns) + chunk_size_global}"
+        )
 
     if use_pretrained:
         # MLA-only fixture: this driver uses nothing but the attention weights, and the full-layer one
@@ -690,7 +388,11 @@ def _run_chunked_prefill(
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
-        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+        # tail_slack: an overrunning iteration still ropes its whole padded slab, so the table needs one
+        # chunk of headroom (as the production transformer passes).
+        cache_seq_len_global=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        tail_slack=tight_cache,
     )
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -790,10 +492,10 @@ def _run_chunked_prefill(
                     )
                     for val in (u, kv_actual, valid_end)
                 )
-            # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
-            # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
-            # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
-            # (slot comes from metadata[0]).
+            # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
+            # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
+            # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
+            # from metadata[0]).
             # Determinism re-issues the SAME forward on the same device inputs. forward takes
             # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
             # with the same data -- idempotent, like the repeated block() in test_prefill_block.
@@ -806,6 +508,9 @@ def _run_chunked_prefill(
                         rope_tensors=indexed_rope,
                         kvpe_cache=tt_kvpe_cache,
                         actual_start=None if use_metadata_tensor else kv_actual,
+                        # Scalar path needs actual_end only when the window overruns; None otherwise keeps
+                        # the existing scenarios writing the whole padded slab. (Metadata always carries it.)
+                        actual_end=valid_end if (tight_cache and not use_metadata_tensor) else None,
                         cache_user_id=u,
                         metadata=kv_pad_metadata,
                     )
@@ -933,6 +638,10 @@ _CHUNKED_SCENARIOS = (
         # Multi-user WITH padding/rotation: each user runs the full maxedge pattern in its own slot
         # (partition splits [..]*2 into one maxedge per user), exercising rotation + cross-user isolation.
         ("maxedge-2u", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
+        # Tail chunk padding PAST the cache end: each iter leaves a tile of pad, so kv_actual drifts and
+        # the final 32-token iter's window ends 5056 past the 10240 cache while its real tokens fit. Only
+        # a drifted start can overrun. See tight_cache in the driver.
+        ("padoverflow-1u", dict(iters_isl=[5120 - 32] * 2 + [32], tight_cache=True)),
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
         ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
@@ -946,6 +655,7 @@ _CHUNKED_SCENARIOS = (
         pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
         # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
         # fallback fragments general L1 enough that a later op's static circular buffers collide.
+        #
         pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
     ],
     indirect=["mesh_device", "device_params"],
@@ -954,11 +664,12 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3"],
+    ["kimi_k2_7", "kimi_k3"],
     indirect=True,
-    # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
-    # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
-    ids=["dsv3", "kimi", "k3"],
+    # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
+    # disjoint: "k2_7" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
+    # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
+    ids=["k2_7", "k3"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
@@ -972,18 +683,19 @@ def test_mla_chunked_prefill(
     variant has no registered trace), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
-    Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
-    KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
+    Real weights on the CPU-reference path: point the variant's HF env var (KIMI_K2_7_HF_MODEL /
+    KIMI_K3_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
     with pretrained weights instead of random. create_mla_reference is config-driven and
     architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
-    reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
+    reference), so this works for both variants. It complements the GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic),
-    against its own registered traces. It otherwise runs the same config-driven driver on any arch/mesh.
+    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_7 has no
+    registered golden MLA trace (https://github.com/tenstorrent/tt-metal/issues/54973), so selecting
+    'trace' for it fails rather than silently passing; it runs the cpu and func paths, otherwise the
+    same config-driven driver on any arch/mesh.
 
     kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
-    below. It runs 'trace' like kimi_k2_6, taking real weights from layer 3 via
+    below. Unlike kimi_k2_7 it runs 'trace', taking real weights from layer 3 via
     variant.pretrained_mla_layer. Its rotation scenarios still matter: rotation comes from the
     block-cyclic cache write and the causal offset, not from RoPE."""
     # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so

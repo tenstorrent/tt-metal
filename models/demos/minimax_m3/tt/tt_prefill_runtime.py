@@ -38,7 +38,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder, blockcyclic_positions
+from models.common.utils import block_cyclic_reorder
 
 
 @dataclass
@@ -405,32 +405,39 @@ class TtPrefillRuntime:
         swizzled over the rotary slice — the caller reconciles vs the HF golden). Shapes:
         k,v -> [1, num_kv_heads, n_tokens, head_dim]; index_k -> [1, 1, n_tokens, head_dim] (zeros on
         dense layers, which carry no index_k). Optional bring-up hook — never used in production
-        serving."""
-        sp = self.config.sp_factor
-        cols = self.config.tp_factor  # K/V head c on col c; index_k replicated -> read col 0
-        nkv = self.hf_config.num_key_value_heads
-        slot = slot_id * self.config.num_layers + layer_idx
-        # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
-        p = blockcyclic_positions(sp, self.config.chunk_size, self.config.max_seq_len)
+        serving.
 
-        def gather(cache_tensor, col):
-            dts = ttnn.get_device_tensors(cache_tensor)
-            dev = torch.cat([ttnn.to_torch(dts[r * cols + col])[slot, 0].float() for r in range(sp)], dim=0)
-            nat = torch.empty_like(dev)
-            nat[p] = dev
-            return nat[:n_tokens]
+        Thin wrapper over ``read_slot_kv`` + ``naturalize_kv_block``. A caller that walks EVERY layer
+        should read the slot once and un-rotate each layer itself instead of calling this per layer.
+        """
+        from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
 
-        k = torch.stack([gather(kv_cache.k, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        v = torch.stack([gather(kv_cache.v, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
-        return k, v, index_k
+        k_blk, v_blk, ik_blk = self.read_slot_kv(kv_cache, slot_id)
+        cfg = self.config
+        return (
+            naturalize_kv_block(k_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
+                0
+            ),
+            naturalize_kv_block(v_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
+                0
+            ),
+            naturalize_kv_block(ik_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
+                0
+            ),
+        )
 
-    def kv_migration_base_address(self, kv_cache) -> int:
-        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
-        all-gather (it holds the cache but must not introspect its layout). M3's cache is three
-        tensors; the K tensor is the anchor, and since the table build is single-rank the gathered
-        layout is never consumed."""
-        return int(kv_cache.k.buffer_address())
+    def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
+        """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
+        consumes their gathered layouts: k, v, index_k. All three share one layer-index space (index_k
+        allocates a slot for every layer, zeros on dense ones), so every stage carries the same range."""
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
+        num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
+        return [
+            KvCacheStage(int(t.buffer_address()), first_layer_idx, num_my_layers)
+            for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
+        ]
 
     def build_kv_chunk_table(
         self,
@@ -439,19 +446,17 @@ class TtPrefillRuntime:
         *,
         first_layer_idx: int = 0,
         num_my_layers: Optional[int] = None,
-        stage_layout=None,
+        stage_layouts=None,
     ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
         ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
         comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
 
-        Single-rank only: this describes the whole-model cache and has no cross-stage merge, so a
-        gathered layout spanning more than this rank's stage is rejected rather than silently dropped."""
-        if stage_layout is not None and len(stage_layout) > 1:
-            raise NotImplementedError(
-                f"MiniMax-M3 KV migration is single-rank only; got a {len(stage_layout)}-stage layout. "
-                "The multi-config (per head-shard) table has no cross-stage merge."
-            )
+        Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
+        num_my_layers). The runner all-gathers one layout per ``kv_migration_stages`` entry (k, v,
+        index_k) and passes them as ``stage_layouts`` so ONLY rank 0 builds the table spanning every
+        stage; with stage_layouts None the table covers config.num_layers == the full model from this
+        rank's own mesh."""
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         c = self.config
@@ -467,32 +472,46 @@ class TtPrefillRuntime:
             num_kv_heads=self.hf_config.num_key_value_heads,
             head_dim=self.hf_config.head_dim,
             path=path,
+            stage_layouts=stage_layouts,
         )
 
     def read_slot_kv(self, kv_cache, slot: int):
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
         tensor, each ``[num_layers, heads(or 1), seq_cache, head_dim]`` (index_k collapsed to one TP
         replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
-        DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing
-        into another ND-shard miscomputes the DRAM core on host read-back."""
-        mesh_device = self.mesh_device
-        num_layers = self.config.num_layers
 
-        def _block(tensor, collapse_tp: bool):
+        One device slice + one mesh compose per cache. DRAM_MEMORY_CONFIG on the slice is required —
+        the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM
+        core on host read-back.
+        """
+        start = slot * self.config.num_layers
+        end = start + self.config.num_layers
+        composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
+
+        def _slot_block(tensor, *, collapse_tp: bool = False):
+            """This slot's packed-cache rows, gathered to host in one mesh compose.
+
+            ``ConcatMesh2dToTensor`` ``dims=(2, 1)`` so SP concatenates on seq and TP on heads — one
+            ``to_torch`` instead of per-chip ``get_device_tensors``. ``collapse_tp`` keeps a single TP
+            replica (index_k is replicated across cols). Returns
+            ``[end - start, heads(or 1), seq_cache, head_dim]`` in on-device (block-cyclic) seq order.
+            """
             s = list(tensor.shape)
             sl = ttnn.slice(
                 tensor,
-                [slot * num_layers, 0, 0, 0],
-                [(slot + 1) * num_layers, s[1], s[2], s[3]],
+                [start, 0, 0, 0],
+                [end, s[1], s[2], s[3]],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            block = ttnn.to_torch(
-                sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-            ).float()  # [num_layers, nkv (or cols), seq_cache, head_dim]
+            host = ttnn.to_torch(sl, mesh_composer=composer).float()
             ttnn.deallocate(sl)
-            return block[:, :1] if collapse_tp else block
+            return host[:, :1] if collapse_tp else host
 
-        return [_block(kv_cache.k, False), _block(kv_cache.v, False), _block(kv_cache.index_k, True)]
+        return [
+            _slot_block(kv_cache.k),
+            _slot_block(kv_cache.v),
+            _slot_block(kv_cache.index_k, collapse_tp=True),
+        ]
 
     def kv_cache_pcc_check(
         self,

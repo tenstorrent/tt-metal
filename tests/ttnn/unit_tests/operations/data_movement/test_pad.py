@@ -621,6 +621,47 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
         assert torch.equal(output_tt, output_torch)
 
 
+# test_pad_op above parametrizes TILE x use_multicore=False, but its shapes are already tile-aligned,
+# so invoke_tile() returns through the view() fast path and never reaches prim::pad.  Crossing a tile
+# boundary is what actually selects PadTileCoreProgramFactory, the single-core tiled factory.
+@pytest.mark.parametrize(
+    "in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.bfloat8_b]
+)
+@pytest.mark.parametrize(
+    "shape, padshape",
+    [
+        ([1, 1, 32, 32], [1, 1, 64, 64]),  # grow both tile dims
+        ([1, 1, 32, 64], [2, 3, 64, 96]),  # grow the batch/channel dims too
+        ([2, 1, 64, 32], [2, 2, 96, 64]),
+    ],
+)
+@pytest.mark.parametrize("pad_value", [0.0, 7.0])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_pad_tile_single_core(device, in_dtype, shape, padshape, pad_value, mem_config):
+    if in_dtype == ttnn.bfloat8_b and pad_value != 0.0:
+        pytest.skip("bfloat8_b compares approximately; the exact-fill check below does not apply")
+    if in_dtype == ttnn.float32 and pad_value != 0.0:
+        pytest.xfail("#54223: FLOAT32 pad value is packed as two bfloat16s in the single-core TILE factory")
+
+    torch_input = random_torch_tensor(in_dtype, shape)
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, memory_config=mem_config, dtype=in_dtype, layout=ttnn.TILE_LAYOUT
+    )
+
+    # Repeat so the second and third dispatches land on a program-cache hit, which is where a
+    # stale tensor binding would show up.
+    for _ in range(3):
+        output_tt = ttnn.to_torch(ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=pad_value, use_multicore=False))
+        assert output_tt.shape == torch.Size(padshape)
+
+        output_torch = torch.full(padshape, pad_value).to(output_tt.dtype)
+        output_torch[: shape[0], : shape[1], : shape[2], : shape[3]] = torch_input.to(output_tt.dtype)
+        if in_dtype == ttnn.bfloat8_b:
+            assert_allclose(output_torch, output_tt, rtol=0.05, atol=0.025)
+        else:
+            assert torch.equal(output_tt, output_torch)
+
+
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_multicore", [True])
 def test_pad_op_row_major_unevernly_sharded(device, in_dtype, use_multicore):

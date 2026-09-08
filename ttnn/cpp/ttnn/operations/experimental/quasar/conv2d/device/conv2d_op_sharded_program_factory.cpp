@@ -610,17 +610,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    // WORKAROUND (Quasar), from sjovic/quasar-resnet 057e1792f0a: force out_subblock to 1x1. The Quasar
-    // compute dest-sync (MATH_PACK / SrcA handshake) in conv_bmm_tilize_metal2 deadlocks the three compute
-    // threads whenever the matmul_partials spill/reload handles more than one tile per subblock
-    // (out_subblock_num_tiles > 1). Constraining to 1x1 makes partials flow one tile at a time so the
-    // compute pipeline drains. Verified there: the resnet stem conv passes single-core AND full 32-core
-    // (was hanging). Applies to every conv this factory builds (stem + bottleneck 3x3), so it also covers
-    // the L1-path convs a DRAM slice_config cannot reach. Gated to Quasar; WH/BH keep the tuned subblock.
-    // Remove once the LLK dest-sync limitation is fixed (tt-metal #48679 / tt-llk #48504).
     const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
-    const uint32_t out_subblock_h_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_h_ntiles;
-    const uint32_t out_subblock_w_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_w_ntiles;
+    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
+    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
@@ -1143,17 +1135,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
-    // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
-    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
-    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
-    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
-    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
-    // (copy_block reload + re-accumulate), which IS ported/validated on Quasar. This only
-    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
-    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
-    const bool packer_l1_acc_en = false;
-    (void)ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -1269,17 +1251,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // Convenience accessor for CB sizing.
     auto cb = [&](Conv2dCb name) -> const CBInfo& { return get_cb_info_by_name(cb_info, name); };
 
-    // QSR: the packer RELU (llk_pack_relu_config(ReluConfig::zero())) leaves ~one 16x16 face per output tile
-    // UNCLAMPED on Quasar -- proven by bisect (test_conv2d_correctness_bisect): a height-sharded conv is
-    // correct with the activation off (PCC 0.99997) but drops to 0.8547 with RELU on, uniform / tap-count-
-    // independent / fidelity-independent, with stale negatives surviving (output absmax > golden). WH is fine.
-    // Route RELU through the SFPU activation path on Quasar instead (full DEST tile; the same path GELU uses)
-    // by NOT taking the packer-relu fast-path here -- the `!pack_relu` branch below then merges the SFPU relu
-    // defines (SFPU_OP_*_ACTIVATION), applied per output tile in the compute kernel after the bias add.
-    // TODO(LLK): fix the Quasar packer relu face coverage so the faster packer clamp can be used again.
-    // (arch_is_quasar is declared earlier, near the out_subblock 1x1 workaround.)
-    bool pack_relu =
-        fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU && !arch_is_quasar;
+    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
 
     const bool check_skip_compute = input_cores != output_cores;
     // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
@@ -1376,10 +1348,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- compute defines ----
     std::map<std::string, std::string> compute_defines;
     if (fused_activation.has_value() && !pack_relu) {
-        // Pass the activation input dtype: several unary ops (RELU, SIGNBIT, ...) branch float-vs-int in
-        // get_op_init_and_func and TT_FATAL if it is absent. On Quasar RELU takes this SFPU path (packer-relu
-        // is disabled above), so the dtype is now required. The activation runs on the accumulated conv
-        // result that becomes the output, so use the output dtype (bf16 => the float relu_tile path).
+        // Non-RELU fused activations (GELU, SILU, ...) take the SFPU path. RELU uses packer relu
+        // (`pack_relu` above) and skips this branch. Pass the activation input dtype: several unary
+        // ops branch float-vs-int in get_op_init_and_func and TT_FATAL if it is absent. The
+        // activation runs on the accumulated conv result that becomes the output, so use the output
+        // dtype.
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i", output.dtype()));
     }

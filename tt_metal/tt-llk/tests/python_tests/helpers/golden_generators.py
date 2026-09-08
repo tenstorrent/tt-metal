@@ -320,13 +320,10 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
 def sfpu_clamp(value: float, low: float, high: float) -> float:
     """clamp under the SFPU's total order, in the kernel's order of operations.
 
-    `_calculate_clamp_` applies the bounds as `v_if (val < min)` then `v_elseif (val >= max)`,
-    both two-vector compares and so both on the total order, which sends a +NaN through the first
-    and onto *high* via the second. Composing torch.clamp instead would keep IEEE semantics and
-    return NaN.
-
-    The `>=` matters: tightening it to a strict `>` would change the answer at +NaN, and
-    _hardtanh's golden calls this too even though its kernel is a different one.
+    Metal `calculate_clamp` and `calculate_hardtanh` (`sfpi::clamp`) are both this same
+    max-then-min composition of SFPSWAP min/max, so one golden models both. A +NaN
+    outranks every value: the max leaves it in place and the min lands it on *high*,
+    where torch.clamp would keep IEEE semantics and return NaN.
     """
     return sfpu_min(sfpu_max(value, low), high)
 
@@ -2431,11 +2428,19 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            # relu_min is the one op here that is not integer-*only*: sfpu_operations.h
+            # picks the vInt branch of _relu_min_ at runtime on math_format == Int32 and
+            # the vFloat branch otherwise, so the same MathOperation needs an exact
+            # integer golden as well as the float one. See _relu_min.
+            MathOperation.ReluMin,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
         self._int_shift_amount = 3
         self._int_maxmin_scalar = INT_MAXMIN_SCALAR
+        # relu_min's integer threshold, matching the kernel's RELU_MIN_INT_THRESHOLD default.
+        # Signed: the kernel carries it as a two's-complement uint32 and static_casts to int.
+        self._relu_min_int_threshold = int(RELU_MIN_THRESHOLD)
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2459,12 +2464,16 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
+        relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
         # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
         self._int_shift_amount = shift_amount
+        # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
+        # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
+        self._relu_min_int_threshold = relu_min_int_threshold
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -2813,14 +2822,10 @@ class UnarySFPUGolden:
     def _log(self, x):
         return self._torch_unary(x, torch.log)
 
-    # log_with_base dispatches _calculate_log_ with base_scale = fp16a bits of
-    # 1/ln(2) (0x3DC5). sFloat16a rounds it to the fp16 value below, so the golden
-    # multiplies ln(x) by that exact rounded scale (=> log2(x) modulo the kernel's
-    # own ln approximation, which is within the same tolerance as plain log).
-    _LOG_WITH_BASE_SCALE = 1.4423828125  # fp16(1/ln 2)
-
+    # The dispatch is metal calculate_log with IS_BASE_TWO=true and base_scale = fp32
+    # 1/ln(2), i.e. log2 with an exact exponent term, so torch.log2 is the golden.
     def _log_with_base(self, x):
-        return self._torch_unary(x, lambda t: torch.log(t) * self._LOG_WITH_BASE_SCALE)
+        return self._torch_unary(x, torch.log2)
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
@@ -2973,23 +2978,13 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: value / t)
 
     def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # tt-llk clamp with min/max fixed to the dispatch constants and offset 0. Clamped
-        # under the SFPU's total order, not torch's IEEE one: _calculate_clamp_ applies the
-        # bounds as `v_if (val < min)` then `v_if (val > max)`, so a NaN falls through the
-        # first and lands on max. See sfpu_clamp.
+        # Metal calculate_clamp is the composition sfpu_clamp models -- see its docstring.
         return sfpu_clamp(x, min_val, max_val)
 
     def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # Modelled as a clamp because it *agrees* with one, not because it is one. The kernel is
-        # `_calculate_hardtanh_`, a different function from `_calculate_clamp_` with differently
-        # formatted constants (bf16 p0/p1/p2 = 1.0/-2.0/1.0 against clamp's fp16 min/max/offset):
-        # `val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2`.
-        #
-        # The two coincide on every special this op is enrolled for, and on the finite range they
-        # implement the same function, so sfpu_clamp is a faithful golden here. They agree by
-        # arithmetic rather than by construction, though, so the agreement is pinned in
-        # test_sfpu_domains rather than assumed -- see
-        # test_hardtanh_golden_matches_the_hardtanh_kernel_chain.
+        # Metal calculate_hardtanh is sfpi::clamp, the same composition sfpu_clamp models,
+        # so Hardtanh's golden IS Clamp's. The identity is pinned in test_sfpu_domains
+        # (test_hardtanh_golden_matches_the_clamp_golden).
         return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
@@ -3158,12 +3153,34 @@ class UnarySFPUGolden:
         return sfpu_relu_max(float(x), float(threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.max(input_tensor, torch.tensor(threshold)).item()
+        if isinstance(x, int):
+            # Integer dst. The kernel takes the vInt branch of _relu_min_, which loads an
+            # integer threshold into LREG2 and compares under INT32_2S_COMP, so the golden
+            # is an exact integer max with no float round-trip. Deliberately independent of
+            # self.dst_format: _call_integer returns before __call__ assigns it, so reading
+            # it here would pick up whatever the previous call left behind.
+            #
+            # The threshold comes from _relu_min_int_threshold, not the float default: the
+            # int32 sweep drives negative thresholds to reach the wrapper's sign+magnitude
+            # re-encoding branch, and a negative value has no float-path equivalent here.
+            return max(x, int(self._relu_min_int_threshold))
+        # Float dst. The kernel is a single SFPSWAP fold, so this is a max under the SFPU's
+        # total order and not IEEE's -- see sfpu_total_order_key. Measured on n150, threshold
+        # 5.0, Float32 end to end:
+        #
+        #   -NaN (0xFFC00000) -> 5.0        +NaN (0x7FC00000) -> +NaN
+        #   -inf              -> 5.0        +inf              -> +inf
+        #
+        # torch.max agrees on four of those and not on -NaN, which it propagates: -NaN ranks
+        # below -inf under the total order, so the fold discards it for the threshold exactly
+        # as it does -inf. FLOAT_SPECIALS injects only +NaN, so no sweep reaches that lane
+        # today and switching to sfpu_max changes no sweep's outcome -- but the device answer
+        # is measured, so the golden may as well be right there rather than resting on which
+        # NaN sign the specials set happens to carry.
+        #
+        # ReluMax states the same thing through sfpu_relu_max, whose first compare is this
+        # fold; relu_min is that compare with no relu clamp after it.
+        return sfpu_max(float(x), float(threshold))
 
     def _lrelu(self, x, negative_slope=LRELU_NEGATIVE_SLOPE):
         input_tensor = (
@@ -5187,9 +5204,10 @@ class SdpaSfpuGolden:
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 
-        if op == SdpaOp.RecipLegacy:
-            transformed = torch.reciprocal(x.abs())
-        elif op == SdpaOp.RecipIter:
+        if op in (SdpaOp.RecipLegacy, SdpaOp.RecipIter):
+            # Both are 1/x. RecipLegacy used to be 1/|x| -- _reciprocal_compat_ returns a
+            # magnitude, and the legacy branch of calculate_recip_first_column called it bare
+            # instead of through _reciprocal_compat_signed_, which restores the sign.
             transformed = torch.reciprocal(x)
         elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
             # Both fold the scale, so the reference is exp(scale * x).
@@ -5344,6 +5362,37 @@ class TopKXLGolden:
     def __call__(self, rows, K):
         _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
         return indices
+
+
+@register_golden
+class Top32RmGolden:
+    """Golden generator for the DeepSeek top32_rm LLKs (row-major top-32, K=32).
+
+    Mirrors the on-silicon gtest reference verify_top32_outputs(): rank the
+    (score, original_index) pairs of a single row by score DESCENDING, ties broken
+    by the smaller original index, and take the first K. The index paired with each
+    surviving score is that score's original row-major position, because the kernel's
+    index stream is index[i] = i and index tracking carries it through the sort.
+
+    Every stimulus is exactly representable in bf16, so the fp32 score order equals
+    the bf16 compare order the SFPU SFPSWAP uses.
+
+    Args:
+        row: 1-D float tensor [row_elements] of the row's scores.
+        K:   number of top elements (32 for top32_rm).
+    Returns:
+        (values, indices): float tensor [K] of the top-K scores and int64 tensor [K]
+        of their original row-major positions, in descending-score order.
+    """
+
+    def __call__(self, row, K=32):
+        row = row.flatten().float()
+        n = row.numel()
+        # Stable descending sort with an index tiebreak: torch.sort is stable, so
+        # sorting by -score keeps the smaller original index first among equal
+        # scores, matching the gtest comparator (score desc, orig_idx asc).
+        order = torch.argsort(-row, stable=True)[:K]
+        return row[order], order.to(torch.int64)
 
 
 @register_golden

@@ -50,6 +50,18 @@
       "owners": ["ncvetkovicTT"]
     },
     {
+      "id": "copy-eltwise-unary-legacy-inits",
+      "description": "Legacy copy / eltwise-unary init API: copy_tile_init, copy_tile_to_dst_init_short, copy_tile_to_dst_init_short_with_dt in tt_metal/hw/inc/api/compute/tile_move_copy.h and unary_op_init_common, init_sfpu in tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h. Replaced by compute_kernel_hw_startup(icb, ocb) + copy_init(icb); data-format reconfiguration via reconfig_data_format_srca. Deprecation messages state a fixed removal date of September 20th, 2026.",
+      "files": [
+        "tt_metal/hw/inc/api/compute/tile_move_copy.h",
+        "tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h",
+        "docs/source/tt-metalium/tt_metal/apis/kernel_apis/pack_unpack/copy_tile.rst"
+      ],
+      "introduced_by_pr": 49924,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
+    },
+    {
       "id": "mesh-command-queue-id-host-api-overloads",
       "description": "The Runtime API entry points that identify a command queue by raw id are deprecated in favor of overloads taking MeshCommandQueue& (tt-metal#51559): BeginTraceCapture(MeshDevice*, uint8_t) -> MeshDevice::begin_mesh_trace(MeshCommandQueue&), Synchronize(MeshDevice*, std::optional<uint8_t>, ...) -> Synchronize(MeshDevice&, ttsl::optional_reference<MeshCommandQueue>, ...), MeshDevice::{begin,end,replay}_mesh_trace(uint8_t, ...) -> the same members taking MeshCommandQueue&, and MeshEvent(uint32_t, MeshDevice*, uint32_t, const MeshCoordinateRange&) -> MeshEvent(uint32_t, MeshCommandQueue&, const MeshCoordinateRange&). All in-repo call sites are already migrated; the id-based overloads remain only for external callers during the grace period. The cleanup PR deletes them and their definitions in distributed.cpp, mesh_device.cpp and mesh_event.cpp, leaving only the MeshCommandQueue& forms.",
       "files": [
