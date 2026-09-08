@@ -24,6 +24,24 @@ class KvCacheStage(NamedTuple):
     count: int
 
 
+_PER_HOST_FS_PREFIXES = ("/tmp", "/dev/shm", "/run", "/var/tmp")
+
+
+def migration_table_path_is_explicit() -> bool:
+    return bool(os.environ.get("PREFILL_MIGRATION_TABLE_PATH"))
+
+
+def migration_table_path() -> str:
+    if migration_table_path_is_explicit():
+        return os.environ["PREFILL_MIGRATION_TABLE_PATH"]
+    return f"/tmp/prefill_kv_chunk_table_{os.environ.get('PREFILL_H2D_SERVICE_ID', 'ds_prefill')}.pb"
+
+
+def is_per_host_storage(path: str) -> bool:
+    abs_path = os.path.abspath(path)
+    return any(abs_path == p or abs_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES)
+
+
 def migration_file_export_enabled() -> bool:
     return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
 

@@ -19,6 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.migration import is_per_host_storage, migration_table_path
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -108,16 +109,13 @@ def _chunk_to_host_array(chunk_token_ids):
     )
 
 
-_PER_HOST_FS_PREFIXES = ("/tmp", "/dev/shm", "/run", "/var/tmp")
-
-
 def _require_shared_table_path(world_size: int) -> None:
     if world_size <= 1:
         return
-    table_path = os.path.abspath(os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"))
-    if any(table_path == p or table_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES):
+    table_path = os.path.abspath(migration_table_path())
+    if is_per_host_storage(table_path):
         logger.error(
-            f"[producer] PREFILL_MIGRATION_TABLE_PATH={table_path!r} is on per-host storage; multi-rank "
+            f"[producer] KV chunk table {table_path!r} is on per-host storage; multi-rank "
             f"(world_size={world_size}) validators on other hosts cannot read rank 0's table. Point it at "
             "shared/NFS storage (e.g. /data/...)."
         )
@@ -125,7 +123,7 @@ def _require_shared_table_path(world_size: int) -> None:
 
 
 def _read_kv_chunk_table(timeout_s: int):
-    table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+    table_path = migration_table_path()
     deadline = time.perf_counter() + timeout_s
     while not os.path.exists(table_path):
         if time.perf_counter() > deadline:
