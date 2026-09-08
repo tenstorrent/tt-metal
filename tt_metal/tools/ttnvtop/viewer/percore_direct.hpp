@@ -270,18 +270,36 @@ public:
         //
         // Attached to the LOCAL die only, like slot power, so summing the rendered chips
         // cannot double-count one card.
-        if (a.out.rest_of_chip_w > 0) {
-            uint32_t board_w = 0;
-            for (uint32_t d = 0; d < a.out.dies && d < views_.size(); ++d) {
-                if (!a.out.die[d].published) {
-                    continue;
-                }
+        //
+        // PUBLISHED ONLY WHEN EVERY DIE REPORTED. Skipping a die that is not publishing
+        // (a downed relay, say) and summing the rest gives a figure short by a whole die
+        // that still looks like a reading. Observed on a two-die card: "board 64W" beside
+        // "slot 68W", which is impossible -- the slot rails are a SUBSET of the card's
+        // draw and cannot exceed it. A die's TDP of 0 is the same defect one level down:
+        // 0 there means telemetry was not sampled, not a die drawing nothing.
+        //
+        // So an incomplete read publishes nothing. 0 is this project's "not sampled" and
+        // consumers hide it rather than render it (render_dram, render_thermals), so a
+        // missing die shows as no board figure instead of a wrong one. No value is
+        // invented for the die that did not report: there is nothing to infer it from.
+        // Assigned unconditionally rather than skipped, because views_ persist across
+        // reads and a figure from an earlier complete read would otherwise keep
+        // rendering as if it were current.
+        bool complete = (a.out.dies > 0 && a.out.dies <= views_.size() && a.out.rest_of_chip_w > 0);
+        for (uint32_t d = 0; d < a.out.dies && d < views_.size(); ++d) {
+            if (!a.out.die[d].published || views_[d].header.tdp_w == 0) {
+                complete = false;
+            }
+        }
+        uint32_t board_w = 0;
+        if (complete) {
+            for (uint32_t d = 0; d < a.out.dies; ++d) {
                 board_w += views_[d].header.tdp_w + a.out.rest_of_chip_w + a.out.mvddq_w;
             }
-            for (uint32_t d = 0; d < a.out.dies && d < views_.size(); ++d) {
-                if (a.out.die[d].location == 0) {
-                    views_[d].header.board_power_w = static_cast<uint16_t>(board_w);
-                }
+        }
+        for (uint32_t d = 0; d < a.out.dies && d < views_.size(); ++d) {
+            if (a.out.die[d].location == 0) {
+                views_[d].header.board_power_w = static_cast<uint16_t>(board_w);
             }
         }
         return true;
