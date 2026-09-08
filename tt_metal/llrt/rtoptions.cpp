@@ -1410,13 +1410,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_RISCV_DEBUG_INFO
-        // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
-        // Default: Inherits from inspector setting
+        // Emit DWARF debug info (-g) for JIT-compiled kernels. Opt in: DWARF dominates the size of
+        // every kernel ELF and adds to JIT build time, so it is off unless explicitly requested.
+        // Default: false
         // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable
         case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: {
-            bool enable_riscv_debug_info = this->get_inspector_enabled();  // Default from inspector
+            bool enable_riscv_debug_info = false;
             if (value) {
-                enable_riscv_debug_info = true;  // Default to true if set
+                enable_riscv_debug_info = true;
                 if (strcmp(value, "0") == 0) {
                     enable_riscv_debug_info = false;  // Only "0" = false
                 }
@@ -1848,7 +1849,7 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Set inspector log path
     this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
 
-    // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
+    // TT_METAL_RISCV_DEBUG_INFO: Apply the default when not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
         HandleEnvVar(EnvVarID::TT_METAL_RISCV_DEBUG_INFO, nullptr);
     }

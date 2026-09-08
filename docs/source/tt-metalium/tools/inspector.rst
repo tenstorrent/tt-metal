@@ -22,7 +22,8 @@ Configure the Inspector by setting the following environment variables:
    export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=localhost:50051 # optional: set the address of the Inspector RPC server. Default is `localhost:50051`.
    export TT_METAL_INSPECTOR_RPC=1                              # optional: enable/disable the Inspector RPC server. Default is `1` (enabled).
 
-Enabling the Inspector will override `TT_METAL_RISCV_DEBUG_INFO` and debugging info will be generated for riscv elfs.
+The Inspector no longer turns on `TT_METAL_RISCV_DEBUG_INFO`. Debug info for riscv elfs is opt-in, so set
+`TT_METAL_RISCV_DEBUG_INFO=1` when you need tooling that reads DWARF (for example ``tt-triage`` or ``dump-consts.py``).
 You can also use unix sockets for the RPC server by setting `TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS` to a unix socket path,
 e.g. `unix:/tmp/inspector_socket`.
 
