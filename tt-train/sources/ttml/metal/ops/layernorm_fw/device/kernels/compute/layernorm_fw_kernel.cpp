@@ -96,6 +96,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
+    reconfig_data_format<SrcOrder::Reverse>(cb_sum_idx, cb_scaler_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
@@ -153,6 +154,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
+    reconfig_data_format<SrcOrder::Reverse>(cb_sum_idx, cb_scaler_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
@@ -294,6 +296,7 @@ inline void compute_rstd() {
     tile_regs_acquire();
 
     // Reduce variance sum and scale by 1/N
+    reconfig_data_format<SrcOrder::Reverse>(cb_variance_sum_idx, cb_scaler_idx);
     matmul_init(cb_variance_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_variance_sum_idx,
@@ -337,6 +340,7 @@ inline void compute_x_hat() {
             uint32_t input_tile_idx = col + block_idx;
 
             // Subtract mean: (input - mean)
+            reconfig_data_format(cb_input_idx, cb_mean_bcast_idx);
             sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, input_tile_idx, 0, x_hat_reg);
 
@@ -368,6 +372,7 @@ inline void compute_output() {
         tile_regs_acquire();
 
         // First multiply x_hat by gamma -> store in intermediate CB
+        reconfig_data_format(cb_x_hat_idx, cb_gamma_idx);
         mul_bcast_rows_init(cb_x_hat_idx, cb_gamma_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t input_tile_idx = col + block_idx;
@@ -379,6 +384,7 @@ inline void compute_output() {
 
         // Then add beta from intermediate CB -> store in output CB
         tile_regs_acquire();
+        reconfig_data_format(cb_output_intermediate_idx, cb_beta_idx);
         add_bcast_rows_init(cb_output_intermediate_idx, cb_beta_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t input_tile_idx = col + block_idx;
@@ -410,6 +416,7 @@ inline void compute_output() {
             uint32_t temp_reg = x_hat_reg + 1;
 
             // Subtract mean: (input - mean)
+            reconfig_data_format(cb_input_idx, cb_mean_bcast_idx);
             sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, block_idx, 0, x_hat_reg);
 
@@ -429,6 +436,7 @@ inline void compute_output() {
         // Now compute output = x_hat * gamma + beta
         // Multiply x_hat by gamma -> store in intermediate CB
         tile_regs_acquire();
+        reconfig_data_format(cb_x_hat_idx, cb_gamma_idx);
         mul_bcast_rows_init(cb_x_hat_idx, cb_gamma_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             mul_tiles_bcast_rows(cb_x_hat_idx, cb_gamma_idx, block_idx, block_idx, block_idx);
@@ -441,6 +449,7 @@ inline void compute_output() {
 
         // Then add beta from intermediate CB -> store in output CB
         tile_regs_acquire();
+        reconfig_data_format(cb_output_intermediate_idx, cb_beta_idx);
         add_bcast_rows_init(cb_output_intermediate_idx, cb_beta_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             add_tiles_bcast_rows(cb_output_intermediate_idx, cb_beta_idx, block_idx, block_idx, block_idx);
@@ -504,8 +513,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_output_idx);
     copy_init(cb_input_idx);
-    reconfig_data_format(cb_scaler_idx, cb_sum_idx);
-    matmul_init(cb_sum_idx, cb_scaler_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
 #ifdef EVERYTHING_FITS_IN_L1

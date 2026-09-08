@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <tt-metalium/constants.hpp>
 #include <tuple>
 
 #include "autograd/auto_context.hpp"
@@ -126,6 +127,59 @@ static void CompareKernelVsXArray(
     }
 }
 
+static void CompareMixedStatsFormatsAcrossMultipleRows() {
+    using namespace ttml;
+
+    auto& device = autograd::ctx().get_device();
+    const auto grid = device.compute_with_storage_grid_size();
+    const uint32_t tile_rows = static_cast<uint32_t>(grid.x * grid.y) + 1U;
+    const uint32_t batch_size = 1U;
+    const uint32_t seq_len = tile_rows * tt::constants::TILE_HEIGHT;
+    const uint32_t heads = 1U;
+    const uint32_t features = 64U;
+    const uint32_t total_elements = batch_size * seq_len * heads * features;
+
+    xt::xarray<float> x_data = xt::zeros<float>(std::array<std::size_t, 1>{total_elements});
+    xt::xarray<float> gamma_data = xt::zeros<float>(std::array<std::size_t, 1>{features});
+    xt::xarray<float> beta_data = xt::zeros<float>(std::array<std::size_t, 1>{features});
+
+    for (uint32_t i = 0; i < total_elements; ++i) {
+        x_data.data()[i] = (i % 2U == 0U) ? 0.0F : 2.0F;
+    }
+    for (uint32_t i = 0; i < features; ++i) {
+        gamma_data.data()[i] = 0.5F + static_cast<float>(i % 8U) * 0.125F;
+        beta_data.data()[i] = -0.25F + static_cast<float>(i % 4U) * 0.125F;
+    }
+
+    auto [y_ref, mu_ref, rstd_ref] =
+        layernorm_forward_reference_(x_data, gamma_data, beta_data, seq_len, features, 1e-6F);
+
+    x_data.reshape({batch_size, heads, seq_len, features});
+    gamma_data.reshape({1U, 1U, 1U, features});
+    beta_data.reshape({1U, 1U, 1U, features});
+
+    auto input_tensor = core::from_xtensor(x_data, &device);
+    auto gamma_tensor = core::from_xtensor(gamma_data, &device);
+    auto beta_tensor = core::from_xtensor(beta_data, &device);
+
+    auto output_tensors =
+        metal::layernorm_fw(input_tensor, gamma_tensor, beta_tensor, 1e-6F, /* return_mean_rstd */ true);
+    auto metal_y = xt::flatten(core::to_xtensor(output_tensors[0].value()));
+    auto metal_mu = xt::flatten(core::to_xtensor(output_tensors[1].value()));
+    auto metal_rstd = xt::flatten(core::to_xtensor(output_tensors[2].value()));
+
+    ASSERT_EQ(metal_y.shape(), y_ref.shape());
+    ASSERT_EQ(metal_mu.shape(), mu_ref.shape());
+    ASSERT_EQ(metal_rstd.shape(), rstd_ref.shape());
+
+    EXPECT_TRUE(xt::allclose(metal_y, y_ref, 1.0e-3F, 2.0e-2F))
+        << "y max_abs_diff=" << xt::amax(xt::abs(metal_y - y_ref))();
+    EXPECT_TRUE(xt::allclose(metal_mu, mu_ref, 1.0e-3F, 1.0e-2F))
+        << "mean max_abs_diff=" << xt::amax(xt::abs(metal_mu - mu_ref))();
+    EXPECT_TRUE(xt::allclose(metal_rstd, rstd_ref, 1.0e-3F, 1.0e-2F))
+        << "rstd max_abs_diff=" << xt::amax(xt::abs(metal_rstd - rstd_ref))();
+}
+
 TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_OneTile) {
     CompareKernelVsXArray(1, 32, 1, 32);
 }
@@ -144,4 +198,8 @@ TEST_F(LayerNormForwardOpTest, NIGHTLY_MetalLayerNormFw_LargeTensor_DoesNotFitIn
 
 TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_HeadsDimNot1) {
     CompareKernelVsXArray(2, 8, 4, 512);
+}
+
+TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_MixedStatsFormatsAcrossMultipleRows) {
+    CompareMixedStatsFormatsAcrossMultipleRows();
 }
