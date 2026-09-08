@@ -254,6 +254,30 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
 // rotation). Everything else is keyed by the hash, so a cache hit guarantees it already passed at miss
 // time. Shared by validate_on_program_cache_miss and validate_on_program_cache_hit to avoid divergence.
 void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (tensor_args.has_paged_kv_cache()) {
+        const auto& shape = tensor_args.page_bundle_indices->logical_shape();
+        TT_FATAL(
+            shape.rank() == 2 && shape[0] > 0 && shape[1] > 0, "page_bundle_indices must have shape [slots,max_pages]");
+        TT_FATAL(args.kv_cache_slot_idx < shape[0], "kv_cache_slot_idx is out of range");
+        TT_FATAL(
+            !args.kv_cache_sp_axis.has_value() || *args.kv_cache_sp_axis < tensor_args.input_q.device()->shape().dims(),
+            "kv_cache_sp_axis is out of range");
+        const uint32_t sp = tensor_args.page_table_sp_size(args.kv_cache_sp_axis);
+        TT_FATAL(shape[1] >= sp, "page table must contain at least one page per SP rank");
+        if (shape[1] % sp != 0 || args.has_kv_pad_rotation()) {
+            const uint32_t q_local = tensor_args.input_q.logical_shape()[2];
+            const uint32_t chunk_global = q_local * args.ring_size;
+            const uint32_t valid_local = ((args.logical_n + chunk_global - 1) / chunk_global) * q_local;
+            TT_FATAL(
+                args.has_kv_pad_rotation() && valid_local <= (shape[1] / sp) * args.kv_cache_page_size,
+                "Paged rotation and uneven SP tables require a logical_n-valid prefix within every rank's capacity");
+        }
+    } else {
+        TT_FATAL(
+            args.kv_cache_slot_idx == 0 && !args.kv_cache_sp_axis.has_value(),
+            "kv_cache_slot_idx and kv_cache_sp_axis require page_bundle_indices");
+    }
+
     if (args.has_indexed_kv_cache()) {
         const auto K_cache_batch = tensor_args.input_k.logical_shape()[0];
         const auto V_cache_batch =
@@ -272,7 +296,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
     if (args.has_kv_pad_rotation()) {
         const auto N_local_q = tensor_args.input_q.logical_shape()[2];
-        const auto N_local_kv = tensor_args.local_kv_seq_len();
+        const auto N_local_kv = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
         const auto kv_actual_isl = args.kv_actual_isl.value();
         TT_FATAL(
             args.logical_n >= kv_actual_isl,
@@ -309,7 +333,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked()) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_cache_sp_axis)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
@@ -338,6 +362,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    validate_runtime_patched_scalars(args, tensor_args);
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
@@ -485,20 +510,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             input_tensor_q.device() == bundles.device(),
             "page_bundle_indices must be on the same mesh device as Q/K/V");
         TT_FATAL(bundles.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
-        TT_FATAL(bundles.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+        TT_FATAL(!bundles.memory_config().is_sharded(), "page_bundle_indices must be interleaved");
+        TT_FATAL(bundles.padded_shape() == bundles.logical_shape(), "page_bundle_indices must not be padded");
+        TT_FATAL(bundles.dtype() == DataType::UINT32, "page_bundle_indices must have uint32 dtype");
         const auto& bundle_shape = bundles.logical_shape();
         TT_FATAL(
-            bundle_shape.rank() == 4 && bundle_shape[0] == 1 && bundle_shape[1] == 1 && bundle_shape[2] == 1,
-            "page_bundle_indices must have shape [1, 1, 1, num_logical_bundles], got {}",
+            bundle_shape.rank() == 2 && bundle_shape[0] > 0 && bundle_shape[1] > 0,
+            "page_bundle_indices must have shape [slots,max_pages], got {}",
             bundle_shape);
         TT_FATAL(
             bundles.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "page_bundle_indices must be in DRAM");
         TT_FATAL(bundles.logical_volume() > 0, "page_bundle_indices must contain at least one bundle id");
         const uint32_t physical_bundle_count = validate_paged_cache(tensor_args.input_k, tensor_args.gathered_k, "K");
-        TT_FATAL(
-            physical_bundle_count <= (1u << 16),
-            "uint16 page_bundle_indices support at most 65536 physical bundles, got {}",
-            physical_bundle_count);
         if (has_input_v) {
             const uint32_t v_physical_bundle_count =
                 validate_paged_cache(tensor_args.input_v.value(), tensor_args.gathered_v.value(), "V");
@@ -564,7 +587,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.all_gather_tensor_args,
         args.has_indexed_kv_cache() || tensor_args.has_metadata() || tensor_args.has_paged_kv_cache(),
         compact_gather_dim_minimum,
-        tensor_args.has_paged_kv_cache() ? std::optional<uint32_t>(tensor_args.local_kv_seq_len()) : std::nullopt);
+        tensor_args.has_paged_kv_cache() ? std::optional<uint32_t>(tensor_args.local_kv_seq_len(args.kv_cache_sp_axis))
+                                         : std::nullopt);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -593,10 +617,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
-    // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
+    // Chunked-prefill (`tensor_args.is_chunked(args.kv_cache_sp_axis)`): Q is shorter than the per-device K shard
     // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
     // is_causal=True path.
-    const bool is_chunked = tensor_args.is_chunked();
+    const bool is_chunked = tensor_args.is_chunked(args.kv_cache_sp_axis);
 
     const auto dtype = input_tensor_q.dtype();
     if ((!args.is_causal && !is_chunked) || args.is_cross) {
@@ -628,7 +652,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
     const auto N_local_q = q_shape[2];
-    const auto N_local_kv = tensor_args.local_kv_seq_len();
+    const auto N_local_kv = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
     const auto gathered_buffer_n = k_shape[2];
     const auto N_global = args.has_sliding_window() ? N_local_kv * args.ring_size : gathered_buffer_n;
     const auto L = has_joint_tensors ? joint_q_shape[2] : 0;
@@ -762,7 +786,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Value checks for the runtime-patched scalars (kv_cache_batch_idx, logical_n, kv_actual_isl).
     // Also invoked on every program-cache hit, where these values vary but the rest is hash-pinned.
-    validate_runtime_patched_scalars(args, tensor_args);
 
     if (has_kv_pad_rotation) {
         // Shape/flag preconditions are pinned by the program hash. The logical_n / kv_actual_isl value
@@ -784,7 +807,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "KV-pad-aware rotation currently supports ring attention without joint tokens. Got joint length L={}",
             L);
         TT_FATAL(
-            N_local_kv % N_local_q == 0,
+            tensor_args.has_paged_kv_cache() || N_local_kv % N_local_q == 0,
             "KV-pad-aware rotation expects K/V local sequence length to be an integer number of Q-sized slabs. "
             "Got N_local_kv={}, N_local_q={}",
             N_local_kv,
@@ -1136,6 +1159,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.has_paged_kv_cache(),
         args.kv_cache_num_layers,
         args.kv_cache_layer_idx,
+        args.kv_cache_page_size,
+        args.kv_cache_sp_axis,
         tensor_args.has_latent_v(),
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
@@ -1275,7 +1300,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const uint32_t kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
     const uint32_t kv_cache_page_size,
-    const std::optional<uint32_t> sliding_window_size) {
+    const std::optional<uint32_t> sliding_window_size,
+    const uint32_t kv_cache_slot_idx,
+    const std::optional<uint32_t> kv_cache_sp_axis) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1462,7 +1489,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_cache_page_size,
-        sliding_window_size);
+        sliding_window_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

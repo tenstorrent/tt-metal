@@ -23,13 +23,22 @@
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
+inline uint32_t page_table_sp_size(const operation_attributes_t& attrs, const Tensor& q) {
+    return attrs.kv_cache_sp_axis.has_value() ? q.device()->shape()[*attrs.kv_cache_sp_axis] : 1u;
+}
+
+inline uint32_t page_table_local_pages(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+    const uint32_t sp = page_table_sp_size(attrs, tensors.q);
+    return (tensors.page_bundle_indices->logical_shape()[1] + sp - 1) / sp;
+}
+
 // Logical sequence capacity is not encoded in the physical K shape for paged caches. The classic path's
 // table maps the complete logical sequence; the fused ring path's table maps one local SP shard while `k`
 // remains the contiguous gathered scratch and therefore continues to carry the global logical length.
 inline uint32_t logical_k_length(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     if (tensors.has_paged_kv_cache() && !attrs.has_fused_ring()) {
         return static_cast<uint32_t>(
-            tensors.page_bundle_indices->logical_volume() * static_cast<uint64_t>(attrs.kv_cache_page_size));
+            page_table_local_pages(attrs, tensors) * static_cast<uint64_t>(attrs.kv_cache_page_size));
     }
     return tensors.k.logical_shape()[2];
 }
@@ -37,7 +46,7 @@ inline uint32_t logical_k_length(const operation_attributes_t& attrs, const tens
 inline uint32_t logical_local_k_length(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     if (tensors.has_paged_kv_cache()) {
         return static_cast<uint32_t>(
-            tensors.page_bundle_indices->logical_volume() * static_cast<uint64_t>(attrs.kv_cache_page_size));
+            page_table_local_pages(attrs, tensors) * static_cast<uint64_t>(attrs.kv_cache_page_size));
     }
     return tensors.k_local->logical_shape()[2];
 }

@@ -538,7 +538,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     bool partial_readiness_enabled,
     RingAttentionRankMapping rank_mapping,
     std::optional<Tensor> page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    uint32_t kv_cache_sp_size,
+    uint32_t kv_cache_sp_rank) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -743,9 +746,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         max_payload_size_bytes);
     const uint32_t num_pages_per_packet =
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
+    const uint32_t prefetch_packets =
+        page_bundle_indices.has_value() ? (partial_readiness_enabled ? 16u : 2u) : kPrefetchPackets;
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
-    const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
+    const uint32_t cb_num_pages = kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -824,7 +829,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     }
     const uint32_t page_bundle_cb_index = tt::CB::c_in4;
     if (has_page_bundles) {
-        const uint32_t table_bytes = static_cast<uint32_t>(page_bundle_indices->logical_volume() * sizeof(uint16_t));
+        const uint32_t table_bytes = static_cast<uint32_t>(page_bundle_indices->logical_shape()[1] * sizeof(uint32_t));
         const uint32_t page_bundle_cb_page_size_bytes = round_up_to_mul32(table_bytes);
         for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
             desc.cbs.push_back(CBDescriptor{
@@ -832,7 +837,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 .core_ranges = core_ranges,
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(page_bundle_cb_index),
-                    .data_format = tt::DataFormat::RawUInt16,
+                    .data_format = tt::DataFormat::UInt32,
                     .page_size = page_bundle_cb_page_size_bytes,
                 }}},
             });
@@ -875,7 +880,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            kPrefetchPackets,                                   // kPrefetchPackets
+            prefetch_packets,                                   // kPrefetchPackets
             static_cast<uint32_t>(has_page_bundles),
             page_bundle_cb_index,
         };
@@ -1045,7 +1050,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             const uint32_t input_tensor_Ht =
                 has_page_bundles
                     ? static_cast<uint32_t>(
-                          page_bundle_indices->logical_volume() * (kv_cache_page_size / tt::constants::TILE_HEIGHT))
+                          ((page_bundle_indices->logical_shape()[1] + kv_cache_sp_size - 1) / kv_cache_sp_size) *
+                          (kv_cache_page_size / tt::constants::TILE_HEIGHT))
                     : input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
             const uint32_t output_tensor_Ht = output_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
@@ -1136,6 +1142,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_args.push_back(kv_cache_num_layers);
             reader_args.push_back(kv_cache_layer_idx);
             reader_args.push_back(kv_cache_page_size / tt::constants::TILE_HEIGHT);
+            reader_args.push_back(kv_cache_slot_idx);
+            reader_args.push_back(kv_cache_sp_size);
+            reader_args.push_back(kv_cache_sp_rank);
         }
         if (fuse_op) {
             std::vector<uint32_t> signaler_args;

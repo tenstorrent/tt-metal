@@ -384,7 +384,8 @@ def _make_paged_k(k, page_size, num_layers=3, layer_idx=1, extra_bundles=2, seed
     for logical_bundle, physical_bundle in enumerate(order):
         lo = logical_bundle * page_size
         pool[physical_bundle * num_layers + layer_idx, 0] = k[0, 0, lo : lo + page_size]
-    table = torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, logical_bundles)
+    row = torch.tensor(order, dtype=torch.int64)
+    table = torch.stack([row.flip(0), row.roll(1), row])
     return pool, table
 
 
@@ -394,7 +395,7 @@ def _upload_paged_k(device, pool, table, page_size, dtype=ttnn.bfloat16):
     table_dev = ttnn.from_torch(
         table,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint16,
+        dtype=ttnn.uint32,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -407,6 +408,7 @@ def _paged_kwargs(table_dev, page_size, num_layers=3, layer_idx=1):
         kv_cache_layer_idx=layer_idx,
         page_bundle_indices=table_dev,
         kv_cache_page_size=page_size,
+        kv_cache_slot_idx=2,
     )
 
 
@@ -532,8 +534,8 @@ def test_indexer_score_paged_validation(device, expect_error):
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **{**base, "kv_cache_layer_idx": num_layers})
     with expect_error(RuntimeError, "shape"):
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **{**base, "kv_cache_page_size": page_size * 2})
-    bad_table = to_device(table.to(torch.int32), device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    with expect_error(RuntimeError, "uint16"):
+    bad_table = to_device(table.to(torch.int32), device, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    with expect_error(RuntimeError, "uint32"):
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **{**base, "page_bundle_indices": bad_table})
     interleaved_pool = to_device(pool, device)
     with expect_error(RuntimeError, "ND-sharded"):
@@ -1417,10 +1419,10 @@ def test_indexer_score_paged_perf_matches_contiguous(device, mode):
         memory_config=_nd_sharded_dram_config(device, rows_per_shard=page_size),
     )
     table_dev = ttnn.from_torch(
-        torch.arange(t // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
+        torch.arange(t // page_size, dtype=torch.int64).reshape(1, -1).repeat(3, 1),
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint16,
+        dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     paged_args = _paged_kwargs(table_dev, page_size, num_layers=1, layer_idx=0)
@@ -2067,3 +2069,42 @@ def test_indexer_score_rejects_partial_block_cyclic_args(device, expect_error):
     for kwargs in [{"block_cyclic_sp_axis": 0}, {"block_cyclic_chunk_local": 256}]:
         with expect_error(RuntimeError, "both be set or both unset"):
             ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=0, program_config=cfg, **kwargs)
+
+
+@pytest.mark.parametrize("mode", ["dsa", "msa"])
+def test_indexer_score_paged_uint32_slots(device, mode, expect_error):
+    """One program selects distinct requests from one table with bundle IDs above 65535."""
+    heads, dim, sq, t, base = 4, 128, 64, 256, 65536
+    page_size = 32
+    pages = t // page_size
+    torch.manual_seed(836)
+    rows = torch.stack([torch.randperm(pages) + base + slot * pages for slot in range(3)])
+    pool = torch.zeros(base + 3 * pages, 1, page_size, dim, dtype=torch.bfloat16)
+    keys = [torch.randn(1, 1, t, dim, dtype=torch.bfloat16) for _ in range(3)]
+    for slot, key in enumerate(keys):
+        pool[rows[slot], 0] = key.reshape(pages, page_size, dim)
+    k_dev, table_dev = _upload_paged_k(device, pool, rows, page_size)
+    q, _, w = make_inputs(heads, dim, sq, t, seed=934)
+    q_dev, w_dev = to_device(q, device), to_device(w, device)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    kwargs = dict(chunk_start_idx=128, program_config=cfg, **_paged_kwargs(table_dev, page_size, 1, 0))
+    entries = None
+    for slot in (2, 0, 2):
+        kwargs["kv_cache_slot_idx"] = slot
+        if mode == "dsa":
+            out = ttnn.to_torch(ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **kwargs))
+            ref = indexer_score_dsa_ref(q, keys[slot], w, 128)
+            assert_indexer_match(out, ref, sq, t, check_neg=True)
+        else:
+            out = ttnn.to_torch(ttnn.experimental.indexer_score_msa(q_dev, k_dev, num_groups=heads, **kwargs))
+            ref = indexer_score_msa_ref(
+                q, keys[slot], _msa_scale_w(heads, sq, dim**-0.5), 128, num_groups=heads, block_size=0
+            )
+            assert_grouped_match(out, ref, heads, sq, t)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+    kwargs["kv_cache_slot_idx"] = 3
+    with expect_error(RuntimeError, "kv_cache_slot_idx is out of range"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **kwargs)

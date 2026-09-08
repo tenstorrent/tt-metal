@@ -92,6 +92,15 @@ constexpr uint32_t cb_page_bundle_id = get_compile_time_arg_val(kCbPageBundleId)
 // CB depth must be >= 2 * prefetch_packets * packet_size_in_pages (see program_factory cb_num_pages).
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 
+template <typename Accessor>
+FORCE_INLINE uint64_t bundle_shard_noc_addr(const Accessor& accessor, uint32_t page) {
+    if constexpr (has_page_bundles) {
+        return accessor.get_shard_noc_addr(page);
+    } else {
+        return 0;
+    }
+}
+
 template <bool physically_contiguous, typename Accessor>
 FORCE_INLINE void prefetch_bank_owned_slices(
     const Noc& noc,
@@ -110,7 +119,8 @@ FORCE_INLINE void prefetch_bank_owned_slices(
     uint32_t layer_idx = 0,
     uint32_t num_heads = 1,
     uint32_t head_idx = 0,
-    uint32_t width_tiles = 1) {
+    uint32_t width_tiles = 1,
+    bool bundle_noc_addresses = false) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     const auto next_packet = [&](uint32_t& pages_to_read) {
@@ -119,10 +129,13 @@ FORCE_INLINE void prefetch_bank_owned_slices(
         return accessor_page_base + first_page_offset;
     };
     if constexpr (physically_contiguous) {
+        // Relay packets are full bank-contiguous bursts. Bound their window to avoid
+        // saturating the NoC shared with score-output writes on long contexts.
+        constexpr uint32_t relay_prefetch_packets = std::min<uint32_t>(prefetch_packets, 4u);
         prefetch_batch_read_physically_contiguous_packets<
             input_tensor_page_size,
             packet_size_in_pages,
-            prefetch_packets>(
+            relay_prefetch_packets>(
             noc, cb_output, schedule.packets_remaining, cb_fifo_limit, cb_fifo_size, accessor, next_packet);
     } else {
         prefetch_batch_read_packets<input_tensor_page_size, packet_size_in_pages, prefetch_packets>(
@@ -150,7 +163,12 @@ FORCE_INLINE void prefetch_bank_owned_slices(
                         row_in_bundle = logical_row % rows_per_bundle;
                         col = logical_tile % width_tiles;
                     }
-                    const uint32_t bundle = CoreLocalMem<volatile uint16_t>(bundle_table)[logical_bundle];
+                    if (bundle_noc_addresses) {
+                        return ShardNocReadAddress{
+                            CoreLocalMem<volatile uint64_t>(bundle_table)[logical_bundle] +
+                            (row_in_bundle * width_tiles + col) * input_tensor_page_size};
+                    }
+                    const uint32_t bundle = CoreLocalMem<volatile uint32_t>(bundle_table)[logical_bundle];
                     const uint32_t physical_page = (bundle * num_layers + layer_idx) * num_heads + head_idx;
                     if constexpr (num_inputs == 1) {
                         return ShardNocReadAddress{accessor.get_shard_noc_addr(
@@ -279,11 +297,15 @@ void kernel_main() {
     uint32_t page_bundle_num_layers = 1;
     uint32_t page_bundle_layer_idx = 0;
     uint32_t page_bundle_size_tiles = 1;
+    uint32_t page_table_slot = 0, page_table_sp_size = 1, page_table_sp_rank = 0;
     if constexpr (has_page_bundles) {
         page_bundle_indices_addr = get_arg_val<uint32_t>(arg_idx++);
         page_bundle_num_layers = get_arg_val<uint32_t>(arg_idx++);
         page_bundle_layer_idx = get_arg_val<uint32_t>(arg_idx++);
         page_bundle_size_tiles = get_arg_val<uint32_t>(arg_idx++);
+        page_table_slot = get_arg_val<uint32_t>(arg_idx++);
+        page_table_sp_size = get_arg_val<uint32_t>(arg_idx++);
+        page_table_sp_rank = get_arg_val<uint32_t>(arg_idx++);
     }
 
     OpSignaler op_signaler;
@@ -301,17 +323,37 @@ void kernel_main() {
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
     const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
     uint32_t page_bundle_scratch = 0;
+    bool bundle_noc_addresses = false;
     if constexpr (has_page_bundles) {
         CircularBuffer cb_page_bundle(cb_page_bundle_id);
         page_bundle_scratch = cb_page_bundle.get_write_ptr();
-        noc_obj.async_read(
+        const uint32_t active_tiles = (input_valid_pages[0] + input_tensor_Wt[0] - 1) / input_tensor_Wt[0];
+        const uint32_t active_pages = (active_tiles + page_bundle_size_tiles - 1) / page_bundle_size_tiles;
+        load_paged_kv_table_range(
+            noc_obj,
             page_bundle_reader,
-            CoreLocalMem<uint16_t>(page_bundle_scratch),
-            (input_tensor_Ht[0] / page_bundle_size_tiles) * sizeof(uint16_t),
-            {.page_id = 0},
-            {});
-        noc_obj.async_read_barrier();
-        invalidate_l1_cache();
+            page_bundle_scratch,
+            page_table_slot,
+            page_table_sp_size,
+            page_table_sp_rank,
+            0,
+            active_pages);
+        if constexpr (num_inputs == 1 && output_bank_owned_schedule) {
+            // The SP-interleaved row leaves room after compaction to cache each local
+            // bundle's NoC address. Expand backwards so unread UINT32 IDs stay intact.
+            bundle_noc_addresses =
+                input_batch_head_count[0] == 1 &&
+                get_local_cb_interface(cb_page_bundle_id).fifo_size >= active_pages * sizeof(uint64_t);
+            if (bundle_noc_addresses) {
+                auto bundle_noc_table = CoreLocalMem<volatile uint64_t>(page_bundle_scratch);
+                for (uint32_t page = active_pages; page > 0;) {
+                    --page;
+                    const uint32_t bundle = CoreLocalMem<volatile uint32_t>(page_bundle_scratch)[page];
+                    bundle_noc_table[page] = bundle_shard_noc_addr(
+                        std::get<0>(inputs_tuple), bundle * page_bundle_num_layers + page_bundle_layer_idx);
+                }
+            }
+        }
     }
 
     // Read the local slice into the packet CB before sending it over Fabric.
@@ -351,7 +393,8 @@ void kernel_main() {
                         page_bundle_layer_idx,
                         input_batch_head_count[input_idx],
                         bh_idx,
-                        input_tensor_Wt[input_idx]);
+                        input_tensor_Wt[input_idx],
+                        bundle_noc_addresses);
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
@@ -369,7 +412,8 @@ void kernel_main() {
                         page_bundle_layer_idx,
                         input_batch_head_count[input_idx],
                         bh_idx,
-                        input_tensor_Wt[input_idx]);
+                        input_tensor_Wt[input_idx],
+                        bundle_noc_addresses);
                 } else {
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
@@ -388,7 +432,8 @@ void kernel_main() {
                         page_bundle_layer_idx,
                         input_batch_head_count[input_idx],
                         bh_idx,
-                        input_tensor_Wt[input_idx]);
+                        input_tensor_Wt[input_idx],
+                        bundle_noc_addresses);
                 }
             }
         } else {
@@ -398,14 +443,14 @@ void kernel_main() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                 uint32_t page_bundle_col = 0;
                 auto input_reader = input_tensor_addrgens[input_idx];
-                const PagedKVAccessor<decltype(input_reader)> paged_kv{
+                const PagedKVAccessor<decltype(input_reader), uint32_t> paged_kv{
                     input_reader,
                     page_bundle_scratch,
                     page_bundle_size_tiles,
                     page_bundle_num_layers,
                     input_batch_head_count[input_idx],
                     page_bundle_layer_idx};
-                typename PagedKVAccessor<decltype(input_reader)>::Cursor bundle_cursor;
+                typename PagedKVAccessor<decltype(input_reader), uint32_t>::Cursor bundle_cursor;
                 if constexpr (has_page_bundles) {
                     page_bundle_col = tiles_read % input_tensor_Wt[input_idx];
                     const uint32_t first_logical_row = tiles_read / input_tensor_Wt[input_idx];

@@ -445,8 +445,8 @@ def test_indexer_score_full_mesh_2x2_accuracy_placement_and_cache_reuse(block_cy
     _run_full_mesh_accuracy_case((2, 2), block_cyclic=block_cyclic)
 
 
-def _small_ring_inputs(mesh, heads, *, paged, page_size=64, seed=73):
-    """Small ring-4 tensors; paged mode gives every rank the same table permutation over its own page pool."""
+def _small_ring_inputs(mesh, heads, *, paged, page_size=64, seed=73, slot=2, bundle_base=0):
+    """Small ring-4 tensors; paged mode gives each rank its own bundle permutation in a replicated global table."""
     sq, local_t, dim = 64, 256, QB_DIM
     chunk, total_t = RING4 * sq, RING4 * local_t
     gen = torch.Generator().manual_seed(seed)
@@ -467,15 +467,20 @@ def _small_ring_inputs(mesh, heads, *, paged, page_size=64, seed=73):
         k_local = ttnn.from_torch(k, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_shard)
         return q, k, w, q_dev, w_dev, k_local, k_gathered, {}
 
-    num_layers, layer_idx = 3, 2
+    num_layers, layer_idx = (1, 0) if bundle_base else (3, 2)
     pools = []
-    table = None
+    tables = []
     for rank in range(RING4):
         local = k[:, :, rank * local_t : (rank + 1) * local_t]
-        pool, rank_table = _make_paged_k(local, page_size, num_layers=num_layers, layer_idx=layer_idx, seed=seed + 100)
+        pool, rank_table = _make_paged_k(
+            local, page_size, num_layers=num_layers, layer_idx=layer_idx, seed=seed + 100 + rank
+        )
+        if bundle_base:
+            pool = torch.cat([torch.zeros(bundle_base * num_layers, 1, page_size, dim, dtype=pool.dtype), pool])
+            rank_table = rank_table + bundle_base
         pools.append(pool)
-        table = rank_table if table is None else table
-        assert torch.equal(table, rank_table)
+        tables.append(rank_table.roll(slot - 2, dims=0))
+    table = torch.stack(tables, dim=-1).reshape(3, -1)
     physical_pool = torch.cat(pools, dim=0)
     pool_mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=(1, RING4), dims=(None, 0))
     k_local = ttnn.from_torch(
@@ -490,7 +495,7 @@ def _small_ring_inputs(mesh, heads, *, paged, page_size=64, seed=73):
         table,
         device=mesh,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint16,
+        dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
@@ -499,6 +504,8 @@ def _small_ring_inputs(mesh, heads, *, paged, page_size=64, seed=73):
         kv_cache_layer_idx=layer_idx,
         page_bundle_indices=table_dev,
         kv_cache_page_size=page_size,
+        kv_cache_slot_idx=slot,
+        kv_cache_sp_axis=1,
     )
     return q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs
 
@@ -541,7 +548,8 @@ def _small_ring_msa_ref(q, k, num_groups, block_size):
 
 
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring], ids=["linear", "ring"])
-def test_indexer_score_ring4_fused_paged_dsa_4d(topology):
+@pytest.mark.parametrize("bundle_base", [0, 65536], ids=["ordinary_ids", "uint32_ids"])
+def test_indexer_score_ring4_fused_paged_dsa_4d(topology, bundle_base):
     """Ring DSA gathers logical local shards from permuted multi-layer page pools."""
     mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
         (1, RING4),
@@ -550,7 +558,9 @@ def test_indexer_score_ring4_fused_paged_dsa_4d(topology):
         else ttnn.FabricConfig.FABRIC_1D,
     )
     try:
-        q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs = _small_ring_inputs(mesh, 8, paged=True)
+        q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs = _small_ring_inputs(
+            mesh, 8, paged=True, page_size=32 if bundle_base else 64, bundle_base=bundle_base
+        )
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
         out = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
@@ -585,8 +595,8 @@ def test_indexer_score_ring4_fused_paged_cache_hit_4d(topology):
         keep_alive = []
         entries = None
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
-        for seed in (103, 107):
-            inputs = _small_ring_inputs(mesh, 8, paged=True, seed=seed)
+        for seed, slot in ((103, 2), (107, 0), (109, 2)):
+            inputs = _small_ring_inputs(mesh, 8, paged=True, seed=seed, slot=slot)
             keep_alive.append(inputs)
             q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs = inputs
             out = ttnn.experimental.ring_indexer_score_dsa(

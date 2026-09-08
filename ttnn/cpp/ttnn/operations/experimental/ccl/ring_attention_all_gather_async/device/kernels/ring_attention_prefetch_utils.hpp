@@ -35,7 +35,11 @@ FORCE_INLINE void async_read_accessor_page(
 template <typename Accessor, typename Endpoint>
 FORCE_INLINE void async_read_accessor_page(
     const Noc&, const Accessor&, const Endpoint& dst, uint32_t page_bytes, ShardNocReadAddress src) {
-    noc_async_read(src.value, dst.get_address(), page_bytes);
+    if (page_bytes <= NOC_MAX_BURST_SIZE) {
+        noc_async_read<NOC_MAX_BURST_SIZE>(src.value, dst.get_address(), page_bytes);
+    } else {
+        noc_async_read(src.value, dst.get_address(), page_bytes);
+    }
 }
 
 // Batch packetized DRAM reads into a CB while keeping multiple packets in flight. The caller

@@ -1986,8 +1986,8 @@ def run_ring_joint_sdpa_chunked(
         def upload_page_table(seq_len):
             local_pages = seq_len // sp_size // kv_cache_page_size
             return ttnn.from_torch(
-                torch.arange(local_pages, dtype=torch.int64).reshape(1, 1, 1, local_pages),
-                dtype=ttnn.uint16,
+                torch.arange(local_pages, dtype=torch.int64).repeat_interleave(sp_size).repeat(3, 1),
+                dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -2143,6 +2143,8 @@ def run_ring_joint_sdpa_chunked(
                             "kv_cache_layer_idx": 0,
                             "page_bundle_indices": page_bundle_indices,
                             "kv_cache_page_size": kv_cache_page_size,
+                            "kv_cache_slot_idx": 2,
+                            "kv_cache_sp_axis": sp_axis,
                         }
                     tt_out, _ = ttnn.transformer.ring_mla(
                         tt_Q,
@@ -3990,17 +3992,30 @@ def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error
 
 
 @pytest.mark.parametrize(
-    "num_logical_pages,is_chunked,page_size",
-    [(4, False, 32), (2, False, 64), (4, True, 32), (2, True, 64), (20, True, 32)],
+    "num_logical_pages,is_chunked,page_size,bundle_base,extra_page",
+    [
+        (4, False, 32, 0, 0),
+        (2, False, 64, 0, 0),
+        (4, True, 32, 0, 0),
+        (2, True, 64, 0, 0),
+        (20, True, 32, 0, 0),
+        (2, False, 32, 65536, 0),
+        (4, True, 32, 0, 1),
+    ],
     ids=[
         "full_prefill_page32",
         "full_prefill_page64",
         "chunked_page32",
         "chunked_page64",
         "chunked_prefill_20_page32",
+        "uint32_high_ids",
+        "odd_sp_table",
     ],
 )
-def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(num_logical_pages, is_chunked, page_size):
+@pytest.mark.parametrize("separate_v", [False, True], ids=["mla", "joint"])
+def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(
+    num_logical_pages, is_chunked, page_size, bundle_base, extra_page, separate_v
+):
     """Read full or chunked prefill from noncontiguous bundles in each SP device's private MLA cache pool."""
     mesh_config = MESH_CONFIG
     if mesh_config.sp_size < 2:
@@ -4011,11 +4026,13 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
     mesh_device = runtime.mesh_device
     sp, tp = mesh_config.sp_size, mesh_config.tp_size
     sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
-    num_bundles, num_layers = 2 * num_logical_pages, 2
+    active_bundles, num_layers = 2 * num_logical_pages, 2
+    num_bundles = bundle_base + active_bundles
     local_kv_seq = num_logical_pages * page_size
     local_q_seq = local_kv_seq // 2 if is_chunked else local_kv_seq
     global_kv_seq = local_kv_seq * sp
     global_q_seq = local_q_seq * sp
+    gathered_capacity = (num_logical_pages + bool(extra_page)) * page_size * sp
     local_q_heads = 4
     global_q_heads = local_q_heads * tp
     d_qk, d_v = 64, 32
@@ -4025,6 +4042,16 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
         q_start = global_kv_seq - global_q_seq
         q = q_full[:, :, q_start:, :].contiguous()
         natural_kv = [fa_rand(1, 1, global_kv_seq, d_qk) for _ in range(num_layers)]
+        # Keep the 20-page mapping benchmark on identical tensor values; the other cases
+        # use distinct requests to detect a stale slot independently of table-address patching.
+        replay_natural_kv = (
+            natural_kv if num_logical_pages == 20 else [fa_rand(1, 1, global_kv_seq, d_qk) for _ in range(num_layers)]
+        )
+        replay_physical_kv = (
+            [to_balanced_growing_cache_layout(kv, sp, global_q_seq, last_uploaded_chunk=1) for kv in replay_natural_kv]
+            if is_chunked
+            else replay_natural_kv
+        )
         physical_order_kv = (
             [to_balanced_growing_cache_layout(kv, sp, global_q_seq, last_uploaded_chunk=1) for kv in natural_kv]
             if is_chunked
@@ -4032,8 +4059,8 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
         )
         # Payload is indexed by private SP pool, layer, then physical bundle. The device cache stores each
         # bundle as contiguous [layer, head] groups. Two disjoint,
-        # noncontiguous bundle sets alias the same logical pages, so replay can change both the
-        # table allocation and its values while preserving a single numerical reference.
+        # noncontiguous bundle sets hold distinct requests. Slot replay must select the
+        # matching numerical reference, including when the table allocation stays fixed.
         payload = fa_rand(sp, num_layers, num_bundles, page_size, d_qk) * 3
         # Odd/even pools are disjoint; coprime strides permute each pool so logical adjacency
         # never implies physical adjacency. This scales to the production 20-bundle prefix.
@@ -4043,16 +4070,14 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
             rank_start = rank * local_kv_seq
             for layer in range(num_layers):
                 local_kv = physical_order_kv[layer][0, 0, rank_start : rank_start + local_kv_seq]
+                replay_local_kv = replay_physical_kv[layer][0, 0, rank_start : rank_start + local_kv_seq]
                 for logical_page, (primary_bundle, replay_bundle) in enumerate(zip(primary_order, replay_order)):
                     page = local_kv[logical_page * page_size : (logical_page + 1) * page_size]
-                    payload[rank, layer, primary_bundle] = page
-                    payload[rank, layer, replay_bundle] = page
-        paged_kv_cache = torch.empty(sp * num_bundles * num_layers, 1, page_size, d_qk)
-        for rank in range(sp):
-            for bundle in range(num_bundles):
-                for layer in range(num_layers):
-                    flat = rank * num_bundles * num_layers + bundle * num_layers + layer
-                    paged_kv_cache[flat, 0] = payload[rank, layer, bundle]
+                    payload[rank, layer, bundle_base + (primary_bundle + 2 * rank) % active_bundles] = page
+                    payload[rank, layer, bundle_base + (replay_bundle + 2 * rank) % active_bundles] = replay_local_kv[
+                        logical_page * page_size : (logical_page + 1) * page_size
+                    ]
+        paged_kv_cache = payload.permute(0, 2, 1, 3, 4).reshape(sp * num_bundles * num_layers, 1, page_size, d_qk)
 
         q_dims = [None, None]
         q_dims[sp_axis], q_dims[tp_axis] = 2, 1
@@ -4074,12 +4099,29 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_dims),
         )
         persistent = ttnn.from_torch(
-            torch.zeros(1, 1, global_kv_seq, d_qk),
+            torch.zeros(1, 1, gathered_capacity, d_qk),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        tt_paged_v_cache, persistent_v = None, None
+        if separate_v:
+            tt_paged_v_cache = ttnn.from_torch(
+                paged_kv_cache[..., :d_v].contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=nd_sharded_dram_memory_config(mesh_device, d_v, page_size),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_dims),
+            )
+            persistent_v = ttnn.from_torch(
+                torch.zeros(1, 1, gathered_capacity, d_v),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
             q_chunk_size=32,
@@ -4088,10 +4130,27 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
         )
 
         def upload_table(bundle_order):
-            table = torch.tensor(bundle_order, dtype=torch.int64).reshape(1, 1, 1, -1)
+            rank_orders = [
+                bundle_base + (torch.tensor(bundle_order, dtype=torch.int64) + 2 * rank) % active_bundles
+                for rank in range(sp)
+            ]
+            selected = torch.stack(rank_orders, dim=-1).flatten()
+            if bundle_order == primary_order:
+                replay_selected = torch.stack(
+                    [
+                        bundle_base + (torch.tensor(replay_order, dtype=torch.int64) + 2 * rank) % active_bundles
+                        for rank in range(sp)
+                    ],
+                    dim=-1,
+                ).flatten()
+                table = torch.stack([replay_selected, torch.zeros_like(selected), selected])
+            else:
+                table = torch.stack([selected, torch.zeros_like(selected), torch.zeros_like(selected)])
+            if extra_page:
+                table = torch.cat([table, torch.zeros(3, extra_page, dtype=torch.int64)], dim=1)
             return ttnn.from_torch(
                 table,
-                dtype=ttnn.uint16,
+                dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -4102,14 +4161,10 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
         tt_primary_table = upload_table(primary_order)
         tt_replay_table = upload_table(replay_order)
 
-        def run_one(tt_table, bundle_order, layer_idx, profile=False):
+        def run_one(tt_table, bundle_order, layer_idx, profile=False, slot=2):
             def invoke():
                 page_size_kwargs = {} if page_size == 32 else {"kv_cache_page_size": page_size}
-                return ttnn.transformer.ring_mla(
-                    tt_q,
-                    tt_paged_kv_cache,
-                    persistent_output_buffer_kv=persistent,
-                    head_dim_v=d_v,
+                common = dict(
                     logical_n=global_kv_seq,
                     is_balanced=False,
                     program_config=program_config,
@@ -4126,7 +4181,27 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
                     kv_cache_num_layers=num_layers,
                     kv_cache_layer_idx=layer_idx,
                     page_bundle_indices=tt_table,
+                    kv_cache_slot_idx=slot,
+                    kv_cache_sp_axis=sp_axis,
                     **page_size_kwargs,
+                )
+                if extra_page:
+                    common["kv_actual_isl"] = global_kv_seq - global_q_seq
+                if separate_v:
+                    out, _, stats = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                        tt_q,
+                        tt_paged_kv_cache,
+                        tt_paged_v_cache,
+                        persistent_output_buffer_k=persistent,
+                        persistent_output_buffer_v=persistent_v,
+                        joint_strategy="rear",
+                        logical_l=0,
+                        is_causal=True,
+                        **common,
+                    )
+                    return out, stats
+                return ttnn.transformer.ring_mla(
+                    tt_q, tt_paged_kv_cache, persistent_output_buffer_kv=persistent, head_dim_v=d_v, **common
                 )
 
             duration_ns = None
@@ -4145,10 +4220,11 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
                 tt_out,
                 mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(q_dims[0], q_dims[1])),
             )[:, :, :global_q_seq, :d_v]
+            reference_kv = natural_kv[layer_idx] if bundle_order == primary_order else replay_natural_kv[layer_idx]
             ref = torch_sdpa_reference(
                 q_full,
-                natural_kv[layer_idx],
-                natural_kv[layer_idx][:, :, :, :d_v],
+                reference_kv,
+                reference_kv[:, :, :, :d_v],
                 is_causal=True,
             )[:, :, q_start:, :]
             passing, pcc = comp_pcc(ref, out, DEFAULT_PCC_THRESHOLD)
@@ -4163,9 +4239,8 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
         )
         primary_duration_ns = run_one(tt_primary_table, primary_order, layer_idx=1, profile=profile_page_maps)
         cache_entries = mesh_device.num_program_cache_entries()
-        # Same shapes and layer, but a different table allocation and values: must reuse the program
-        # while proving table-buffer patching.
-        replay_duration_ns = run_one(tt_replay_table, replay_order, layer_idx=1, profile=profile_page_maps)
+        # Same shapes and layer, but a different slot, table allocation and request: reuse the program.
+        replay_duration_ns = run_one(tt_replay_table, replay_order, layer_idx=1, profile=profile_page_maps, slot=0)
         assert mesh_device.num_program_cache_entries() == cache_entries
         if profile_page_maps:
             delta = abs(primary_duration_ns - replay_duration_ns) / max(primary_duration_ns, replay_duration_ns)
@@ -4174,8 +4249,12 @@ def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(nu
                 f"replay={replay_duration_ns / 1e6:.3f} ms, delta={delta * 100:.2f}%"
             )
             assert delta < 0.10, f"paged table-map replay changed device duration by {delta * 100:.2f}%"
+        run_one(tt_primary_table, primary_order, layer_idx=1, slot=2)
+        assert mesh_device.num_program_cache_entries() == cache_entries
+        run_one(tt_primary_table, replay_order, layer_idx=1, slot=0)
+        assert mesh_device.num_program_cache_entries() == cache_entries
         # Layer remains structural (one cached program per layer), matching the existing cache API.
-        run_one(tt_replay_table, replay_order, layer_idx=0)
+        run_one(tt_replay_table, replay_order, layer_idx=0, slot=0)
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 

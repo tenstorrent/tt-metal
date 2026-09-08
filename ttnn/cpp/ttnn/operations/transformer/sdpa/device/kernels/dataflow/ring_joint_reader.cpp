@@ -313,7 +313,9 @@ void kernel_main() {
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
     // Slots 40-43 are the rank mapping and 44-47 carry paged-cache structure.
-    constexpr uint32_t tensor_args_offset = 48;
+    constexpr uint32_t page_table_sp_size = get_compile_time_arg_val(48);
+    constexpr uint32_t page_table_global_pages = get_compile_time_arg_val(49);
+    constexpr uint32_t tensor_args_offset = 50;
     constexpr auto q_args = TensorAccessorArgs<tensor_args_offset>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -326,7 +328,7 @@ void kernel_main() {
     constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
     // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
     // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
-    // (unused) accessor offset (q_args' slot 48) so TensorAccessorArgs<> -- instantiated unconditionally
+    // (unused) accessor offset (q_args' slot 50) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
     constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : tensor_args_offset;
@@ -371,8 +373,12 @@ void kernel_main() {
         gathered_joint_v_addr = get_arg_val<uint32_t>(argidx++);
     }
     uint32_t page_bundle_indices_addr = 0;
+    uint32_t page_table_slot = 0;
+    uint32_t page_table_sp_rank = 0;
     if constexpr (has_page_bundles) {
         page_bundle_indices_addr = get_arg_val<uint32_t>(argidx++);
+        page_table_slot = get_arg_val<uint32_t>(argidx++);
+        page_table_sp_rank = get_arg_val<uint32_t>(argidx++);
     }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -476,6 +482,35 @@ void kernel_main() {
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_page_bundle_id = get_compile_time_arg_val(cb_arg_offset + 5);
+
+    // Fetch the selected allocator row while setting up the K/V chains. Paging and
+    // device-derived metadata are mutually exclusive, so logical_nt is final here.
+    const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
+    CircularBuffer cb_page_bundle(cb_page_bundle_id);
+    const uint32_t page_bundle_table_l1 = cb_page_bundle.get_write_ptr();
+    Noc page_bundle_noc;
+    uint32_t active_bundle_pages = 0;
+    if constexpr (has_page_bundles) {
+        const uint32_t rank_capacity =
+            (page_table_global_pages + page_table_sp_size - 1 - page_table_sp_rank) / page_table_sp_size;
+        uint32_t active_local_tiles = kv_local_padded_Nt;
+        if constexpr (kv_pad_rotation_enabled) {
+            const uint32_t global_slab_tiles = q_local_padded_Nt * ring_size;
+            active_local_tiles = std::min(
+                active_local_tiles, ((logical_nt + global_slab_tiles - 1) / global_slab_tiles) * q_local_padded_Nt);
+        }
+        active_bundle_pages =
+            std::min(rank_capacity, (active_local_tiles + page_bundle_size_tiles - 1) / page_bundle_size_tiles);
+        if (active_bundle_pages != 0) {
+            const uint32_t end = (active_bundle_pages - 1) * page_table_sp_size + page_table_sp_rank + 1;
+            page_bundle_noc.async_read(
+                page_bundle_reader,
+                CoreLocalMem<uint32_t>(page_bundle_table_l1),
+                end * sizeof(uint32_t),
+                {.page_id = page_table_slot},
+                {});
+        }
+    }
 
     if constexpr (slot_from_metadata || kv_pad_from_metadata) {
         Noc meta_noc;
@@ -647,7 +682,6 @@ void kernel_main() {
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto local_k_reader = TensorAccessor(k_args, k_addr);
     const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
-    const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
 
     const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
     // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
@@ -664,18 +698,15 @@ void kernel_main() {
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
-    CircularBuffer cb_page_bundle(cb_page_bundle_id);
-    const uint32_t page_bundle_table_l1 = cb_page_bundle.get_write_ptr();
     if constexpr (has_page_bundles) {
-        Noc page_bundle_noc;
-        page_bundle_noc.async_read(
-            page_bundle_reader,
-            CoreLocalMem<uint16_t>(page_bundle_table_l1),
-            (kv_local_padded_Nt / page_bundle_size_tiles) * sizeof(uint16_t),
-            {.page_id = 0},
-            {});
         page_bundle_noc.async_read_barrier();
         invalidate_l1_cache();
+        if constexpr (page_table_sp_size > 1) {
+            auto* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_bundle_table_l1);
+            for (uint32_t page = 0; page < active_bundle_pages; ++page) {
+                entries[page] = entries[page * page_table_sp_size + page_table_sp_rank];
+            }
+        }
     }
     const auto paged_k_generator = PagedKVAddrGenerator<decltype(local_k_reader), has_page_bundles>{
         local_k_reader,

@@ -71,6 +71,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t kv_cache_layer_idx = 0,
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
     uint32_t kv_cache_page_size = 32,
-    std::optional<uint32_t> sliding_window_size = std::nullopt);
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 }  // namespace ttnn::prim

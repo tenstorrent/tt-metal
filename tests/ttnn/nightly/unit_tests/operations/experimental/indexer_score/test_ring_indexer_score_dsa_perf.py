@@ -258,10 +258,10 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, cache_layout):
             page_mem,
         )
         page_table = ttnn.from_torch(
-            torch.arange(local_bundles, dtype=torch.int64).reshape(1, 1, 1, -1),
+            torch.arange(local_bundles, dtype=torch.int64).repeat_interleave(sp).reshape(1, -1).repeat(3, 1),
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint16,
+            dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -270,6 +270,8 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, cache_layout):
             kv_cache_layer_idx=GLM52_INDEX_CACHE_SLOT,
             page_bundle_indices=page_table,
             kv_cache_page_size=page_size,
+            kv_cache_slot_idx=2,
+            kv_cache_sp_axis=0,
         )
     # The all-gather output is persistent and full-width on every rank.  It is
     # zero-seeded because only shape/route/device timing matters here.
@@ -442,10 +444,10 @@ def test_ring_indexer_score_paged_perf_matches_contiguous(mesh_device, mode):
         mesh_mapper=pool_mapper,
     )
     page_table = ttnn.from_torch(
-        torch.arange(local_t // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
+        torch.arange(local_t // page_size, dtype=torch.int64).repeat_interleave(sp).reshape(1, -1).repeat(3, 1),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint16,
+        dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
@@ -471,6 +473,8 @@ def test_ring_indexer_score_paged_perf_matches_contiguous(mesh_device, mode):
         kv_cache_layer_idx=0,
         page_bundle_indices=page_table,
         kv_cache_page_size=page_size,
+        kv_cache_slot_idx=2,
+        kv_cache_sp_axis=0,
     )
     cfg = (
         _ring_perf_config()

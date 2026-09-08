@@ -72,10 +72,12 @@ constexpr uint32_t fused_rt_width = 9;
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t reader_page_bundle_addr = reader_kv_len_tiles + 1;                                        // 27
-constexpr uint32_t reader_fused_rt_base = reader_page_bundle_addr + 1;                                       // 28
-constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 37
-constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 38
-constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 39
+constexpr uint32_t reader_page_table_slot = reader_page_bundle_addr + 1;
+constexpr uint32_t reader_page_table_sp_rank = reader_page_table_slot + 1;
+constexpr uint32_t reader_fused_rt_base = reader_page_table_sp_rank + 1;         // 30
+constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;  // 39
+constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;        // 40
+constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;      // 41
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_kv_len_tiles = 6;
 constexpr uint32_t compute_chunk_start_tiles = compute_kv_len_tiles + 1;
@@ -88,12 +90,12 @@ constexpr uint32_t writer_chunk_start_tiles = writer_kv_len_tiles + 1;
 constexpr uint32_t writer_straddle_q_tile = writer_chunk_start_tiles + 1;
 constexpr uint32_t writer_straddle_jump_tiles = writer_straddle_q_tile + 1;
 constexpr uint32_t writer_band_perm_base = writer_straddle_jump_tiles + 1;  // 11
-// Lock the derived offsets to the values the kernels hardcode (reader receiver reads the fused block at 28;
+// Lock the derived offsets to the values the kernels hardcode (reader receiver reads the fused block at 30;
 // compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
 static_assert(
     reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_page_bundle_addr == 27 &&
-        reader_fused_rt_base == 28 && reader_k_local_addr == 37 && reader_k_local_batch_offset == 38 &&
-        reader_band_perm_base == 39 && compute_band_perm_base == 10 && writer_band_perm_base == 11,
+        reader_fused_rt_base == 30 && reader_k_local_addr == 39 && reader_k_local_batch_offset == 40 &&
+        reader_band_perm_base == 41 && compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
@@ -320,7 +322,7 @@ ProgramDescriptor build_ring_program_descriptor(
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
     if (tensors.has_paged_kv_cache()) {
         const uint32_t table_bytes =
-            static_cast<uint32_t>(tensors.page_bundle_indices->logical_volume() * sizeof(uint16_t));
+            static_cast<uint32_t>(tensors.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t));
         const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
         const uint32_t idx = next_cb_index++;
         cb_id[cb_page_table_arg] = idx;
@@ -329,7 +331,7 @@ ProgramDescriptor build_ring_program_descriptor(
             .core_ranges = core_ranges,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(idx),
-                .data_format = tt::DataFormat::RawUInt16,
+                .data_format = tt::DataFormat::UInt32,
                 .page_size = aligned_table_bytes}}}});
     }
 
@@ -426,7 +428,8 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(args.kv_cache_num_layers);
     reader_ct.push_back(args.kv_cache_layer_idx);
     reader_ct.push_back(
-        tensors.has_paged_kv_cache() ? static_cast<uint32_t>(tensors.page_bundle_indices->logical_volume()) : 0u);
+        tensors.has_paged_kv_cache() ? static_cast<uint32_t>(tensors.page_bundle_indices->logical_shape()[1]) : 0u);
+    reader_ct.push_back(page_table_sp_size(args, q));
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
@@ -560,7 +563,10 @@ ProgramDescriptor build_ring_program_descriptor(
             } else {
                 reader_rt.push_back(0u);
             }
-            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (28..36): ring/dir/sems/split
+            reader_rt.push_back(args.kv_cache_slot_idx);
+            reader_rt.push_back(
+                args.kv_cache_sp_axis.has_value() ? static_cast<uint32_t>(coord[*args.kv_cache_sp_axis]) : 0u);
+            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (30..38): ring/dir/sems/split
             reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (37): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
             reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (39..): physical K starts
@@ -662,7 +668,10 @@ ProgramDescriptor build_ring_program_descriptor(
         /*partial_readiness_enabled=*/partial_readiness_enabled,
         rank_mapping,
         tensors.page_bundle_indices,
-        args.kv_cache_page_size);
+        args.kv_cache_page_size,
+        args.kv_cache_slot_idx,
+        page_table_sp_size(args, q),
+        args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u);
 
     log_debug(
         tt::LogOp,
@@ -766,6 +775,11 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_batch_offset, k_batch_page_offset);
         patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_kv_len_tiles, pcache.kv_len_tiles);
+        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_page_table_slot, args.kv_cache_slot_idx);
+        patch_field(
+            kReaderKernelIndex,
+            CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_page_table_sp_rank,
+            args.kv_cache_sp_axis.has_value() ? range.start_coord()[*args.kv_cache_sp_axis] : 0u);
         patch_field(
             kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_local_batch_offset, k_local_batch_page_offset);
         patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_kv_len_tiles, pcache.kv_len_tiles);
@@ -845,6 +859,15 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_valid_pages, valid_pages);
         patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_writer_valid_pages, valid_pages);
         patch_ag_field(kAllGatherWriterBackwardKernelIndex, ag_writer_valid_pages, valid_pages);
+        if (tensors.has_paged_kv_cache()) {
+            constexpr uint32_t slot_offset = ag_rt::reader_page_table_slot_offset(1, false);
+            const uint32_t sp_rank =
+                args.kv_cache_sp_axis.has_value() ? range.start_coord()[*args.kv_cache_sp_axis] : 0u;
+            patch_ag_field(kAllGatherReaderForwardKernelIndex, slot_offset, args.kv_cache_slot_idx);
+            patch_ag_field(kAllGatherReaderBackwardKernelIndex, slot_offset, args.kv_cache_slot_idx);
+            patch_ag_field(kAllGatherReaderForwardKernelIndex, slot_offset + 2, sp_rank);
+            patch_ag_field(kAllGatherReaderBackwardKernelIndex, slot_offset + 2, sp_rank);
+        }
     }
 }
 

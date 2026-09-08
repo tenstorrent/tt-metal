@@ -99,8 +99,10 @@ void bind_indexer_score(nb::module_& mod) {
             kv_cache_num_layers / kv_cache_layer_idx / kv_cache_page_size / page_bundle_indices:
                 optional paged-cache geometry. When page_bundle_indices is supplied, k is the physical tiled
                 pool [physical_bundles*num_layers,1,page_size,D], ND-sharded with one
-                [1,1,page_size,D] bundle/layer page per DRAM shard. The uint16 row-major DRAM table has shape
-                [1,1,1,logical_bundles] and maps logical bundle to physical bundle. cache_batch_idx is then
+                [1,1,page_size,D] bundle/layer page per DRAM shard. The replicated UINT32 ROW_MAJOR DRAM table
+                has shape [slots,max_pages]. kv_cache_slot_idx (default 0) selects the row;
+                kv_cache_sp_axis (default None, SP=1) identifies the SP mesh axis. Local page i
+                on rank r uses table[slot,i*SP+r], whose ID addresses that rank's local pool. cache_batch_idx is then
                 unavailable; kv_len remains a logical-prefix length.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
@@ -122,7 +124,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_cache_num_layers") = std::nullopt,
         nb::arg("kv_cache_layer_idx") = std::nullopt,
         nb::arg("page_bundle_indices").noconvert() = std::nullopt,
-        nb::arg("kv_cache_page_size") = 32);
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -209,7 +213,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_cache_num_layers") = std::nullopt,
         nb::arg("kv_cache_layer_idx") = std::nullopt,
         nb::arg("page_bundle_indices").noconvert() = std::nullopt,
-        nb::arg("kv_cache_page_size") = 32);
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 
     ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
         mod,
@@ -296,7 +302,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_cache_num_layers") = nb::none(),
         nb::arg("kv_cache_layer_idx") = nb::none(),
         nb::arg("page_bundle_indices").noconvert() = nb::none(),
-        nb::arg("kv_cache_page_size") = 32);
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 
     ttnn::bind_function<"ring_indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -336,7 +344,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_cache_num_layers") = nb::none(),
         nb::arg("kv_cache_layer_idx") = nb::none(),
         nb::arg("page_bundle_indices").noconvert() = nb::none(),
-        nb::arg("kv_cache_page_size") = 32);
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

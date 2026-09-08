@@ -64,7 +64,9 @@ struct IndexerScoreDeviceOperation {
         uint32_t kv_cache_num_layers,
         uint32_t kv_cache_layer_idx,
         uint32_t kv_cache_page_size,
-        const std::optional<Tensor>& page_bundle_indices);
+        const std::optional<Tensor>& page_bundle_indices,
+        uint32_t kv_cache_slot_idx,
+        std::optional<uint32_t> kv_cache_sp_axis);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -114,7 +116,9 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
@@ -144,7 +148,9 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
@@ -181,7 +187,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 // Fused MiniMax-M3 MSA variant. It shares the ring transport and paged-cache contract with the DSA frontend,
 // while retaining MSA's raw dot, constant scale, grouped output, and optional block-max pooling semantics.
@@ -206,6 +214,8 @@ ttnn::Tensor ring_indexer_score_msa(
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 }  // namespace ttnn::experimental

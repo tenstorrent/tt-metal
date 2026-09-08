@@ -9,11 +9,11 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 
-// Tensor accessor for a uint16 logical-page -> physical-bundle table. Physical
+// Tensor accessor for a UINT32 logical-page -> physical-bundle table. Physical
 // cache pages are flattened as [bundle][layer][head], and each page contains
 // page_size_rows sequence rows. Supports random logical rows and a sequential
 // cursor that caches the current bundle-table entry.
-template <typename ReaderType, typename BundleId = uint16_t>
+template <typename ReaderType, typename BundleId = uint32_t>
 struct PagedKVAccessor {
 private:
     ReaderType reader_;

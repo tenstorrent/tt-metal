@@ -44,6 +44,8 @@ constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t reader_page_bundle_addr = reader_kv_len_tiles + 1;                                        // 27
+constexpr uint32_t reader_page_table_slot = reader_page_bundle_addr + 1;
+constexpr uint32_t reader_page_table_sp_rank = reader_page_table_slot + 1;
 constexpr uint32_t compute_kv_len_tiles = 6;          // after the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_kv_len_tiles = 1 + 6;       // out_addr + the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_chunk_start_tiles = 1 + 7;  // after out_addr + 6 sched scalars + kv_len[7]; match writer
@@ -291,14 +293,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
     if (tensors.has_paged_kv_cache()) {
         const uint32_t table_bytes =
-            static_cast<uint32_t>(tensors.page_bundle_indices->logical_volume() * sizeof(uint16_t));
+            static_cast<uint32_t>(tensors.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t));
         const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
         const uint32_t idx = next_cb_index++;
         cb_id[cb_page_table_arg] = idx;
         tt::tt_metal::CreateCircularBuffer(
             program,
             core_ranges,
-            tt::tt_metal::CircularBufferConfig(aligned_table_bytes, {{idx, tt::DataFormat::RawUInt16}})
+            tt::tt_metal::CircularBufferConfig(aligned_table_bytes, {{idx, tt::DataFormat::UInt32}})
                 .set_page_size(idx, aligned_table_bytes));
     }
 
@@ -363,7 +365,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(args.kv_cache_num_layers);
     reader_ct.push_back(args.kv_cache_layer_idx);
     reader_ct.push_back(
-        tensors.has_paged_kv_cache() ? static_cast<uint32_t>(tensors.page_bundle_indices->logical_volume()) : 0u);
+        tensors.has_paged_kv_cache() ? static_cast<uint32_t>(tensors.page_bundle_indices->logical_shape()[1]) : 0u);
+    reader_ct.push_back(page_table_sp_size(args, q));
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -478,6 +481,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             reader_rt.push_back(k_batch_page_offset);
             reader_rt.push_back(kv_len_tiles);
             reader_rt.push_back(tensors.has_paged_kv_cache() ? tensors.page_bundle_indices->buffer()->address() : 0u);
+            reader_rt.push_back(args.kv_cache_slot_idx);
+            reader_rt.push_back(args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u);
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
             // compute: schedule[0-5], kv_len_tiles[6], chunk_start_tiles[7], straddle[8,9] (hash-excluded runtime).
             std::vector<uint32_t> compute_rt(sched.begin(), sched.end());
@@ -554,6 +559,12 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
                 rt_arg::reader_page_bundle_addr,
                 tensors.has_paged_kv_cache() ? tensors.page_bundle_indices->buffer()->address() : 0u,
                 "reader.page_bundle_addr");
+            patch_arg(reader_rt, rt_arg::reader_page_table_slot, args.kv_cache_slot_idx, "reader.page_table_slot");
+            patch_arg(
+                reader_rt,
+                rt_arg::reader_page_table_sp_rank,
+                args.kv_cache_sp_axis.has_value() ? range.start_coord()[*args.kv_cache_sp_axis] : 0u,
+                "reader.page_table_sp_rank");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_kv_len_tiles, kv_len_tiles, "compute.kv_len_tiles");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
             patch_arg(

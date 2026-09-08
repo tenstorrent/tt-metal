@@ -52,6 +52,9 @@ uint32_t logical_k_length(const operation_attributes_t& attrs, const tensor_args
 
 void validate_paged_cache(const operation_attributes_t& attrs, const tensor_args_t& t) {
     if (!t.has_paged_kv_cache()) {
+        TT_FATAL(
+            attrs.kv_cache_slot_idx == 0 && !attrs.kv_cache_sp_axis.has_value(),
+            "kv_cache_slot_idx and kv_cache_sp_axis require page_bundle_indices");
         return;
     }
 
@@ -75,15 +78,26 @@ void validate_paged_cache(const operation_attributes_t& attrs, const tensor_args
     TT_FATAL(bundles.device() == t.q.device(), "page_bundle_indices must be on the same device as q/k");
     TT_FATAL(bundles.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
     TT_FATAL(bundles.padded_shape() == bundles.logical_shape(), "page_bundle_indices must not be padded");
-    TT_FATAL(bundles.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+    TT_FATAL(bundles.dtype() == DataType::UINT32, "page_bundle_indices must have uint32 dtype");
     TT_FATAL(
         bundles.memory_config().buffer_type() == BufferType::DRAM && !bundles.memory_config().is_sharded(),
         "page_bundle_indices must be DRAM interleaved");
     const auto& bs = bundles.logical_shape();
     TT_FATAL(
-        bs.rank() == 4 && bs[0] == 1 && bs[1] == 1 && bs[2] == 1 && bs[3] > 0,
-        "page_bundle_indices must have shape [1,1,1,num_logical_bundles] (got {})",
-        bs);
+        bs.rank() == 2 && bs[0] > 0 && bs[1] > 0, "page_bundle_indices must have shape [slots,max_pages] (got {})", bs);
+
+    TT_FATAL(attrs.kv_cache_slot_idx < bs[0], "kv_cache_slot_idx is out of range");
+    if (attrs.kv_cache_sp_axis.has_value()) {
+        TT_FATAL(*attrs.kv_cache_sp_axis < t.q.device()->shape().dims(), "kv_cache_sp_axis is out of range");
+        const uint32_t sp = program::page_table_sp_size(attrs, t.q);
+        TT_FATAL(bs[1] >= sp, "page table must contain at least one page per SP rank");
+        const uint32_t factor = attrs.has_fused_ring() ? program::ring_size_for(attrs, t.q) : 1u;
+        TT_FATAL(
+            bs[1] % sp == 0 ||
+                (attrs.kv_len.has_value() && *attrs.kv_len <= (bs[1] / sp) * attrs.kv_cache_page_size * factor),
+            "Uneven SP page tables require kv_len within every rank's page capacity");
+    }
+    TT_FATAL(!attrs.has_fused_ring() || t.k_local.has_value(), "Paged fused indexer requires k_local");
 
     const Tensor& paged_k = attrs.has_fused_ring() ? *t.k_local : t.k;
     const auto& ps = paged_k.logical_shape();
@@ -96,11 +110,6 @@ void validate_paged_cache(const operation_attributes_t& attrs, const tensor_args
         "Paged K flat page count {} must be positive and divisible by num_layers {}",
         ps[0],
         attrs.kv_cache_num_layers);
-    const uint32_t physical_bundle_count = ps[0] / attrs.kv_cache_num_layers;
-    TT_FATAL(
-        physical_bundle_count <= (1u << 16),
-        "uint16 page_bundle_indices support at most 65536 physical bundles (got {})",
-        physical_bundle_count);
     const auto nd_shard_spec = paged_k.nd_shard_spec();
     TT_FATAL(nd_shard_spec.has_value(), "Paged K cache must use an ND-sharded memory config");
     const auto& shard_shape = nd_shard_spec->shard_shape;
@@ -357,6 +366,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.kv_cache_num_layers,
         attrs.kv_cache_layer_idx,
         attrs.kv_cache_page_size,
+        attrs.kv_cache_sp_axis,
         attrs.has_runtime_kv_len(),
         // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
         // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
@@ -382,10 +392,10 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
 void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // chunk_start, cache slot, and exact kv_len are runtime values -> re-checked on hits.
+    validate_paged_cache(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
-    validate_paged_cache(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -415,10 +425,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     // Placement/layout/same-device and the non-indexed k batch shape are hash-pinned (miss only); the
     // slot/kv_len runtime values are re-checked every dispatch.
     validate_static(attrs, tensor_args);
+    validate_paged_cache(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
-    validate_paged_cache(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
     // K shard k_local [B,1,sll,D] (the all-gather INPUT), single-head, matching head dim, tile-aligned.
@@ -746,7 +756,9 @@ IndexerScoreDeviceOperation::invoke(
     uint32_t kv_cache_num_layers,
     uint32_t kv_cache_layer_idx,
     uint32_t kv_cache_page_size,
-    const std::optional<Tensor>& page_bundle_indices) {
+    const std::optional<Tensor>& page_bundle_indices,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -762,6 +774,8 @@ IndexerScoreDeviceOperation::invoke(
             .kv_cache_num_layers = kv_cache_num_layers,
             .kv_cache_layer_idx = kv_cache_layer_idx,
             .kv_cache_page_size = kv_cache_page_size,
+            .kv_cache_slot_idx = kv_cache_slot_idx,
+            .kv_cache_sp_axis = kv_cache_sp_axis,
             .kv_len = kv_len,
             .block_cyclic = block_cyclic,
             .key_stripe_split = key_stripe_split},
@@ -817,6 +831,8 @@ ttnn::Tensor launch_indexer_score(
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
     uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis,
     // Fused ring (all-gather subsumed): k is the gathered [B,1,T,D] persistent output buffer, k_local is this
     // chip's SP shard = the all-gather INPUT, fused_ring carries the AG config. Both nullopt = the classic path.
     std::optional<ttnn::Tensor> k_local = std::nullopt,
@@ -825,6 +841,15 @@ ttnn::Tensor launch_indexer_score(
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
     using ttnn::operations::experimental::indexer_score::BlockCyclicLayout;
+
+    if (page_bundle_indices.has_value()) {
+        TT_FATAL(
+            page_bundle_indices->logical_shape().rank() == 2, "page_bundle_indices must have shape [slots,max_pages]");
+    }
+    TT_FATAL(
+        !kv_cache_sp_axis.has_value() || *kv_cache_sp_axis < q.device()->shape().dims(),
+        "kv_cache_sp_axis is out of range");
+    const uint32_t table_sp = kv_cache_sp_axis.has_value() ? q.device()->shape()[*kv_cache_sp_axis] : 1u;
 
     const uint32_t Sq = q.logical_shape()[2];
     const bool full_mesh = fused_ring.has_value() && fused_ring->full_mesh;
@@ -965,9 +990,11 @@ ttnn::Tensor launch_indexer_score(
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
     } else {
-        const uint32_t T = page_bundle_indices.has_value() && !fused_ring.has_value()
-                               ? static_cast<uint32_t>(page_bundle_indices->logical_volume() * kv_cache_page_size)
-                               : k.logical_shape()[2];
+        const uint32_t T =
+            page_bundle_indices.has_value() && !fused_ring.has_value()
+                ? static_cast<uint32_t>(
+                      ((page_bundle_indices->logical_shape()[1] + table_sp - 1) / table_sp) * kv_cache_page_size)
+                : k.logical_shape()[2];
         if (block_cyclic.has_value()) {
             const uint32_t chunk = block_cyclic->sp * block_cyclic->chunk_local;
             TT_FATAL(
@@ -1026,7 +1053,9 @@ ttnn::Tensor launch_indexer_score(
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
         kv_cache_page_size,
-        page_bundle_indices);
+        page_bundle_indices,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
     // Attach the fused-ring config + local shard (both nullopt on the classic path -> byte-identical behavior).
     operation_attributes.fused_ring = std::move(fused_ring);
     tensor_args.k_local = std::move(k_local);
@@ -1051,7 +1080,9 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -1075,7 +1106,9 @@ ttnn::Tensor indexer_score_dsa(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         page_bundle_indices,
-        kv_cache_page_size);
+        kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -1095,7 +1128,9 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
@@ -1125,7 +1160,9 @@ ttnn::Tensor indexer_score_msa(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         page_bundle_indices,
-        kv_cache_page_size);
+        kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
 }
 
 ttnn::Tensor ring_indexer_score_dsa(
@@ -1150,7 +1187,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1241,6 +1280,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         kv_cache_layer_idx,
         page_bundle_indices,
         kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis,
         k_local,
         fused_ring);
 }
@@ -1266,7 +1307,9 @@ ttnn::Tensor ring_indexer_score_msa(
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
     fused_ring.num_links = num_links;
     fused_ring.topology = topology;
@@ -1295,6 +1338,8 @@ ttnn::Tensor ring_indexer_score_msa(
         kv_cache_layer_idx,
         page_bundle_indices,
         kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis,
         k_local,
         fused_ring);
 }

@@ -1503,9 +1503,9 @@ struct PagedKVAddrGenerator {
         const uint32_t cols = slice.get_d3_size();
         const uint32_t valid_rows = slice.d2_start >= bound ? 0 : std::min(rows, bound - slice.d2_start);
         uint32_t barrier_count = 0;
-        const PagedKVAccessor<ReaderType> paged_kv{
+        const PagedKVAccessor<ReaderType, uint32_t> paged_kv{
             reader, bundle_ids_l1_addr, page_size_tiles, num_layers, num_heads, layer_idx};
-        typename PagedKVAccessor<ReaderType>::Cursor bundle_cursor;
+        typename PagedKVAccessor<ReaderType, uint32_t>::Cursor bundle_cursor;
         if (valid_rows > 0) {
             bundle_cursor = paged_kv.cursor(slice.d2_start, slice.d1);
         }
