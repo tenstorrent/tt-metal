@@ -130,10 +130,16 @@ class TtMiniMaxMoE(LightweightModule):
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
-            # No zero-init (~95 us per call): every slot the reduce reads with a non-zero weight is
-            # written because the dispatch buffer is drop-free (asserted above). Slots it reads with
-            # a zero weight (tokens with no local expert, padded rows) may be stale; the Blackhole
-            # FPU gives 0 for NaN*0 and Inf*0, same path as deepseek_v3_d_p prefill.
+            # No zero-init (~95 us per call). Invariant: every slot post_combine_reduce reads with a
+            # non-zero weight is written, because the dispatch buffer is drop-free (asserted above).
+            # Unwritten slots ARE still read: when none of a token's top-k experts is local to this
+            # dispatch group (about (1-1/ndg)^topk of tokens, ~1/3 on the 8x4 mesh, plus every padded
+            # row) the kernel's must_zero_init branch forces the last slot through with a writer-
+            # forced zero weight, so the result is stale_slot * 0. That is exact for finite stale
+            # data; for NaN/Inf it relies on the Blackhole FPU returning 0 for NaN*0 and Inf*0
+            # (measured on BH Galaxy, not an IEEE guarantee). deepseek_v3_d_p prefill runs the same
+            # path with init_zeros=False. Hard guarantee = kernel packs explicit zeros in the
+            # must_zero_init branch instead of reading the slot.
             init_zeros=False,
         )
         global_expert_idx_tt = ttnn.from_torch(
