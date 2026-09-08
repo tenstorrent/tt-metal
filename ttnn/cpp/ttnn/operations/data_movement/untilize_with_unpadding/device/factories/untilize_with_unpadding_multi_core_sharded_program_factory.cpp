@@ -70,8 +70,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
-    uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
-             num_output_rows_unpadded = 0;
+    uint32_t num_rows_block = 0, block_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;
     uint32_t last_idx = 0;
     auto shard_spec = a.shard_spec().value();
@@ -91,8 +90,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
-    block_row_size = out_shard_spec.shape[1] * output.element_size();     // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.padded_shape()[-1] * output.element_size();  // output row size bytes
+    block_row_size = out_shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
     last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) -
                                                      output.padded_shape()[-1]) *
                                                         output.element_size();
@@ -313,8 +311,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             {"float32_dtype",
              (uint32_t)(input_dfb_data_format == tt::DataFormat::Float32 or
                         input_dfb_data_format == tt::DataFormat::UInt32 or
-                        input_dfb_data_format == tt::DataFormat::Int32)},
-            {"output_row_size", output_row_size}};
+                        input_dfb_data_format == tt::DataFormat::Int32)}};
         writer.runtime_arg_schema = {
             .runtime_arg_names = {
                 "num_rows_block",

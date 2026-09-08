@@ -68,9 +68,6 @@ void kernel_main() {
     auto block_start_row_offset = get_arg(args::block_start_row_offset);
 
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
-    // args::output_row_size is declared by every binding factory but never read here; it is carried
-    // in the schema so the argument set matches what callers have always supplied. Reading it is not
-    // required and it may be retired once every caller drops it.
 
     constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
 
