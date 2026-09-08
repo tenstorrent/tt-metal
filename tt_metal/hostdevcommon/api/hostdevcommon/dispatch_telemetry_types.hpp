@@ -65,7 +65,9 @@ struct __attribute__((packed, aligned(8))) DispatchCoreTelemetry {
     uint64_t current_timestamp = 0;
 
     // dispatch_s_compute writes
-    // Computed average time a worker core was running, updated only on sub device count change.
+    // Cumulative worker-cycles compressed as avg * num_worker_cores. Updated on overflow or
+    // sub-device count change. Host recovers total cycles as avg_work_runtime_per_worker * N,
+    // where N is SMCDispatchTelemetryControl::num_worker_cores.
     uint64_t avg_work_runtime_per_worker = 0;  //_per_worker
 
     // dispatch_s_compute writes
@@ -145,6 +147,9 @@ struct __attribute__((packed)) SMCDispatchTelemetryControl {
     uint32_t dispatch_telemetry_addr = 0;
     uint8_t num_hw_cqs = RESERVED_CQ_SPACE;
     SMCDispatchCoreCoords cq_dispatch_core_coords[RESERVED_CQ_SPACE];
+    // Tensix cores in the compute-with-storage grid (excludes dispatch tensix and ethernet).
+    // Host-published at device init. 0 means the field was not written (legacy control block).
+    uint16_t num_worker_cores = 0;
     struct __attribute__((packed)) SDTelemetry {
         // Reserved for future use
     } sd_telemetry[RESERVED_CQ_SPACE];

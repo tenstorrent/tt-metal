@@ -469,7 +469,11 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // offset >= 0, so it is checked in both offset forms.
         const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
         const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
-        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
+        TT_FATAL(
+            q_rows <= k_rows,
+            "windowed Q shard has {} rows, more than the K sequence length {}.",
+            q_rows,
+            k_rows);
         if (!tensors.windowed_q_token_offset_tensor.has_value()) {
             // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
             // per-device values cannot be validated here without a readback -- tile alignment and

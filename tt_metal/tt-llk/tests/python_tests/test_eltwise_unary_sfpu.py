@@ -36,6 +36,7 @@ from helpers.sfpu_domains import (
     for_op_pipeline,
     negative_zero_delivered,
     op_edge_points,
+    op_threshold,
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
@@ -50,6 +51,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
     DestSync,
@@ -434,9 +436,6 @@ def test_eltwise_unary_sfpu(
             )
         )
 
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
@@ -543,8 +542,11 @@ _EDGE_SWEEP_OPS = sorted(
 #
 # STILL OPEN — not explained by the ISA:
 #
-#   Erfinv at ±1: golden ∓inf/±inf against a saturated result, on the two fp32-dest
-#   combinations only, so tolerance-shaped rather than semantic.
+#   None left in this table. Both entries that were here have been fixed rather than
+#   reclassified: RsqrtCompat's saturating +0 pole in #53758, and Erfinv at ±1 by the
+#   sqrt_custom(+inf) fix below (it was never tolerance-shaped — sqrt_custom returned NaN
+#   for +inf and erfinv inherited it). What is still not explained by the ISA is the cat-B
+#   set derived below, which carries its own block.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -552,10 +554,6 @@ _EDGE_KNOWN_DIVERGENCES = {
     ),
     MathOperation.Heaviside: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-    MathOperation.Erfinv: (
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
         (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
     ),
 }
@@ -566,6 +564,7 @@ _EDGE_KNOWN_DIVERGENCES = {
 # axis grows or a delivery measurement is revised.
 #
 #   Reciprocal  every combination carrying specials at all -- 1/NaN is the probe.
+#   SqrtCustom  every combination carrying specials at all -- sqrt_custom(-inf) is the probe.
 #   Sqrt, Rsqrt every combination that also delivers a real -0.0, the strictly smaller
 #               unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and agrees.
 #
@@ -585,15 +584,21 @@ def _cat_b_divergences(delivers):
 _EDGE_KNOWN_DIVERGENCES.update(
     {
         MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
+        MathOperation.SqrtCustom: _cat_b_divergences(lambda _fmt, _dest_acc: True),
         MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
         MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
     }
 )
 
-# The three whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
+# The four whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
 # specials surviving the NaN-sign gate; see where the marker is applied.
 _CAT_B_DERIVED_DIVERGENCES = frozenset(
-    {MathOperation.Reciprocal, MathOperation.Sqrt, MathOperation.Rsqrt}
+    {
+        MathOperation.Reciprocal,
+        MathOperation.SqrtCustom,
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
+    }
 )
 
 _EDGE_DIVERGENCE_REASON = {
@@ -604,12 +609,22 @@ _EDGE_DIVERGENCE_REASON = {
     "pass vacuously.",
     MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
     "SFPSETCC negative-zero caveat as Sign, and the same unpack-to-dest scoping.",
-    MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
     MathOperation.Reciprocal: "1/NaN returns +0: the kernel does not propagate NaN, where "
     "IEEE, torch and the golden all give NaN. Every other special agrees (1/±inf = ±0, "
     "1/±0 = ±inf), so this is the NaN probe alone and it diverges on every combination that "
     "delivers one. Not prescribed by the ISA, which says only that NaN inputs follow 'the "
     "usual IEEE754 rules'.",
+    MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
+    "NaN. The non-finite guard added with the sqrt_custom(+inf) fix passes non-finite input "
+    "straight through rather than synthesising a NaN, which is right for +inf and NaN and "
+    "wrong for -inf -- a deliberate limit of the minimal fix. The constraint is erfinv, not "
+    "asin/acos: asin/acos seed quiet_NaN() and commit the range-reduced value only under "
+    "v_if(abs(val) <= 1.0f), so a NaN out of sqrt_custom on their |v| > 1 lanes is never "
+    "observable. erfinv's NR undershoot drives tmp + intermediate_result non-positive for "
+    "small in-domain x -- erfinv(1e-6) already reads 0x00000000 -- so a negative-to-NaN "
+    "guard would regress an ordinary input to NaN. Before the fix this combination returned "
+    "+inf, which agreed with the golden by accident: the golden's NaN is itself narrowed to "
+    "inf on a bf16 output. See https://github.com/tenstorrent/tt-metal/issues/52930.",
     MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
     "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
     "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
@@ -706,9 +721,6 @@ def test_eltwise_unary_sfpu_edges(
 
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
     # Two independent gates, and both have to pass: _SPECIALS_READY_OPS says the *golden*
     # defines a result for non-finite inputs, specials_safe() says the *pipeline* delivers
     # them intact. Neither implies the other.
@@ -718,11 +730,11 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate, not before, because three of these divergences are cat-B's and the
+    # Marked after the gate, not before, because four of these divergences are cat-B's and the
     # gate can take cat B away: where it has, the probe is not sent, the divergence cannot
-    # occur, and the entry would be a non-strict xfail that XPASSes every run. Sign, Heaviside,
-    # RsqrtCompat and Erfinv are unaffected -- their divergences are cat-A poles and signed
-    # zeros that edge_values() emits with or without specials.
+    # occur, and the entry would be a non-strict xfail that XPASSes every run. Sign and
+    # Heaviside are unaffected -- their divergences are cat-A signed zeros that
+    # edge_values() emits with or without specials.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
@@ -763,6 +775,237 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# sqrt_custom(+inf): the strict regression assertion, deliberately outside the edge sweep
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The sweep cannot carry this one. edge_values() puts +inf and -inf in the same SqrtCustom
+# tensor, and _EDGE_KNOWN_DIVERGENCES marks the whole parametrized invocation non-strict XFAIL
+# for the sqrt_custom(-inf) divergence. A return to sqrt_custom(+inf) = NaN would be absorbed
+# by that marker and never fail CI -- and keeping +inf is the entire point of the fix. Until
+# the sweep can record a divergence against a single probe rather than a whole combination,
+# the repaired value is asserted here on its own.
+#
+# ONE COMBINATION -- THE ONLY ONE specials_safe() ADMITS THAT CAN SHOW A REGRESSION:
+#
+#   Float32 -> Float32 at dest_acc=Yes. Outbound is the real constraint: the pre-fix result was
+#   NaN, and a bf16 output narrows NaN to inf on the way to L1, which is exactly how this defect
+#   stayed hidden on six of the eight combinations. Run against a 16-bit output and the assertion
+#   passes whether the kernel is fixed or not.
+#
+#   Inbound, specials_safe() then leaves only the 32-bit input. It is a conservative gate, not a
+#   statement about +inf delivery: it rejects Float16_b -> Float32 at dest_acc=Yes on breaker 2,
+#   but breaker 2 is about the *whole* specials set -- that unpack loses -inf and NaN, not +inf.
+#   So that combination does deliver the probe and would show the regression too; the repaired
+#   pole is visible there in the accuracy record. It is excluded here only because this test
+#   asserts specials_safe() as its non-vacuity guard.
+@pytest.mark.nightly
+def test_sqrt_custom_infinity_regression(request):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # Quasar still carries the pre-fix kernel (its ckernel_sfpu_sqrt_custom.h guards only
+    # val != 0.0f), so it is expected to fail here rather than silently not being covered.
+    # Non-strict: fixing Quasar should XPASS and prompt removing this, not error.
+    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="Quasar's sfpu_sqrt_custom has not had the non-finite guard applied; "
+                "sqrt_custom(+inf) is still NaN there. See tt-metal issue #52930.",
+                strict=False,
+            )
+        )
+
+    # If this ever goes False the pipeline stopped delivering +inf and the assertion below
+    # would pass vacuously -- fail loudly instead of quietly testing nothing.
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # A finite control alongside the probe: if the guard is ever widened to pass everything
+    # through, sqrt_custom(4.0) stops being 2.0 and this catches it in the same run.
+    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
+    src_A[0] = float("inf")
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.SqrtCustom),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+
+    assert res[0] == float("inf"), (
+        f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. This is the defect the "
+        "non-finite guard in ckernel_sfpu_sqrt_custom.h exists to prevent: the "
+        "fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes it to +0, and the "
+        "next multiply is 0 * -inf = NaN. Every consumer inherits it -- erfinv(+/-1) is "
+        "how it was originally found. See tt-metal issue #52930."
+    )
+    # Tolerance, not equality: sqrt_custom is a magic-seed + Newton-Raphson approximation
+    # (~14 correct bits after two iterations), so sqrt_custom(4.0) is near 2.0, not exactly
+    # 2.0. The band only has to be tight enough to separate "computed" from "passed through",
+    # and a pass-through lane would read 4.0.
+    assert torch.allclose(res[1:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
+        f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probe "
+        f"(max deviation {(res[1:] - 2.0).abs().max().item():.6g}). The non-finite guard is "
+        "supposed to divert only zero and the 255-exponent lanes; a finite lane reaching the "
+        "pass-through path means the predicate has been widened."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# reciprocal_compat(-0.0): the sign restore at the pole, deliberately outside the edge sweep
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# _reciprocal_compat_signed_ promises 1/in, and the primitive it wraps returns |1/in|, so the
+# whole promise rests on the restore. Two SFPSETCC behaviours the ISA leaves unspecified
+# ("provided that VC is neither negative zero nor any kind of NaN") decide the answer at -0.0,
+# and they pull in opposite directions:
+#
+#   `setsgn(in, 0) == 0.0F` in the pole guard is written that way because a bare `in == 0.0F`
+#   does NOT admit -0.0 -- measured: it leaves -0.0 at the saturated 1.70135e38 instead of an
+#   infinity. So the zero comparison behaves like an all-32-bits-zero test.
+#
+#   `in < 0.0` in the restore DOES fire on -0.0 -- so the sign comparison behaves like a
+#   sign-bit test. Same measurement that puts sign(-0.0) at -1 and heaviside(-0.0) at 0 in
+#   _EDGE_KNOWN_DIVERGENCES above.
+#
+# Both are outside the documented contract, so neither is a property to lean on silently. The
+# kernel takes the sign bit with SFPSETSGN (sfpi::copysgn) rather than a comparison, which is
+# inside the contract and is one instruction rather than three; this test is what holds that
+# in place, and it fails if the restore reverts to a comparison AND the comparison behaviour
+# changes -- which is exactly the pair that would otherwise go unnoticed.
+#
+# ONE COMBINATION: Float32 -> Float32 at dest_acc=Yes. negative_zero_delivered() is the gate --
+# only the unpack-to-dest path puts a real -0.0 in the LREG, everywhere else the datacopy
+# flattens it to +0.0 and the assertion would pass vacuously. The output leg has to be 32-bit
+# too, or the bf16 narrowing on the way to L1 hides which infinity came back.
+@pytest.mark.nightly
+def test_reciprocal_compat_negative_zero_regression():
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # If this ever goes False the pipeline stopped delivering -0.0 and the assertion below
+    # would be testing +0.0 -- fail loudly rather than quietly testing nothing.
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # A positive control in the same tile: +0.0 must stay +inf. A restore that over-fires
+    # (copying the wrong sign, or negating unconditionally) breaks this one, not the probe.
+    src_A = torch.full((num_elements,), 1.0, dtype=torch.float32)
+    src_A[0] = -0.0
+    src_A[1] = 0.0
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.ReciprocalCompat),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    bits = res.view(torch.int32)
+
+    assert bits[0].item() & 0xFFFFFFFF == 0xFF800000, (
+        f"reciprocal_compat(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} "
+        f"({res[0].item()!r}), expected -inf (0xFF800000). _reciprocal_compat_ returns "
+        "|1/in|, so this is the sign restore in _reciprocal_compat_signed_ failing at the "
+        "pole. A 0x7F800000 here means the restore did not fire on a delivered -0.0; a "
+        "0xFEFFFD9E means the pole guard did not fire either."
+    )
+    assert bits[1].item() & 0xFFFFFFFF == 0x7F800000, (
+        f"reciprocal_compat(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} "
+        f"({res[1].item()!r}), expected +inf. The restore is over-firing: it must move the "
+        "input's sign bit, not set one."
+    )
+    # The rest of the tile is 1.0, whose reciprocal must stay positive and near 1.0. Catches a
+    # restore widened to every lane. Tolerance, not equality: _reciprocal_compat_ is a
+    # magic-seed Newton-Raphson approximation, so 1/1.0 lands near 1.0, not exactly on it.
+    assert torch.all(bits[2:] >= 0), (
+        "reciprocal_compat(1.0) came back negative on some lane; the sign restore is "
+        "firing outside the negative inputs."
+    )
+    assert torch.allclose(res[2:], torch.tensor(1.0), rtol=1e-3, atol=0.0), (
+        f"reciprocal_compat(1.0) is no longer ~1.0 on the lanes around the probe "
+        f"(max deviation {(res[2:] - 1.0).abs().max().item():.6g})."
+    )
+
+
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).
@@ -773,6 +1016,12 @@ _INT_UNARY_OPS = [
     MathOperation.UnaryMinInt32,
     MathOperation.UnaryMaxUint32,
     MathOperation.UnaryMinUint32,
+    # relu_min is the only entry that is not an integer-only op. sfpu_operations.h selects
+    # the vInt branch of _relu_min_ at runtime on math_format == Int32, and nothing else
+    # drives that branch -- the float sweeps all take the vFloat one -- so without this the
+    # integer half of the kernel, including its 2's-complement to sign+magnitude threshold
+    # conversion, has no coverage at all.
+    MathOperation.ReluMin,
 ]
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32.
@@ -819,6 +1068,12 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # ReluMin is in both BROAD_SWEEP_OPS and COVERAGE_COMPILE_SKIP_OPS, so this sweep needs
+    # the same coverage guard the float ones use. It was unreachable before ReluMin joined
+    # _INT_UNARY_OPS -- no integer-only op is in either list -- but without it the coverage
+    # job compiles the relu_min kernel and fails at build time instead of skipping.
+    _skip_coverage_unsupported(mathop)
+
     int_format = (
         DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
     )
@@ -833,6 +1088,142 @@ def test_eltwise_unary_sfpu_int(
         FastMode.No,
         input_dimensions,
         spec_A=_int_unary_stimuli_spec(mathop),
+    )
+
+
+# relu_min's integer threshold, which is the last unreached branch of that kernel.
+#
+# The vInt branch of _relu_min_ re-encodes its threshold from two's complement into the
+# sign+magnitude order SFPSWAP compares in -- but only when the threshold is negative:
+#
+#     int scalar = static_cast<int>(threshold);
+#     if (scalar < 0) { scalar = -scalar; scalar = 0x80000000 | (scalar & 0x7FFFFFFF); }
+#
+# Nothing reaches that `if`. The harness's own dispatch hard-coded 5u, and no Compute API
+# entry point passes a negative integer threshold either (relu_tile_int32 passes 0, and
+# relu_min_tile_int32 routes to a different kernel entirely). So the re-encoding shipped
+# untested. Overriding the threshold via SFPU_RELU_MIN_INT_THRESHOLD is what reaches it.
+#
+# Both signs are swept, because the negation is only meaningful against a control: the
+# non-negative thresholds take the straight-through path and must keep agreeing.
+_RELU_MIN_INT_THRESHOLDS = [-1000, -5, -1, 0, 5, 1000]
+
+
+def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
+    """Values straddling *threshold*, so both sides of the clamp fire.
+
+    Built around the threshold rather than from a fixed span: at -1000 a positive-only
+    spread would sit entirely on the pass-through side and the clamp would never fire,
+    which is the same way the float domain used to be vacuous.
+
+    Negatives are required here -- max(x, -5) only clamps for x < -5 -- so unlike
+    _int_unary_stimuli_spec this cannot stay positive-only. (The positive-only rule over
+    there is about ops that are also read as unsigned, which is a different constraint.)
+
+    Negative inputs and a negative threshold matter independently, which is worth keeping
+    straight. Negative *inputs* alone are harmless: the compare orders operands as
+    sign+magnitude, but for a non-negative threshold that ordering cannot change the
+    outcome, because a negative input loses under either encoding. Only once the *threshold*
+    is negative too does the encoding of the two operands have to actually agree.
+
+    On both arches it currently does not, which is the unsupported path this sweep
+    deliberately drives and why the negative cases below are xfailed -- the mechanism
+    differs per arch and is tabulated at that marker.
+    See https://github.com/tenstorrent/tt-metal/issues/55643.
+    """
+    straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
+    # A decade either side, so the comparison is exercised well away from the boundary too.
+    spread = [float(threshold + d) for d in (-1000, -100, -10, 10, 100, 1000)]
+    return StimuliSpec.custom(values=straddle + spread, seed=0)
+
+
+@parametrize(
+    threshold=_RELU_MIN_INT_THRESHOLDS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_relu_min_int_threshold(
+    request,
+    threshold: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """relu_min on Int32 against both signs of threshold.
+
+    The negative cases are the point: they are the only inputs that reach the
+    sign+magnitude re-encoding in _relu_min_'s vInt branch. Exact integer golden, so a
+    mis-encoded threshold shows up as a wrong clamp value rather than a tolerance miss.
+
+    The non-negative cases are the control and pass: they take the straight-through path
+    where sign+magnitude and two's complement coincide.
+    """
+    # ReluMin is hardcoded here rather than parametrized, so the guard takes it directly.
+    _skip_coverage_unsupported(MathOperation.ReluMin)
+
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+
+    # First execution of this branch, and it does not work. Measured on n300 at
+    # thresholds -1, -5 and -1000, against stimuli straddling each:
+    #
+    #   as shipped      the threshold wins every lane, including against inputs that are
+    #                   larger than it, and is stored as the raw re-encoding: threshold -5
+    #                   returns 0x80000005 (-2147483643) rather than -5, and -1000 returns
+    #                   0x800003E8. The magnitude is right, the representation is not.
+    #   re-encode       the opposite failure -- a plain two's-complement negative threshold
+    #     removed       never wins, so every input passes through unclamped.
+    #
+    # So it is not a matter of deleting the conversion: neither representation makes SFPSWAP
+    # and the INT32_2S_COMP store agree for a negative threshold, and settling it needs the
+    # ISA semantics for that pair rather than a guess. Recorded as a non-strict xfail rather
+    # than skipped so the case still *executes* and reports XPASS the moment it is fixed.
+    #
+    # Tracked as tt-metal issue #55643. Drop this marker as part of fixing the kernel.
+    #
+    # Nothing ships on this path: no Compute API entry point passes a negative integer
+    # threshold (relu_tile_int32 passes 0, relu_min_tile_int32 routes to relu_clamp_int), and
+    # the harness itself hard-coded 5u until this test parametrized it.
+    #
+    # Both arches fail, for different reasons, and both return the *sign+magnitude* encoding
+    # of the threshold instead of its two's-complement value:
+    #
+    #   Wormhole   raw TTI. The vInt branch hand-re-encodes the threshold to sign+magnitude
+    #              for SFPSWAP, correctly, but loads the input with
+    #              InstrModLoadStore::INT32_2S_COMP, which loads raw -- so the compare comes
+    #              out against a two's-complement input. Threshold -5 returns 0x80000005.
+    #   Blackhole  plain sfpi, and no instruction mode to get wrong -- but _relu_min_impl_
+    #              reads DEST as a bare sfpi::dst_reg[0], with no .mode<DataLayout::I32>()
+    #              to request the converting layout. Dst holds int32 as sign+magnitude (see
+    #              _int_unary_stimuli_spec, which stays positive-only for exactly this
+    #              reason), so a negative threshold does not survive the round trip.
+    #              Threshold -1000 returns 0x800003E8, measured in CI on bh_p150b.
+    #
+    # Non-strict, so the case still executes and reports XPASS per arch as each is fixed.
+    if threshold < 0 and TestConfig.CHIP_ARCH in (
+        ChipArchitecture.WORMHOLE,
+        ChipArchitecture.BLACKHOLE,
+    ):
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="relu_min's vInt branch returns the sign+magnitude encoding of a "
+                "negative threshold instead of its value: Wormhole 0x80000005 for -5 "
+                "(wrong SFPLOAD instruction mode), Blackhole 0x800003E8 for -1000 (no "
+                "converting sfpi DataLayout on the DEST access). Unreached before this "
+                "test; no shipping op passes a negative integer threshold. "
+                "https://github.com/tenstorrent/tt-metal/issues/55643",
+                strict=False,
+            )
+        )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.ReluMin,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_relu_min_int_stimuli_spec(threshold),
+        relu_min_int_threshold=threshold,
     )
 
 
@@ -1034,39 +1425,51 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-# Threshold comparison ops: each maps every element to 0/1 by comparing against a
-# fixed threshold, so a plain random float sweep never lands on the threshold and the
-# output collapses to a constant (PCC undefined). Keyed by mathop:
-#   logical_not(x) = (x == 0) ? 1 : 0   -> threshold 0.0
-#   unary_eq / unary_ne(x)  compare vs 0.5 -> threshold 0.5
+# Ops whose behaviour turns on a comparison against a fixed scalar. A plain random float
+# sweep reaches such a scalar with probability ~0, so the one input where a `>` / `>=` slip
+# or a missing branch is visible never gets driven. Keyed by mathop:
+#   logical_not(x) = (x == 0) ? 1 : 0        -> threshold 0.0
+#   unary_eq / unary_ne(x)  compare vs 0.5   -> threshold 0.5
+#   relu_min(x) = max(x, threshold)          -> threshold RELU_MIN_THRESHOLD
+#   relu_max(x) = clamp(x, 0, threshold)     -> threshold RELU_MAX_THRESHOLD
+#
+# The first three collapse to 0/1 and are here because their output would otherwise be a
+# constant. The two clamps are here for the tie itself: their random domains (widened to
+# clear the threshold) already cover both branches, but neither lands *on* the cutoff, and
+# both kernels compare strictly -- `> threshold` for relu_max, and an SFPSWAP fold for
+# relu_min -- so the boundary is exactly where an off-by-one would hide.
 _THRESHOLD_OPS = [
     MathOperation.LogicalNotUnary,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.ReluMin,
+    MathOperation.ReluMax,
 ]
 
 
 def _threshold_op_stimuli_spec(mathop):
-    # Force a regular subset onto the op's threshold so both the equal and not-equal
-    # branches fire and the output is non-constant.
+    # Force a regular subset onto the op's threshold so the tie branch fires and, for the
+    # 0/1 ops, the output is non-constant.
     #
-    # The threshold comes from op_edge_points() rather than a local literal, which could drift
-    # from UNARY_COMP_THRESHOLD -- the value the golden reads -- with no test noticing. These
-    # three ops are outside _OP_DOMAIN_REGISTRY, so this is the only consumer of their
-    # _OP_EDGE_POINTS entry, the same arrangement the int32 comparison ops have.
-    edges = op_edge_points(mathop)
-    if not edges:
+    # The threshold comes from op_threshold() rather than a local literal, which could drift
+    # from the dispatch constant the golden reads with no test noticing. Deliberately NOT
+    # op_edge_points()[0]: that held only while every entry was exactly (threshold,), and the
+    # clamp entries now straddle their cutoff, so index 0 is a probe beside the threshold.
+    threshold = op_threshold(mathop)
+    if threshold is None:
         raise AssertionError(
-            f"{mathop.name} has no op_edge_points() entry, so the threshold sweep cannot "
-            "land on its comparison threshold — add one in sfpu_domains._OP_EDGE_POINTS"
+            f"{mathop.name} has no op_threshold() entry, so the threshold sweep cannot "
+            "land on its comparison threshold — add one in sfpu_domains._OP_COMPARISON_THRESHOLD"
         )
-    # logical_not's entry is the signed-zero pair (+0.0, -0.0); both are the same
-    # threshold, so the first element is the value to hit in every case.
-    threshold = edges[0]
 
     def dist(size, dtype, generator):
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 5) - 2.0  # {-2, -1, 0, 1, 2}; none equal 0.5
+        # Spread *relative to* the threshold: {t-2, t-1, t, t+1, t+2}. An absolute
+        # {-2, -1, 0, 1, 2} spread works only for a threshold near zero -- against
+        # relu_min's 5.0 every value sat on the clamped side and the golden went constant,
+        # which is the same defect the widened domains fixed. Unchanged for logical_not,
+        # whose threshold is 0.0.
+        x = threshold + ((idx % 5) - 2.0)
         x[0::3] = threshold  # guaranteed threshold hits
         return x.to(dtype)
 
@@ -1087,6 +1490,9 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # ReluMin/ReluMax are COVERAGE_COMPILE_SKIP_OPS members, so this sweep needs the guard
+    # too now that _THRESHOLD_OPS carries them.
+    _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(
@@ -1113,6 +1519,7 @@ def eltwise_unary_sfpu(
     custom_atol=None,
     custom_rtol=None,
     shift_amount=None,
+    relu_min_int_threshold=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1154,6 +1561,11 @@ def eltwise_unary_sfpu(
         formats.input_format,
         input_dimensions,
         **({} if shift_amount is None else {"shift_amount": shift_amount}),
+        **(
+            {}
+            if relu_min_int_threshold is None
+            else {"relu_min_int_threshold": relu_min_int_threshold}
+        ),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1177,6 +1589,11 @@ def eltwise_unary_sfpu(
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
+            *(
+                []
+                if relu_min_int_threshold is None
+                else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

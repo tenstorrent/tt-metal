@@ -128,8 +128,9 @@ void kernel_main() {
                     qkv_x = 0;
                     qkv_y++;
                 }
-                // Past the last input core the cursor is one beyond the coordinate tables; the value is
-                // never used but the read is out of bounds (kernel runtime-arg assert), so guard it.
+                // After the last tile of the last input core qkv_y == num_y: the coordinate
+                // tables have no entry for it and the coordinates are never used again, so skip
+                // the read (the watcher flags it as a runtime-arg out-of-bounds access).
                 if (qkv_y < num_y) {
                     qkv_noc_x = get_vararg(qkv_x);
                     qkv_noc_y = get_vararg(num_x + qkv_y);
@@ -191,8 +192,9 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    // Past the last input core the cursor is one beyond the coordinate tables; the value is
-                    // never used but the read is out of bounds (kernel runtime-arg assert), so guard it.
+                    // After the last tile of the last input core qkv_y == num_y: the coordinate
+                    // tables have no entry for it and the coordinates are never used again, so skip
+                    // the read (the watcher flags it as a runtime-arg out-of-bounds access).
                     if (qkv_y < num_y) {
                         qkv_noc_x = get_vararg(qkv_x);
                         qkv_noc_y = get_vararg(num_x + qkv_y);
@@ -255,8 +257,9 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    // Past the last input core the cursor is one beyond the coordinate tables; the value is
-                    // never used but the read is out of bounds (kernel runtime-arg assert), so guard it.
+                    // After the last tile of the last input core qkv_y == num_y: the coordinate
+                    // tables have no entry for it and the coordinates are never used again, so skip
+                    // the read (the watcher flags it as a runtime-arg out-of-bounds access).
                     if (qkv_y < num_y) {
                         qkv_noc_x = get_vararg(qkv_x);
                         qkv_noc_y = get_vararg(num_x + qkv_y);

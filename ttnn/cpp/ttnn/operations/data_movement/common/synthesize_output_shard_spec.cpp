@@ -39,12 +39,7 @@ ShardSpec synthesize_output_shard_spec(
     uint64_t tensor_width,
     TensorMemoryLayout memory_layout,
     const SynthesizeOutputShardSpecOpts& opts) {
-    // Sharded-only contract — callers filter INTERLEAVED at their wrapper (see repeat_utils.cpp:186-190).
-    TT_FATAL(
-        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
-        "{}: unsupported memory_layout; only HEIGHT/WIDTH/BLOCK sharded.",
-        opts.caller_tag);
+    // Non-{H/W} layouts (ND_SHARDED / INTERLEAVED) fall through to the BLOCK path.
     const CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
     const uint32_t num_cores = all_cores.num_cores();
     TT_FATAL(num_cores > 0, "{}: empty compute grid.", opts.caller_tag);

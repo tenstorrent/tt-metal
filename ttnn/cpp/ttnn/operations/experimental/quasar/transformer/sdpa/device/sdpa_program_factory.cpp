@@ -1439,8 +1439,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             .dfb_spec_name = WINDOWED_K_RANGE,
             .accessor_name = "windowed_k_range",
             .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_tensors.push_back(
-            TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_reader"});
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_reader"});
         reader_defines.insert({"USE_WINDOWED_NARROWING", "1"});
         reader_rta_names.push_back("cu_window_seqlens_eles");
         reader_rta_names.push_back("windowed_q_tok_offset");
@@ -1453,9 +1452,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
 
     KernelSpec reader{
         .unique_id = READER,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/"
-            "reader_interleaved.cpp",
+        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings = reader_dfbs,
         .semaphore_bindings = reader_sems,
@@ -1563,9 +1560,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/"
-            "writer_interleaved.cpp",
+        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = writer_tensors,

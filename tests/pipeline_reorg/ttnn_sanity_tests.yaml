@@ -17,8 +17,10 @@
     tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py::test_run_tilize_with_val_padding_test
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_codegen
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_block_per_node_cb_size
     tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_height_sharded
     tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_rank_gt_4_uses_output_tensor_end
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_block_per_node_cb_size
     tests/ttnn/unit_tests/operations/data_movement/test_pad.py::test_pad
     tests/ttnn/unit_tests/operations/data_movement/test_fill_pad.py::test_fill_pad_complex_sharding
     tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
@@ -28,6 +30,7 @@
     tests/ttnn/unit_tests/operations/data_movement/test_embedding.py::test_base_case
     tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
     tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_general
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_codegen
     tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
     tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
     tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
@@ -263,6 +266,23 @@
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn llk helper library tests"
+  # The device-perf tests in this directory shell out to `python3 -m tracy`, which needs a
+  # Tracy-enabled build; this job runs from the wheel, so they fail on a missing profiler
+  # rather than on anything they measure. The nightly entry in ops_unit_tests.yaml drops the
+  # same tests by --ignore'ing both files; deselecting the marker instead keeps the
+  # functional cases in test_chain_perf.py, which do run here.
+  cmd: >-
+    pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
+    -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
+  skus:
+    wh_n300_civ2:
+      timeout: 20
+    bh_p150b_civ2:
+      timeout: 20
+  team: ttnn
+  owner_id: U0BCCPS862F # Milan Alimpic
 
 - name: "core ttnn unit test group"
   # per_core_allocation runs as its own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read

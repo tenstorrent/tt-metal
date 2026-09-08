@@ -245,11 +245,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
     auto scale_val = scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        joint_strategy,
-        scale_val,
-        tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        program_config,
-        kernel_config_val};
+        joint_strategy, scale_val, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG, program_config, kernel_config_val};
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

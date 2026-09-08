@@ -192,7 +192,7 @@ CoreRangeSet get_worker_grid(
 
 tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout) {
-    // Force ROW_MAJOR to preserve pre-consolidation behaviour (input inheritance is out of scope here).
+    // Unary: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
     auto* device = input_tensor.device();
     auto spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
         device->compute_with_storage_grid_size(),

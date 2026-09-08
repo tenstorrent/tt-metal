@@ -78,9 +78,9 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 545
+    wh_n300_civ2: 565
     bh_p100: 545
-    bh_p150b_civ2: 545
+    bh_p150b_civ2: 565
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
@@ -90,13 +90,16 @@ ttnn:
     wh_llmbox: 50
     wh_galaxy: 120
     bh_galaxy: 40
-    bh_p100: 805
-    bh_p150b_civ2: 1045
-    wh_n150_civ2: 1215
-    wh_n300_civ2: 1180
+    bh_p100: 815
+    bh_p150b_civ2: 850
+    wh_n150_civ2: 1020
+    wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
     bh_quietbox_2: 60
+  package_and_release:
+    wh_n150_civ2: 205
+    bh_p150b_civ2: 205
   e2e:
     wh_llmbox: 90
     wh_galaxy: 0
@@ -160,12 +163,15 @@ train:
     bh_sc1: 260
 
 ttsim:
+  merge_gate:
+    sim_quasar: 15
   unit:
     sim_wh_n150: 15
     sim_bh_p150: 15
   sanity:
     sim_wh_n150: 30
     sim_bh_p150: 30
+    sim_quasar: 30
 
 shield:
   e2e_tier2:
@@ -186,7 +192,7 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 35
+    bh_sc4: 50
 
 scaleout:
   merge_gate:
@@ -298,6 +304,9 @@ llk:
   pr_gate:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 40
+  sanity:
+    wh_n150_civ2: 40
+    bh_p150b_civ2_viommu: 40
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -334,7 +343,7 @@ models:
   e2e:
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 193
+    bh_loudbox: 200
     bh_quietbox_2: 90
     bh_sc1: 20
   e2e_tier1:
@@ -425,8 +434,9 @@ models:
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
-    wh_llmbox: 297
-    bh_loudbox: 75
+    wh_llmbox: 342
+    bh_loudbox: 155  # 75 (Llama-3.1-8B dp=8) + 40 (Gemma4-12B tp=8) + 40 (Gemma4-31B tp=8)
+    bh_galaxy: 65
     wh_n150: 65
 umd:
   unit:

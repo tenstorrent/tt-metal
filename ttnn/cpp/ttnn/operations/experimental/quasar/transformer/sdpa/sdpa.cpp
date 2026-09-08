@@ -72,7 +72,7 @@ ttnn::Tensor scaled_dot_product_attention(
         sliding_window_size,
         std::nullopt,  // chunk_start_idx
         std::nullopt,  // chunk_start_idx_tensor
-        false,         // use_mla
+        false,  // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
@@ -112,13 +112,13 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
         std::nullopt,  // chunk_start_idx_tensor
-        false,         // use_mla
+        false,  // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        0,             // windowed_q_token_offset (windowed mode only)
+        0,  // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
 }
@@ -145,21 +145,21 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        std::nullopt,       // attn_mask
-        page_table_tensor,  // page_table
-        std::nullopt,       // attention_sink
+        std::nullopt,        // attn_mask
+        page_table_tensor,   // page_table
+        std::nullopt,  // attention_sink
         /*is_causal=*/true,
         scale,
         std::nullopt,  // sliding_window_size
         std::nullopt,
         chunk_start_idx_tensor,
-        false,         // use_mla
+        false,  // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        0,             // windowed_q_token_offset (windowed mode only)
+        0,  // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
 }
@@ -186,7 +186,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
         program_config,
         scale,
         compute_kernel_config);
-    return {output_tensors[prim::qsr::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::qsr::JOINT_SDPA_JOINT_OUTPUT_IDX]};
+    return {output_tensors[prim::qsr::JOINT_SDPA_OUTPUT_IDX],
+            output_tensors[prim::qsr::JOINT_SDPA_JOINT_OUTPUT_IDX]};
 }
 
 ttnn::Tensor flash_mla_prefill(
@@ -218,7 +219,7 @@ ttnn::Tensor flash_mla_prefill(
         std::nullopt,  // sliding_window_size (not supported yet)
         std::nullopt,  // chunk_start_idx
         std::nullopt,  // chunk_start_idx_tensor
-        true,          // use_mla
+        true,  // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
@@ -244,16 +245,16 @@ ttnn::Tensor chunked_flash_mla_prefill(
     return ttnn::prim::qsr::sdpa(
         input_tensor_q,
         input_tensor_k,
-        std::nullopt,       // V is implied by K in MLA mode
-        std::nullopt,       // attn_mask
-        page_table_tensor,  // page_table
-        std::nullopt,       // attention_sink
+        std::nullopt,        // V is implied by K in MLA mode
+        std::nullopt,        // attn_mask
+        page_table_tensor,   // page_table
+        std::nullopt,  // attention_sink
         /*is_causal=*/true,
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
         std::nullopt,  // chunk_start_idx_tensor
-        true,          // use_mla
+        true,  // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
