@@ -545,6 +545,11 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             (
                 ttnn.to_torch(dn.rec_state, mesh_composer=comp),
                 [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+                (
+                    ttnn.to_torch(dn.conv_hist_packed, mesh_composer=comp)
+                    if getattr(dn, "conv_hist_packed", None) is not None
+                    else None
+                ),
             )
             for dn in _gdn
         ]
@@ -556,7 +561,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             # Match target buffer dtype on restore
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
-        for dn, (rec, convs) in zip(_gdn, snap):
+        for dn, (rec, convs, hp) in zip(_gdn, snap):
             r = _back(rec, dn.rec_state.dtype)
             ttnn.copy(r, dn.rec_state)
             ttnn.deallocate(r)
@@ -564,6 +569,11 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
                 cc = _back(c, dn.conv_states[j].dtype)
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
+            if hp is not None and getattr(dn, "conv_hist_packed", None) is not None:
+                hh = _back(hp, dn.conv_hist_packed.dtype)
+                ttnn.copy(hh, dn.conv_hist_packed)
+                ttnn.deallocate(hh)
+                dn._hist_packed_valid = True  # restored together with conv_states
 
     # Persistent decode input buffers
     dev = model.prepare_inputs_decode(
@@ -749,6 +759,11 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
             (
                 ttnn.to_torch(dn.rec_state, mesh_composer=comp),
                 [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+                (
+                    ttnn.to_torch(dn.conv_hist_packed, mesh_composer=comp)
+                    if getattr(dn, "conv_hist_packed", None) is not None
+                    else None
+                ),
             )
             for dn in _gdn
         ]
@@ -759,7 +774,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         def _back(t, dtype):
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
-        for dn, (rec, convs) in zip(_gdn, snap):
+        for dn, (rec, convs, hp) in zip(_gdn, snap):
             r = _back(rec, dn.rec_state.dtype)
             ttnn.copy(r, dn.rec_state)
             ttnn.deallocate(r)
@@ -767,6 +782,11 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
                 cc = _back(c, dn.conv_states[j].dtype)
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
+            if hp is not None and getattr(dn, "conv_hist_packed", None) is not None:
+                hh = _back(hp, dn.conv_hist_packed.dtype)
+                ttnn.copy(hh, dn.conv_hist_packed)
+                ttnn.deallocate(hh)
+                dn._hist_packed_valid = True  # restored together with conv_states
 
     def _update(tokens_row, positions):
         # page_table is a constant per-user block mapping for the whole decode loop; it was

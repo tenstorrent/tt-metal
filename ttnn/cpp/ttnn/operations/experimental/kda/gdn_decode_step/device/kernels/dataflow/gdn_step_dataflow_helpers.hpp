@@ -192,4 +192,41 @@ inline void write_head_row_r0(
     dfb.pop_front(Ct);
 }
 
+// Copy row 0 of source tile `page` into row `dst_row` of tile `dst_tile` in `dfb` (two face-row segments).
+template <typename Accessor>
+inline void pack_row_from(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t dst_tile, uint32_t dst_row) {
+    const uint32_t entry = dfb.get_entry_size();
+    const uint32_t seg = entry / 64;    // one face row: 32 B for bf16
+    const uint32_t esz = entry / 1024;  // bytes per element
+    const uint32_t base = dst_tile * entry;
+    noc.async_read(
+        acc,
+        dfb,
+        seg,
+        {.page_id = page, .offset_bytes = 0},
+        {.offset_bytes = base + tile_elem_index(dst_row, 0) * esz});
+    noc.async_read(
+        acc,
+        dfb,
+        seg,
+        {.page_id = page, .offset_bytes = entry / 4},
+        {.offset_bytes = base + tile_elem_index(dst_row, 16) * esz});
+}
+
+// Build the head's packed [q | k | v] tile into tile `dst_tile` (zeroed first). Channel chunk c goes to row 2c:
+// DRAM->L1 reads need the L1 destination to share the source's 64 B alignment, and only even rows (2c * 32 B) satisfy
+// it.
+template <uint32_t Kt, uint32_t Vt, uint32_t Nk, typename Accessor>
+inline void pack_head_tile(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t hk, uint32_t h, uint32_t dst_tile) {
+    for (uint32_t c = 0; c < Kt; ++c) {
+        pack_row_from(acc, dfb, noc, hk * Kt + c, dst_tile, 2 * c);
+        pack_row_from(acc, dfb, noc, Nk * Kt + hk * Kt + c, dst_tile, 2 * (Kt + c));
+    }
+    for (uint32_t c = 0; c < Vt; ++c) {
+        pack_row_from(acc, dfb, noc, 2 * Nk * Kt + h * Vt + c, dst_tile, 2 * (2 * Kt + c));
+    }
+}
+
 }  // namespace gdn_step_df

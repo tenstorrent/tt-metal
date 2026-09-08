@@ -3,7 +3,7 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
+#include <optional>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -34,8 +34,9 @@ struct GdnDecodeStepInputs {
     Tensor g;       // [1, 1, Nv] fp32/bf16 (log decay)
     Tensor state;   // [1, Nv, Dk, Dv] fp32, updated in place
     Tensor weight;  // [Dv] bf16 gated-norm weight
-    std::vector<Tensor> conv_states;  // fused-conv mode: 4 x [1, 1, C] bf16 (oldest first), shifted in place
-    std::vector<Tensor> conv_taps;    // fused-conv mode: 4 x (volume C) bf16
+    std::optional<Tensor>
+        conv_hist;  // fused-conv mode: packed history [Nv, 4, 32, 32] bf16 (slot 3 newest), shifted in place
+    std::optional<Tensor> conv_taps;  // fused-conv mode: packed taps [Nv, 4, 32, 32] bf16 (row c = channel chunk c)
 };
 
 }  // namespace ttnn::experimental::prim

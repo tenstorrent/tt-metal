@@ -13,39 +13,57 @@ namespace {
 constexpr uint32_t kOneBits = 0x3F800000u;     // 1.0f
 constexpr uint32_t kTwentyBits = 0x41A00000u;  // 20.0f (softplus threshold, as ttnn.softplus(1.0, 20.0))
 
-// conv[t] = silu(hist1[t]*tap0[t] + hist2[t]*tap1[t] + hist3[t]*tap2[t] + cur[t]*tap3[t]) for the Ct = 2Kt+Vt head
-// tiles, packed into qc (first Kt), kc (next Kt) and vc (last Vt).
+// conv_p = silu(hist[0]*taps[0] + hist[1]*taps[1] + hist[2]*taps[2] + cur*taps[3])  (one packed fp32 tile)
+inline void causal_conv_silu_packed(DataflowBuffer& conv_p) {
+    conv_p.reserve_back(1);
+    pack_reconfig_data_format(dfb::conv_p);
+    reconfig_data_format(dfb::hist, dfb::taps);
+    mul_init(dfb::hist, dfb::taps);
+    tile_regs_acquire();
+    mul_tiles(dfb::hist, dfb::taps, 0, 0, 0);
+    mul_tiles(dfb::hist, dfb::taps, 1, 1, 1);
+    mul_tiles(dfb::hist, dfb::taps, 2, 2, 2);
+    mul_tiles(dfb::cur, dfb::taps, 0, 3, 3);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
+    add_binary_tile(0, 2, 0);
+    add_binary_tile(0, 3, 0);
+    silu_tile_init();
+    silu_tile(0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, dfb::conv_p, 0);
+    tile_regs_release();
+    conv_p.push_back(1);
+}
+
+// Scatter: tile c (row 0 = row 2c of conv_p, other rows exactly 0) = sel[c] @ conv_p, packed into qc | kc | vc.
 template <uint32_t Kt, uint32_t Vt>
-inline void causal_conv_silu(DataflowBuffer& qc, DataflowBuffer& kc, DataflowBuffer& vc) {
+inline void scatter_conv(DataflowBuffer& qc, DataflowBuffer& kc, DataflowBuffer& vc) {
     constexpr uint32_t Ct = 2 * Kt + Vt;
     qc.reserve_back(Kt);
     kc.reserve_back(Kt);
     vc.reserve_back(Vt);
     pack_reconfig_data_format(dfb::qc);
-    // all four operand pairs are bf16 tiles of the same shape: one unpack/math init serves every product
-    reconfig_data_format(dfb::hist1, dfb::tap0);
-    for (uint32_t t = 0; t < Ct; ++t) {
-        // the previous tile's SFPU ops leave the math in SFPU state: cheap FPU re-init (no format reconfig) per tile
-        mul_init(dfb::hist1, dfb::tap0);
+    reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::conv_p);
+    matmul_init(dfb::sel, dfb::conv_p);
+    for (uint32_t c0 = 0; c0 < Ct; c0 += 4) {
+        const uint32_t n = (Ct - c0) < 4 ? (Ct - c0) : 4;
         tile_regs_acquire();
-        mul_tiles(dfb::hist1, dfb::tap0, t, t, 0);
-        mul_tiles(dfb::hist2, dfb::tap1, t, t, 1);
-        mul_tiles(dfb::hist3, dfb::tap2, t, t, 2);
-        mul_tiles(dfb::cur, dfb::tap3, t, t, 3);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
-        add_binary_tile(0, 2, 0);
-        add_binary_tile(0, 3, 0);
-        silu_tile_init();
-        silu_tile(0);
+        for (uint32_t i = 0; i < n; ++i) {
+            matmul_tiles(dfb::sel, dfb::conv_p, c0 + i, 0, i);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        if (t < Kt) {
-            pack_tile(0, dfb::qc, t);
-        } else if (t < 2 * Kt) {
-            pack_tile(0, dfb::kc, t - Kt);
-        } else {
-            pack_tile(0, dfb::vc, t - 2 * Kt);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t c = c0 + i;
+            if (c < Kt) {
+                pack_tile(i, dfb::qc, c);
+            } else if (c < 2 * Kt) {
+                pack_tile(i, dfb::kc, c - Kt);
+            } else {
+                pack_tile(i, dfb::vc, c - 2 * Kt);
+            }
         }
         tile_regs_release();
     }
@@ -145,14 +163,11 @@ TT_KERNEL void compute(uint32_t wi_count) {
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t Ct = 2 * Kt + Vt;
     constexpr uint32_t one_bits = kOneBits;
-    DataflowBuffer hist1(dfb::hist1);
-    DataflowBuffer hist2(dfb::hist2);
-    DataflowBuffer hist3(dfb::hist3);
+    DataflowBuffer hist(dfb::hist);
+    DataflowBuffer taps(dfb::taps);
     DataflowBuffer cur(dfb::cur);
-    DataflowBuffer tap0(dfb::tap0);
-    DataflowBuffer tap1(dfb::tap1);
-    DataflowBuffer tap2(dfb::tap2);
-    DataflowBuffer tap3(dfb::tap3);
+    DataflowBuffer sel(dfb::sel);
+    DataflowBuffer conv_p(dfb::conv_p);
     DataflowBuffer z_in(dfb::z_in);
     DataflowBuffer a_s(dfb::a_s);
     DataflowBuffer b_s(dfb::b_s);
@@ -188,22 +203,18 @@ TT_KERNEL void compute(uint32_t wi_count) {
     DataflowBuffer on(dfb::on);
     DataflowBuffer out(dfb::out);
 
-    compute_kernel_hw_startup(dfb::hist1, dfb::state_in, dfb::out);
+    compute_kernel_hw_startup(dfb::hist, dfb::state_in, dfb::out);
     scaler.wait_front(1);
     eps_l2.wait_front(1);
     eps_norm.wait_front(1);
     mask.wait_front(1);
     w_in.wait_front(Vt);
-    tap0.wait_front(Ct);
-    tap1.wait_front(Ct);
-    tap2.wait_front(Ct);
-    tap3.wait_front(Ct);
+    sel.wait_front(Ct);
+    taps.wait_front(4);
 
     for (uint32_t wi = 0; wi < wi_count; ++wi) {
-        hist1.wait_front(Ct);
-        hist2.wait_front(Ct);
-        hist3.wait_front(Ct);
-        cur.wait_front(Ct);
+        hist.wait_front(3);
+        cur.wait_front(1);
         z_in.wait_front(Vt);
         a_s.wait_front(1);
         b_s.wait_front(1);
@@ -211,12 +222,13 @@ TT_KERNEL void compute(uint32_t wi_count) {
         nea_s.wait_front(1);
         state_in.wait_front(KV);
 
-        // conv + silu -> qc, kc, vc ; gates
-        causal_conv_silu<Kt, Vt>(qc, kc, vc);
-        hist1.pop_front(Ct);
-        hist2.pop_front(Ct);
-        hist3.pop_front(Ct);
-        cur.pop_front(Ct);
+        // conv + silu on the packed tile, scattered into qc, kc, vc ; gates
+        causal_conv_silu_packed(conv_p);
+        hist.pop_front(3);
+        cur.pop_front(1);
+        conv_p.wait_front(1);
+        scatter_conv<Kt, Vt>(qc, kc, vc);
+        conv_p.pop_front(1);
         gate_beta(beta_t);
         b_s.pop_front(1);
         gate_decay(dec);

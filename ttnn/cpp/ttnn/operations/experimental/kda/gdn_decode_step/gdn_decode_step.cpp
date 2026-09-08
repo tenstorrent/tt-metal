@@ -24,8 +24,8 @@ ttnn::Tensor gdn_decode_step(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     DataType output_dtype,
-    const std::optional<std::vector<ttnn::Tensor>>& conv_states,
-    const std::optional<std::vector<ttnn::Tensor>>& conv_taps,
+    const std::optional<ttnn::Tensor>& conv_hist,
+    const std::optional<ttnn::Tensor>& conv_taps,
     uint32_t qkvz_dim) {
     TT_FATAL(
         qkv.storage_type() == StorageType::DEVICE && qkv.buffer() != nullptr,
@@ -55,8 +55,8 @@ ttnn::Tensor gdn_decode_step(
         output_memory_config,
         kernel_config,
         output_dtype,
-        conv_states.value_or(std::vector<ttnn::Tensor>{}),
-        conv_taps.value_or(std::vector<ttnn::Tensor>{}),
+        conv_hist,
+        conv_taps,
         qkvz_dim);
 }
 

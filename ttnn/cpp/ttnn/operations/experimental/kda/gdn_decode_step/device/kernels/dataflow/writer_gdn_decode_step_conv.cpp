@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Writer for the fused-conv variant: stores the new state and output, then shifts the conv history in place
-// (cs0 <- cs1, cs1 <- cs2, cs2 <- cs3, cs3 <- new qkv). The history is read at kernel start (before any core can
-// have started writing) and written after the compute finishes; q/k tiles shared by rf value heads are written by
-// the first head of each key group only.
+// Writer for the fused-conv variant (packed layout). The packed history is private per value head (no cross-core
+// hazard); the shift (slot0 <- slot1, ..., slot3 <- new token) is snapshotted at kernel start and written after the
+// state, i.e. after this core's reader has consumed the old history.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 
 using namespace gdn_step_df;
@@ -26,33 +25,27 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto state_acc = TensorAccessor(tensor::state_out);
     const auto out_acc = TensorAccessor(tensor::out);
     const auto qkv_acc = TensorAccessor(tensor::qkv_w);
-    const auto cs0_acc = TensorAccessor(tensor::cs0_out);
-    const auto cs1_acc = TensorAccessor(tensor::cs1_w);
-    const auto cs2_acc = TensorAccessor(tensor::cs2_w);
-    const auto cs3_acc = TensorAccessor(tensor::cs3_w);
+    const auto hist_acc = TensorAccessor(tensor::hist_w);
     DataflowBuffer hnew(dfb::hnew);
     DataflowBuffer out(dfb::out);
-    DataflowBuffer wh1(dfb::wh1);
-    DataflowBuffer wh2(dfb::wh2);
-    DataflowBuffer wh3(dfb::wh3);
-    DataflowBuffer wcur(dfb::wcur);
+    DataflowBuffer wshift(dfb::wshift);
     Noc noc;
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t rf = Nv / Nk;
     for (uint32_t i = 0; i < wi_count; ++i) {
         const uint32_t h = wi_start + i;
         const uint32_t hk = h / rf;
-        // snapshot the history rows before anyone shifts them
-        read_head_row<Kt, Vt, Nk>(cs1_acc, wh1, noc, hk, h);
-        read_head_row<Kt, Vt, Nk>(cs2_acc, wh2, noc, hk, h);
-        read_head_row<Kt, Vt, Nk>(cs3_acc, wh3, noc, hk, h);
-        read_head_row<Kt, Vt, Nk>(qkv_acc, wcur, noc, hk, h);
+        // wshift = [slot1, slot2, slot3, new token]  ->  slots 0..3
+        wshift.reserve_back(4);
+        zero_reserved(wshift, noc, 4);
+        read_tiles_at(hist_acc, wshift, noc, h * 4 + 1, 3, 0);
+        pack_head_tile<Kt, Vt, Nk>(qkv_acc, wshift, noc, hk, h, 3);
+        noc.async_read_barrier();
+        wshift.push_back(4);
+        // The state write below waits for the compute output, which in turn consumed the reader's copy of the history:
+        // only after that is it safe to overwrite slots 1..3 (the reader and writer share this core's history pages).
         write_tiles(state_acc, hnew, noc, h * KV, KV);  // in-place state update
+        write_tiles(hist_acc, wshift, noc, h * 4, 4);   // slot0 <- slot1, ..., slot3 <- new token (8 KB)
         write_tiles(out_acc, out, noc, h * Vt, Vt);
-        const bool write_qk = (h % rf) == 0;
-        write_head_row<Kt, Vt, Nk>(cs0_acc, wh1, noc, hk, h, write_qk);
-        write_head_row<Kt, Vt, Nk>(cs1_acc, wh2, noc, hk, h, write_qk);
-        write_head_row<Kt, Vt, Nk>(cs2_acc, wh3, noc, hk, h, write_qk);
-        write_head_row<Kt, Vt, Nk>(cs3_acc, wcur, noc, hk, h, write_qk);
     }
 }

@@ -91,6 +91,26 @@ def _reference_conv(hist, new_row, taps, dtb, nea, h, w, scale, l2_eps=1e-6, nor
     return gated, h_new, new_hist
 
 
+def _pack_rows(rows):
+    """4 torch [C] rows (oldest first) -> [Nv, 4, 32, 32] packed head tiles (row c = channel chunk c of [q|k|v])."""
+    rf = Nv // Nk
+    out = torch.zeros(Nv, 4, 32, 32, dtype=torch.bfloat16)
+    for h in range(Nv):
+        hk = h // rf
+        for j, r in enumerate(rows):
+            r = r.reshape(-1).to(torch.bfloat16)
+            chunks = torch.cat(
+                [
+                    r[hk * Dk : (hk + 1) * Dk],
+                    r[KD + hk * Dk : KD + (hk + 1) * Dk],
+                    r[2 * KD + h * Dv : 2 * KD + (h + 1) * Dv],
+                ]
+            )
+            n = chunks.numel() // 32
+            out[h, j, 0 : 2 * n : 2, :] = chunks.reshape(-1, 32)  # chunk c in row 2c
+    return out
+
+
 @pytest.mark.parametrize("steps", [3])
 def test_gdn_decode_step_conv(device, steps):
     torch.manual_seed(1)
@@ -107,8 +127,8 @@ def test_gdn_decode_step_conv(device, steps):
     to_dev = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
     state = to_dev(h.reshape(1, Nv, Dk, Dv), ttnn.float32)
     w_dev = to_dev(w, ttnn.bfloat16)
-    taps_dev = [to_dev(t, ttnn.bfloat16) for t in taps]
-    cs_dev = [to_dev(t.reshape(1, 1, C), ttnn.bfloat16) for t in cs]
+    taps_dev = to_dev(_pack_rows(taps), ttnn.bfloat16)
+    hist_dev = to_dev(_pack_rows(cs), ttnn.bfloat16)
     h_ref = h.clone()
     cs_ref = [t.float() for t in cs]
     for step in range(steps):
@@ -129,18 +149,18 @@ def test_gdn_decode_step_conv(device, steps):
             Dv,
             scale=scale,
             output_dtype=ttnn.float32,
-            conv_states=cs_dev,
+            conv_hist=hist_dev,
             conv_taps=taps_dev,
             qkvz_dim=az,
         )
         out_t = ttnn.to_torch(out).reshape(-1)
         h_t = ttnn.to_torch(state).reshape(Nv, Dk, Dv)
-        cs_t = [ttnn.to_torch(t).reshape(-1).float() for t in cs_dev]
+        hist_t = ttnn.to_torch(hist_dev)
         p_out, p_h = _pcc(out_t, gated_ref), _pcc(h_t, h_ref)
-        cs_ok = all(torch.equal(cs_t[j], new_hist[j]) for j in range(4))
+        hist_ok = torch.equal(hist_t, _pack_rows([t.bfloat16() for t in new_hist]))
         print(
             f"step {step}: out pcc={p_out:.6f} max|d|={(out_t - gated_ref).abs().max().item():.4e}  "
-            f"state pcc={p_h:.6f} max|d|={(h_t - h_ref).abs().max().item():.4e}  conv-state shift exact={cs_ok}"
+            f"state pcc={p_h:.6f} max|d|={(h_t - h_ref).abs().max().item():.4e}  packed-history shift exact={hist_ok}"
         )
-        assert p_out > 0.999 and p_h > 0.9999 and cs_ok, (p_out, p_h, cs_ok)
+        assert p_out > 0.999 and p_h > 0.9999 and hist_ok, (p_out, p_h, hist_ok)
         cs_ref = new_hist

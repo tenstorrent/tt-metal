@@ -73,13 +73,8 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const m2::TensorParamName STATE{"state"};
     const m2::TensorParamName WEIGHT{"weight"};
     const m2::TensorParamName OUT{"out"};
-    const std::vector<m2::TensorParamName> CS = {
-        m2::TensorParamName{"cs0"}, m2::TensorParamName{"cs1"}, m2::TensorParamName{"cs2"}, m2::TensorParamName{"cs3"}};
-    const std::vector<m2::TensorParamName> TAP = {
-        m2::TensorParamName{"tap0"},
-        m2::TensorParamName{"tap1"},
-        m2::TensorParamName{"tap2"},
-        m2::TensorParamName{"tap3"}};
+    const m2::TensorParamName HIST{"hist"};
+    const m2::TensorParamName TAPS{"taps"};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -91,14 +86,10 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     std::vector<Dfb> reader_out;  // produced by reader, consumed by compute
     if (fused) {
         reader_out = {
-            {"hist1", Ct, in_fmt},
-            {"hist2", Ct, in_fmt},
-            {"hist3", Ct, in_fmt},
-            {"cur", Ct, in_fmt},
-            {"tap0", Ct, bf16},
-            {"tap1", Ct, bf16},
-            {"tap2", Ct, bf16},
-            {"tap3", Ct, bf16},
+            {"hist", 3, bf16},
+            {"taps", 4, bf16},
+            {"cur", 1, bf16},
+            {"sel", Ct, bf16},
             {"z_in", Vt, in_fmt},
             {"a_s", 1, fp32},
             {"b_s", 1, fp32},
@@ -137,14 +128,19 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         {"on", Vt, fp32}};
     if (fused) {
         for (const auto& d : std::vector<Dfb>{
-                 {"qc", Kt, fp32}, {"kc", Kt, fp32}, {"vc", Vt, fp32}, {"beta_t", 1, fp32}, {"zs", Vt, fp32}}) {
+                 {"conv_p", 1, fp32},
+                 {"qc", Kt, fp32},
+                 {"kc", Kt, fp32},
+                 {"vc", Vt, fp32},
+                 {"beta_t", 1, fp32},
+                 {"zs", Vt, fp32}}) {
             compute_local.push_back(d);
         }
     }
     const std::vector<Dfb> compute_out = {{"hnew", KV, fp32}, {"out", Vt, out_fmt}};
     std::vector<Dfb> writer_local;
     if (fused) {
-        writer_local = {{"wh1", Ct, in_fmt}, {"wh2", Ct, in_fmt}, {"wh3", Ct, in_fmt}, {"wcur", Ct, in_fmt}};
+        writer_local = {{"wshift", 4, bf16}};
     }
 
     m2::Group<m2::DataflowBufferSpec> dfbs;
@@ -182,12 +178,8 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         m2::TensorBinding{STATE, "state"},
         m2::TensorBinding{WEIGHT, "weight"}};
     if (fused) {
-        for (uint32_t j = 1; j < 4; ++j) {
-            reader.tensor_bindings.push_back(m2::TensorBinding{CS[j], "cs" + std::to_string(j)});
-        }
-        for (uint32_t j = 0; j < 4; ++j) {
-            reader.tensor_bindings.push_back(m2::TensorBinding{TAP[j], "tap" + std::to_string(j)});
-        }
+        reader.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{TAPS, "taps"});
         reader.compile_time_args = {
             {"Kt", Kt},
             {"Vt", Vt},
@@ -227,10 +219,7 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             writer.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
         }
         writer.tensor_bindings.push_back(m2::TensorBinding{QKV, "qkv_w"});
-        writer.tensor_bindings.push_back(m2::TensorBinding{CS[0], "cs0_out"});
-        for (uint32_t j = 1; j < 4; ++j) {
-            writer.tensor_bindings.push_back(m2::TensorBinding{CS[j], "cs" + std::to_string(j) + "_w"});
-        }
+        writer.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist_w"});
         writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}};
     } else {
         writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}};
@@ -291,14 +280,12 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     m2::ProgramRunArgs run_args;
     run_args.tensor_args = {{QKV, qkv}, {BETA, beta}, {G, g}, {STATE, state}, {WEIGHT, weight}, {OUT, output}};
     if (fused) {
-        for (uint32_t j = 0; j < 4; ++j) {
-            tensor_parameters.push_back(
-                m2::TensorParameter{.unique_id = CS[j], .spec = in.conv_states[j].mesh_tensor().tensor_spec()});
-            tensor_parameters.push_back(
-                m2::TensorParameter{.unique_id = TAP[j], .spec = in.conv_taps[j].mesh_tensor().tensor_spec()});
-            run_args.tensor_args.emplace(CS[j], in.conv_states[j].mesh_tensor());
-            run_args.tensor_args.emplace(TAP[j], in.conv_taps[j].mesh_tensor());
-        }
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = HIST, .spec = in.conv_hist->mesh_tensor().tensor_spec()});
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = TAPS, .spec = in.conv_taps->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(HIST, in.conv_hist->mesh_tensor());
+        run_args.tensor_args.emplace(TAPS, in.conv_taps->mesh_tensor());
     }
 
     m2::ProgramSpec spec{

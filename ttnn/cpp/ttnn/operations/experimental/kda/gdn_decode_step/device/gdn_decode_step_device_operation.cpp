@@ -3,6 +3,7 @@
 #include "gdn_decode_step_device_operation.hpp"
 
 #include <array>
+#include <optional>
 #include <cmath>
 
 #include <tt-metalium/constants.hpp>
@@ -82,22 +83,24 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             "{}: fused-conv needs qkvz_dim == 2*Nk*Dk + 2*Nv*Dv (tile aligned) and 2*Nv <= 32 (a|b in one tile)",
             kOp);
         TT_FATAL(
-            in.conv_states.size() == 4 && in.conv_taps.size() == 4,
-            "{}: fused-conv needs 4 conv states and 4 taps",
-            kOp);
-        for (uint32_t j = 0; j < 4; ++j) {
-            check_tiled(in.conv_states[j], "conv_state", {DataType::BFLOAT16});
-            check_tiled(in.conv_taps[j], "conv_tap", {DataType::BFLOAT16});
-            check_same_device(in.qkv, in.conv_states[j], kOp, "conv_state");
-            check_same_device(in.qkv, in.conv_taps[j], kOp, "conv_tap");
-            const auto& cs = in.conv_states[j].logical_shape();
+            in.conv_hist.has_value() && in.conv_taps.has_value(), "{}: fused-conv needs conv_hist and conv_taps", kOp);
+        for (const auto& [t, name] :
+             std::array{std::pair{&*in.conv_hist, "conv_hist"}, std::pair{&*in.conv_taps, "conv_taps"}}) {
+            check_tiled(*t, name, {DataType::BFLOAT16});
+            check_same_device(in.qkv, *t, kOp, name);
+            const auto& ps = t->logical_shape();
             TT_FATAL(
-                cs.rank() == 3 && cs[0] == 1 && cs[1] == 1 && cs[2] == C,
-                "{}: conv_state must be [1, 1, C] (got {})",
+                ps.rank() == 4 && ps[0] == Nv && ps[1] == 4 && ps[2] == tt::constants::TILE_HEIGHT &&
+                    ps[3] == tt::constants::TILE_WIDTH,
+                "{}: {} must be packed [Nv, 4, 32, 32] (got {})",
                 kOp,
-                cs);
-            TT_FATAL(in.conv_taps[j].logical_volume() == C, "{}: conv_tap volume must equal C", kOp);
+                name,
+                ps);
         }
+        TT_FATAL(
+            2 * ((2 * Dk + Dv) / tt::constants::TILE_WIDTH) <= tt::constants::TILE_HEIGHT,
+            "{}: packed head row needs <= 16 chunks (chunk c in row 2c)",
+            kOp);
         TT_FATAL(
             in.beta.logical_volume() == Nv && in.g.logical_volume() == Nv,
             "{}: dt_bias / neg_exp_A volume must be Nv",
@@ -155,8 +158,8 @@ Tensor gdn_decode_step(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
-    const std::vector<Tensor>& conv_states,
-    const std::vector<Tensor>& conv_taps,
+    const std::optional<Tensor>& conv_hist,
+    const std::optional<Tensor>& conv_taps,
     uint32_t qkvz_dim) {
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
         GdnDecodeStepParams{
@@ -170,7 +173,7 @@ Tensor gdn_decode_step(
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
-            .fuse_conv = !conv_states.empty(),
+            .fuse_conv = conv_hist.has_value(),
             .qkvz_dim = qkvz_dim,
         },
         GdnDecodeStepInputs{
@@ -179,7 +182,7 @@ Tensor gdn_decode_step(
             .g = g,
             .state = state,
             .weight = weight,
-            .conv_states = conv_states,
+            .conv_hist = conv_hist,
             .conv_taps = conv_taps});
 }
 

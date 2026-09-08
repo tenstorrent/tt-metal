@@ -283,6 +283,11 @@ class TPGatedDeltaNet:
         self._decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED") in ("1", "2")
         self._decode_fused_conv = os.environ.get("QWEN36_GDN_DECODE_FUSED") == "2"
         self._norm_w_1d = None
+        # packed per-head conv history / taps for the fused-conv op ([Nv, 4, 32, 32] bf16 per device; row 2c of a tile =
+        # channel chunk c of the head's [q|k|v] row, slot 3 = newest). Rebuilt from conv_states when they were rewritten.
+        self.conv_hist_packed = None
+        self._hist_packed_valid = False
+        self._conv_taps_packed = None
         # QWEN36_KDA_RM_L1=1: ROW_MAJOR fallback tuning. The untilize itself cannot use more than 64 cores
         # for a [1,2048,2560] chunk -- UntilizeCodegen splits work over tile-rows only
         # (untilize_codegen_program_factory.cpp:562 choose_2d_ncol returns 1 whenever
@@ -305,6 +310,7 @@ class TPGatedDeltaNet:
 
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
+        self._hist_packed_valid = False
         self.rec_state = None
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
         self._stable_state = False
@@ -330,6 +336,7 @@ class TPGatedDeltaNet:
             )
 
         self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
+        self._hist_packed_valid = False
         # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
         if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = ttnn.from_torch(
@@ -832,6 +839,7 @@ class TPGatedDeltaNet:
                     self.reset_state()
                 if self._zero_conv0 is not None:
                     ttnn.copy(self._zero_conv0, self.conv_states[0])
+                    self._hist_packed_valid = False
                 else:
                     zero = ttnn.from_torch(
                         torch.zeros(1, B, D, dtype=torch.bfloat16),
@@ -841,10 +849,12 @@ class TPGatedDeltaNet:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
                     )
                     ttnn.copy(zero, self.conv_states[0])
+                    self._hist_packed_valid = False
                     ttnn.deallocate(zero)
                 for j in range(self.K - 1):
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
+                    self._hist_packed_valid = False
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -993,10 +1003,12 @@ class TPGatedDeltaNet:
             ttnn.deallocate(rec_batched)
             for m in range(self.K):
                 ttnn.copy(conv_states[m], self.conv_states[m])
+                self._hist_packed_valid = False
                 ttnn.deallocate(conv_states[m])
         else:
             self.rec_state = rec_batched
             self.conv_states = conv_states
+            self._hist_packed_valid = False
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -1113,6 +1125,7 @@ class TPGatedDeltaNet:
             if c_src is not c:
                 ttnn.deallocate(c)
             self._write_index(self.conv_states[m], c_src, slot, dim=1)
+            self._hist_packed_valid = False
 
     def remap_slots(self, remap):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
@@ -1282,9 +1295,11 @@ class TPGatedDeltaNet:
         if self._stable_state and self.conv_states is not None:
             for m in range(self.K):
                 ttnn.copy(new_conv[m], self.conv_states[m])
+                self._hist_packed_valid = False
                 ttnn.deallocate(new_conv[m])
         else:
             self.conv_states = new_conv
+            self._hist_packed_valid = False
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
@@ -1338,6 +1353,65 @@ class TPGatedDeltaNet:
         w_host = ttnn.to_torch(ttnn.get_device_tensors(self.tw["norm_w"])[0]).float().reshape(-1)[:Dv]
         self._kda_dec_const = {"e_q": dev(e_q), "e_g": dev(e_g), "gate": dev(gate), "norm_w": dev(w_host)}
         return self._kda_dec_const
+
+    def _pack_head_tiles(self, rows):
+        """rows: list of 4 torch [C] vectors (this device's channels, oldest first) -> [Nv, 4, 32, 32] bf16 packed tiles."""
+        Nv, Nk, Dk, Dv = self.Nv, self.Nk, self.Dk, self.Dv
+        rf = Nv // Nk
+        kd = Nk * Dk
+        out = torch.zeros(Nv, 4, 32, 32, dtype=torch.bfloat16)
+        for h in range(Nv):
+            hk = h // rf
+            for j, r in enumerate(rows):
+                r = r.reshape(-1).to(torch.bfloat16)
+                chunks = torch.cat(
+                    [
+                        r[hk * Dk : (hk + 1) * Dk],
+                        r[kd + hk * Dk : kd + (hk + 1) * Dk],
+                        r[2 * kd + h * Dv : 2 * kd + (h + 1) * Dv],
+                    ]
+                )
+                n = chunks.numel() // 32
+                out[h, j, 0 : 2 * n : 2, :] = chunks.reshape(-1, 32)  # chunk c in row 2c (64 B aligned segments)
+        return out
+
+    def _per_device_rows(self, tensors):
+        """[[torch row per device] per tensor] for a list of mesh tensors holding this layer's per-device [.., C] rows."""
+        return [[ttnn.to_torch(d).reshape(-1).float() for d in ttnn.get_device_tensors(t)] for t in tensors]
+
+    def _packed_from_rows(self, rows_per_tensor):
+        """rows_per_tensor: 4 lists (one per slot/tap) of per-device torch rows -> mesh tensor [Nv,4,32,32] per device."""
+        n_dev = len(rows_per_tensor[0])
+        # [n_dev * Nv, 4, 32, 32] sharded on dim 0 -> each device holds its own [Nv, 4, 32, 32]
+        per_dev = torch.cat(
+            [self._pack_head_tiles([rows_per_tensor[j][d] for j in range(4)]) for d in range(n_dev)], dim=0
+        )
+        return ttnn.from_torch(
+            per_dev,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+
+    def _conv_taps_packed_t(self):
+        if self._conv_taps_packed is None:
+            self._conv_taps_packed = self._packed_from_rows(self._per_device_rows(self.tw["conv_taps"]))
+        return self._conv_taps_packed
+
+    def _ensure_conv_hist_packed(self):
+        """(Re)build the packed history from conv_states when they changed (prefill, reset, restore). Host round trip,
+        runs eagerly before the first decode step of a prompt - never inside a trace capture."""
+        if self._hist_packed_valid and self.conv_hist_packed is not None:
+            return
+        packed = self._packed_from_rows(self._per_device_rows(self.conv_states))
+        if self.conv_hist_packed is None:
+            self.conv_hist_packed = packed  # stable address for traced decode
+        else:
+            ttnn.copy(packed, self.conv_hist_packed)
+            ttnn.deallocate(packed)
+        self._hist_packed_valid = True
 
     def _norm_weight_1d(self):
         """tw["norm_w"] as the 1-D [Dv] bf16 tensor the fused op wants (built once)."""
@@ -1460,6 +1534,7 @@ class TPGatedDeltaNet:
         B = x.shape[-2]
 
         if self._decode_fused_conv and B == 1 and self._fuse_ab and getattr(self.args, "proj_1d_decode", False):
+            self._ensure_conv_hist_packed()
             qkvzab = tpc.matmul_1d_decode(
                 x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
             )
@@ -1476,8 +1551,8 @@ class TPGatedDeltaNet:
                 scale=self.scale,
                 memory_config=_L1,
                 output_dtype=ttnn.bfloat16,
-                conv_states=self.conv_states,
-                conv_taps=tw["conv_taps"],
+                conv_hist=self.conv_hist_packed,
+                conv_taps=self._conv_taps_packed_t(),
                 qkvz_dim=self.qkvz_dim_tp,
             )
             ttnn.deallocate(qkvzab)
