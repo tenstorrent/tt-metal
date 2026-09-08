@@ -1267,14 +1267,33 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // subsumed by the split-reader deferral above (enable_split_reader is forced false), so it can never
     // arise here.
 
-    // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated. matmul_partials
-    // is never aliased onto the output on this arch: get_cb_info() leaves MATMUL_PARTIALS.is_globally_allocated
-    // false here because partials_use_output_cb gates on arch != QUASAR (conv2d_op_program_factory_common.cpp), so
-    // partials already gets its own allocation and the compute kernel takes its !partials_cb_uses_output path
-    // (dedicated-ring RESTORE_PARTIALS). No extra arch guard is needed at this site.
-    const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
+    // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
+    //
+    // matmul_partials in-place accumulate: the shared get_cb_info() borrows it onto the OUTPUT allocation
+    // (is_globally_allocated) and, for a MULTI-BLOCK per-core output, places it at a NON-ZERO address_offset --
+    // the END of the output region, so the scratch overlaps only the last-finalized output block. The Metal-2.0
+    // borrowed-DFB API (DataflowBufferSpec::borrowed_from, set below) has NO offset field: it can only alias at
+    // OFFSET 0 (the FRONT of the output). So when the mainline's address_offset is non-zero
+    // (num_blocks_act_h_per_core > 1), a borrow places the partials scratch over output block 0 and clobbers it
+    // the moment the second output block is produced -> corrupted, finite-but-wrong output. This is the WH
+    // batch-16 folded stem (HEIGHT_SHARDED, per_core_M=98 -> 2 height blocks): op002 stem_conv1 PCC ~0.52. It
+    // does NOT reproduce at batch 1 (single block, address_offset==0) nor under DRAM height-slicing (each slice
+    // is a single block), which is exactly what test_conv2d_stem_bisect.py showed.
+    //
+    // Fix: only borrow onto the output when the mainline offset is 0 (single output block, where FRONT==the whole
+    // region and the alias is safe); otherwise give matmul_partials its OWN L1 DFB, and the compute kernel takes
+    // its !partials_cb_uses_output path (dedicated-ring RESTORE_PARTIALS). On Quasar is_globally_allocated is
+    // already false (get_cb_info gates partials_use_output_cb on arch != QUASAR), so this is a no-op there; it
+    // only changes the multi-block case on WH/BH, which is where the offset-0 clobber bites.
+    const auto& matmul_partials_cb_info = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS);
+    const bool partials_cb_uses_output = !is_conv_1d_depthwise_conv && matmul_partials_cb_info.is_globally_allocated &&
+                                         matmul_partials_cb_info.address_offset == 0;
+    log_debug(
+        tt::LogOp,
+        "partials_cb_uses_output: {} (is_globally_allocated={} address_offset={})",
+        partials_cb_uses_output,
+        matmul_partials_cb_info.is_globally_allocated,
+        matmul_partials_cb_info.address_offset);
 
     const bool reader_indices_globally_allocated =
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).is_globally_allocated;
