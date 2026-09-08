@@ -2,7 +2,7 @@ import ttnn
 
 from models.experimental.deepseek_v4_flash.tt.decode_prefetch import DECODE_GCB_GROUP, DECODE_LAYOUTS
 from models.experimental.deepseek_v4_flash.tt.l1_placement import placement_for
-from models.experimental.deepseek_v4_flash.tt.layers import fused_rms_norm_gamma_memory_config
+from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode, fused_rms_norm_gamma_memory_config
 
 
 def test_fused_rms_norm_gamma_is_width_sharded_on_the_weight_grid():
@@ -17,6 +17,33 @@ def test_fused_rms_norm_gamma_is_width_sharded_on_the_weight_grid():
     assert tuple(mem.shard_spec.shape) == (1, n // num_cores)
     assert mem.shard_spec.grid == grid
     assert mem.shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+
+
+def test_linear_decode_forwards_fused_rms_norm_group_size():
+    layer = LinearDecode.__new__(LinearDecode)
+    layer.output_core_grid = None
+    layer.fused_rms_norm_eps = 1e-6
+    layer.fused_rms_norm_gamma = 1.0
+    layer.fused_rms_norm_group_size = 512
+    output_memory_config = object()
+
+    assert layer._epilogue_kwargs(output_memory_config) == {
+        "output_mem_config": output_memory_config,
+        "rms_norm": True,
+        "rms_norm_gamma": 1.0,
+        "rms_norm_epsilon": 1e-6,
+        "rms_norm_group_size": 512,
+    }
+
+
+def test_linear_decode_accepts_scalar_fused_rms_norm_gamma():
+    layer = LinearDecode.__new__(LinearDecode)
+    layer.can_fuse_rms_norm = lambda: True
+
+    assert layer.enable_fused_rms_norm(1e-6, 1.0, group_size=512)
+    assert layer.fused_rms_norm_eps == 1e-6
+    assert layer.fused_rms_norm_gamma == 1.0
+    assert layer.fused_rms_norm_group_size == 512
 
 
 def test_q_a_uses_full_width_32_core_layout():
