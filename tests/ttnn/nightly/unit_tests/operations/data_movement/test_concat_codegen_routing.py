@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Contracts: (1) every case the codegen gate rejects falls back to native under ordinary
-# routing; (2) an accepted case dispatched twice under forced codegen stays a program-cache hit
-# and rebinds its buffers; (3) the forced-codegen entry refuses an out-of-scope case rather than
-# falling back. The block below is generated from the op's coverage data; hand-add off-grid
-# regressions beneath it.
+# routing; (2) an accepted case is actually routed to codegen by ordinary routing; (3) an accepted
+# case dispatched twice under forced codegen stays a program-cache hit and rebinds its buffers;
+# (4) the forced-codegen entry refuses an out-of-scope case rather than falling back. The block
+# below is generated from the op's coverage data; hand-add off-grid regressions beneath it.
 
 import pytest
 import torch
@@ -233,6 +233,41 @@ _ROUTING_IDS = [
     "[[32, 64], [32, 64], [32, 64]]|dim=0|int32|tile",
     "[[32, 64], [32, 64], [32, 64]]|dim=0|uint32|tile",
 ]
+
+
+_ACCEPTED = [
+    ([[1, 32, 64], [1, 32, 64]], {"dim": 0}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([[2, 32, 64], [2, 64, 64]], {"dim": 1}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 32, 64], [1, 32, 64]], {"dim": -1}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 32, 32], [1, 64, 32], [1, 32, 32]], {"dim": 1}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": -1}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+]
+_ACCEPTED_IDS = [
+    "[[1, 32, 64], [1, 32, 64]]|dim=0|bfloat16|row_major",
+    "[[2, 32, 64], [2, 64, 64]]|dim=1|int32|row_major",
+    "[[1, 32, 64], [1, 32, 64]]|dim=-1|bfloat16|row_major",
+    "[[1, 32, 32], [1, 64, 32], [1, 32, 32]]|dim=1|uint32|row_major",
+    "[[1, 32, 32], [1, 32, 64], [1, 32, 32]]|dim=-1|bfloat16|row_major",
+]
+
+
+@pytest.mark.parametrize("shapes,kwargs,dtype,layout", _ACCEPTED, ids=_ACCEPTED_IDS)
+def test_concat_routes_an_accepted_case_to_codegen(device, shapes, kwargs, dtype, layout):
+    # The negative direction alone is satisfied by a gate that accepts nothing: if the predicate
+    # started returning false everywhere, or a demotion grew to cover the supported set, every
+    # other test here would still pass while the auto route was dead.
+    #
+    # The forced entry and the auto branch end in the same prim::concat_codegen call on the same
+    # params, so they share a program-cache key. Warming with the forced entry turns "did ordinary
+    # routing pick codegen" into "did the cache stay put" -- a native decision would have to build
+    # its own program.
+    xs = _inputs(shapes, dtype, layout, device)
+    golden = ttnn.to_torch(_force_codegen(xs, **kwargs))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.concat(xs, **kwargs)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "routed an in-scope case to native (program cache grew); expected the codegen program"
+    assert device.num_program_cache_entries() == entries_before, msg
 
 
 @pytest.mark.parametrize("shapes,kwargs,dtype,layout", _ROUTING, ids=_ROUTING_IDS)

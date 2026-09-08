@@ -658,6 +658,11 @@ codegen_supported_cases = [
     # N-way (> 2 inputs), both regimes
     ([(1, 32, 32), (1, 64, 32), (1, 32, 32)], 1),
     ([(1, 32, 32), (1, 32, 64), (1, 32, 32)], -1),
+    # N-way width with a segment boundary off the transport alignment for every supported dtype
+    # (byte offsets 72/112 at bfloat16, 144/224 at int32), so the reader's per-input scratch-staged
+    # byte copy runs instead of the batched direct write. is_demoted() sends exactly this regime to
+    # native, so the forced entry is the only way the branch is reached.
+    ([(1, 32, 36), (1, 32, 20), (1, 32, 36)], -1),
 ]
 
 codegen_dtypes = [ttnn.bfloat16, ttnn.int32, ttnn.uint32]

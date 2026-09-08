@@ -29,9 +29,10 @@
 # compare against native on the same input. The generated routing matrices under
 # tests/ttnn/nightly only assert that out-of-scope shapes fall BACK to native, so nothing in
 # them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
-# why they stay in nightly. No single timing covers this selection: roughly 35s of wall-clock
-# pytest on an N300 over the untilize, repeat and repeat_interleave legs, and 39.5s for concat's 25
-# on an N150 with a cold kernel cache. Treat the total as a floor.
+# why they stay in nightly. This selection is 88 tests against the job's 5-minute budget. No timing
+# covers the whole of it: roughly 35s of wall-clock pytest on an N300 over the untilize, repeat and
+# repeat_interleave legs, and 39.5s on an N150 with a cold kernel cache over 25 of concat's 28.
+# Treat the total as a floor.
 #
 # Hardware only, to keep the gate cheap. Codegen kernels are not blocked from ttsim -- untilize's
 # codegen tests pass on both sim SKUs and sanity runs them there -- but the simulator would
