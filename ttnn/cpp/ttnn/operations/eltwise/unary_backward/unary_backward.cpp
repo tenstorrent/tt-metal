@@ -1331,13 +1331,16 @@ std::vector<Tensor> exp2_bw(
     return grad_tensor;
 }
 
-// bw(expm1) = grad * expm1(input) + 1
+// bw(expm1) = grad * exp(input)
+// expm1(x) + 1 is exp(x) in exact arithmetic only: expm1(x) rounds to exactly -1 once
+// |exp(x)| falls below half an ULP of 1, so the sum cancels to 0 and the gradient is lost
+// for every x below about -6.25 (bfloat16) / -17.32 (float32). exp is the derivative, so
+// take it directly - one op fewer and exact over the whole domain.
 std::vector<Tensor> expm1_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor eresult = ttnn::expm1(input, output_mem_config);
-    Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, rp1, std::nullopt, output_mem_config);
+    Tensor eresult = ttnn::exp(input, false, output_mem_config);
+    Tensor result = ttnn::multiply(grad, eresult, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
