@@ -210,7 +210,6 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external_id = dfb::ex_external;
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;  // Interleaved E[x] and Var[x] final global mcast result
     constexpr uint32_t dfb_transpose_id = dfb::transpose;  // Transpose interleaved E[x] and Var[x] to columns
-                                                           // (workaround for bug in transpose_dest)
     constexpr uint32_t dfb_fusion_id = dfb::xmm;           // stream gamma/beta
     constexpr uint32_t dfb_out_id = dfb::out;
     constexpr uint32_t dfb_reciprocals = dfb::reciprocals;  // LUT of pre-computed reciprocals for Welford's algorithm
@@ -453,9 +452,8 @@ void kernel_main() {
             two_pass_stats_update_rows(stats_input_dst, 0, partial_welford_tile_w);
         }
         two_pass_stats_finalize_to_row(welford_mean_dst, (*p_reciprocals)[partial_reduce_W - 1]);
-        // We should transpose back to columns here
-        // However, transpose_dest() is currently buggy.
-        // So we transpose to an intermediate buffer downstream
+        // Publish row-oriented partials for the cross-core combine protocol.
+        // The combined/multicast statistics are transposed to columns downstream.
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(welford_mean_dst, dfb_ex_partial_id);
