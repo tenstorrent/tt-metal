@@ -34,7 +34,8 @@ inline void run_full_width_rms_norm_transport(
     uint32_t mcast_end_x,
     uint32_t mcast_end_y,
     uint32_t mcast_num_cores,
-    uint32_t producer_index) {
+    uint32_t producer_index,
+    uint32_t producer_coords_arg_base) {
     constexpr uint32_t cb_rms_local = get_named_compile_time_arg_val("cb_rms_local");
     constexpr uint32_t cb_rms_gathered = get_named_compile_time_arg_val("cb_rms_gathered");
     constexpr uint32_t cb_rms_scale_src = get_named_compile_time_arg_val("cb_rms_scale_src");
@@ -49,7 +50,7 @@ inline void run_full_width_rms_norm_transport(
     constexpr uint32_t packed_tiles_per_row = get_named_compile_time_arg_val("rms_packed_tiles_per_row");
     constexpr uint32_t packed_tiles = M_tiles * packed_tiles_per_row;
     constexpr uint32_t packed_bytes_per_row = packed_tiles_per_row * reduce_tile_size;
-    static_assert(num_producers * local_tile_size <= packed_bytes_per_row);
+    static_assert(num_producers <= packed_tiles_per_row);
 
     Noc noc;
     CircularBuffer rms_local(cb_rms_local);
@@ -69,41 +70,48 @@ inline void run_full_width_rms_norm_transport(
     // are free, and that the destination write pointer is at the CB base on all receivers.
     rms_scale.reserve_back(M_tiles);
 
-    // Each local statistics page contains one meaningful scalar at [0,0]; REDUCE_SCALAR packing
-    // guarantees the rest of that page is zero. Producers write their pages directly into disjoint
-    // packed slots on the hub, parallelizing the old hub-issued read loop.
+    // Each local statistics page contains one meaningful scalar at [0,0]. Producers write their
+    // pages directly into disjoint packed slots on the hub, parallelizing the old hub-issued read loop.
     rms_local.wait_front(M_tiles);
     if (is_hub) {
         rms_gathered.reserve_back(packed_tiles);
         auto* packed_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_gathered.get_write_ptr());
-        constexpr uint32_t valid_bytes_per_row = num_producers * local_tile_size;
-        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-            const uint32_t tail_start = mt * packed_bytes_per_row + valid_bytes_per_row;
-            const uint32_t tail_end = (mt + 1) * packed_bytes_per_row;
-            for (uint32_t byte = tail_start; byte < tail_end; byte += sizeof(uint32_t)) {
-                packed_dst[byte / sizeof(uint32_t)] = 0;
-            }
+        for (uint32_t byte = 0; byte < M_tiles * packed_bytes_per_row; byte += sizeof(uint32_t)) {
+            packed_dst[byte / sizeof(uint32_t)] = 0;
         }
     }
 
-    UnicastEndpoint hub;
-    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        noc.async_write(
-            rms_local,
-            hub,
-            local_tile_size,
-            {.offset_bytes = mt * local_tile_size},
-            {.noc_x = hub_x,
-             .noc_y = hub_y,
-             .addr = rms_gathered.get_write_ptr() + mt * packed_bytes_per_row + producer_index * local_tile_size});
-    }
-    noc.async_write_barrier();
     arrival_sem.up(noc, hub_x, hub_y, 1);
     noc.async_atomic_barrier();
 
     if (is_hub) {
         arrival_sem.wait(num_producers);
         arrival_sem.set(0);
+        UnicastEndpoint producer;
+        for (uint32_t p = 0; p < num_producers; ++p) {
+            const uint32_t producer_x = get_arg_val<uint32_t>(producer_coords_arg_base + 2 * p);
+            const uint32_t producer_y = get_arg_val<uint32_t>(producer_coords_arg_base + 2 * p + 1);
+            for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+                if (p == producer_index) {
+                    auto* src =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_local.get_read_ptr() + mt * local_tile_size);
+                    auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        rms_gathered.get_write_ptr() + mt * packed_bytes_per_row + p * reduce_tile_size);
+                    for (uint32_t byte = 0; byte < local_tile_size; byte += sizeof(uint32_t)) {
+                        dst[byte / sizeof(uint32_t)] = src[byte / sizeof(uint32_t)];
+                    }
+                    continue;
+                }
+                noc.async_read(
+                    producer,
+                    CoreLocalMem<uint32_t>(
+                        rms_gathered.get_write_ptr() + mt * packed_bytes_per_row + p * reduce_tile_size),
+                    local_tile_size,
+                    {.noc_x = producer_x, .noc_y = producer_y, .addr = rms_local.get_read_ptr() + mt * local_tile_size},
+                    {});
+            }
+        }
+        noc.async_read_barrier();
         rms_gathered.push_back(packed_tiles);
 
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<

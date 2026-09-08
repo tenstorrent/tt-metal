@@ -420,6 +420,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         local_out_cb_desc.buffer = output_tensor.buffer();
     }
     desc.cbs.push_back(std::move(local_out_cb_desc));
+    uint32_t rms_packed_tiles_per_row = 0;
     if (rms_norm) {
         const tt::DataFormat rms_data_format = rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t rms_tile_size = output_tile.get_tile_size(rms_data_format);
@@ -433,8 +434,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             "size {}",
             rms_tile_size,
             rms_reduce_tile_size);
-        const uint32_t rms_stats_per_reduce_tile = rms_reduce_tile_size / rms_tile_size;
-        const uint32_t rms_packed_tiles_per_row = div_up(num_producers, rms_stats_per_reduce_tile);
+        rms_packed_tiles_per_row = num_producers;
         const CoreRangeSet rms_hub_core({CoreRange(rms_hub_logical, rms_hub_logical)});
         const CoreRangeSet rms_mcast_cores(rms_mcast_bbox);
 
@@ -847,8 +847,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             compute_kernel_desc.defines.emplace_back("FUSE_RMS_VECTOR_GAMMA", "1");
             compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
         }
-        compute_kernel_desc.named_compile_time_args.emplace_back(
-            "rms_packed_tiles_per_row", div_up(num_producers, tt::constants::TILE_HEIGHT / output_tile_height));
+        compute_kernel_desc.named_compile_time_args.emplace_back("rms_packed_tiles_per_row", rms_packed_tiles_per_row);
         const uint32_t inv_n_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(operation_attributes.N));
         const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon);
         const uint32_t gamma_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_gamma.value_or(1.0F));
@@ -877,7 +876,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         {"rms_reduce_tile_size",
          tt::tt_metal::Tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH})
              .get_tile_size(rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
-        {"rms_packed_tiles_per_row", div_up(num_producers, tt::constants::TILE_HEIGHT / output_tile_height)},
+        {"rms_packed_tiles_per_row", rms_packed_tiles_per_row},
     };
     std::map<CoreCoord, uint32_t> rms_producer_id_by_core;
     for (uint32_t id = 0; id < producer_cores.size(); ++id) {
@@ -896,6 +895,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             rms_mcast_num_cores,
             producer_it == rms_producer_id_by_core.end() ? 0u : producer_it->second,
         };
+        for (const auto& producer_core : producer_cores) {
+            const auto producer_phys = device->worker_core_from_logical_core(producer_core);
+            args.push_back(producer_phys.x);
+            args.push_back(producer_phys.y);
+        }
         return args;
     };
 
