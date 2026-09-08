@@ -125,7 +125,9 @@
     print(f"Diagnostic Tracy module: {init}", flush=True)
     text = init.read_text()
     assert text.count("if verbose:") == 1
-    init.write_text(text.replace("if verbose:", "if True:"))
+    text = text.replace("if verbose:", "if True:")
+    text = text.replace("{capture_exe} -o", "stdbuf -oL -eL {capture_exe} -o")
+    init.write_text(text)
     main = init.with_name("__main__.py")
     text = main.read_text()
     assert text.count("captureProcess.communicate(timeout=15)") == 1
