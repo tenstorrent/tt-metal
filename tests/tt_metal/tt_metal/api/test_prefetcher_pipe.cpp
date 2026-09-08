@@ -24,6 +24,7 @@
 #include <tt-metalium/sub_device.hpp>
 
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -243,8 +244,8 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSharesAddressesAcrossDisjointCores)
     auto pipe1 =
         experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0})), 1024);
 
-    EXPECT_EQ(pipe0.buffer_address(), pipe1.buffer_address());
-    EXPECT_EQ(pipe0.config_address(), pipe1.config_address());
+    EXPECT_EQ(pipe0->buffer_address(), pipe1->buffer_address());
+    EXPECT_EQ(pipe0->config_address(), pipe1->config_address());
 }
 
 TEST_F(PrefetcherPipeFixture, MultipleDisjointOneToNPipesShareL1Address) {
@@ -263,17 +264,17 @@ TEST_F(PrefetcherPipeFixture, MultipleDisjointOneToNPipesShareL1Address) {
     auto pipe2 = experimental::CreatePrefetcherPipe(
         mesh_device.get(), CoreCoord(0, 2), CoreRangeSet(CoreRange({1, 2}, {2, 2})), ring_bytes);
 
-    EXPECT_EQ(pipe1.buffer_address(), pipe0.buffer_address());
-    EXPECT_EQ(pipe2.buffer_address(), pipe0.buffer_address());
-    EXPECT_EQ(pipe1.config_address(), pipe0.config_address());
-    EXPECT_EQ(pipe2.config_address(), pipe0.config_address());
+    EXPECT_EQ(pipe1->buffer_address(), pipe0->buffer_address());
+    EXPECT_EQ(pipe2->buffer_address(), pipe0->buffer_address());
+    EXPECT_EQ(pipe1->config_address(), pipe0->config_address());
+    EXPECT_EQ(pipe2->config_address(), pipe0->config_address());
 
     EXPECT_EQ(
-        run_persistent_1toN_cross_program(mesh_device, pipe0, entry_size, num_entries, /*write_primitive=*/0), 2u);
+        run_persistent_1toN_cross_program(mesh_device, *pipe0, entry_size, num_entries, /*write_primitive=*/0), 2u);
     EXPECT_EQ(
-        run_persistent_1toN_cross_program(mesh_device, pipe1, entry_size, num_entries, /*write_primitive=*/0), 2u);
+        run_persistent_1toN_cross_program(mesh_device, *pipe1, entry_size, num_entries, /*write_primitive=*/0), 2u);
     EXPECT_EQ(
-        run_persistent_1toN_cross_program(mesh_device, pipe2, entry_size, num_entries, /*write_primitive=*/0), 2u);
+        run_persistent_1toN_cross_program(mesh_device, *pipe2, entry_size, num_entries, /*write_primitive=*/0), 2u);
 }
 
 TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingCoresAndReusesFreedSpace) {
@@ -283,18 +284,18 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingCoresAndReuses
     {
         auto pipe0 = experimental::CreatePrefetcherPipe(
             mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
-        first_ring_address = pipe0.buffer_address();
-        first_config_address = pipe0.config_address();
+        first_ring_address = pipe0->buffer_address();
+        first_config_address = pipe0->config_address();
 
         auto pipe1 = experimental::CreatePrefetcherPipe(
             mesh_device.get(), CoreCoord(2, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
-        EXPECT_GE(pipe1.buffer_address(), pipe0.config_address() + pipe0.config_page_size());
+        EXPECT_GE(pipe1->buffer_address(), pipe0->config_address() + pipe0->config_page_size());
     }
 
     auto replacement =
         experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
-    EXPECT_EQ(replacement.buffer_address(), first_ring_address);
-    EXPECT_EQ(replacement.config_address(), first_config_address);
+    EXPECT_EQ(replacement->buffer_address(), first_ring_address);
+    EXPECT_EQ(replacement->config_address(), first_config_address);
 }
 
 TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_EntrySizeRejects) {
@@ -304,10 +305,10 @@ TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_EntrySizeRejects) {
 
     for (const uint32_t entry_size : {0u, 33u, 1280u}) {
         Program program = CreateProgram();
-        EXPECT_THROW(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), entry_size), std::exception);
+        EXPECT_THROW(AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), entry_size), std::exception);
     }
     Program program = CreateProgram();
-    EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), 256), 0u);
 }
 
 TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_RequiresRoleCompleteProgram) {
@@ -317,18 +318,18 @@ TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_RequiresRoleCompleteProgram) 
 
     {
         Program program = CreateProgram();
-        EXPECT_EQ(AttachPrefetcherPipe(program, pipe, CoreRangeSet(CoreRange(CoreCoord(0, 0))), 256), 0u);
+        EXPECT_EQ(AttachPrefetcherPipe(program, *pipe, CoreRangeSet(CoreRange(CoreCoord(0, 0))), 256), 0u);
     }
     {
         Program program = CreateProgram();
         EXPECT_THROW(
-            AttachPrefetcherPipe(program, pipe, CoreRangeSet(CoreRange(CoreCoord(2, 0))), 256), std::exception);
+            AttachPrefetcherPipe(program, *pipe, CoreRangeSet(CoreRange(CoreCoord(2, 0))), 256), std::exception);
     }
     {
         Program sender_program = CreateProgram();
-        EXPECT_EQ(AttachPrefetcherPipe(sender_program, pipe, pipe.sender_cores(), 256), 0u);
+        EXPECT_EQ(AttachPrefetcherPipe(sender_program, *pipe, pipe->sender_cores(), 256), 0u);
         Program receiver_program = CreateProgram();
-        EXPECT_EQ(AttachPrefetcherPipe(receiver_program, pipe, pipe.receiver_cores(), 256), 0u);
+        EXPECT_EQ(AttachPrefetcherPipe(receiver_program, *pipe, pipe->receiver_cores(), 256), 0u);
     }
 }
 
@@ -347,8 +348,8 @@ TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_AssignsDistinctSlots) {
         CoreRangeSet({CoreRange({0, 0}, {1, 1})}),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_EQ(AttachPrefetcherPipe(program, pipe0, pipe0.all_cores(), 256), 0u);
-    EXPECT_EQ(AttachPrefetcherPipe(program, pipe1, pipe1.all_cores(), 256), 1u);
+    EXPECT_EQ(AttachPrefetcherPipe(program, *pipe0, pipe0->all_cores(), 256), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program, *pipe1, pipe1->all_cores(), 256), 1u);
 
     detail::CompileProgram(mesh_device.get(), program);
     program.impl().finalize_offsets(mesh_device.get());
@@ -368,39 +369,39 @@ TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_SameObjectMultiplePrograms) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
-    const uint32_t fifo_start = pipe.buffer_address();
-    const uint32_t config_addr = pipe.config_address();
+    const uint32_t fifo_start = pipe->buffer_address();
+    const uint32_t config_addr = pipe->config_address();
 
     Program program_a = CreateProgram();
     Program program_b = CreateProgram();
-    AttachPrefetcherPipe(program_a, pipe, pipe.all_cores(), 256);
-    AttachPrefetcherPipe(program_b, pipe, pipe.all_cores(), 256);
+    AttachPrefetcherPipe(program_a, *pipe, pipe->all_cores(), 256);
+    AttachPrefetcherPipe(program_b, *pipe, pipe->all_cores(), 256);
 
     const auto& per_core_a = program_a.impl().get_per_core_prefetcher_pipes().at(CoreCoord(0, 0));
     const auto& per_core_b = program_b.impl().get_per_core_prefetcher_pipes().at(CoreCoord(0, 0));
     EXPECT_EQ(per_core_a[0].config_page_addr, config_addr);
     EXPECT_EQ(per_core_b[0].config_page_addr, config_addr);
-    EXPECT_EQ(pipe.buffer_address(), fifo_start);
+    EXPECT_EQ(pipe->buffer_address(), fifo_start);
 }
 
 TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_AddressStableAcrossRebuild) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
-    const uint32_t ring_addr = pipe.buffer_address();
-    const uint32_t config_addr = pipe.config_address();
+    const uint32_t ring_addr = pipe->buffer_address();
+    const uint32_t config_addr = pipe->config_address();
 
     {
         Program program = CreateProgram();
-        AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256);
+        AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), 256);
         detail::CompileProgram(mesh_device.get(), program);
         program.impl().finalize_offsets(mesh_device.get());
     }
     {
         Program program = CreateProgram();
-        AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256);
-        EXPECT_EQ(pipe.buffer_address(), ring_addr);
-        EXPECT_EQ(pipe.config_address(), config_addr);
+        AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), 256);
+        EXPECT_EQ(pipe->buffer_address(), ring_addr);
+        EXPECT_EQ(pipe->config_address(), config_addr);
         EXPECT_EQ(program.impl().get_per_core_prefetcher_pipes().at(CoreCoord(0, 0))[0].config_page_addr, config_addr);
     }
 }
@@ -409,11 +410,11 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossProgramPersistence) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
-    const uint32_t ring_addr = pipe.buffer_address();
+    const uint32_t ring_addr = pipe->buffer_address();
 
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, 256, 4, 0u), 1u);
-    EXPECT_EQ(pipe.buffer_address(), ring_addr);
-    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, 256, 4, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, 256, 4, 0u), 1u);
+    EXPECT_EQ(pipe->buffer_address(), ring_addr);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, 256, 4, 0u), 1u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_ProducerRelaunchWithOutstandingCredits) {
@@ -428,9 +429,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_ProducerRelaunchWithOutstandingCred
     auto pipe =
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, entry_size * ring_depth);
 
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, entry_size, first_push, 0u), 1u);
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, entry_size, second_push, 0u), 1u);
-    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, entry_size, first_push + second_push, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, entry_size, first_push, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, entry_size, second_push, 0u), 1u);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, entry_size, first_push + second_push, 0u), 1u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BackToBackRelaunch) {
@@ -439,10 +440,10 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BackToBackRelaunch) {
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
 
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, 256, 4, 0u), 1u);
-    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, 256, 4, 0u), 1u);
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, 256, 4, 0u), 1u);
-    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, 256, 4, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, 256, 4, 0u), 1u);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, 256, 4, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, 256, 4, 0u), 1u);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, 256, 4, 0u), 1u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevicePersistence) {
@@ -471,11 +472,11 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevicePersistence) {
         const std::pair<CoreCoord, CoreRangeSet> mapping = {sender_core, receiver_cores};
         auto pipe = experimental::CreatePrefetcherPipe(
             mesh_device.get(), mapping.first, mapping.second, entry_size * num_entries);
-        const uint32_t ring_addr = pipe.buffer_address();
+        const uint32_t ring_addr = pipe->buffer_address();
 
-        EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, entry_size, num_entries, 0u), 1u);
-        EXPECT_EQ(pipe.buffer_address(), ring_addr);
-        EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, entry_size, num_entries, 0u), 1u);
+        EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, entry_size, num_entries, 0u), 1u);
+        EXPECT_EQ(pipe->buffer_address(), ring_addr);
+        EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, entry_size, num_entries, 0u), 1u);
     }
 
     mesh_device->clear_loaded_sub_device_manager();
@@ -505,10 +506,10 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_ABC_ReceiverRelaunch
     auto pipe =
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, entry_size * num_entries);
 
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, entry_size, num_entries, 0u), 1u);
-    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, entry_size, num_entries, 0u), 1u);
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, entry_size, num_entries, 0u), 1u);
-    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, entry_size, num_entries, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, entry_size, num_entries, 0u), 1u);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, entry_size, num_entries, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, *pipe, entry_size, num_entries, 0u), 1u);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, *pipe, entry_size, num_entries, 0u), 1u);
 
     mesh_device->clear_loaded_sub_device_manager();
 }
@@ -531,7 +532,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BasicPushPop_1to1) {
     EXPECT_EQ(
         run_persistent_1toN_cross_program(
             mesh_device,
-            pipe,
+            *pipe,
             256,
             4,
             /*write_primitive=*/2,
@@ -560,7 +561,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteBroadcast_1to4) {
     EXPECT_EQ(
         run_persistent_1toN_cross_program(
             mesh_device,
-            pipe,
+            *pipe,
             256,
             4,
             /*write_primitive=*/0,
@@ -589,7 +590,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStrided_1to4) {
     EXPECT_EQ(
         run_persistent_1toN_cross_program(
             mesh_device,
-            pipe,
+            *pipe,
             256,
             4,
             /*write_primitive=*/1,
@@ -604,28 +605,28 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteToReceiver_ReceiverContiguous)
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
-    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/2), 4u);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, *pipe, 256, 4, /*write_primitive=*/2), 4u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RoundRobinPushBackToReceiver) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 256);
-    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 1, /*write_primitive=*/3), 4u);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, *pipe, 256, 1, /*write_primitive=*/3), 4u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_PerReceiverCreditInterleaved_RingDepth4) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
-    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/5), 2u);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, *pipe, 256, 4, /*write_primitive=*/5), 2u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_DecoupledWriteThenCredit) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
-    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/4), 4u);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, *pipe, 256, 4, /*write_primitive=*/4), 4u);
 }
 
 TEST_F(PrefetcherPipeFixture, GlobalAndCrossNode_SameProgram_DistinctRegions) {
@@ -645,7 +646,7 @@ TEST_F(PrefetcherPipeFixture, GlobalAndCrossNode_SameProgram_DistinctRegions) {
 
     experimental::CreateCrossNodeDFB(
         program, mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0})), 256, 4);
-    AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256);
+    AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), 256);
 
     detail::CompileProgram(mesh_device.get(), program);
     program.impl().finalize_offsets(mesh_device.get());
@@ -672,14 +673,14 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_StaleCommitRejected) {
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))};
     auto pipe =
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, entry_size * num_entries);
-    const uint32_t poison_wr_ptr = pipe.buffer_address() + 2 * entry_size;
+    const uint32_t poison_wr_ptr = pipe->buffer_address() + 2 * entry_size;
 
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(2);
 
     Program program = CreateProgram();
-    EXPECT_EQ(AttachPrefetcherPipe(program, pipe, sender_cores, entry_size), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program, *pipe, sender_cores, entry_size), 0u);
     KernelHandle sender_k = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_stale_commit.cpp",
@@ -691,18 +692,18 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_StaleCommitRejected) {
             .defines = {{"PREFETCHER_PIPE_TEST_HELPERS", "1"}}});
 
     prefetcher_pipe_test::write_sender_l1_staging(
-        device, sender_cores, pipe, data_pattern, entry_size, /*num_entries=*/1, 1);
-    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, pipe);
+        device, sender_cores, *pipe, data_pattern, entry_size, /*num_entries=*/1, 1);
+    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, *pipe);
 
     distributed::MeshWorkload workload;
     persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
 
-    const uint32_t expected_checkpoint = pipe.buffer_address() + entry_size;
+    const uint32_t expected_checkpoint = pipe->buffer_address() + entry_size;
     std::vector<uint32_t> words(2, 0);
     slow_dispatch::ReadFromL1(
         device,
         sender_core,
-        pipe.config_address() + PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT * sizeof(uint32_t),
+        pipe->config_address() + PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT * sizeof(uint32_t),
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(words.data()), 2 * sizeof(uint32_t)),
         CoreType::WORKER);
 
@@ -710,7 +711,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_StaleCommitRejected) {
     // commit was rejected.
     EXPECT_EQ(words[0], expected_checkpoint);
     EXPECT_NE(words[0], poison_wr_ptr);
-    EXPECT_NE(words[0], pipe.buffer_address());
+    EXPECT_NE(words[0], pipe->buffer_address());
     // PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE (word[5]) reflects the successful resize that created the new epoch.
     EXPECT_EQ(words[1], new_entry_size);
 }
@@ -724,7 +725,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
 
     {
         Program program = CreateProgram();
-        EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256), 0u);
+        EXPECT_EQ(AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), 256), 0u);
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
         const uint32_t relay_host_id = experimental::CreatePrefetcherPipeRelayDataflowBuffer(
             program, receiver_cores, config, /*prefetcher_pipe_id=*/0);
@@ -742,7 +743,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
         EXPECT_EQ(
             program.impl().get_per_core_prefetcher_pipes().at(sender_core).at(0).relay_dfb_id,
             std::numeric_limits<uint8_t>::max());
-        EXPECT_EQ(relay_dfb->borrowed_addr_, pipe.buffer_address());
+        EXPECT_EQ(relay_dfb->borrowed_addr_, pipe->buffer_address());
 
         // Metal 2.0 genfiles reads DataflowBufferBindingHandle.prefetcher_pipe_id when emitting
         // RelayDFBBindingToken. Mirror MakeDataflowBufferBindingHandles and verify the callback
@@ -775,7 +776,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
 
     {
         Program program = CreateProgram();
-        AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256);
+        AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), 256);
         experimental::dfb::DataflowBufferConfig wrong_size{.entry_size = 128, .num_entries = 4};
         EXPECT_THROW(
             experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, wrong_size, 0),
@@ -917,7 +918,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CrossProgram_DMToCompute) 
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, entry_size * ring_depth);
     EXPECT_EQ(
         run_prefetcher_pipe_relay_cross_program(
-            mesh_device, pipe, entry_size, ring_depth, total_entries, /*batch_size=*/1),
+            mesh_device, *pipe, entry_size, ring_depth, total_entries, /*batch_size=*/1),
         1u);
 }
 
@@ -943,7 +944,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) 
     auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
 
     Program program = CreateProgram();
-    EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), entry_size), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program, *pipe, pipe->all_cores(), entry_size), 0u);
     experimental::dfb::DataflowBufferConfig relay_config{.entry_size = entry_size, .num_entries = ring_depth};
     const uint32_t relay_host_id =
         experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, relay_config, 0);
@@ -974,8 +975,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) 
     experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
         program, relay_host_id, receiver_kernel, trisc_kernel);
     prefetcher_pipe_test::write_sender_l1_staging(
-        device, sender_cores, pipe, data_pattern, entry_size, total_entries, 1);
-    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_kernel, sender_cores, pipe);
+        device, sender_cores, *pipe, data_pattern, entry_size, total_entries, 1);
+    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_kernel, sender_cores, *pipe);
     SetRuntimeArgs(program, trisc_kernel, receiver_cores, {static_cast<uint32_t>(result_buffer->address())});
 
     distributed::MeshWorkload workload;
@@ -1004,7 +1005,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CrossProgram_DifferentEntr
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, e1 * ring_depth_e1);
     EXPECT_EQ(
         run_prefetcher_pipe_relay_cross_program(
-            mesh_device, pipe, e1, ring_depth_e1, total_entries_e1, /*batch_size=*/1, e2),
+            mesh_device, *pipe, e1, ring_depth_e1, total_entries_e1, /*batch_size=*/1, e2),
         1u);
 }
 
@@ -1052,7 +1053,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // --- Program A (SD0): push E1 → resize without drain → signal → wait go → push E2 ---
     Program program_a = CreateProgram();
-    EXPECT_EQ(AttachPrefetcherPipe(program_a, pipe, sender_cores, e1), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program_a, *pipe, sender_cores, e1), 0u);
     const KernelHandle sender_k = CreateKernel(
         program_a,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_coordinated_resize_sender.cpp",
@@ -1064,7 +1065,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
     prefetcher_pipe_test::write_sender_l1_staging(
         device,
         sender_cores,
-        pipe,
+        *pipe,
         data_pattern,
         e1,
         total_entries_e1,
@@ -1076,7 +1077,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
         program_a,
         sender_k,
         sender_cores,
-        {prefetcher_pipe_test::sender_l1_staging_address(pipe),
+        {prefetcher_pipe_test::sender_l1_staging_address(*pipe),
          static_cast<uint32_t>(resized_sem.address()),
          static_cast<uint32_t>(go_sem.address())});
 
@@ -1101,7 +1102,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    const uint32_t credit_base = pipe.config_address() + pipe.credit_reset_offset();
+    const uint32_t credit_base = pipe->config_address() + pipe->credit_reset_offset();
     const auto [sender_sent, sender_acked] = cross_node_dfb_test::read_credit_pair(device, sender_core, credit_base);
     ASSERT_TRUE(resized) << "Timed out waiting for barrier-free set_entry_size(E2); sender credits=" << sender_sent
                          << "/" << sender_acked;
@@ -1109,7 +1110,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // --- Program B (SD1): consume E1, then consume resize pad credits at E2 ---
     Program program_b = CreateProgram();
-    EXPECT_EQ(AttachPrefetcherPipe(program_b, pipe, receiver_cores, e1), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program_b, *pipe, receiver_cores, e1), 0u);
     CreateKernel(
         program_b,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_coordinated_resize_receiver.cpp",
@@ -1124,7 +1125,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // --- Program C (SD1): same-epoch Attach E2 while A is still alive ---
     Program program_c = CreateProgram();
-    EXPECT_EQ(AttachPrefetcherPipe(program_c, pipe, receiver_cores, e2), 0u);
+    EXPECT_EQ(AttachPrefetcherPipe(program_c, *pipe, receiver_cores, e2), 0u);
     CreateKernel(
         program_c,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_receiver.cpp",
@@ -1149,7 +1150,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
     // after the four E1 entries while the final E2 push also advances over the ring gap.
     EXPECT_TRUE(prefetcher_pipe_test::verify_receiver_ring(
         device,
-        pipe,
+        *pipe,
         receiver_core,
         data_pattern,
         e2,

@@ -62,7 +62,7 @@ class MeshWorkloadImpl;
 namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
-class PrefetcherPipe;
+class PrefetcherPipeImpl;
 }  // namespace experimental
 
 namespace program_dispatch {
@@ -367,9 +367,9 @@ public:
     uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
 
     uint8_t add_prefetcher_pipe_attachment(
-        experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+        experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
 
-    const experimental::PrefetcherPipe& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
+    const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
 
     // Mark a normal local DFB as the typed relay for a PrefetcherPipe this core participates in.
@@ -587,7 +587,7 @@ private:
     uint8_t next_cross_node_dfb_slot_ = 0;
 
     std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
-    std::unordered_map<uint8_t, experimental::PrefetcherPipe*> prefetcher_pipe_attachments_;
+    std::unordered_map<uint8_t, experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
     // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
     std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
     uint8_t next_prefetcher_pipe_slot_ = 0;

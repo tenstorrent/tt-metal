@@ -31,7 +31,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/distributed/trace_allocation_tracker.hpp"
 
-#include "tt_metal/impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal {
 
@@ -166,7 +166,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
 
     auto pipe = experimental::CreatePrefetcherPipe(
         mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024);
-    const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
+    const DeviceAddr persistent_end = pipe->config_address() + pipe->config_page_size();
 
     SubDevice sub_device(std::array{cores});
     const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);

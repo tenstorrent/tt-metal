@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -158,10 +158,10 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     auto buf = Buffer::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
 
     const DeviceAddr per_core_size = buf->aligned_size_per_bank();
-    const DeviceAddr ring_begin = pipe.buffer_address();
-    const DeviceAddr ring_end = ring_begin + pipe.ring_size();
-    const DeviceAddr config_begin = pipe.config_address();
-    const DeviceAddr config_end = config_begin + pipe.config_page_size();
+    const DeviceAddr ring_begin = pipe->buffer_address();
+    const DeviceAddr ring_end = ring_begin + pipe->ring_size();
+    const DeviceAddr config_begin = pipe->config_address();
+    const DeviceAddr config_end = config_begin + pipe->config_page_size();
     auto overlaps = [](DeviceAddr addr, DeviceAddr size, DeviceAddr begin, DeviceAddr end) {
         return addr < end && addr + size > begin;
     };
