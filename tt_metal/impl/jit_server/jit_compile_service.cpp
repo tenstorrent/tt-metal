@@ -22,6 +22,31 @@ namespace {
 // A positive integer enables periodic logging at that millisecond interval.
 // Anything else -- unset, empty, "0", negative, or unparseable -- disables it.
 constexpr char kJitServerLogIntervalEnv[] = "TT_METAL_JIT_SERVER_LOG_INTERVAL_MS";
+constexpr char kJitServerNumThreadsEnv[] = "TT_METAL_JIT_SERVER_NUM_THREADS";
+
+std::size_t parse_thread_pool_size() {
+    const auto fallback = std::max(1u, std::thread::hardware_concurrency());
+    const char* threads_env = std::getenv(kJitServerNumThreadsEnv);
+    if (threads_env == nullptr || *threads_env == '\0') {
+        return fallback;
+    }
+
+    try {
+        const auto parsed_value = std::stoull(threads_env);
+        if (parsed_value == 0) {
+            throw std::invalid_argument("thread count must be positive");
+        }
+        return parsed_value;
+    } catch (const std::exception&) {
+        log_warning(
+            tt::LogMetal,
+            "Invalid value '{}' for {}. Using {} JIT compile threads.",
+            threads_env,
+            kJitServerNumThreadsEnv,
+            fallback);
+        return fallback;
+    }
+}
 
 std::chrono::milliseconds parse_log_interval_ms() {
     const char* interval_env = std::getenv(kJitServerLogIntervalEnv);
@@ -58,6 +83,7 @@ void update_peak_inflight(std::atomic<std::uint64_t>& peak_inflight, std::uint64
 JitCompileService::JitCompileService(CompileCallback compile_callback, UploadFirmwareCallback upload_fw_callback) :
     compile_callback_(std::move(compile_callback)),
     upload_fw_callback_(std::move(upload_fw_callback)),
+    thread_pool_(parse_thread_pool_size()),
     periodic_log_interval_(get_periodic_log_interval()) {
     if (periodic_log_interval_.count() > 0) {
         periodic_logger_thread_ = std::thread(&JitCompileService::run_periodic_logger_loop, this);
