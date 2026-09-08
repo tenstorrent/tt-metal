@@ -41,9 +41,7 @@ file(
     moreh_nll_loss/moreh_nll_loss_step2/device/kernels/*.cpp
     moreh_nll_loss_backward/device/kernels/*.cpp
     moreh_nll_loss_unreduced_backward/device/kernels/*.cpp
-    moreh_norm/device/moreh_norm_h/kernels/*.cpp
     moreh_norm/device/moreh_norm_other/kernels/*.cpp
-    moreh_norm/device/moreh_norm_w/kernels/*.cpp
     moreh_norm/device/ord_other/moreh_norm_h/kernels/*.cpp
     moreh_norm/device/ord_other/moreh_norm_nc/kernels/*.cpp
     moreh_norm/device/ord_other/moreh_norm_w/kernels/*.cpp

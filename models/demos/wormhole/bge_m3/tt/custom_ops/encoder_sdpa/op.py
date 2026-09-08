@@ -275,6 +275,11 @@ def _writer_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[int
             CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
         ]
     )
+    planner = ttnn.reduce_planner
+    planner.ReduceAuxiliaryPlan(
+        cb_id=CB_IDENTITY,
+        tiles=[planner.ReduceAuxiliaryTileSpec(1.0, planner.ReduceAuxiliaryTileType.FIRST_ROW, 32)],
+    ).append_to(args)
     return args
 
 

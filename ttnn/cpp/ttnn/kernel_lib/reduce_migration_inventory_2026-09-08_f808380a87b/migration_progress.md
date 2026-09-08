@@ -17,7 +17,9 @@ audit.
 - `tt-smi -ls` reports an N300 with two Wormhole chips. Common, Wormhole, and
   N300 test lanes can run here. Other architecture/topology lanes still need
   their supported environments; their results must be reported separately.
-- Claude reviews have not started yet. An availability check succeeded with
+- The first fresh-context Claude Opus 5/high review started on 2026-09-08;
+  its transcript is under `generated/reduce_migration_reviews/round_01_20260908`.
+  An earlier availability check succeeded with
   `claude --model claude-opus-5 --effort high --no-session-persistence`; the
   result's model usage confirms `claude-opus-5`. This was not a code review.
 
@@ -148,11 +150,7 @@ audit.
 
 ## Remaining work
 
-- Migrate all remaining compute and dataflow helper callers in the inventory,
-  with their factories and auxiliary allocations.
-- Simplify obsolete manual tail masking and cross-tile add accumulation where
-  supported by the planner, preserving fused operations and stream ordering.
-- Exercise the sanity cases throughout and commit meaningful phases.
+- Consumer migration is complete; continue targeted checks for review fixes.
 - Obtain satisfied fresh-context Claude Opus 5 reviews at high effort; record
   and address every review concern.
 - Run the full prepared regression suite after review and resolve failures.
@@ -275,3 +273,17 @@ Validation: native build passed (`/tmp/reduce-ccl-final-build-20260908.log`). De
 Quasar W/H/HW and dense row-major factories now serialize planned calls and auxiliary recipes. The H reader streams one complete column per planned batch. Welford's shared readers receive a harmless explicit zero recipe, and the three Metal2 SDPA writers receive their identity recipe through varargs. Removed the Quasar sharded H reader, which has no factory references (the H factory rejects width sharding).
 
 Validation: the native build compiled the Quasar factory objects and linked successfully (`/tmp/reduce-quasar-build-20260908.log`). On-device Quasar compilation/numerics cannot be verified on Wormhole. Full toy variance T079 also passed all 41 cases (`reduce-migration-if_f43wa`).
+
+## UDM and unused kernel retirement
+
+The interleaved and both sharded UDM readers materialize host-provided FirstRow identity recipes. Their two C++ test builders serialize the descriptors. Removed four unused legacy compute files: RMSNorm pre-all-gather 2D and post-all-gather, and the superseded Moreh norm H/W copies. Active Moreh factories use the ord_other copies, and active RMSNorm factories use their Metal2 versions. The source-composition-only test now reads the active fused RMSNorm kernel. Its RMS/LN compilation case T176 passed (`reduce-migration-uieyhz42`).
+
+Validation: native build passed (`/tmp/reduce-udm-bge-build-20260908.log`), including the UDM test builder objects. UDM's 1x4 fabric device tests cannot run on this two-chip N300. The original 218 candidate consumer/factory files now have only two unchanged host factories: DiT Welford and layernorm Welford, whose shared readers no longer consume the obsolete helper and whose scratch ownership remains valid.
+
+## BGE model-local SDPA and final caller audit
+
+The BGE writer now consumes an explicit host auxiliary recipe. Added typed Python constructors for auxiliary tile/plan records, so raw-compute Python factories can serialize their physical recipe directly. New T177 covers four combinations: standard/streaming compute and full/partially masked KV. These checks exposed two pre-existing model-local writer compile errors: an obsolete window-mask signature and an unconditional static_assert inside a discarded non-template branch. Both were corrected without enabling the gated KV alias mode.
+
+Validation: all four T177 cases passed (`reduce-migration-lilo65k8`). Added its smallest case as SM075, closing the original DF001 coverage gap. Together with T176, the current full manifest adds 13 definitions / 350 cases beyond the original inventory; the current sanity manifest selects 75 cases. Earlier T177 collection and compile failures are superseded by this passing run. The new constructors built in `/tmp/reduce-udm-bge-build-20260908.log`, and the local extension was refreshed atomically before tests.
+
+Final static scan: no calls to any of the three old dataflow helper APIs remain in ttnn, tests, or models; no old explicit compute reduce overload remains in consumer kernels. The legacy compute overload remains in the library as the backend of reduce<Call>, as requested. Five unreferenced kernel files were removed in total, including the Quasar sharded reader. The original inventory reports remain unchanged; the executable manifests and this journal record migration additions.

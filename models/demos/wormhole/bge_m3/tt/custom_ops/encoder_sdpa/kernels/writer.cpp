@@ -13,6 +13,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "dataflow_common.hpp"
 #include "windowed_mask_gen.hpp"
 
@@ -114,11 +115,8 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<cb_arg_offset + 7>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Runtime padding mask palette: one all--inf tile plus the at-most-two
@@ -218,7 +216,8 @@ void kernel_main() {
                 valid_Sqt,
                 windowed_valid_Skt,
                 k_num_chunks,
-                cu_window_seqlens_eles);
+                cu_window_seqlens_eles,
+                0);  // This model-local factory does not use windowed query offsets.
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.
@@ -226,7 +225,8 @@ void kernel_main() {
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
             if constexpr (DIRECT_CONCAT_HEADS == 1) {
-                static_assert(!use_streaming_compute, "direct concat requires non-streaming compute");
+                static_assert(
+                    DIRECT_CONCAT_HEADS != 1 || !use_streaming_compute, "direct concat requires non-streaming compute");
                 constexpr uint32_t fold = NQH / NKH;
                 constexpr uint32_t out_row_tiles = NKH * vDHt;
                 constexpr uint32_t out_seq_tiles = Sqt * fold;

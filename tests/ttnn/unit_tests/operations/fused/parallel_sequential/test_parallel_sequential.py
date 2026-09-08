@@ -1429,7 +1429,7 @@ class TestCrossOpCompilation:
 
     KERNEL_PATHS = {
         "layernorm": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
-        "rmsnorm_post": "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp",
+        "rmsnorm_post": "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp",
         "matmul": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         "batchnorm": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
         "untilize": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
