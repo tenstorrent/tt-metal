@@ -90,7 +90,7 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
     compress_rate = cfg.compress_rates[layer_type] if layer_type != "sliding_attention" else None
 
     loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
-    qkv_tp_strategy = os.environ.get("DEEPSEEK_QKV_TP_STRATEGY", "fused_replicated_full")
+    qkv_tp_strategy = os.environ.get("DEEPSEEK_QKV_TP_STRATEGY", "replicated")
     o_b_tp_strategy = os.environ.get("DEEPSEEK_OB_TP_STRATEGY", "row")
     o_a_tp_strategy = os.environ.get("DEEPSEEK_OA_TP_STRATEGY", "sequential")
     use_prefetcher = os.environ.get("DEEPSEEK_USE_PREFETCHER", "1") != "0" and (

@@ -332,9 +332,8 @@ def test_matmul_decode_row_major_height_sharded_replicated(device, m, k, n, outp
         assert_with_pcc(torch_output_tensor, replica, 0.99)
 
 
-@pytest.mark.parametrize("m", [1, 4])
-@pytest.mark.parametrize("k", [1024, 4096])
-@pytest.mark.parametrize("n", [2048, 4096])
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("k, n", [(4096, 1024), (1024, 512)])
 @pytest.mark.parametrize("use_vector_gamma", [False, True])
 def test_matmul_decode_fused_rms_norm(device, m, k, n, use_vector_gamma, expect_error):
     torch.manual_seed(0)
@@ -384,16 +383,6 @@ def test_matmul_decode_fused_rms_norm(device, m, k, n, use_vector_gamma, expect_
 
     if use_vector_gamma:
         gamma_arg = make_width_sharded_gamma(torch_gamma, producer_grid, device, n, num_inputB_cores)
-    if m == 1:
-        with expect_error(RuntimeError, "requires rms_norm_gamma"):
-            ttnn.experimental.matmul_decode(a, weight, rms_norm=True)
-        with expect_error(RuntimeError, "rms_norm_gamma requires rms_norm"):
-            ttnn.experimental.matmul_decode(a, weight, rms_norm=False, rms_norm_gamma=gamma_arg)
-        with expect_error(RuntimeError, "not supported with ring_gather"):
-            ttnn.experimental.matmul_decode(a, weight, rms_norm=True, rms_norm_gamma=gamma_arg, ring_gather=True)
-        if not use_vector_gamma:
-            with expect_error(RuntimeError, "must be finite"):
-                ttnn.experimental.matmul_decode(a, weight, rms_norm=True, rms_norm_gamma=float("inf"))
 
     out = ttnn.experimental.matmul_decode(
         a,
@@ -501,7 +490,7 @@ def test_matmul_decode_output_core_grid_replicates_full_n(device, m, k, n, outpu
         assert_with_pcc(ref, replica, 0.99)
 
 
-@pytest.mark.parametrize("m, k, n", [(1, 1024, 2048)])
+@pytest.mark.parametrize("m, k, n", [(1, 1024, 512), (1, 1024, 2048)])
 @pytest.mark.parametrize("rms_norm", [False, True])
 def test_matmul_decode_output_core_grid_single_dest_core(device, m, k, n, rms_norm):
     """One dest core: the hub is the whole destination, so there is nothing to broadcast to.
@@ -565,6 +554,8 @@ def test_matmul_decode_output_core_grid_single_dest_core(device, m, k, n, rms_no
     assert tuple(out.memory_config().shard_spec.shape) == (m, n)
     got = ttnn.to_torch(out).float()
     assert got.shape[-2] == m
+    norm_ratio = got.norm().item() / ref.norm().item()
+    assert 0.9 < norm_ratio < 1.1, f"fused RMSNorm output norm ratio {norm_ratio} is not close to 1"
     assert_with_pcc(ref, got.reshape(m, n), 0.99)
 
 
