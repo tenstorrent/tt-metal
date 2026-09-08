@@ -1048,7 +1048,10 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     drisc_l1_arena_.reset();
 
     if (is_initialized()) {
-        disable_and_clear_program_cache();
+        // Do not clear the program cache here. Destroying cached programs while the devices are
+        // still initialized runs mesh-buffer deallocation during teardown, which hangs on multihost
+        // meshes using the hybrid allocator. Cached programs outliving the persistent L1 arena is
+        // handled by PersistentL1Arena::Seal's liveness token instead.
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();

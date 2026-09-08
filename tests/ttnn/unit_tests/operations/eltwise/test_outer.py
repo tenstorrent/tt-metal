@@ -123,17 +123,45 @@ def test_outer_row_major_layout(a_shape, b_shape, dtype, device):
 # block-float dtype with a working code path through reshape.
 
 
-def test_outer_default_memory_config(device):
-    # Smoke test: ttnn.outer(a, b) with no memory_config kwarg uses the default.
+@pytest.mark.parametrize(
+    "requested_memcfg, expected_memcfg",
+    (
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (None, ttnn.DRAM_MEMORY_CONFIG),
+    ),
+    ids=["explicit_DRAM", "explicit_L1", "unset_defaults_to_DRAM"],
+)
+def test_outer_honours_memory_config(device, requested_memcfg, expected_memcfg):
+    """outer must return in the requested memory config.
+
+    The other tests in this file pass an explicit config but assert only shape and
+    values, so they still pass if the placement argument is dropped on the way to
+    matmul. Both inputs are placed in L1 and DRAM is requested, so the requested and
+    inherited configs differ; with matching configs this cannot discriminate.
+
+    The unset case expects DRAM, not the input's L1: `outer` dispatches to `matmul`,
+    whose default is DRAM, unlike the eltwise ops that inherit their input's config.
+    That default is unchanged by threading the config, and is pinned here so the
+    difference from the eltwise convention is deliberate rather than assumed.
+
+    This pins the main path, which is the executable half of the contract. The quasar
+    copy of `outer` is the same function and cannot be exercised on this hardware.
+    """
     torch.manual_seed(0)
     a_pt = torch.rand([32], dtype=torch.bfloat16)
     b_pt = torch.rand([64], dtype=torch.bfloat16)
 
-    a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT)
-    b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT)
+    a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    out_tt = ttnn.outer(a_tt, b_tt)
-    out_pt = _golden(a_pt, b_pt)
+    out_tt = (
+        ttnn.outer(a_tt, b_tt) if requested_memcfg is None else ttnn.outer(a_tt, b_tt, memory_config=requested_memcfg)
+    )
 
-    assert tuple(ttnn.to_torch(out_tt).shape) == tuple(out_pt.shape)
-    assert_with_pcc(out_pt, ttnn.to_torch(out_tt), pcc=0.9999)
+    assert (
+        out_tt.memory_config() == expected_memcfg
+    ), f"requested {requested_memcfg}: expected {expected_memcfg} but landed in {out_tt.memory_config()}"
+
+    # values must be unaffected by placement
+    assert_with_pcc(_golden(a_pt, b_pt), ttnn.to_torch(out_tt), pcc=_pcc_threshold(ttnn.bfloat16))

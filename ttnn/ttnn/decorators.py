@@ -21,19 +21,99 @@ import ttnn.operation_tracer
 from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
+@dataclasses.dataclass(frozen=True)
+class GoldenComparisonConfig:
+    """Defines a per-tensor comparison policy for golden outputs.
+    Controls the metric, applicability, tolerances, and compared elements.
+    """
+
+    method: str  # Comparison metric: "ulp", "allclose", or "skip".
+    scope: str = "degenerate"  # Apply only to degenerate PCC cases or to "all" outputs.
+    ulp_threshold: float | None = None  # Maximum ULP distance accepted by the ULP metric.
+    rtol: float = 1e-5  # Relative tolerance used by the allclose metric.
+    atol: float = 1e-4  # Absolute tolerance used by the allclose metric.
+    equal_nan: bool = True  # Whether matching NaN positions compare as equal.
+    nonfinite: str = "strict"  # Policy for nonfinite values: "strict" or "mask".
+    mask: object | None = None  # Optional boolean tensor selecting elements to compare.
+
+
+def set_golden_comparison_config(
+    tensor,
+    *,
+    method,
+    scope="degenerate",
+    ulp_threshold=None,
+    rtol=1e-5,
+    atol=1e-4,
+    equal_nan=True,
+    nonfinite="strict",
+    mask=None,
+):
+    """Attach a validated comparison policy to a Torch golden tensor.
+    Returns the same tensor so golden implementations can configure results inline.
+    """
+
+    import torch
+
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor, got {type(tensor)}")
+    if method not in ("ulp", "allclose", "skip"):
+        raise ValueError(f"Unsupported golden comparison method: {method}")
+    if scope not in ("degenerate", "all"):
+        raise ValueError(f"Unsupported golden comparison scope: {scope}")
+    if nonfinite not in ("strict", "mask"):
+        raise ValueError(f"Unsupported golden nonfinite policy: {nonfinite}")
+    if method == "ulp" and ulp_threshold is None:
+        raise ValueError("ULP golden comparison requires ulp_threshold")
+    if mask is not None and not isinstance(mask, torch.Tensor):
+        raise TypeError(f"Expected comparison mask to be a torch.Tensor, got {type(mask)}")
+
+    tensor._ttnn_comparison_config = GoldenComparisonConfig(
+        method=method,
+        scope=scope,
+        ulp_threshold=ulp_threshold,
+        rtol=rtol,
+        atol=atol,
+        equal_nan=equal_nan,
+        nonfinite=nonfinite,
+        mask=mask,
+    )
+    return tensor
+
+
+def _copy_golden_comparison_config(source, destination):
+    """Copy recognized golden comparison metadata between tensors.
+    Leaves each destination attribute unchanged when the source does not define it.
+    """
+
+    comparison_config = getattr(source, "_ttnn_comparison_config", None)
+    if comparison_config is not None:
+        destination._ttnn_comparison_config = comparison_config
+    mesh_index = getattr(source, "_ttnn_mesh_index", None)
+    if mesh_index is not None:
+        destination._ttnn_mesh_index = mesh_index
+    return destination
+
+
 def compare_tensors_using_pcc(
     python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
 ):
     import torch
 
-    from models.common.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc, comp_ulp
 
     if isinstance(outputs, ttnn.Tensor):
+        # Backward goldens commonly return a one-element list even when the runtime returns one tensor.
+        # Unwrap only this unambiguous singleton shape; preserve list handling for true multi-output operations.
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
         golden_outputs = [golden_outputs]
     elif isinstance(outputs, torch.Tensor):
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
@@ -50,7 +130,110 @@ def compare_tensors_using_pcc(
             torch_output = to_torch_for_comparison(output, golden_output)
         else:
             torch_output = output
-        matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
+
+        same_shape = golden_output.shape == torch_output.shape
+        comparison_config = getattr(golden_output, "_ttnn_comparison_config", None)
+        comparison_golden = golden_output
+        comparison_output = torch_output
+        if comparison_config is not None and comparison_config.mask is not None and same_shape:
+            comparison_mask = comparison_config.mask.to(dtype=torch.bool, device=golden_output.device)
+            while comparison_mask.ndim < golden_output.ndim:
+                comparison_mask = comparison_mask.unsqueeze(-1)
+            try:
+                comparison_mask = torch.broadcast_to(comparison_mask, golden_output.shape)
+            except RuntimeError as error:
+                raise ValueError(
+                    f"Golden comparison mask shape {tuple(comparison_config.mask.shape)} cannot be broadcast "
+                    f"to output shape {tuple(golden_output.shape)}"
+                ) from error
+            comparison_golden = golden_output[comparison_mask]
+            comparison_output = torch_output[comparison_mask]
+
+        flattened_golden = comparison_golden.reshape(-1)
+        flattened_output = comparison_output.reshape(-1)
+
+        def is_constant(flattened_tensor):
+            """Return whether a flattened tensor contains one repeated value.
+            Treats empty and all-NaN tensors as constant for PCC routing.
+            """
+
+            if flattened_tensor.numel() == 0:
+                return True
+            first_value = flattened_tensor[0]
+            # NaN never compares equal to itself, so direct equality misses all-NaN constants.
+            # Recognize that case explicitly before checking ordinary constant values.
+            if flattened_tensor.dtype.is_floating_point or flattened_tensor.dtype.is_complex:
+                if bool(torch.isnan(first_value)):
+                    return bool(torch.all(torch.isnan(flattened_tensor)))
+            return bool(torch.all(flattened_tensor == first_value))
+
+        pcc_is_degenerate = (
+            flattened_golden.numel() < 2
+            or flattened_output.numel() < 2
+            or is_constant(flattened_golden)
+            or is_constant(flattened_output)
+        )
+        use_comparison_config = comparison_config is not None and (
+            comparison_config.scope == "all" or pcc_is_degenerate
+        )
+
+        # Operation goldens opt into non-PCC metrics only where their numerical contract requires it.
+        # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.
+        if use_comparison_config and comparison_config.method == "skip":
+            continue
+
+        if use_comparison_config and same_shape:
+            nonfinite_masks_match = True
+            if comparison_config.nonfinite == "mask" and (
+                comparison_golden.dtype.is_floating_point
+                or comparison_golden.dtype.is_complex
+                or comparison_output.dtype.is_floating_point
+                or comparison_output.dtype.is_complex
+            ):
+                golden_finite = torch.isfinite(comparison_golden)
+                output_finite = torch.isfinite(comparison_output)
+                nonfinite_masks_match = bool(torch.equal(golden_finite, output_finite))
+                if nonfinite_masks_match and not bool(golden_finite.all()):
+                    comparison_golden = comparison_golden.clone()
+                    comparison_output = comparison_output.clone()
+                    comparison_golden[~golden_finite] = 0
+                    comparison_output[~output_finite] = 0
+
+            if not nonfinite_masks_match:
+                matches = False
+            elif comparison_config.method == "ulp":
+                matches, _ = comp_ulp(
+                    comparison_golden,
+                    comparison_output,
+                    ulp_threshold=comparison_config.ulp_threshold,
+                    allow_nonfinite=True,
+                )
+                matches = bool(matches)
+            else:
+                if comparison_golden.dtype != comparison_output.dtype:
+                    comparison_output = comparison_output.to(comparison_golden.dtype)
+                matches = bool(
+                    torch.allclose(
+                        comparison_golden,
+                        comparison_output,
+                        rtol=comparison_config.rtol,
+                        atol=comparison_config.atol,
+                        equal_nan=comparison_config.equal_nan,
+                    )
+                )
+            actual_pcc = 1.0 if matches else 0.0
+        elif use_comparison_config:
+            matches = False
+            actual_pcc = 0.0
+        elif pcc_is_degenerate:
+            if golden_output.dtype != torch_output.dtype:
+                torch_output = torch_output.to(golden_output.dtype)
+            matches = same_shape and bool(
+                torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
+            )
+            actual_pcc = 1.0 if matches else 0.0
+        else:
+            matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
         comparison_record = {
             "tensor_id": int(output.tensor_id),
             "golden_tensor_id": int(golden_output.tensor_id),
@@ -195,6 +378,79 @@ def get_all_tensors(object_value):
     return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
 
 
+def should_compare_tensor_outputs(golden_outputs, outputs):
+    """Return whether either output structure contains tensor values.
+    Selects the tensor comparison path when one side exposes tensors.
+    """
+
+    # Keep tensor and scalar comparison paths separate so each can preserve its report contract.
+    golden_has_tensors = bool(get_all_tensors(golden_outputs))
+    output_has_tensors = bool(get_all_tensors(outputs))
+    return golden_has_tensors or output_has_tensors
+
+
+def should_compare_scalar_outputs(golden_outputs, outputs):
+    """Return whether both outputs are scalar numeric values.
+    Selects scalar comparison only when neither side requires tensor handling.
+    """
+
+    import numbers
+
+    return isinstance(golden_outputs, numbers.Number) and isinstance(outputs, numbers.Number)
+
+
+def compare_scalar_outputs(
+    python_fully_qualified_name, golden_output, output, desired_pcc, level, fail_on_bad_comparison
+):
+    """Compare scalar operation output and record tensor-compatible metadata.
+    Uses exact equality for integers and allclose semantics for other numbers.
+    """
+
+    import numbers
+    import torch
+
+    golden_tensor = torch.as_tensor(golden_output)
+    output_tensor = torch.as_tensor(output)
+    set_tensor_id(golden_tensor)
+    set_tensor_id(output_tensor)
+
+    if isinstance(golden_output, numbers.Integral) and isinstance(output, numbers.Integral):
+        matches = golden_output == output
+    else:
+        common_dtype = torch.promote_types(golden_tensor.dtype, output_tensor.dtype)
+        matches = bool(
+            torch.allclose(
+                golden_tensor.to(common_dtype),
+                output_tensor.to(common_dtype),
+                rtol=1e-5,
+                atol=1e-4,
+                equal_nan=True,
+            )
+        )
+
+    comparison_record = {
+        "tensor_id": int(output_tensor.tensor_id),
+        "golden_tensor_id": int(golden_tensor.tensor_id),
+        "matches": bool(matches),
+        "desired_pcc": float(desired_pcc),
+        "actual_pcc": 1.0 if matches else 0.0,
+    }
+    ttnn.graph.record_tensor_comparison_data(
+        tensors=[get_tensor_report_record(output_tensor), get_tensor_report_record(golden_tensor)]
+    )
+
+    if not matches:
+        error_message = (
+            f"{python_fully_qualified_name}: Comparing scalar output against CPU {level} failed: "
+            f"expected {golden_output!r}, got {output!r}"
+        )
+        if fail_on_bad_comparison:
+            raise RuntimeError(error_message)
+        logger.error(error_message)
+
+    return [comparison_record]
+
+
 def set_tensor_id(tensor, force=False):
     import torch
 
@@ -240,6 +496,11 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                 ttnn_tensor = ttnn.from_device(ttnn_tensor)
             ttnn_tensor = ttnn.to_dtype(ttnn_tensor, ttnn.float32)
         return ttnn.to_torch(ttnn_tensor, **kwargs)
+
+    mesh_index = getattr(golden_tensor, "_ttnn_mesh_index", None)
+    if mesh_index is not None:
+        device_tensors = ttnn.get_device_tensors(tensor)
+        return convert_ttnn_to_torch(device_tensors[mesh_index])
 
     try:
         topology = tensor.tensor_topology()
@@ -423,6 +684,34 @@ def default_preprocess_golden_function_inputs(function_args, function_kwargs):
     return tuple(new_args), new_kwargs
 
 
+def prepare_backward_golden_inputs(function_args_and_kwargs):
+    """Prepare nested Torch inputs for comparison-mode backward goldens.
+    Clears gradients and enables autograd on floating-point and complex tensors.
+    """
+
+    import torch
+
+    def prepare(object_value):
+        """Recursively enable autograd on eligible tensors in an input structure.
+        Preserves list, tuple, and dictionary containers while replacing their values.
+        """
+
+        if isinstance(object_value, torch.Tensor) and (
+            object_value.dtype.is_floating_point or object_value.dtype.is_complex
+        ):
+            object_value.grad = None
+            object_value.requires_grad_(True)
+        elif isinstance(object_value, (list, tuple)):
+            object_value = type(object_value)(prepare(element) for element in object_value)
+        elif isinstance(object_value, dict):
+            object_value = {key: prepare(value) for key, value in object_value.items()}
+        return object_value
+
+    args, kwargs = function_args_and_kwargs
+    # Backward goldens need autograd-enabled references even in comparison mode.
+    return prepare(args), prepare(kwargs)
+
+
 def default_postprocess_golden_function_outputs(output, function_args, function_kwargs):
     input_tensors = get_ttnn_tensors((function_args, function_kwargs))
 
@@ -455,7 +744,53 @@ TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
 TENSOR_IDS_PRODUCED_BY_OPERATION = set()
 
 
-def preprocess_global_golden_function_inputs(function_args, function_kwargs):
+def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
+    """Decompose a global golden tensor into mesh-aligned device shards.
+    Replicates unsharded values and validates reconstructed shard shapes.
+    """
+
+    import math
+    import torch
+
+    device_tensors = list(ttnn.get_device_tensors(input_tensor))
+    if len(device_tensors) <= 1:
+        return [golden_tensor]
+
+    topology = input_tensor.tensor_topology()
+    placements = list(topology.placements())
+    distribution_shape = [int(dimension) for dimension in topology.distribution_shape()]
+    shard_shapes = [tuple(int(dimension) for dimension in tensor.shape) for tensor in device_tensors]
+    if not placements or not distribution_shape:
+        return [golden_tensor] * len(device_tensors)
+    has_sharded_placement = any(isinstance(placement, ttnn.PlacementShard) for placement in placements)
+    if all(shape == tuple(golden_tensor.shape) for shape in shard_shapes):
+        if not has_sharded_placement:
+            return [golden_tensor] * len(device_tensors)
+        raise ValueError("Cannot reconstruct sharded mesh inputs from a single-shard global golden")
+
+    distribution_size = math.prod(distribution_shape)
+    shards = []
+    for shard_index in range(len(device_tensors)):
+        coordinate_index = shard_index % distribution_size
+        coordinates = [0] * len(distribution_shape)
+        for axis in range(len(distribution_shape) - 1, -1, -1):
+            coordinates[axis] = coordinate_index % distribution_shape[axis]
+            coordinate_index //= distribution_shape[axis]
+
+        shard = golden_tensor
+        for axis, placement in enumerate(placements):
+            if isinstance(placement, ttnn.PlacementShard):
+                shard = torch.tensor_split(shard, distribution_shape[axis], dim=placement.dim)[coordinates[axis]]
+        if tuple(shard.shape) != shard_shapes[shard_index]:
+            raise ValueError(
+                f"Global golden shard shape {tuple(shard.shape)} does not match mesh shard shape "
+                f"{shard_shapes[shard_index]}"
+            )
+        shards.append(shard)
+    return shards
+
+
+def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, mesh_tensors_as_shards=False):
     if ttnn.CONFIG.report_path is None:
         return None
     input_index = 0
@@ -479,6 +814,8 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             else:
                 golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1
+            if mesh_tensors_as_shards:
+                return _decompose_global_golden_mesh_tensor(object_value, golden_tensor)
             return golden_tensor
         elif isinstance(object_value, ttnn.Shape):
             return tuple(object_value)
@@ -507,11 +844,17 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     import torch
 
     if isinstance(outputs, ttnn.Tensor):
+        # A single runtime tensor commonly corresponds to a one-element backward golden list.
+        # Unwrap only this unambiguous case; retain list validation for genuine multi-output operations.
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
         golden_outputs = [golden_outputs]
     elif isinstance(outputs, torch.Tensor):
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
@@ -525,7 +868,12 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     for output, golden_output in zip(outputs, golden_outputs):
         if output.tensor_id is None:
             raise RuntimeError(f"Output tensor does not have a tensor_id")
-        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
+        # Clone the value as a storage boundary, but retain only recognized comparison metadata.
+        # This lets a later to_torch validate the originating operation without copying arbitrary metadata.
+        golden_clone = golden_output.clone()
+        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = _copy_golden_comparison_config(
+            golden_output, golden_clone
+        )
 
 
 if TRACE_ALLOC_DIAGNOSTICS:
@@ -566,6 +914,7 @@ INPLACE_OUTPUT_KWARG_NAMES = (
     "optional_tensor",
     "optional_output_tensor",
     "out",
+    "output",
     "output_tensors",
     "optional_output_tensors",
 )
@@ -592,9 +941,29 @@ def refresh_or_invalidate_global_goldens(inplace_tensors, global_golden_output):
         if tensor_id is None:
             continue
         if len(golden_tensors) == len(inplace_tensors):
-            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[tensor_id] = golden_tensors[index]
+            # Keep caller-buffer goldens behind the same storage boundary as ordinary outputs.
+            # Copy the operation-owned comparison contract so a later read retains its tolerance.
+            golden_clone = golden_tensors[index].clone()
+            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[tensor_id] = _copy_golden_comparison_config(
+                golden_tensors[index], golden_clone
+            )
         else:
             TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor_id, None)
+
+
+def _merge_local_golden_metadata_into_global_inputs(local_inputs, global_inputs):
+    """Copy operation-specific preprocessing metadata into cached global inputs.
+    Also normalizes keyword aliases before the global golden is evaluated.
+    """
+
+    _, local_kwargs = local_inputs
+    _, global_kwargs = global_inputs
+    argument_aliases = local_kwargs.get("_ttnn_golden_argument_aliases", {})
+    for alias, canonical_name in argument_aliases.items():
+        if alias in global_kwargs and canonical_name not in global_kwargs:
+            global_kwargs[canonical_name] = global_kwargs.pop(alias)
+    global_kwargs.update({key: value for key, value in local_kwargs.items() if key.startswith("_ttnn_")})
+    return global_inputs
 
 
 @dataclasses.dataclass
@@ -848,9 +1217,25 @@ class Operation:
                             f"{self.python_fully_qualified_name}: Failed to preprocess local golden inputs: {e}. "
                             "Local comparison will be skipped"
                         )
+                    mesh_tensors_as_shards = False
+                    if local_golden_function_args_and_kwargs is not None:
+                        _, local_golden_function_kwargs = local_golden_function_args_and_kwargs
+                        mesh_tensors_as_shards = bool(
+                            local_golden_function_kwargs.get("_ttnn_global_golden_mesh_shards", False)
+                        )
                     global_golden_function_args_and_kwargs = preprocess_global_golden_function_inputs(
-                        function_args, function_kwargs
+                        function_args,
+                        function_kwargs,
+                        mesh_tensors_as_shards=mesh_tensors_as_shards,
                     )
+                    if (
+                        local_golden_function_args_and_kwargs is not None
+                        and global_golden_function_args_and_kwargs is not None
+                    ):
+                        global_golden_function_args_and_kwargs = _merge_local_golden_metadata_into_global_inputs(
+                            local_golden_function_args_and_kwargs,
+                            global_golden_function_args_and_kwargs,
+                        )
 
                 function_return_value = function(*function_args, **function_kwargs)
 
@@ -879,6 +1264,12 @@ class Operation:
                 local_golden_function_output = None
                 if local_golden_function_args_and_kwargs is not None:
                     local_golden_function_args, local_golden_function_kwargs = local_golden_function_args_and_kwargs
+                    # Backward goldens call backward() and read input gradients.
+                    # Comparison preprocessing otherwise supplies detached Torch inputs.
+                    if self.python_fully_qualified_name.endswith("_bw"):
+                        local_golden_function_args, local_golden_function_kwargs = prepare_backward_golden_inputs(
+                            (local_golden_function_args, local_golden_function_kwargs)
+                        )
                     try:
                         local_golden_function_output = self.golden_function(
                             *local_golden_function_args, **local_golden_function_kwargs
@@ -894,6 +1285,15 @@ class Operation:
                 global_golden_function_output = None
                 if global_golden_function_args_and_kwargs is not None:
                     global_golden_function_args, global_golden_function_kwargs = global_golden_function_args_and_kwargs
+                    if getattr(self.golden_function, "_ttnn_mutates_global_inputs", False):
+                        # Only marked global goldens may update stored inputs for positional in-place operations.
+                        # Local and directly requested goldens remain ordinary out-of-place references.
+                        global_golden_function_kwargs["_ttnn_global_golden"] = True
+                    # Global backward goldens need the same autograd inputs as local goldens.
+                    if self.python_fully_qualified_name.endswith("_bw"):
+                        global_golden_function_args, global_golden_function_kwargs = prepare_backward_golden_inputs(
+                            (global_golden_function_args, global_golden_function_kwargs)
+                        )
                     try:
                         global_golden_function_output = self.golden_function(
                             *global_golden_function_args, **global_golden_function_kwargs
@@ -906,7 +1306,9 @@ class Operation:
                             "Global comparison will be skipped"
                         )
 
-                if local_golden_function_output is not None:
+                if local_golden_function_output is not None and should_compare_tensor_outputs(
+                    local_golden_function_output, output
+                ):
                     try:
                         set_tensor_id(local_golden_function_output)
                         local_tensor_comparison_records = compare_tensors_using_pcc(
@@ -925,8 +1327,30 @@ class Operation:
                             f"{self.python_fully_qualified_name}: Failed local tensor comparison: {e}. "
                             "Local comparison will be skipped"
                         )
+                elif local_golden_function_output is not None and should_compare_scalar_outputs(
+                    local_golden_function_output, output
+                ):
+                    try:
+                        local_tensor_comparison_records = compare_scalar_outputs(
+                            self.python_fully_qualified_name,
+                            local_golden_function_output,
+                            output,
+                            desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
+                            level="locally",
+                            fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        local_golden_function_output = None
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed local scalar comparison: {e}. "
+                            "Local comparison will be skipped"
+                        )
 
-                if global_golden_function_output is not None:
+                if global_golden_function_output is not None and should_compare_tensor_outputs(
+                    global_golden_function_output, output
+                ):
                     try:
                         set_tensor_id(global_golden_function_output)
                         postprocess_global_golden_function_outputs(output, global_golden_function_output)
@@ -944,6 +1368,26 @@ class Operation:
                         global_golden_function_output = None
                         logger.warning(
                             f"{self.python_fully_qualified_name}: Failed global tensor comparison: {e}. "
+                            "Global comparison will be skipped"
+                        )
+                elif global_golden_function_output is not None and should_compare_scalar_outputs(
+                    global_golden_function_output, output
+                ):
+                    try:
+                        global_tensor_comparison_records = compare_scalar_outputs(
+                            self.python_fully_qualified_name,
+                            global_golden_function_output,
+                            output,
+                            desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
+                            level="globally",
+                            fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        global_golden_function_output = None
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed global scalar comparison: {e}. "
                             "Global comparison will be skipped"
                         )
 
