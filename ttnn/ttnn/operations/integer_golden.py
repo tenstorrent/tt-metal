@@ -71,6 +71,17 @@ def _to_unsigned_operand(value, dtype):
     return torch.tensor(_to_unsigned_scalar(value, dtype), dtype=torch.int64)
 
 
+def as_unsigned_tensor(value, dtype):
+    """Materialize a scalar as a tensor of an unsigned dtype.
+    Masks to the storage width first, so a value outside it wraps as the hardware does
+    rather than failing Torch's conversion range check.
+    """
+
+    import torch
+
+    return torch.tensor(_to_unsigned_scalar(value, dtype), dtype=dtype)
+
+
 def restore_unsigned(result, dtype):
     """Restore a widened result to the requested unsigned dtype.
     Masks high bits before casting to reproduce hardware wraparound.
