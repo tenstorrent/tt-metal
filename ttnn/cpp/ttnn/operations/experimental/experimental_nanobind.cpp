@@ -51,6 +51,7 @@
 #include "ttnn/operations/experimental/matmul_decode/matmul_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
+#include "ttnn/operations/experimental/fft/fft_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.hpp"
@@ -99,6 +100,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
@@ -169,12 +171,14 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
+    deepseek_prefill::attn_res_gather_softmax::detail::bind_attn_res_gather_softmax(mod);
     deepseek_prefill::attn_res_weighted_reduce_nc::detail::bind_attn_res_weighted_reduce_nc(mod);
     deepseek_prefill::pack_scaled_fp8_kv_cache::detail::bind_pack_scaled_fp8_kv_cache(mod);
     deepseek_prefill::per_token_cast_to_fp8::detail::bind_experimental_per_token_cast_to_fp8_operation(mod);
     deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
+    fft_binding::detail::bind_experimental_fft_operation(mod);
 
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);

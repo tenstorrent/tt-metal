@@ -280,7 +280,7 @@ class RunTimeOptions {
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    std::optional<tt_metal::DispatchCoreType> dispatch_core_type_override;
 
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
@@ -388,6 +388,9 @@ class RunTimeOptions {
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
+
+    // NOC API version for Quasar
+    uint32_t quasar_noc_api_version = 2;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -757,7 +760,9 @@ public:
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
-    tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
+    std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
+        return dispatch_core_type_override;
+    }
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     bool is_simulator_or_emulated() const {
@@ -933,6 +938,8 @@ public:
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
+
+    uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

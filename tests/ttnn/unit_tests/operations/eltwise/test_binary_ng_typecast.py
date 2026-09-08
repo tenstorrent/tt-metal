@@ -960,12 +960,17 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
     tt_output_tensor = ttnn.to_torch(output)
 
+    assert output.dtype == ttnn.float32
+
     golden_fn = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
     if ttnn_fn == "divide":
-        assert_with_ulp(torch_output_tensor, tt_output_tensor, ulp_threshold=0)
+        # A float32 output was requested, so the reference has to be computed in float32 as well:
+        # comp_ulp measures against the golden's precision and expects it to be the higher one.
+        torch_output_tensor = golden_fn(torch_input_tensor_a.float(), torch_input_tensor_b.float())
+        assert_with_ulp(torch_output_tensor, tt_output_tensor, ulp_threshold=1)
     else:
+        torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
         assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
@@ -1075,4 +1080,5 @@ def test_binary_div(
         torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
     )
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype)
+    assert output_tensor.dtype == output_dtype
     assert_with_ulp(torch_output, ttnn.to_torch(output_tensor), ulp_threshold=0)
