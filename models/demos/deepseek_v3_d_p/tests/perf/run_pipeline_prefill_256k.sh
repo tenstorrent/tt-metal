@@ -56,9 +56,13 @@ mkdir -p "$OUT"
 
 TOPO=models/demos/common/prefill/runners/topology_configuration
 # torus_y by default: its SP-axis RING matches the single-process 8x1 measurements, and it is what the
-# published headline was measured on. It needs the SP axis cabled as a torus. Where it is not, rank 0
-# dies in MGD mapping -- point PP_BINDING at the plain-2d sibling, which is LINE on that axis and maps
-# anywhere. The two are NOT interchangeable for a published number: Ring vs Linear SP collectives.
+# published headline was measured on. Keep it -- measured 298.3 ms/chunk here against 338.6 for the
+# plain-2d sibling, so the wrap is worth ~13% and the two are NOT interchangeable for a quoted number.
+#
+# If rank 0 dies in MGD mapping, the SP axis is not presenting as a torus. That is usually a link that
+# failed to train rather than absent cabling -- `tt-smi -glx_reset` restored it on bh-glx-120-b03u02
+# after it dropped between 2026-09-04 and 09-08. PP_BINDING points at the plain-2d sibling to get a
+# run out of a degraded box; it is a workaround, not the expected path.
 BASE="${PP_BINDING:-$TOPO/pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml}"
 # The column -> device map is PER-GALAXY and a wrong one does NOT error: it builds stages that are
 # not columns and reports plausible wrong numbers. gen_pipeline_binding.py writes <name>.<host>.yaml.
