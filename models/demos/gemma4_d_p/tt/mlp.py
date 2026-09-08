@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel shared or dense MLP for Gemma4 prefill."""
+"""Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
 
 import ttnn
@@ -10,30 +10,7 @@ from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
-def resolve_shared_mlp_intermediate_size(hf_config, state_dict=None, layer_idx=None) -> int:
-    """Per-layer intermediate width for dense SharedMLP.
-
-    Gemma4-E2B sets ``use_double_wide_mlp=True``: KV-shared layers use
-    ``2 * intermediate_size`` (HF gate_proj is [12288, H] vs [6144, H] on early
-    layers). Prefer the checkpoint shape when present; otherwise mirror HF's
-    double-wide rule from ``layer_idx``.
-    """
-    if state_dict and state_dict.get("gate_proj.weight") is not None:
-        return int(state_dict["gate_proj.weight"].shape[0])
-    inter = int(hf_config.intermediate_size)
-    if (
-        layer_idx is not None
-        and bool(getattr(hf_config, "use_double_wide_mlp", False))
-        and (getattr(hf_config, "num_kv_shared_layers", 0) or 0) > 0
-    ):
-        n_layers = int(getattr(hf_config, "num_hidden_layers", 0) or 0)
-        first_shared = n_layers - int(hf_config.num_kv_shared_layers)
-        if int(layer_idx) >= first_shared:
-            inter *= 2
-    return inter
-
-
-class SharedMLP:
+class MLP:
     def __init__(
         self,
         mesh_device,
@@ -43,19 +20,18 @@ class SharedMLP:
         ccl_manager=None,
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
-        layer_idx=None,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
-        self.intermediate_size = resolve_shared_mlp_intermediate_size(hf_config, state_dict, layer_idx)
+        self.intermediate_size = hf_config.intermediate_size
 
         tp = mesh_config.tp if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
         # Tag the cache filenames with the weight dtype so that flipping a
-        # SharedMLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
+        # MLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
         # doesn't collide with a previously-cached file that holds the same
         # logical weight at a different dtype. The rest of the model's cache
         # entries are unaffected and stay reusable across runs.

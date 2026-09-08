@@ -20,9 +20,6 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     model.mesh_device = object()
     model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
     model.tt_kv_cache = [None, None]
-    model.hidden_size_per_layer_input = 0
-    model._compute_per_layer_inputs = lambda *_: None
-    model.kv_shared_layer_map = {}
     model._rope_prefill_positions = None
     model.rope_caches_2d = {}
     model._ring_metadata_external = True

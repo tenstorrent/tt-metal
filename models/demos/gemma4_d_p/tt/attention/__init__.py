@@ -103,14 +103,12 @@ class Gemma4Attention:
         self,
         hidden_states,
         rope_mats,
-        shared_kv=None,
-        keep_kv=False,
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
     ):
-        """Run one chunk of ring attention and retain KV only for sharing layers."""
-        tt_out, self._last_kv = prefill_forward(
+        """Run one chunk of ring attention."""
+        tt_out = prefill_forward(
             hidden_states=hidden_states,
             cos_cache=rope_mats[0],
             sin_cache=rope_mats[1],
@@ -118,8 +116,6 @@ class Gemma4Attention:
             config=self.config,
             mesh_config=self.mesh_config,
             ccl_manager=self.ccl_manager,
-            shared_kv=shared_kv,
-            keep_kv=keep_kv,
             chunk_start_idx=chunk_start_idx,
             ring_kv_cache=self.ring_kv_cache,
             ring_max_seq_len=self.ring_max_seq_len,

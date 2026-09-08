@@ -75,3 +75,31 @@ for path in pathlib.Path('models/demos/gemma4_d_p').rglob('*.py'):
     importlib.import_module(name)
 """
     subprocess.run([sys.executable, "-c", script], cwd=repo, check=True, capture_output=True, text=True)
+
+
+def test_31b_config_defaults_match_supported_architecture():
+    from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+
+    args = Gemma4ModelArgs.from_hf_config(Gemma4ModelArgs())
+    assert (args.hidden_size, args.intermediate_size, args.num_hidden_layers) == (5376, 21504, 60)
+    assert (args.num_attention_heads, args.num_key_value_heads, args.num_global_key_value_heads) == (32, 16, 4)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("enable_moe_block", True),
+        ("hidden_size_per_layer_input", 256),
+        ("num_kv_shared_layers", 20),
+        ("use_double_wide_mlp", True),
+        ("hidden_size", 2816),
+        ("num_hidden_layers", 30),
+    ],
+)
+def test_non_31b_architectures_are_rejected(field, value, expect_error):
+    from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+
+    config = Gemma4ModelArgs()
+    setattr(config, field, value)
+    with expect_error(ValueError, "Only Gemma4-31B-it is supported"):
+        Gemma4ModelArgs.from_hf_config(config)

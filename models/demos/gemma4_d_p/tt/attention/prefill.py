@@ -37,15 +37,13 @@ def prefill_forward(
     ccl_manager,
     ring_kv_cache,
     ring_max_seq_len,
-    shared_kv=None,
-    keep_kv=False,
     chunk_start_idx=0,
     ring_layer_idx=0,
     ring_num_layers=1,
     packed_global_rope=None,
     packed_sliding_rope=None,
 ):
-    """Write a user's chunk, attend its cached prefix, and optionally retain shared KV."""
+    """Write a user's chunk and attend its cached prefix."""
     if ring_kv_cache is None:
         raise ValueError("Galaxy prefill requires a ring KV cache")
     tp = mesh_config.tp
@@ -70,29 +68,20 @@ def prefill_forward(
 
     packed_global_ring = weights.is_global and isinstance(ring_kv_cache, PackedRingKVCache)
     packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
-    if shared_kv is not None:
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-        tt_k, tt_v = shared_kv
-    elif weights.is_global and kv_tied:
+    if weights.is_global and kv_tied:
         # The tied projection is one semantic KV value. Normalize it once without
         # gamma: this entire 512-wide result is V. K branches from this value;
         # packed-only serving transforms just its active rotary quarter below.
         tt_k.deallocate(True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
-        needs_canonical_k = not packed_global_ring and keep_kv
-        if needs_canonical_k:
-            gamma = ttnn.reshape(weights.k_norm_weight, (1, 1, 1, config.head_dim))
-            tt_k = ttnn.multiply(tt_v, gamma, memory_config=act_mc)
-        else:
-            tt_k = None
+        tt_k = None
     else:
         tt_k = apply_per_head_norm(
             tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
         )
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
 
-    # Rotate Q; shared K already carries its source layer's RoPE.
+    # Apply RoPE to Q and the rotary part of K.
     if packed_global_ring:
         if packed_global_rope is None:
             raise RuntimeError("packed global ring attention requires pre-gathered packed RoPE tensors")
@@ -125,12 +114,11 @@ def prefill_forward(
             q_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
         )
         q_unrotated.deallocate(True)
-        if shared_kv is None:
-            k_unrotated = tt_k
-            tt_k = ttnn.experimental.rotary_embedding_llama(
-                k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
-            )
-            k_unrotated.deallocate(True)
+        k_unrotated = tt_k
+        tt_k = ttnn.experimental.rotary_embedding_llama(
+            k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+        )
+        k_unrotated.deallocate(True)
     seq_len = tt_q.shape[-2]
     cp = cp_degree(mesh_config)
     sliding_window = config.sliding_window
@@ -215,11 +203,10 @@ def prefill_forward(
             num_layers=ring_num_layers,
         )
     tt_q.deallocate(True)
-    if shared_kv is None and not keep_kv:
-        if tt_k is not None:
-            tt_k.deallocate(True)
-        tt_v.deallocate(True)
+    if tt_k is not None:
+        tt_k.deallocate(True)
+    tt_v.deallocate(True)
     tt_out = concat_heads(tt_sdpa)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
-    return tt_out, ((tt_k, tt_v) if keep_kv else None)
+    return tt_out

@@ -565,10 +565,6 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         idx = layer_idxs[lt]
         layer = model.layers[idx]
         assert layer.self_attn.ring_kv_cache is not None, f"layer {idx} has no ring cache"
-        assert idx not in model.kv_shared_layer_map, (
-            f"layer {idx} ({lt}) shares KV from layer {model.kv_shared_layer_map[idx]}; "
-            f"timing it standalone would omit the K/V projection and cache write"
-        )
         model_layer_type = model_layer_types[lt]
         assert model_layer_type in model.rope_caches_2d, (
             f"model has no 2D RoPE cache for {lt} (built without _hf_text_config?) — "

@@ -1,17 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Gemma4 ModelArgs: HF config parsing, weight loading, and model configuration.
-
-Supports all Gemma4 variants:
-- E2B/E4B: Dense models (no MoE, per-layer input embeddings)
-- A4B/26B: MoE models (128 experts, top-8 routing)
-- 31B: Similar to A4B with different dimensions
-
-Config is automatically loaded from the model checkpoint's config.json
-via HF AutoConfig. Specify model path via HF_MODEL env var.
-"""
+"""Configuration and checkpoint loading for Gemma4-31B-it."""
 
 import errno
 import os
@@ -103,6 +93,34 @@ def _resolve_mesh_qualified_weight_cache(model_cache_path: Path, dtype_str: str,
     return _ensure_cache_dir(mesh)
 
 
+def validate_31b_config(config):
+    """Reject unsupported text architectures before allocating device weights."""
+    expected = {
+        "hidden_size": 5376,
+        "num_hidden_layers": 60,
+        "intermediate_size": 21504,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 16,
+        "num_global_key_value_heads": 4,
+        "head_dim": 256,
+        "global_head_dim": 512,
+        "vocab_size": 262144,
+        "sliding_window": 1024,
+        "attention_k_eq_v": True,
+        "tie_word_embeddings": True,
+        "attention_bias": False,
+    }
+    mismatches = [name for name, value in expected.items() if getattr(config, name, None) != value]
+    for name in ("enable_moe_block", "hidden_size_per_layer_input", "num_kv_shared_layers", "use_double_wide_mlp"):
+        if getattr(config, name, False):
+            mismatches.append(name)
+    pattern = ("sliding_attention",) * 5 + ("full_attention",)
+    if tuple(getattr(config, "layer_types", ()) or ()) != pattern * 10:
+        mismatches.append("layer_types")
+    if mismatches:
+        raise ValueError("Only Gemma4-31B-it is supported; incompatible configuration: " + ", ".join(mismatches))
+
+
 @dataclass
 class Gemma4ModelArgs:
     """Gemma4 model arguments parsed from HuggingFace config.
@@ -112,13 +130,13 @@ class Gemma4ModelArgs:
     """
 
     # Core dimensions
-    hidden_size: int = 2816
-    num_hidden_layers: int = 30
-    num_attention_heads: int = 16
-    num_key_value_heads: int = 8
+    hidden_size: int = 5376
+    num_hidden_layers: int = 60
+    num_attention_heads: int = 32
+    num_key_value_heads: int = 16
     head_dim: int = 256
     # Global attention overrides (None = same as sliding)
-    num_global_key_value_heads: int = 2
+    num_global_key_value_heads: int = 4
     global_head_dim: int = 512
     attention_k_eq_v: bool = True
     # Sliding window
@@ -128,19 +146,8 @@ class Gemma4ModelArgs:
     global_rope_theta: float = 1000000.0
     partial_rotary_factor: float = 0.25
     # Shared MLP
-    intermediate_size: int = 2112
+    intermediate_size: int = 21504
     hidden_activation: str = "gelu_pytorch_tanh"
-    # MoE (disabled by default for dense models)
-    enable_moe_block: bool = True
-    moe_intermediate_size: int = 704
-    num_experts: int = 128
-    top_k_experts: int = 8
-    # Per-layer input embeddings (E2B/E4B feature)
-    hidden_size_per_layer_input: int = 0
-    vocab_size_per_layer_input: int = 262144
-    # KV sharing
-    num_kv_shared_layers: int = 0
-    use_double_wide_mlp: bool = False
     # General
     vocab_size: int = 262144
     rms_norm_eps: float = 1e-6
@@ -161,9 +168,10 @@ class Gemma4ModelArgs:
     def from_hf_config(cls, hf_config):
         """Create Gemma4ModelArgs from a HuggingFace AutoConfig.
 
-        Handles all Gemma4 variants (E2B, E4B, A4B, 31B).
+        Requires the Gemma4-31B text architecture before loading weights.
         """
         tc = getattr(hf_config, "text_config", hf_config)
+        validate_31b_config(tc)
         layer_types = tuple(tc.layer_types) if hasattr(tc, "layer_types") and tc.layer_types else None
 
         rope_params = getattr(tc, "rope_parameters", {}) or {}
@@ -190,14 +198,6 @@ class Gemma4ModelArgs:
             partial_rotary_factor=full_rope.get("partial_rotary_factor", 0.25),
             intermediate_size=tc.intermediate_size,
             hidden_activation=getattr(tc, "hidden_activation", "gelu_pytorch_tanh"),
-            enable_moe_block=getattr(tc, "enable_moe_block", False),
-            moe_intermediate_size=getattr(tc, "moe_intermediate_size", None) or 0,
-            num_experts=getattr(tc, "num_experts", None) or 0,
-            top_k_experts=getattr(tc, "top_k_experts", None) or 0,
-            hidden_size_per_layer_input=getattr(tc, "hidden_size_per_layer_input", 0) or 0,
-            vocab_size_per_layer_input=getattr(tc, "vocab_size_per_layer_input", 262144),
-            num_kv_shared_layers=getattr(tc, "num_kv_shared_layers", 0),
-            use_double_wide_mlp=getattr(tc, "use_double_wide_mlp", False),
             vocab_size=tc.vocab_size,
             rms_norm_eps=getattr(tc, "rms_norm_eps", 1e-6),
             final_logit_softcapping=getattr(tc, "final_logit_softcapping", None) or 0.0,
@@ -286,7 +286,7 @@ class Gemma4ModelArgs:
             # Local checkpoint: cache next to the weights.
             cache_dir = Path(model_path)
         else:
-            # Otherwise model_path is an HF id like "google/gemma-4-E2B-it".
+            # Otherwise model_path is an HF id like "google/gemma-4-31B-it".
             # Caching under Path(model_path) would create that as a relative dir
             # in cwd, which then makes transformers' AutoConfig.from_pretrained
             # treat the id as a local path (os.path.isdir returns True) and fail

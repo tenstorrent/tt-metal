@@ -15,17 +15,9 @@ from models.demos.gemma4_d_p.tt.model import Gemma4Model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 
-# Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
-# loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4_d_p/tt):
-#  - token embedding: F.embedding(tokens, _embed_weight_cpu)      (model.py:1218/1238/1421)
-#  - per-layer-input embed/proj/norm (E2B/E4B):                    (model.py:615-635)
-#  - per-layer learned scalar read via .item():                   (layer.py:122-123)
-# Everything else flows through ttnn.as_tensor(cache_file_name=...) and is placeholder-safe.
+# Host weights required for embedding construction and learned layer scalars.
 _GEMMA4_HOST_WEIGHT_SUFFIXES = (
     "embed_tokens.weight",
-    "embed_tokens_per_layer.weight",
-    "per_layer_model_projection.weight",
-    "per_layer_projection_norm.weight",
     ".layer_scalar",
 )
 
@@ -65,11 +57,7 @@ def create_tt_model(
     if prefill_chunk_size < 1024 * mesh_config.prefill.sp:
         raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
 
-    model_path = (
-        model_path
-        or os.getenv("HF_MODEL")
-        or os.getenv("GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it")
-    )
+    model_path = model_path or os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
@@ -84,7 +72,7 @@ def create_tt_model(
     ccl_manager = CCLManager(mesh_device)
 
     # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
-    # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
+    # host-consumed weights (token embedding and layer scalars) are served real from the
     # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
     # Qualify the cache by mesh geometry BEFORE resolving cache_dir: ttnn.as_tensor
     # reloads tensorbins as-is and ignores mesh_mapper, so a TP=4 cache built on
@@ -95,7 +83,7 @@ def create_tt_model(
     model_args.cluster_shape = _worker_mesh
     cache_dir = model_args.weight_cache_path(dtype)
     # Resolved early so it can key the cache identity: gemma4 embeds each module's dtype in its
-    # tensorbin FILENAME (attention/experts/shared_mlp/router *_{dtype} suffixes), so an edit to
+    # tensorbin FILENAME (attention/shared_mlp *_{dtype} suffixes), so an edit to
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)

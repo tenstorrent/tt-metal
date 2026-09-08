@@ -62,50 +62,10 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
-def default_ccl_topology(mesh_device=None):
-    """Default CCL topology for Gemma4 TP collectives.
-
-    Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
-
-    Policy (when env unset):
-      * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
-        sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
-      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
-        drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
-        (~0.7505 vs ~0.77/0.94 with Linear / main). Ring on 4-device BH also
-        drops 12B full-model PCC (~0.97 → ~0.90).
-
-    Async RS+AG is correct but slower than sync on P150x8 — keep
-    ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
-    """
+def default_ccl_topology():
+    """Use ring collectives on Galaxy unless linear topology is requested."""
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
-    if override in ("ring", "r"):
-        return ttnn.Topology.Ring
-    if override in ("linear", "line", "l"):
-        return ttnn.Topology.Linear
-
-    n = mesh_device.get_num_devices() if mesh_device is not None else 0
-    # Ring TTFT win was swept on BH P150x8 only. WH T3K is also n=8 but must
-    # stay Linear for MoE PCC (matches main's hardcoded Linear all-reduce).
-    if n:
-        if n >= 8 and is_blackhole():
-            return ttnn.Topology.Ring
-        return ttnn.Topology.Linear
-
-    try:
-        cluster = ttnn.cluster.get_cluster_type()
-    except Exception:
-        cluster = None
-
-    # No mesh_device: Ring only on full 8-device BH LoudBox / BH Galaxy.
-    # Do not treat WH T3K / Galaxy cluster types as Ring defaults.
-    ring_when_unknown_n = ()
-    for name in ("P150_X8", "BLACKHOLE_GALAXY"):
-        if hasattr(ttnn.cluster.ClusterType, name):
-            ring_when_unknown_n += (getattr(ttnn.cluster.ClusterType, name),)
-    if cluster in ring_when_unknown_n:
-        return ttnn.Topology.Ring
-    return ttnn.Topology.Linear
+    return ttnn.Topology.Linear if override in ("linear", "line", "l") else ttnn.Topology.Ring
 
 
 def ccl_async_enabled() -> bool:
@@ -130,7 +90,7 @@ class CCLManager:
         if num_links is None:
             num_links = default_num_links()
         if topology is None:
-            topology = default_ccl_topology(mesh_device)
+            topology = default_ccl_topology()
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology

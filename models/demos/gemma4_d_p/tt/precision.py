@@ -13,7 +13,7 @@ _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Module names that may be overridden — keep in sync with the JSON schema and
 # with the constructors that accept these kwargs (Gemma4Model and below).
-KNOWN_MODULES = ("shared_mlp", "attention", "experts", "router", "lm_head", "embedding", "kv_cache")
+KNOWN_MODULES = ("shared_mlp", "attention", "lm_head", "embedding", "kv_cache")
 
 _DTYPE_BY_NAME = {
     "bf16": ttnn.bfloat16,

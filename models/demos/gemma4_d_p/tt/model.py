@@ -5,7 +5,6 @@
 
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
@@ -164,44 +163,6 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None, pr
     return caches_4d, caches_2d
 
 
-def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared_layer_map):
-    """Add placeholder K/V tensors for checkpoint-omitted kv-shared layers.
-
-    Gemma4 E2B/E4B checkpoints can omit K/V projections for layers that reuse a
-    source layer's KV cache. The runtime correctly skips K/V work for those
-    layers, but the constructor still builds a fused QKV tensor before that
-    runtime flag is known. Zero K/V placeholders make weight loading complete;
-    they are discarded under ``is_kv_shared=True``.
-    """
-    if not state_dict or not kv_shared_layer_map:
-        return
-
-    for layer_idx in kv_shared_layer_map:
-        cfg = Gemma4AttentionConfig(hf_config, layer_idx)
-        kv_size = cfg.num_key_value_heads * cfg.head_dim
-        for prefix in ("model.language_model.", "model."):
-            attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
-            q_key = f"{attn_prefix}.q_proj.weight"
-            if q_key not in state_dict:
-                continue
-
-            weight_dtype = state_dict[q_key].dtype
-            norm_dtype = state_dict.get(f"{attn_prefix}.q_norm.weight", state_dict[q_key]).dtype
-            state_dict.setdefault(
-                f"{attn_prefix}.k_proj.weight",
-                torch.zeros((kv_size, hf_config.hidden_size), dtype=weight_dtype),
-            )
-            if not cfg.use_kv_tying:
-                state_dict.setdefault(
-                    f"{attn_prefix}.v_proj.weight",
-                    torch.zeros((kv_size, hf_config.hidden_size), dtype=weight_dtype),
-                )
-            state_dict.setdefault(
-                f"{attn_prefix}.k_norm.weight",
-                torch.ones((cfg.head_dim,), dtype=norm_dtype),
-            )
-
-
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -261,7 +222,6 @@ class Gemma4Model:
         self._ring_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
-        self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
@@ -274,34 +234,13 @@ class Gemma4Model:
 
         if precision is None:
             precision = Gemma4Precision()
-        shared_mlp_dtype = precision.get("shared_mlp", dtype)
+        mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
-        experts_dtype = precision.get("experts", dtype)
-        router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
         # Paged K/V storage, not a weight: it sizes with context rather than with the model,
         # so it is the one tensor whose precision trades against how long a prompt fits.
         kv_cache_dtype = precision.get("kv_cache", dtype)
-
-        # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
-        # from the last non-shared layer of the same type
-        full_n_layers = hf_config.num_hidden_layers
-        num_kv_shared = getattr(hf_config, "num_kv_shared_layers", 0) or 0
-        first_shared_idx = full_n_layers - num_kv_shared
-        self.kv_shared_layer_map = {}  # layer_idx -> source_layer_idx
-        if num_kv_shared > 0 and first_shared_idx < n_layers:
-            prev_layers = hf_config.layer_types[:first_shared_idx]
-            for i in range(first_shared_idx, n_layers):
-                lt = hf_config.layer_types[i]
-                if lt in prev_layers:
-                    source = len(prev_layers) - 1 - list(prev_layers)[::-1].index(lt)
-                    if source < n_layers:  # Source must be within our layer range
-                        self.kv_shared_layer_map[i] = source
-            if self.kv_shared_layer_map:
-                logger.info(f"KV sharing enabled: {len(self.kv_shared_layer_map)} layers share KV from earlier layers")
-
-        _inject_missing_kv_shared_attention_weights(state_dict, hf_config, self.kv_shared_layer_map)
 
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
@@ -378,28 +317,6 @@ class Gemma4Model:
             self.embedding_weight = None
             self.lm_head_weight = None
 
-        # Per-layer input embeddings (E2B/E4B) — kept as CPU torch tensors for computation
-        self.per_layer_input_weights = {}
-        if self.hidden_size_per_layer_input and state_dict:
-            pli_size = self.hidden_size_per_layer_input
-            # Try both key formats
-            for prefix in ["model.language_model.", "model."]:
-                pli_embed_key = f"{prefix}embed_tokens_per_layer.weight"
-                pli_proj_key = f"{prefix}per_layer_model_projection.weight"
-                pli_norm_key = f"{prefix}per_layer_projection_norm.weight"
-                if pli_embed_key in state_dict:
-                    self.per_layer_input_weights = {
-                        "embed_tokens_per_layer": state_dict[pli_embed_key],  # [vocab_pli, n_layers * pli_size]
-                        "per_layer_model_projection": state_dict[pli_proj_key],  # [n_layers * pli_size, hidden]
-                        "per_layer_projection_norm": state_dict[pli_norm_key],  # [pli_size]
-                    }
-                    self.per_layer_input_scale = 2.0**-0.5
-                    self.per_layer_model_projection_scale = hf_config.hidden_size**-0.5
-                    self.per_layer_embed_scale = pli_size**0.5
-
-                    logger.info(f"Per-layer input embeddings loaded (pli_size={pli_size})")
-                    break
-
         # Each layer owns a ring cache unless the caller supplies one.
         self.layers = []
         if ring_kv_caches is not None and len(ring_kv_caches) != n_layers:
@@ -412,10 +329,8 @@ class Gemma4Model:
                 layer_idx=i,
                 ccl_manager=ccl_manager,
                 dtype=dtype,
-                shared_mlp_dtype=shared_mlp_dtype,
+                mlp_dtype=mlp_dtype,
                 attention_dtype=attention_dtype,
-                experts_dtype=experts_dtype,
-                router_dtype=router_dtype,
                 tensor_cache_path=tensor_cache_path,
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
@@ -424,15 +339,7 @@ class Gemma4Model:
             )
             self.layers.append(layer)
 
-        # Expose the durable caches for migration.
-        # Shared layers point to their source layer's cache
-        self.tt_kv_cache = []
-        for i, layer in enumerate(self.layers):
-            if i in self.kv_shared_layer_map:
-                source_idx = self.kv_shared_layer_map[i]
-                self.tt_kv_cache.append(self.layers[source_idx].self_attn.ring_kv_cache)
-            else:
-                self.tt_kv_cache.append(layer.self_attn.ring_kv_cache)
+        self.tt_kv_cache = [layer.self_attn.ring_kv_cache for layer in self.layers]
 
         # Final norm
         if state_dict and "model.language_model.norm.weight" in state_dict:
@@ -449,49 +356,6 @@ class Gemma4Model:
             tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
             mesh_config=mesh_config,
         )
-
-    def _compute_per_layer_inputs(self, input_ids_torch, embeds_torch):
-        """Compute one host PLI tensor per layer from token IDs and scaled embeddings."""
-        if not self.hidden_size_per_layer_input or not self.per_layer_input_weights:
-            return None
-        if input_ids_torch is None or embeds_torch is None:
-            raise ValueError(
-                "Model has per-layer inputs configured but input_ids_torch/embeds_torch "
-                "are missing. Pass pli_device_tensors instead, "
-                "or supply input_ids_torch and embeds_torch."
-            )
-
-        import torch.nn.functional as F
-
-        w = self.per_layer_input_weights
-        pli_size = self.hidden_size_per_layer_input
-        n_layers = len(self.layers)
-        # The per-layer embedding weight has ALL layers baked in
-        # Infer full layer count from the weight shape, not the (possibly overridden) config
-        embed_w = w["embed_tokens_per_layer"]  # [vocab_pli, full_n_layers * pli_size]
-        full_n_layers = embed_w.shape[-1] // pli_size
-
-        # 1. Per-layer token embedding: embed_tokens_per_layer(input_ids)
-        pli_embed = F.embedding(input_ids_torch.long(), embed_w) * self.per_layer_embed_scale
-        pli_embed = pli_embed.reshape(*input_ids_torch.shape, full_n_layers, pli_size)
-
-        # 2. Projection from main embeddings
-        proj_w = w["per_layer_model_projection"]  # [full_n_layers * pli_size, hidden]
-        pli_proj = F.linear(embeds_torch.float(), proj_w.float()) * self.per_layer_model_projection_scale
-        pli_proj = pli_proj.reshape(*embeds_torch.shape[:-1], full_n_layers, pli_size)
-
-        # 3. Norm the projection
-        norm_w = w["per_layer_projection_norm"]  # [pli_size]
-        eps = self.hf_config.rms_norm_eps
-        pli_proj_f = pli_proj.float()
-        var = pli_proj_f.pow(2).mean(-1, keepdim=True)
-        pli_proj = (pli_proj_f * torch.rsqrt(var + eps) * norm_w.float()).to(pli_proj.dtype)
-
-        # 4. Combine: (projection + embed) * scale
-        per_layer_inputs = (pli_proj + pli_embed.float()) * self.per_layer_input_scale
-
-        # Return as list of per-layer tensors
-        return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
     def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
         """Slice chunk-major RoPE caches using a CP-local row offset."""
@@ -513,9 +377,6 @@ class Gemma4Model:
         self,
         hidden_states,
         rope_mats=None,
-        input_ids_torch=None,
-        embeds_torch=None,
-        pli_device_tensors=None,
         user_id=0,
         chunk_start_idx=0,
         on_layer_complete=None,
@@ -532,13 +393,6 @@ class Gemma4Model:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if pli_device_tensors is not None:
-            if self.hidden_size_per_layer_input and len(pli_device_tensors) != len(self.layers):
-                raise ValueError("pli_device_tensors must contain one tensor per model layer")
-            per_layer_inputs = None
-        else:
-            per_layer_inputs = self._compute_per_layer_inputs(input_ids_torch, embeds_torch)
-
         if not self._ring_metadata_external:
             self.ccl_manager.set_ring_metadata(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
@@ -552,8 +406,6 @@ class Gemma4Model:
                 )
 
         packed_rope_by_type = {}
-        shared_kv_store = {}
-        kv_source_indices = set(self.kv_shared_layer_map.values())
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
             if rope_mats is not None:
@@ -569,32 +421,13 @@ class Gemma4Model:
                 packed_rope_by_type[layer_type] = (*pack_rope(*layer_rope), self._packed_global_rope_trans_mat)
             packed_rope = packed_rope_by_type.get(layer_type)
 
-            pli_tt = None
-            if pli_device_tensors is not None:
-                pli_tt = pli_device_tensors[i]
-            elif per_layer_inputs is not None:
-                pli = per_layer_inputs[i]
-                pli_tt = ttnn.from_torch(
-                    pli.reshape(1, 1, -1, pli.shape[-1]),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, dims=(-2, None)),
-                )
-            source_idx = self.kv_shared_layer_map.get(i)
-            keep_kv = i in kv_source_indices
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
-                per_layer_input=pli_tt,
-                shared_kv=shared_kv_store.get(source_idx),
-                keep_kv=keep_kv,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
             )
-            if per_layer_inputs is not None:
-                pli_tt.deallocate(True)
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             elif on_layer_complete is not None:
@@ -603,13 +436,6 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
-            if keep_kv:
-                shared_kv_store[i] = layer.self_attn._last_kv
-
-        for pair in shared_kv_store.values():
-            for tensor in pair:
-                if tensor is not None:
-                    tensor.deallocate(True)
         return self.norm.forward(hidden_states)
 
     def _cp_gather_prefill_sequence(self, hidden_states):
