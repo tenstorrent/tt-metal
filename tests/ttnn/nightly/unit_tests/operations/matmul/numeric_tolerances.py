@@ -55,7 +55,7 @@ inputs:
 
   - how many mantissa bits each number format keeps, from the inputs through to
     the partial sums. The final rounding into the output format is not part of "r";
-    stage two adds it, because it scales with the element's own value
+    stage two adds it, because it scales with each element's reference value
   - K, the reduction length, which is the shared dimension of the two operands
   - math_fidelity, which selects how many passes the matrix engine makes and so
     how much of each input's mantissa it uses
@@ -78,20 +78,23 @@ needed whether or not an activation applies.
 
 - atol. An element's error comes from rounding partial sums, whose size does not
   depend on the dot product they land in, so it is about the same for every
-  element: "r" times the standard deviation of the pre-activation reference. One
-  number therefore serves the whole tensor. It is a sum of many roundings, so it
-  is close to Gaussian. An error can come out too high or too low, and the
-  largest of n such errors, in either direction, sits about sqrt(2 * ln(2n))
-  standard deviations from zero, for n the number of output elements. The module
-  then shifts every reference value by that distance, up and down, applies the
-  activation to all three values, and keeps the largest change in the
+  element: "r" times the standard deviation of the pre-activation reference, which
+  for independent operands is sqrt(K) times the product of the operands' own
+  standard deviations, so atol grows as sqrt(K). One number therefore serves the
+  whole tensor. It is a sum of many roundings, so it is close to Gaussian. An
+  error can come out too high or too low, and the largest of n such errors, in
+  either direction, sits about sqrt(2 * ln(2n)) standard deviations from zero, for
+  n the number of output elements, so M and N enter only inside that logarithm.
+  The module then shifts every reference value by that distance, up and down,
+  applies the activation to all three values, and keeps the largest change in the
   activation's output. It does not scale the distance by the activation's
   slope, because at worst case distance the activation is nowhere near straight;
   this is why a saturating activation is never assigned more error than its whole
   output range. The device's own absolute error on the activation is then added.
 
-- rtol takes the two contributions that do scale with an element's own value: the
-  activation's relative error and the rounding into the output format. "r" does not
+- rtol takes the two contributions that do scale with an element's reference
+  value, the abs(reference) the allowance above multiplies: the activation's
+  relative error and the rounding into the output format. "r" does not
   enter it. The two are added rather than combined in quadrature, so that rtol
   stays a bound for every element rather than a typical value.
 
@@ -475,13 +478,26 @@ _PIECEWISE_LINEAR_FLAG_INDEX = {
 # for the whole-tensor checks; the peak itself is used elementwise.
 _PIECEWISE_LINEAR_RMS_FRACTION = 0.5
 
-# Most activations pick a higher accuracy inner algorithm when the accumulator is
-# 32 bit. These two do not: they select it from a compile time setting that only
-# the standalone activation op defines, so fused into a matmul they always take
-# their 16 bit polynomial branch however the accumulator is configured.
+# An activation is allowed two units in the last place of the format it is
+# evaluated in, which is the accumulator's, so a 32 bit accumulator normally
+# makes that allowance negligible. Softplus is the exception. Its kernel picks
+# its polynomial on the INP_FLOAT32 macro, which only the eltwise unary program
+# factory defines, so a fused softplus always takes the degree-6 branch whatever
+# fp32_dest_acc_en says. That branch records itself as bf16-accurate at
+# "<0.28 ULP", the low end of the range quoted above, so its allowance is two
+# units of bfloat16. The flag still reaches the kernel, but there it decides only
+# whether the result is rounded to bfloat16 on the way out.
+#
+# Softplus is the only entry. Every other activation the matmul can fuse chooses
+# its polynomial from is_fp32_dest_acc_en, the same setting that decides the
+# accumulator format, so the rule above already covers them.
+# Softplus therefore carries the loosest rtol here: its allowance dominates,
+# where every other activation's vanishes once the accumulator is 32 bit, so its
+# fused tests are correspondingly less sensitive. The absence of a selectable
+# accurate softplus is tracked by #54673; this exception may be removed once that
+# issue is resolved.
 _ALWAYS_16_BIT_ACTIVATIONS = frozenset(
     {
-        ttnn.UnaryOpType.SELU,
         ttnn.UnaryOpType.SOFTPLUS,
     }
 )
@@ -567,7 +583,7 @@ def matmul_numeric_tolerances(
     )
 
     # An element's error is set by the spread of the whole dot product, not by
-    # the element's own value. A bias carries none of that error; it is left in
+    # that element's own reference value. A bias carries none of that error; it is left in
     # because the tests that use one keep it far smaller than the matmul result.
     error_before_activation = relative_error * pre_activation.std().item()
 
@@ -617,8 +633,8 @@ def matmul_numeric_tolerances(
     # combined in quadrature.
     max_error = max_propagated_error + activation_absolute
 
-    # rtol carries only what scales with an element's own value; atol carries the
-    # accumulated error, which does not.
+    # rtol carries only what scales with an element's reference value; atol
+    # carries the accumulated error, which does not.
     tolerances = {
         "atol": safety * max_error,
         "rtol": safety * (output_relative + activation_relative),
