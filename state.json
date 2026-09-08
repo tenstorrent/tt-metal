@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-09-08T12:41:00Z",
-  "run_id": "34226949304",
+  "last_run": "2026-09-08T18:36:00Z",
+  "run_id": "34263416428",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -21,7 +21,8 @@
     },
     "53690": {
       "issue": 53655,
-      "status": "CI green, all reviewer objections resolved (ncvetkovicTT/pmilenkovicTT/nvelickovicTT); awaiting nvelickovicTT manual Sanity/L2/BH-e2e run results + maintainer merge decision; re-verified 2026-08-31, no new activity"
+      "status": "CI green, all reviewer objections resolved (ncvetkovicTT/pmilenkovicTT/nvelickovicTT); awaiting nvelickovicTT manual Sanity/L2/BH-e2e run results + maintainer merge decision; re-verified 2026-08-31, no new activity",
+      "ci_status_2026-09-08": "5/5 checks green, mergeable_state unknown, unchanged, still awaiting maintainer decision"
     },
     "54223_pad_float32": {
       "issue": 54223,
@@ -50,7 +51,8 @@
     "54792": {
       "title": "fix(llk): clamp expm1_cw_clamped upper bound",
       "status": "updated - pushed correction per reviewer (naufalfx805-source) feedback: upper clamp changed 87.0f -> 88.7228f (128*ln2)",
-      "date": "2026-09-02T18:41:19Z"
+      "date": "2026-09-02T18:41:19Z",
+      "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
     },
     "54901_softshrink": "PR#54901 closed_by_maintainer (mateusznowakTT): softshrink undefined for negative lambda, no further action",
     "54932_hardsigmoid_fp32": "PR#54932 open, action_required, blocked pending maintainer approval; reporter proposed follow-up assert_with_ulp test PR out of scope",
@@ -76,7 +78,8 @@
       "status": "CI: 5/5 pre-checks green (RTL Sim CI + 4 Cycode scans); no build-artifact yet (PR Gate likely action_required pending maintainer approval); corrects prior memory which had wrong PR number 55334 (that was the issue, not the PR)"
     },
     "55435": {
-      "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer"
+      "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer",
+      "ci_status_2026-09-08": "RTL Sim CI test now conclusion=success (previously failing 09-07); all 5 checks green; mergeable_state=behind"
     },
     "55605_alias": {
       "issue": 55605,
@@ -87,6 +90,9 @@
       "issue": 55681,
       "pr": 55688,
       "status": "CI pre-checks 5/5 green, mergeable_state=behind, no build-artifact.yaml run found yet; comment-only change so low risk; checked 2026-09-08"
+    },
+    "54932": {
+      "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
     }
   },
   "issues_labeled": [
@@ -950,6 +956,11 @@
     "55643": "2026-09-07 - relu_min vInt sign+magnitude bug, root cause confirmed against current code, left fix to maintainer"
   },
   "run_history": [
+    {
+      "run_id": "34263416428",
+      "date": "2026-09-08T18:36:00Z",
+      "summary": "Task1/2: labeled 4 fresh community bug reports (#55797 reciprocal fp32 BH Newton-refinement underflow, #55798 softplus fp32 exp-tail clamp missing, #55799 repeat_bw TT_FATAL/empty-grad/wrong-shape, #55800 unary output_tensor shape guard compares against itself) - each already has an open community fix PR (55801/55802/55803/55804), so no duplicate fix PR opened, just labeled bug after confirming root cause against current source. Task5: re-verified check-runs on tracked PRs; #55435 RTL Sim CI now green (was failing 09-07, resolved itself/reran); #54932/#54792 unchanged green; #53690 unchanged. Task8: this update."
+    },
     {
       "run_id": "34122745559",
       "date": "2026-09-07T12:40:00Z",
