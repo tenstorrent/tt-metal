@@ -966,17 +966,27 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
-    # bh_qb is the (2,2) row and the only one a 4-chip box matches, since the perf rows carry
-    # require_exact_physical_num_devices. 1024x1024 only -- the resolutions run to 8192.
+    # Both select the one (2,2) row a 4-chip box matches (the perf rows carry
+    # require_exact_physical_num_devices; the pipeline rows skip 8/32-device configs by count),
+    # at 1024x1024 -- resolutions run to 8192. Both run, and the leg fails if either did; they
+    # share the 2x2 converted-weight cache so the second is warm.
+    status=0
+    # Perf: measures throughput and asserts the PERF_THRESHOLDS. Confirmed on run 33889272485
+    # (PASS, 92.3s/image).
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
-      -k "bh_qb and 1024x1024"
+      -k "bh_qb and 1024x1024" || status=1
+    # Pipeline: the real generate path (create_pipeline -> denoise -> decode -> save). A smoke
+    # test, no PCC assert. Confirmed on run 33910468525 (PASS, saved a 1024x1024 image).
+    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k bh_2x2 || status=1
+    exit $status
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      # 45 min: the 31m cold run included the one-time converted-weight build, now persisted on
-      # the mount, so warm runs are well under this. Above the pytest --timeout (40 min).
-      timeout: 45
+      # 75 min. The two tests share the 2x2 converted-weight cache, so only the first pays the
+      # one-time build (persisted on the mount); measured cold, perf was 31m and pipeline 28m.
+      # Above the sum of the pytest --timeouts (70 min) so a hang fails cleanly.
+      timeout: 75
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

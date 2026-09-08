@@ -34,11 +34,16 @@ line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, traced",
     [
+        # 2x2: the only geometry a 4-chip Blackhole box (bh_quietbox_2) matches. is_fsdp and
+        # dynamic_load are both mandatory here -- the 32B transformer, the 24B encoder and the VAE
+        # cannot be co-resident on 4 chips, same as the perf test's bh_qb row.
+        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, False],
         [(1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
         [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, False, True],
         [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, True],
     ],
     ids=[
+        "bh_2x2",
         "1x8tp1",
         "wh_4x8",
         "bh_4x8",
