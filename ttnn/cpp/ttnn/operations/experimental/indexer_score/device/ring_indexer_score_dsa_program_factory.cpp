@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ring_indexer_score_dsa_program_factory.hpp"
 
 #include <algorithm>
@@ -499,6 +500,22 @@ ProgramDescriptor build_ring_program_descriptor(
     // stripe count ahead of the physical SP size, so compute reads these at +11/+12 (was +10/+11).
     compute_ct.push_back(has_meta ? 1u : 0u);
     compute_ct.push_back(has_meta ? cb_meta_derived : 0u);
+
+    namespace rh = ttnn::kernel_lib::host;
+    const tt::tt_metal::TensorLayout pool_layout(
+        DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{});
+    auto pool_plan = rh::make_reduce_plan(
+        tt::tt_metal::TensorSpec(Shape{1, 32, 32}, pool_layout),
+        tt::tt_metal::TensorSpec(Shape{1, 32, 1}, pool_layout),
+        tt::tt_metal::ReduceOpMath::MAX,
+        tt::tt_metal::ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {q.device()->arch(), false, false, q.device()->l1_size_per_core()});
+    pool_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+    rh::ReduceCallArgs(pool_plan, {cb_id[cb_acc_strip_arg], cb_id[cb_scaler_arg], cb_id[cb_out_strip_arg]})
+        .append_to(compute_ct);
+    rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(reader_ct);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};

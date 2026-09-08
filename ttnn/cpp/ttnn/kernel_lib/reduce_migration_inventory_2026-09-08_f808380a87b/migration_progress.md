@@ -257,3 +257,9 @@ Validation: native build passed (`/tmp/reduce-toy-variance-build-20260908.log`);
 All standard SDPA and decode writers now materialize explicit host auxiliary recipes. Their raw compute kernels retain their existing reduction algorithms. The experimental ring writer advances its fabric argument offset past the serialized recipe. Removed an obsolete reader-produced scaler from DiT Welford: that buffer is compute-owned transpose scratch.
 
 Validation: native build passed (`/tmp/reduce-sdpa-auxiliary-build-20260908.log`). SM054/SM060/SM061/SM062 all passed (`reduce-migration-htyz2h8l`). Sparse Blackhole and large-ring topologies cannot be exercised on this N300.
+
+## KDA and indexer score
+
+Both KDA factories now plan their normalization reductions and auxiliary buffers. Recurrence keeps its independent all-ones matrix constant and gets a separate reduction auxiliary buffer. Indexer score's fallback MAX uses a planned call; its specialized batched MAX path remains intact. Both regular and ring factories serialize compatible compute/reader arguments, including the non-pooling configuration.
+
+Validation: native builds passed (`/tmp/reduce-kda-build-20260908.log`, `/tmp/reduce-indexer-build-v2-20260908.log`). Device compilation and numerical behavior are unverified here because their tests require Blackhole.
