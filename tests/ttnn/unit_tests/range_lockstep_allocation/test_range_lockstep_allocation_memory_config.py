@@ -141,11 +141,9 @@ def test_range_lockstep_serialized_to_json():
 def test_default_is_not_written_to_json():
     """A config that never asked for range lockstep must serialize as if the flag did not exist.
 
-    to_json() output is hashed as a content-addressed cache key by model code
-    (models/demos/deepseek_v3_b1/weights/cache/fingerprint.py), so writing the default would
-    change the digest of every existing config and invalidate prebuilt weight caches. The
-    default therefore stays absent, and from_json reads absent as false --
-    test_json_without_the_key_loads_as_default_lockstep covers the read side.
+    to_json() output is hashed as a persisted cache key, so writing the default would change the
+    digest of every existing config and invalidate those caches. from_json reads absent as false
+    -- test_json_without_the_key_loads_as_default_lockstep covers the read side.
     """
     lockstep, _range_lockstep = _configs()
     assert "range_lockstep_allocation" not in json.loads(lockstep.to_json())
