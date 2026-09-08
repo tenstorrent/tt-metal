@@ -5,7 +5,10 @@
 With fp32 tiles a page is 4kB, so only one tile fits in a fabric packet and
 num_tiles_to_write_per_packet becomes 1. The ring reduce-scatter writer used to prime its scatter
 packet header with that value, which is below NOC_SCATTER_WRITE_MIN_CHUNKS (2), and the fabric
-ASSERT in populate_unicast_scatter_write_fields tripped the watcher. See #53329.
+ASSERT in populate_unicast_scatter_write_fields tripped the watcher.
+
+This is the scatter-header fault, which is distinct from the missing atomic barrier in the matmul
+sender/writer that #53329 was originally filed for. #53329 is the Qwen3.6 suite that surfaced both.
 
 Shapes and program config mirror the Qwen3.6-27B GDN prefill out projection
 (models/demos/blackhole/qwen36/tt/tp_common.py::matmul_reduce_scatter_prefill).

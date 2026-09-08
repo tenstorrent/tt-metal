@@ -190,12 +190,12 @@ struct IntermSink</*Contiguous=*/false> {
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_unicast, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_scatter, unicast_route_info);
 
-        // A scatter write requires at least NOC_SCATTER_WRITE_MIN_CHUNKS (2) chunks. With large
+        // A scatter write requires at least NOC_SCATTER_WRITE_MIN_CHUNKS chunks. With large
         // pages (e.g. fp32 tiles at 4kB) only one tile fits in a packet, so this header would be
         // primed with chunk_count == 1 and trip the ASSERT in populate_unicast_scatter_write_fields
         // (fabric/hw/inc/api_common.h). The send path already falls back to pkt_unicast_hdr when
         // num_tiles == 1, so simply skip priming the scatter header when it can never be legal.
-        if constexpr (num_tiles_to_write_per_packet >= 2) {
+        if constexpr (num_tiles_to_write_per_packet >= tt::tt_fabric::NOC_SCATTER_WRITE_MIN_CHUNKS) {
             fabric_unicast_noc_scatter_write_set_state<
                 UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
                 pkt_scatter_hdr,
