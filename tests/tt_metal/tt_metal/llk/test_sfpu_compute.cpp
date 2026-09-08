@@ -310,7 +310,16 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         (op_name == "lez")) {
         // Include exact zeros so the eqz/nez/lez/gez at-zero branches are exercised.
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.0f, 0.5f, 1.0f});
-        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+        auto packed = generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+        // Pin the IEEE special values (raw bf16 bits, since bfloat16(float) canonicalises NaN) in the
+        // first lanes: NaN of either sign is neither <0, >0, >=0 nor <=0; +/-inf compare like any
+        // finite value; -0 counts as zero.
+        auto unpacked = unpack_vector<bfloat16, uint32_t>(packed);
+        const vector<uint16_t> special_bits = {0x7FC0, 0xFFC0, 0x7F80, 0xFF80, 0x0000, 0x8000};
+        for (size_t i = 0; i < special_bits.size() && i < unpacked.size(); ++i) {
+            unpacked[i] = std::bit_cast<bfloat16>(special_bits[i]);
+        }
+        return pack_vector<uint32_t, bfloat16>(unpacked);
     }
     if (op_name == "softplus") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 30.0f, numel, seed);
