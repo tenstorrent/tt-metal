@@ -1249,12 +1249,29 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             self.kv_proj.set_output_core_grid(
                 ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
             )
-        self.q_b_proj = projection("q_b_proj")
+        # q_a's RMSNorm rides in the q_a matmul epilogue when the op can take it.
+        # The dest of that mcast must be a filled rectangle (NOC multicast) that also
+        # holds q_b's B cores; the generic row-wise 64-core set can be ragged on Blackhole.
+        self.fuse_q_a_norm = (
+            self.packed_weights is None
+            and not self.dedicated_qkv_ranks
+            and not self.balanced_qkv
+            and self.q_a_proj.can_fuse_rms_norm()
+        )
+        if self.fuse_q_a_norm:
+            self.q_b_proj = projection("q_b_proj", cache_suffix=".rect", rectangle_b_grid=True)
+        else:
+            self.q_b_proj = projection("q_b_proj")
         self.o_b_proj = projection("o_b_proj")
-        # q_a's learned RMSNorm stays standalone. q_b's unweighted norm is per query
-        # head, so its grouped matmul epilogue is the compatible fusion point.
-        self.q_a_norm = DeepSeekV4RMSNorm(
-            weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
+        if self.fuse_q_a_norm:
+            # Mcast a ROW_MAJOR HEIGHT_SHARDED replica of [M, q_lora] onto every q_b B
+            # core so q_b can consume it as A without a DRAM round-trip.
+            self.q_a_proj.set_output_core_grid(self.q_b_proj.b_core_grid())
+            self.q_a_proj.enable_fused_rms_norm(self.eps, weights["q_a_norm.weight"])
+        self.q_a_norm = (
+            None
+            if self.fuse_q_a_norm
+            else DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True)
         )
         self.fuse_q_b_norm = self.q_b_proj.can_fuse_rms_norm()
         if self.fuse_q_b_norm:
@@ -1697,9 +1714,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         if qkv_tokens is not tokens:
             ttnn.deallocate(qkv_tokens)
-        q_a = self.q_a_norm(q_a_raw)
-        # The grouped epilogue needs q_b's one-row replicated-A path. Unsupported q_b
-        # layouts keep the tiled width-sharded activation and standalone per-head norm.
+        # ``None`` when the q_a matmul already normalized and mcast a replica onto
+        # every q_b B core (see __init__).
+        q_a = q_a_raw if self.q_a_norm is None else self.q_a_norm(q_a_raw)
+        # The grouped epilogue needs q_b's one-row replicated-A path. A fused q_a mcast
+        # already has that layout; otherwise replicate here. Unsupported q_b layouts
+        # keep the tiled width-sharded activation and standalone per-head norm.
         q_b_input = self.q_b_proj.to_replicated_rm_hs_activation(q_a) if self.fuse_q_b_norm else q_a
         q = self.q_b_proj(q_b_input)  # [1, 1, B, H*Dh]
         if q_b_input is not q_a:

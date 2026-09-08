@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""TP=4 PCC for the complete DeepSeek-V4-Flash decode attention layer."""
+"""TP=4 PCC for the complete DeepSeek-V4-Flash decode attention layer.
+
+Opens a 2x4 (8-chip) or 8x4 (32-chip) parent mesh and runs on a 1x4 TP line."""
 
 from __future__ import annotations
 
@@ -36,13 +38,13 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 TP_SIZE = 4
-PARENT_MESH = (8, 4)
 SUBMESH_SHAPE = (1, TP_SIZE)
+PARENT_MESHES = ((2, 4), (8, 4))
 
 
 def _1x4_line_submesh(mesh_device):
-    """Carve the TP ethernet line from the opened 8x4 Galaxy mesh."""
-    return mesh_device.create_submesh(ttnn.MeshShape(*SUBMESH_SHAPE))
+    """Carve the first-row TP ethernet line from a 2x4 or 8x4 parent mesh."""
+    return mesh_device.create_submesh(ttnn.MeshShape(*SUBMESH_SHAPE), ttnn.MeshCoordinate(0, 0))
 
 
 def _to_tt_replicated(tensor: torch.Tensor, device) -> ttnn.Tensor:
@@ -65,7 +67,11 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 
 
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
-@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(shape, id=f"{shape[0]}x{shape[1]}") for shape in PARENT_MESHES],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -75,9 +81,11 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 @pytest.mark.timeout(14400)
 @torch.no_grad()
 def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, layer_idx: int, seq_len: int) -> None:
-    if tuple(mesh_device.shape) != PARENT_MESH:
-        pytest.skip(f"need an {PARENT_MESH[0]}x{PARENT_MESH[1]} mesh, got {tuple(mesh_device.shape)}")
+    mesh_shape = tuple(mesh_device.shape)
+    if mesh_shape not in PARENT_MESHES:
+        pytest.skip(f"need a 2x4 (8-chip) or 8x4 (32-chip) mesh, got {mesh_shape}")
     submesh = _1x4_line_submesh(mesh_device)
+    assert submesh.get_num_devices() == TP_SIZE, f"1x4 submesh has {submesh.get_num_devices()} devices"
 
     batch = 1
     ref_path, need_gen = _reference_path(tmp_path, f"attn_pcc_tp{TP_SIZE}_{layer_idx}_{batch}_{seq_len}")
