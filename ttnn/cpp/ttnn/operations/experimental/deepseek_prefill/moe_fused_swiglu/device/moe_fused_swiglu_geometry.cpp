@@ -335,14 +335,14 @@ std::vector<CbView> Blocking::cb_layout(
         {CB_H, depth_h * h_fast, bfp8_tile, FormatKey::Bfp8},
         {CB_IDX_SCRATCH, 1, idx_page, FormatKey::U32},
         {CB_COUNTS_SCRATCH, 1, counts_page, FormatKey::U32},
-        {CB_GATHER_GATE, gather_pages, bfp8_tile, FormatKey::Bfp8},
-        {CB_GATHER_UP, gather_pages, bfp8_tile, FormatKey::Bfp8},
+        {CB_GATHER_GATE, gather_pages, bf16_tile, FormatKey::Bf16},
+        {CB_GATHER_UP, gather_pages, bf16_tile, FormatKey::Bf16},
         {CB_SLICE_GATE, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_SLICE_UP, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_SLICE, slice_pages, bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_TILES, DEPTH_OUT * out_block, output_tile, FormatKey::Out},
-        {CB_GATE_ACC, gu, bfp8_tile, FormatKey::Bfp8},
-        {CB_UP_ACC, gu, bfp8_tile, FormatKey::Bfp8},
+        {CB_GATE_ACC, gu, bf16_tile, FormatKey::Bf16},
+        {CB_UP_ACC, gu, bf16_tile, FormatKey::Bf16},
         {CB_GATE_SILU, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_LOCAL, std::max(gu, h_fast), bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_INTERM, out_interm, bf16_tile, FormatKey::Bf16},
@@ -378,6 +378,22 @@ bool Blocking::phase_cb_alias(uint32_t requested_out_tile) const {
         return false;
     }
     const auto layout = cb_layout(true, requested_out_tile, 64, 64);
+    // The three phase views share ONE allocation, so they must agree on page size -- the
+    // aliasing loop in cb_allocations TT_FATALs otherwise. cb_gather_gate is bf16 while the
+    // other two are bfp8, so this alias is simply off; the guard is here rather than in
+    // cb_allocations so l1_bytes() and the degradation loop agree with what is allocated.
+    {
+        const auto page_size_of = [&](uint32_t wanted) {
+            return std::find_if(layout.begin(), layout.end(), [&](const CbView& view) { return view.index == wanted; })
+                ->page_size;
+        };
+        const uint32_t first = page_size_of(CB_GATHER_GATE);
+        for (const uint32_t wanted : {CB_H_SLICE, CB_OUT_TILES}) {
+            if (page_size_of(wanted) != first) {
+                return false;
+            }
+        }
+    }
     uint32_t separate_pages = 0;
     for (const uint32_t wanted : {CB_GATHER_GATE, CB_H_SLICE, CB_OUT_TILES}) {
         separate_pages +=

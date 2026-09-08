@@ -110,6 +110,10 @@ constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
 // h is bfp8, like x, the output and the reduce operands. It cannot be bfp4: the packer emits bfp8,
 // so a bfp4 h CB would be decoded through the wrong format.
 constexpr uint32_t H_TILE = BFP8_TILE;
+// cb_up_acc / cb_gather_up are bf16, so the up leg of the column all-to-all strides by a bf16
+// tile. H_TILE above stays bfp8 for the `h` sends -- see the writer for why these two must not
+// be conflated.
+constexpr uint32_t GU_TILE = CT(BF16_TILE);
 constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
 
 // W_down blocks kept in flight ahead of the round that consumes them; 1 == the per-round read.
@@ -957,7 +961,7 @@ void kernel_main() {
                     {
                         MaybeDeviceZoneScope("reader_reduce_up_payload");
                         moe_fused_swiglu::scatter_payload(
-                            RT_PEERS, cb_up_acc, cb_gather_up, slice_worker_count, slice_tiles_each, my_row, BFP8_TILE);
+                            RT_PEERS, cb_up_acc, cb_gather_up, slice_worker_count, slice_tiles_each, my_row, GU_TILE);
                     }
                     // The payload barrier in scatter_payload is the data-before-publish proof.  The
                     // writer invalidates while polling this monotone mailbox word, then signals the
@@ -973,7 +977,7 @@ void kernel_main() {
                         slice_worker_count,
                         slice_tiles_each,
                         my_row,
-                        BFP8_TILE);
+                        GU_TILE);
                 }
                 cb_pop_front(cb_up_acc, GU_FULL);
             }

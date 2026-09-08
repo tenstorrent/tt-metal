@@ -70,6 +70,12 @@ constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
 // tile is 2048 B, and striding the write-back by 1088 would emit partial pages from wrong offsets.
 constexpr uint32_t OUT_TILE = CT(OUT_TILE_BYTES);
 constexpr uint32_t H_TILE = BFP8_TILE;  // h is bfp8; see the reader
+// The gate accumulator and its landing buffer are bf16 (cb_gate_acc / cb_gather_gate), so the
+// gate leg of the column all-to-all strides by a bf16 tile. Distinct from H_TILE: that one still
+// sizes the `h` slice sends below, which stay bfp8. Getting these two confused reads the right
+// bytes through the wrong exponents and yields ~1e38 garbage rather than a wrong-but-plausible
+// number, so keep the two payloads' tile sizes named apart.
+constexpr uint32_t GU_TILE = CT(BF16_TILE);
 constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
 constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 // Cross-M-block weight residency, the NoC1 half: W_up's read carries no M-block index, so every
@@ -447,7 +453,7 @@ void kernel_main() {
                     // that case. Derive the identical physical slot directly from block index.
                     const auto& iface = get_local_cb_interface(cb_gather_gate);
                     const uint32_t base = iface.fifo_limit - iface.fifo_size;
-                    gate_dst = base + ((gb * GATHER_PAGES) % PHASE_ALIAS_PAGES) * H_TILE;
+                    gate_dst = base + ((gb * GATHER_PAGES) % PHASE_ALIAS_PAGES) * GU_TILE;
                 }
                 // The GATE half of the column all-to-all, on NOC_1. The reader carries the UP half on
                 // NOC_0: split by PAYLOAD, not destination, so each RISC-V owns one
@@ -457,7 +463,7 @@ void kernel_main() {
                     {
                         MaybeDeviceZoneScope("writer_scatter_gate_payload");
                         moe_fused_swiglu::scatter_payload_to(
-                            RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
+                            RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, GU_TILE);
                     }
                     {
                         MaybeDeviceZoneScope("writer_scatter_up_wait");
@@ -475,7 +481,7 @@ void kernel_main() {
                     {
                         MaybeDeviceZoneScope("writer_scatter_gate_payload");
                         moe_fused_swiglu::scatter_payload_to(
-                            RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
+                            RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, GU_TILE);
                     }
                     {
                         MaybeDeviceZoneScope("writer_scatter_signal");

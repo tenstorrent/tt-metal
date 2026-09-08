@@ -120,6 +120,7 @@ std::vector<uint32_t> make_reader_ct(
     uint32_t row_capacity,
     uint32_t weight_tile,
     uint32_t bfp8_tile,
+    uint32_t bf16_tile,
     uint32_t wg_shard_w,
     uint32_t wd_shard_w) {
     return {
@@ -156,6 +157,7 @@ std::vector<uint32_t> make_reader_ct(
         num_global_experts,
         weight_tile,
         bfp8_tile,
+        bf16_tile,
         geo::MAILBOX_MAGIC,
         blocking.wd_ahead,
         blocking.m_eff_min,
@@ -205,6 +207,7 @@ std::vector<uint32_t> make_writer_ct(
     uint32_t output_m_tiles,
     uint32_t weight_tile,
     uint32_t bfp8_tile,
+    uint32_t bf16_tile,
     uint32_t output_tile,
     uint32_t wg_shard_w,
     uint32_t wd_shard_w) {
@@ -233,6 +236,7 @@ std::vector<uint32_t> make_writer_ct(
         phase_alias,
         weight_tile,
         bfp8_tile,
+        bf16_tile,
         output_tile,
         geo::MAILBOX_MAGIC,
         blocking.m_eff_min,
@@ -456,6 +460,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         static_cast<uint32_t>(tensor_arguments.activations.padded_shape()[-2]),
         weight_tile,
         bfp8_tile,
+        bf16_tile,
         wg,
         wd);
     append(reader_ct, x_mcast_ct);
@@ -491,6 +496,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         tensor_return_value.padded_shape()[-2] / geo::TILE,
         weight_tile,
         bfp8_tile,
+        bf16_tile,
         output_tile,
         wg,
         wd);
