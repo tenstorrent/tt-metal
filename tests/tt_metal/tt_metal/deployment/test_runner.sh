@@ -143,7 +143,7 @@ emit_section() {
 emit_setup() {
 	if [ "$SKIP_RESET" -eq 1 ]; then using_board_resets=false; else using_board_resets=true; fi
 	if [ "${ETH_TEST_EXPECTED_LINKS:-10}" -eq 0 ]; then checking_eth_links=false; else checking_eth_links=true; fi
-	emit "$(printf '%-24s %s' 'Output:' "$LOGDIR")"
+	emit "$(printf '%-24s %s' 'Output:' "$RUN_LOG")"
 	emit "$(printf '%-24s %s' 'Number of iterations:' "$ITERATIONS")"
 	emit "$(printf '%-24s %s' 'Using board resets:' "$using_board_resets")"
 	emit "$(printf '%-24s %s' 'Continue on failure:' "$([ "$CONTINUE_ON_FAILURE" -eq 1 ] && echo true || echo false)")"
@@ -236,7 +236,6 @@ emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
 emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
 emit_setup
-emit "$(printf '%-12s %s' 'Run log:' "$RUN_LOG")"
 emit "$RULE_HEAVY"
 
 iteration_failures=0
@@ -300,9 +299,7 @@ if [ "$iteration_failures" -gt 0 ]
 then
 	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed")"
 	emit "$RULE_HEAVY"
-	emit "Run log: $RUN_LOG"
 	exit 1
 fi
 emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed")"
 emit "$RULE_HEAVY"
-emit "Run log: $RUN_LOG"
