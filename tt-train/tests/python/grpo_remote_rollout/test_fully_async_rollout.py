@@ -5,9 +5,9 @@ from threading import Thread
 
 from ttml.trainers import FullyAsyncRolloutBatch
 
-from examples.grpo_remote_rollout.utils.fully_async_rollout import FullyAsyncRolloutClient, FullyAsyncRolloutWorker
-from examples.grpo_remote_rollout.utils.rollout_engine import RolloutOutput
-from examples.grpo_remote_rollout.utils.rollout_transport import create_in_memory_rollout_transports
+from utils.fully_async_rollout import FullyAsyncRolloutClient, FullyAsyncRolloutWorker
+from utils.rollout_engine import RolloutOutput
+from utils.rollout_transport import create_in_memory_rollout_transports
 
 
 class _SenderBridge:
