@@ -285,7 +285,12 @@ jobs:
           if [ -z "$REF" ]; then
             SHA="$FALLBACK"
           else
-            SHA=$(gh api "repos/${REPO}/commits/${REF}" --jq '.sha')
+            # Percent-encode the slashes. A slash-containing branch does resolve
+            # literally, because {ref} is greedy, but the endpoint has sub-resources
+            # (/status, /comments, /pulls, /check-runs), so a branch named like
+            # `x/comments` would address one of those instead and return an array
+            # where a commit is expected. Encoding keeps the ref one path segment.
+            SHA=$(gh api "repos/${REPO}/commits/${REF//\//%2F}" --jq '.sha')
           fi
           printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$' \
             || { echo "::error::could not resolve '${REF:-HEAD}' to a full commit sha, got '${SHA}'"; exit 1; }
