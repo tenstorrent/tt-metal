@@ -48,6 +48,7 @@ def usable_cpus() -> int:
         pass
     return max(1, n)
 
+
 # A finding is identified by where it is, what fired, and what it said. Message
 # is included because a handful of checkers report distinct problems at one
 # location (measured: 28 of 19,863 on the two-leg sample).

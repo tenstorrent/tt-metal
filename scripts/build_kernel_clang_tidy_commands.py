@@ -461,9 +461,9 @@ def self_test():
     assert "build.cpp" not in argv_text, "source-location suffix leaked into the captured argv"
     # A define whose value holds a space must survive the log's unquoted join as
     # one element, or the macro reaches clang as a truncated template-id.
-    assert "-DFILL_WITH_VALUE=fill_with_val<1024, int32_t>" in entries[0]["arguments"], (
-        f"split define was not rejoined: {entries[0]['arguments']}"
-    )
+    assert (
+        "-DFILL_WITH_VALUE=fill_with_val<1024, int32_t>" in entries[0]["arguments"]
+    ), f"split define was not rejoined: {entries[0]['arguments']}"
     # A bare '<' must not let the rejoin swallow the rest of the command.
     kept = rejoin_split_defines(["-DCOND=a<b", "-DOTHER=1", "x.cc"])
     assert kept == ["-DCOND=a<b", "-DOTHER=1", "x.cc"], f"unbalanced define was over-merged: {kept}"
@@ -488,9 +488,9 @@ def self_test():
     for spelling in (["-I", "/opt/tenstorrent/sfpi/include"], ["-I/opt/tenstorrent/sfpi/include"]):
         got = transform([gxx, "-c", "-mcpu=tt-wh-tensix", *spelling, "-I/work/tt_metal", "x.cc"], "clang++")
         assert got is not None, f"transform rejected {spelling}"
-        assert "-isystem" in got and got[got.index("-isystem") + 1] == "/opt/tenstorrent/sfpi/include", (
-            f"SFPI include not demoted to -isystem for {spelling}: {got}"
-        )
+        assert (
+            "-isystem" in got and got[got.index("-isystem") + 1] == "/opt/tenstorrent/sfpi/include"
+        ), f"SFPI include not demoted to -isystem for {spelling}: {got}"
         assert "-I/opt/tenstorrent/sfpi/include" not in got, f"SFPI kept as -I for {spelling}"
         assert "-I/work/tt_metal" in got, "project includes must stay first-party"
 
