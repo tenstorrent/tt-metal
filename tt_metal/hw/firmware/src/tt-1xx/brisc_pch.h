@@ -29,11 +29,16 @@
 // Everything from kernel_includes.hpp onwards is also left out: that is the
 // generated per-kernel body and the conditional includes that follow it.
 //
+// <unistd.h> is absent from both this umbrella and the prelude: brisck.cc included it
+// without using any POSIX declaration, and it reached the PCH through here, costing six
+// newlib headers per build. Both copies went in one commit deliberately. Dropping it from
+// the umbrella alone would not remove that parse but relocate it into every BRISC compile,
+// since brisck.cc would still pull it in textually after the PCH boundary.
+//
 // Keep this in sync with the prelude in brisck.cc.
 
 #pragma once
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
