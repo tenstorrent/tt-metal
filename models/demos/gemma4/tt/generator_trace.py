@@ -56,6 +56,30 @@ GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 # nor OOMs a whole-length trace.
 GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
 
+# Above this max_seq_len the decode step must be fully serialized or the device
+# wedges partway through generation. Measured on 12B / T3K at 256k (prompt
+# ~262k), 30-token runs, each from a clean reset:
+#
+#   non-blocking + traced sampling ............ wedged at 7 tokens
+#   non-blocking + eager sampling ............. wedged at 18 tokens
+#   blocking + no pipeline + traced sampling .. wedged at 13 tokens
+#   blocking + no pipeline + eager sampling,
+#     per-token mesh sync OFF ................. wedged at 4 tokens
+#   blocking + no pipeline + eager sampling
+#     + per-token mesh sync ................... 30/30, 69.33 ms/tok
+#
+# The last two differ only in the sync, so the sync is load-bearing, not
+# incidental -- and blocking replay / pipelining-off alone are not enough.
+# 128k (prompt ~101k) needs none of this: it runs pipelined with only the
+# blocking replay, at 45.90 ms/tok. So the tier sits between the two. Eager
+# sampling is chosen when the model is built, hence a max_seq_len gate rather
+# than a position gate.
+#
+# The sync costs real throughput (69.33 vs the reference table's 55.33), but
+# every cheaper combination above wedges. Do not trade it away without a
+# 200-token run at 256k.
+GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN = int(os.environ.get("GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN", str(128 * 1024)))
+
 
 def _resolve_max_trace_batched_prefill_tokens() -> int:
     """Virtual-token ceiling above which batched prefill drops to eager.

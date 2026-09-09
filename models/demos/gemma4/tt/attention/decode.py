@@ -54,21 +54,26 @@ def _wh_paged_update_user_cap():
     [0-0, 7-3] does not leave room for both: compile fails outright with
     "circular buffers ... clash with L1 buffers" (12384 B over), and freeing
     enough L1 to make it compile (writing K and V one at a time) still wedges
-    the device ~120 decode tokens in. Eight users fit with margin, so batch>8
-    is written in groups of 8. Blackhole has the L1 headroom and is exempt.
+    the device ~120 decode tokens in.
+
+    16 fits, and fewer groups means fewer slices + cache writes per layer:
+    12B T3K batch-32 measured 51.2 ms/tok at 16 (3/3 x 200 tokens) versus
+    53.05 at 8. Exceeding the margin is a loud compile error, not silent
+    corruption, so drop to 8 via the env if a model's shard shape does not fit.
+    Blackhole has the L1 headroom and is exempt.
     """
-    return max(1, int(os.environ.get("GEMMA4_WH_PAGED_UPDATE_USERS", "8")))
+    return max(1, int(os.environ.get("GEMMA4_WH_PAGED_UPDATE_USERS", "16")))
 
 
 def _wh_user_groups(cache_pos, page_table, batch, cap):
     """Yield ``(start, end, cache_pos_slice, page_table_slice)`` per user group.
 
     NOTE (perf): ``cache_pos`` and ``page_table`` are the same two device tensors
-    for every layer of a decode step, so these slices are re-cut once per layer —
-    8 extra dispatches x num_layers per token at batch-32. Hoisting them to once
-    per step belongs in the model's decode entry, where the tensors are owned;
-    doing it here would need a cross-layer memo whose entries can outlive a trace
-    capture. Left per-call deliberately.
+    for every layer of a decode step, so these slices are re-cut once per layer --
+    ``2 * ceil(batch / cap)`` extra dispatches x num_layers per token. Hoisting
+    them to once per step belongs in the model's decode entry, where the tensors
+    are owned; doing it here would need a cross-layer memo whose entries can
+    outlive a trace capture. Left per-call deliberately.
     """
     pt_cols = page_table.shape[1]
     for start in range(0, batch, cap):
@@ -579,9 +584,9 @@ def _packed_verify_sdpa(
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2),
+            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2, scope="decode"),
             math_approx_mode=True,
-            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
+            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True, scope="decode"),
             packer_l1_acc=False,
         )
         if _num_dev == 1

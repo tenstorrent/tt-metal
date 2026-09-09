@@ -15,6 +15,7 @@ from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator_trace import (
     GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
+    GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
     maybe_disable_pli_prefill_trace,
@@ -1422,16 +1423,22 @@ class ChunkedPrefillPageTableGuardMixin:
                     pass
                 self._gemma4_commit_sampled_tokens_to_feedback(out)
                 wrote_feedback = True
-            # Default: skip host sync after eager sample. Single-CQ metal demos
-            # already order sample → next decode on the same queue; a full mesh
-            # sync every token was costing ~4–8 tok/s on LB 12B. Re-enable with
-            # GEMMA4_SAMPLE_FEEDBACK_SYNC=1 for multi-CQ / async races (#51186).
-            need_sync = wrote_feedback and os.environ.get("GEMMA4_SAMPLE_FEEDBACK_SYNC", "0").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
+            # Mesh-sync after an eager sample, by decode position.
+            #
+            # Below GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN: skip it. Single-CQ
+            # metal demos already order sample -> next decode on the same queue,
+            # and syncing every token cost ~4-8 tok/s on LB 12B (#51186).
+            # At or above it: required. 12B T3K 256k with the rest of the
+            # serialized tier in place but this sync off wedged 4 tokens in;
+            # with it, 30/30 at 69.33 ms/tok.
+            # GEMMA4_SAMPLE_FEEDBACK_SYNC=0/1 forces either way.
+            sync_env = os.environ.get("GEMMA4_SAMPLE_FEEDBACK_SYNC", "").strip().lower()
+            if sync_env in ("1", "true", "yes", "on"):
+                need_sync = wrote_feedback
+            elif sync_env in ("0", "false", "no", "off"):
+                need_sync = False
+            else:
+                need_sync = wrote_feedback and (_host_decode_pos_max(start_pos) >= GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN)
             if need_sync:
                 try:
                     mesh = getattr(self.model_args[0], "mesh_device", None)

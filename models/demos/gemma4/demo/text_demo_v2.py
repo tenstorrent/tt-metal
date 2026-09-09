@@ -61,6 +61,7 @@ from models.demos.gemma4.demo.sampling_utils import (
 from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN,
     maybe_auto_enable_chunked_prefill_trace,
     resolve_gemma4_demo_long_context,
 )
@@ -547,6 +548,19 @@ def test_demo_text(
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
+    # Top long-context tier: the decode step has to be fully serialized or the
+    # device wedges partway through generation (see
+    # GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN). Eager sampling is decided when the
+    # model is built, so set it here, before from_pretrained, and only as a
+    # default -- an explicit env still wins.
+    serialized_decode = max_seq_len > GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN
+    if serialized_decode:
+        os.environ.setdefault("GEMMA4_DISABLE_SAMPLING_TRACE", "1")
+        logger.info(
+            f"max_seq_len={max_seq_len} > {GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN}: "
+            "serializing decode (eager sampling + per-token mesh sync + no pipelined reads)"
+        )
+
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
         f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
@@ -686,6 +700,8 @@ def test_demo_text(
     # ceilings exist only for bisecting.
     _pipe_max_batch = int(os.environ.get("GEMMA4_DECODE_PIPELINE_MAX_BATCH", "0")) or None
     _pipe_max_isl = int(os.environ.get("GEMMA4_DECODE_PIPELINE_MAX_ISL", "0")) or None
+    if serialized_decode and _pipe_max_isl is None:
+        _pipe_max_isl = GEMMA4_SERIALIZED_DECODE_MIN_SEQ_LEN
     pipeline_reads = (
         device_sampling_params is not None
         and enable_trace
