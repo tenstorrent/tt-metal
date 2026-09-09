@@ -1142,11 +1142,8 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     straight. Negative *inputs* alone are harmless where the compare is a sign+magnitude
     order: for a non-negative threshold that ordering cannot change the outcome, because a
     negative input loses under either encoding. Only once the *threshold* is negative too
-    does the encoding of the two operands have to actually agree. That is the Wormhole
-    defect in #55643: the kernel hand-encodes the threshold to sign+magnitude for SFPSWAP
-    and now loads the input under the non-converting InstrModLoadStore::INT32, so both
-    operands reach the compare in that same form. It previously used INT32_2S_COMP, the
-    *converting* mode, which handed SFPSWAP a two's-complement input instead.
+    does the encoding of the two operands have to actually agree -- on Wormhole, that both
+    reach SFPSWAP in sign+magnitude.
 
     The two range ends are here for a second, independent failure mode, and they matter on
     Blackhole rather than Wormhole. That kernel compares in two's complement, and the SFPU
@@ -1192,34 +1189,6 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     _skip_coverage_unsupported(MathOperation.ReluMin)
 
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
-
-    # The negative half of this sweep was broken on both arches until tt-metal #55643, from
-    # the same root cause -- the compare was handed its two operands in different
-    # representations -- reached by opposite mistakes:
-    #
-    #   Wormhole  hand-encodes the threshold to sign+magnitude for SFPSWAP, correctly, but
-    #             loaded the input under InstrModLoadStore::INT32_2S_COMP, the mode that
-    #             *converts* DEST's sign+magnitude to two's complement. So SFPSWAP compared a
-    #             sign+magnitude threshold against a two's-complement input, the threshold won
-    #             every lane, and it was stored back un-converted (threshold -5 returned
-    #             0x80000005). The fix is INT32, the mode that leaves DEST's encoding alone.
-    #   Blackhole is plain sfpi with no instruction mode to get wrong, but read DEST as a bare
-    #             sfpi::dst_reg[0], which for vInt defaults to the non-converting
-    #             DataLayout::I32 -- so its two's-complement compare saw raw sign+magnitude
-    #             bits. It now reads through DataLayout::SM32, the converting layout there.
-    #
-    # Both name pairs are the opposite way round to the intuition, which is what the original
-    # code walked into; both fixes carry the note at the call site.
-    #
-    # Keep the non-negative thresholds next to the negative ones. They exercise the
-    # straight-through path where sign+magnitude and two's complement coincide -- which is
-    # exactly why this defect stayed invisible -- and if it ever regresses, the split between
-    # the two halves is what says whether the encoding or the instruction mode moved.
-    #
-    # No xfail marker: the Blackhole half was unverified when it was written (no Blackhole
-    # part on the development bench) and carried a non-strict xfail for CI to judge, which it
-    # has -- all four negative thresholds report XPASS on bh_p150b in the llk-smoke job of
-    # PR gate run 34261984343. Wormhole is verified on n150. Both arches now gate.
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
