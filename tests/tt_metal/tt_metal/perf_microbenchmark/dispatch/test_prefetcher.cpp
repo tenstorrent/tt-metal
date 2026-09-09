@@ -3020,7 +3020,7 @@ public:
         }
 
         device_data.overflow_check(this->device_);
-        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program), /*wait_until_cores_done=*/true);
+        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program));
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
         // DRAM-backed Quasar CQs need a staging-buffer readback before validation; host-backed queues are
