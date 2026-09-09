@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import time
 from collections import Counter
 from pathlib import Path
@@ -43,6 +45,20 @@ DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "ar_generator"
 MANIFEST = R.reference_dir() / "manifest.json"
 
 
+def _run_meta() -> dict:
+    """Provenance of a recorded entry: when, which commit, how busy the host was (perf entries are host-sensitive)."""
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=DOC_DIR, text=True).strip()
+    except Exception:  # pragma: no cover
+        commit = "unknown"
+    return {
+        "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "commit": commit,
+        "loadavg_1m": os.getloadavg()[0],
+        "log_hint": os.environ.get("MM3_RUN_LABEL", ""),
+    }
+
+
 def _record(name: str, **fields):
     if os.environ.get("TT_METAL_WATCHER") or os.environ.get("TT_METAL_DEVICE_PROFILER"):
         return
@@ -50,6 +66,7 @@ def _record(name: str, **fields):
     out.mkdir(parents=True, exist_ok=True)
     path = out / "results.json"
     results = json.loads(path.read_text()) if path.is_file() else {}
+    fields["_meta"] = _run_meta()
     results[name] = fields
     path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
 
@@ -150,6 +167,21 @@ def test_prompt_contract_edge_cases(prompt_encoder, expect_error):
     with expect_error(ValueError, "must be a non-empty string"):
         prompt_encoder.encode("pop", "   ")
     _record("prompt_edge_cases", tags_inline=True, markdown=True, max_prompt_tokens=MAX_PROMPT_TOKENS)
+
+
+def test_work_log_integrity():
+    """The committed work log has no template placeholders and every evidence file it links exists."""
+    readme = DOC_DIR / "README.md"
+    text = readme.read_text()
+    # A line consisting only of an UPPER_CASE token is a template placeholder (env vars etc. live inside prose/code).
+    assert not re.search(
+        r"^[A-Z][A-Z_]{5,}$|\bTODO\b|\bTBD\b", text, flags=re.MULTILINE
+    ), "placeholder left in the work log"
+    missing = []
+    for link in re.findall(r"\]\(((?:pcc|perf|\.\./)[^)#]+)\)", text):
+        if not (DOC_DIR / link).exists():
+            missing.append(link)
+    assert not missing, missing
 
 
 # ----------------------------------------------------------------------------- device
@@ -254,14 +286,17 @@ def test_free_running_generation(ar, manifest):
     warm = per_frame[5:]  # skip the first frames (first-frame host paths, caches)
     fps = len(warm) / sum(warm)
     total = t["llm_step"] + t["depth"] + t["host"]
-    frames_run = len(per_frame)
+    frames_run = len(per_frame)  # frame 0 + n emitted frames; the last emitted frame runs no decode step
+    llm_steps = t["llm_steps"]
+    assert llm_steps == frames_run - 1 == n, (llm_steps, frames_run, n)
     perf = {
         "frames": n,
         "prefill_s": t["prefill"],
         "frames_per_s_warm": fps,
         "ms_per_frame_warm": 1e3 / fps,
         "ms_per_frame_all": 1e3 * sum(per_frame) / frames_run,
-        "llm_step_ms": 1e3 * t["llm_step"] / frames_run,
+        "llm_steps": llm_steps,
+        "llm_step_ms": 1e3 * t["llm_step"] / llm_steps,
         "depth_loop_ms": 1e3 * t["depth"] / frames_run,
         "host_sampling_embed_ms": 1e3 * t["host"] / frames_run,
         "section_share": {k: t[k] / total for k in ("llm_step", "depth", "host")},

@@ -1,5 +1,11 @@
 {
   "end_token_short_lyric": {
+    "_meta": {
+      "commit": "02974adfdb6",
+      "loadavg_1m": 2.03515625,
+      "log_hint": "generated/gate04_final.log (idle host, CPU control SIGSTOPped)",
+      "recorded_at": "2026-09-09 19:14:21"
+    },
     "distinct_semantic_codes": 1331,
     "frames": 2782,
     "max_frames": 4500,
@@ -11,6 +17,12 @@
     "stopped_by": "end_token"
   },
   "free_running": {
+    "_meta": {
+      "commit": "02974adfdb6",
+      "loadavg_1m": 7.61279296875,
+      "log_hint": "generated/gate04_final.log (idle host, CPU control SIGSTOPped)",
+      "recorded_at": "2026-09-09 19:10:50"
+    },
     "deterministic_same_seed": true,
     "differs_other_seed": true,
     "distinct_semantic_codes": 33,
@@ -20,25 +32,26 @@
     ],
     "perf": {
       "decode_stats": {
-        "input_refreshes": 150,
-        "position_refreshes": 3,
+        "input_refreshes": 400,
+        "position_refreshes": 4,
         "trace_captures": 1,
-        "trace_replays": 150
+        "trace_replays": 400
       },
-      "depth_loop_ms": 33.50537978272483,
+      "depth_loop_ms": 33.26337047231694,
       "frames": 50,
-      "frames_per_s_warm": 13.259960518777676,
-      "host_sampling_embed_ms": 4.338919779733189,
-      "llm_step_ms": 37.5093037077664,
-      "ms_per_frame_all": 75.35408103528123,
-      "ms_per_frame_warm": 75.41500584288177,
-      "prefill_s": 0.137114551034756,
+      "frames_per_s_warm": 13.551267731468673,
+      "host_sampling_embed_ms": 3.6077171714757297,
+      "llm_step_ms": 37.763798902742565,
+      "llm_steps": 50,
+      "ms_per_frame_all": 73.89487782219315,
+      "ms_per_frame_warm": 73.79383389185101,
+      "prefill_s": 0.13280118198599666,
       "realtime_frames_per_s": 25.0,
-      "realtime_gap_x": 1.8853751460720443,
+      "realtime_gap_x": 1.8448458472962754,
       "section_share": {
-        "depth": 0.44464203871673785,
-        "host": 0.05758078700196265,
-        "llm_step": 0.4977771742812995
+        "depth": 0.45014725762390345,
+        "host": 0.048822592778865394,
+        "llm_step": 0.5010301495972311
       }
     },
     "seed7_codes_head": [
@@ -135,11 +148,23 @@
     ]
   },
   "prompt_edge_cases": {
+    "_meta": {
+      "commit": "02974adfdb6",
+      "loadavg_1m": 4.72509765625,
+      "log_hint": "",
+      "recorded_at": "2026-09-09 20:56:37"
+    },
     "markdown": true,
     "max_prompt_tokens": 5000,
     "tags_inline": true
   },
   "teacher_forced_golden": {
+    "_meta": {
+      "commit": "02974adfdb6",
+      "loadavg_1m": 8.205078125,
+      "log_hint": "generated/gate04_final.log (idle host, CPU control SIGSTOPped)",
+      "recorded_at": "2026-09-09 19:10:38"
+    },
     "backbone_part_min": 0.9917587261462499,
     "bar": 0.99,
     "decode_stats": {
@@ -408,14 +433,21 @@
       0.9995485503011778
     ],
     "timings": {
-      "depth": 7.911866765178274,
-      "host": 0.13360859389649704,
-      "llm_step": 9.655917793454137,
-      "prefill": 0.17301059799501672
+      "depth": 7.811418854456861,
+      "host": 0.09300229785731062,
+      "llm_step": 9.590405594499316,
+      "llm_steps": 250,
+      "prefill": 0.15956228598952293
     },
-    "wall_seconds": 17.88209423603257
+    "wall_seconds": 17.661496984015685
   },
   "text_ids": {
+    "_meta": {
+      "commit": "02974adfdb6",
+      "loadavg_1m": 4.72509765625,
+      "log_hint": "",
+      "recorded_at": "2026-09-09 20:56:37"
+    },
     "exact_match": true,
     "shape": [
       2,

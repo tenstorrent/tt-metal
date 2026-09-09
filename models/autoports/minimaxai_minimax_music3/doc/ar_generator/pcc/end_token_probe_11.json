@@ -1,0 +1,4758 @@
+{
+ "caption": "Genre: acoustic pop. BPM: 96. Key: C major. A short intimate vocal phrase over one guitar.",
+ "lyrics": "[verse]\nMorning light through the pine",
+ "seed": 11,
+ "max_frames": 9000,
+ "stopped_by": "end_token",
+ "frames": 945,
+ "wall_seconds": 109.25778943696059,
+ "distinct_semantic_codes": 458,
+ "most_common_semantic_code": [
+  15655,
+  0.031746031746031744
+ ],
+ "end_token_stats": [
+  {
+   "rank_conditional": 1753,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 6.703125
+  },
+  {
+   "rank_conditional": 1834,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.15625
+  },
+  {
+   "rank_conditional": 3635,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.75
+  },
+  {
+   "rank_conditional": 2118,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.5
+  },
+  {
+   "rank_conditional": 4723,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.25
+  },
+  {
+   "rank_conditional": 4749,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.03125
+  },
+  {
+   "rank_conditional": 5102,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.421875
+  },
+  {
+   "rank_conditional": 6070,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.98828125
+  },
+  {
+   "rank_conditional": 4469,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.234375
+  },
+  {
+   "rank_conditional": 2716,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.59375
+  },
+  {
+   "rank_conditional": 4359,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.328125
+  },
+  {
+   "rank_conditional": 2150,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 12.84375
+  },
+  {
+   "rank_conditional": 6116,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.126953125
+  },
+  {
+   "rank_conditional": 10657,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.515625
+  },
+  {
+   "rank_conditional": 11492,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.703125
+  },
+  {
+   "rank_conditional": 5175,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 13.7109375
+  },
+  {
+   "rank_conditional": 10398,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.625
+  },
+  {
+   "rank_conditional": 9975,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.359375
+  },
+  {
+   "rank_conditional": 10323,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.4140625
+  },
+  {
+   "rank_conditional": 6961,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.73046875
+  },
+  {
+   "rank_conditional": 9018,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.48828125
+  },
+  {
+   "rank_conditional": 5847,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.59375
+  },
+  {
+   "rank_conditional": 5592,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.25
+  },
+  {
+   "rank_conditional": 4559,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.28125
+  },
+  {
+   "rank_conditional": 4160,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.78125
+  },
+  {
+   "rank_conditional": 4983,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.4375
+  },
+  {
+   "rank_conditional": 7170,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.04296875
+  },
+  {
+   "rank_conditional": 9494,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.015625
+  },
+  {
+   "rank_conditional": 10067,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.21875
+  },
+  {
+   "rank_conditional": 8445,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.6953125
+  },
+  {
+   "rank_conditional": 7479,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.6923828125
+  },
+  {
+   "rank_conditional": 6524,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.1640625
+  },
+  {
+   "rank_conditional": 5005,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.703125
+  },
+  {
+   "rank_conditional": 2480,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.625
+  },
+  {
+   "rank_conditional": 8207,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.95703125
+  },
+  {
+   "rank_conditional": 7095,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.1474609375
+  },
+  {
+   "rank_conditional": 8167,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.12890625
+  },
+  {
+   "rank_conditional": 10643,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.328125
+  },
+  {
+   "rank_conditional": 4856,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.65625
+  },
+  {
+   "rank_conditional": 2050,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.125
+  },
+  {
+   "rank_conditional": 8156,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.0703125
+  },
+  {
+   "rank_conditional": 8512,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.1953125
+  },
+  {
+   "rank_conditional": 12568,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.90625
+  },
+  {
+   "rank_conditional": 11259,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.75
+  },
+  {
+   "rank_conditional": 11236,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.296875
+  },
+  {
+   "rank_conditional": 11756,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.8125
+  },
+  {
+   "rank_conditional": 12070,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.9375
+  },
+  {
+   "rank_conditional": 8746,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.27734375
+  },
+  {
+   "rank_conditional": 6752,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.94140625
+  },
+  {
+   "rank_conditional": 9187,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.0546875
+  },
+  {
+   "rank_conditional": 6016,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.85546875
+  },
+  {
+   "rank_conditional": 4562,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 13.8125
+  },
+  {
+   "rank_conditional": 4471,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.921875
+  },
+  {
+   "rank_conditional": 4665,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.1328125
+  },
+  {
+   "rank_conditional": 8078,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.390625
+  },
+  {
+   "rank_conditional": 10255,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.734375
+  },
+  {
+   "rank_conditional": 10203,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.921875
+  },
+  {
+   "rank_conditional": 9785,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.921875
+  },
+  {
+   "rank_conditional": 9884,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.59375
+  },
+  {
+   "rank_conditional": 8824,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.0
+  },
+  {
+   "rank_conditional": 7326,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.8017578125
+  },
+  {
+   "rank_conditional": 7793,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.7109375
+  },
+  {
+   "rank_conditional": 5098,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.046875
+  },
+  {
+   "rank_conditional": 9803,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.3125
+  },
+  {
+   "rank_conditional": 11915,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.453125
+  },
+  {
+   "rank_conditional": 5241,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.3828125
+  },
+  {
+   "rank_conditional": 4183,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.4375
+  },
+  {
+   "rank_conditional": 3673,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.8125
+  },
+  {
+   "rank_conditional": 7106,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.98046875
+  },
+  {
+   "rank_conditional": 6508,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.39013671875
+  },
+  {
+   "rank_conditional": 9336,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.125
+  },
+  {
+   "rank_conditional": 11191,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.71875
+  },
+  {
+   "rank_conditional": 4413,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.9375
+  },
+  {
+   "rank_conditional": 4274,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.9375
+  },
+  {
+   "rank_conditional": 3919,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.59375
+  },
+  {
+   "rank_conditional": 3270,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.96875
+  },
+  {
+   "rank_conditional": 2919,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.65625
+  },
+  {
+   "rank_conditional": 3866,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.890625
+  },
+  {
+   "rank_conditional": 3508,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.828125
+  },
+  {
+   "rank_conditional": 3031,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.34375
+  },
+  {
+   "rank_conditional": 1988,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.4375
+  },
+  {
+   "rank_conditional": 2744,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.96875
+  },
+  {
+   "rank_conditional": 2783,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.75
+  },
+  {
+   "rank_conditional": 7786,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.87890625
+  },
+  {
+   "rank_conditional": 7922,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.171875
+  },
+  {
+   "rank_conditional": 9308,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.8125
+  },
+  {
+   "rank_conditional": 8420,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.3125
+  },
+  {
+   "rank_conditional": 7882,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.359375
+  },
+  {
+   "rank_conditional": 8883,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.1484375
+  },
+  {
+   "rank_conditional": 6929,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.578125
+  },
+  {
+   "rank_conditional": 7574,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.285888671875
+  },
+  {
+   "rank_conditional": 7366,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.3037109375
+  },
+  {
+   "rank_conditional": 3622,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.53125
+  },
+  {
+   "rank_conditional": 5484,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.3359375
+  },
+  {
+   "rank_conditional": 9525,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.9765625
+  },
+  {
+   "rank_conditional": 5383,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.875
+  },
+  {
+   "rank_conditional": 5319,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.0
+  },
+  {
+   "rank_conditional": 5064,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.4375
+  },
+  {
+   "rank_conditional": 4970,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.0
+  },
+  {
+   "rank_conditional": 4362,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.375
+  },
+  {
+   "rank_conditional": 4088,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.078125
+  },
+  {
+   "rank_conditional": 5831,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.3828125
+  },
+  {
+   "rank_conditional": 6161,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.265625
+  },
+  {
+   "rank_conditional": 3817,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.421875
+  },
+  {
+   "rank_conditional": 3705,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.765625
+  },
+  {
+   "rank_conditional": 4616,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.203125
+  },
+  {
+   "rank_conditional": 4120,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.328125
+  },
+  {
+   "rank_conditional": 3537,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.515625
+  },
+  {
+   "rank_conditional": 4484,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.890625
+  },
+  {
+   "rank_conditional": 2876,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.375
+  },
+  {
+   "rank_conditional": 3517,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.25
+  },
+  {
+   "rank_conditional": 4766,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.8046875
+  },
+  {
+   "rank_conditional": 3134,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.515625
+  },
+  {
+   "rank_conditional": 5635,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.4375
+  },
+  {
+   "rank_conditional": 3663,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.53125
+  },
+  {
+   "rank_conditional": 2785,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.125
+  },
+  {
+   "rank_conditional": 2106,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.0625
+  },
+  {
+   "rank_conditional": 3507,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.21875
+  },
+  {
+   "rank_conditional": 4289,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.21875
+  },
+  {
+   "rank_conditional": 2621,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.125
+  },
+  {
+   "rank_conditional": 5730,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.7734375
+  },
+  {
+   "rank_conditional": 6126,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.2890625
+  },
+  {
+   "rank_conditional": 5249,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.484375
+  },
+  {
+   "rank_conditional": 2128,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.78125
+  },
+  {
+   "rank_conditional": 3417,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 13.078125
+  },
+  {
+   "rank_conditional": 4407,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.96875
+  },
+  {
+   "rank_conditional": 4185,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.984375
+  },
+  {
+   "rank_conditional": 3242,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.40625
+  },
+  {
+   "rank_conditional": 1864,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.5625
+  },
+  {
+   "rank_conditional": 1559,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.125
+  },
+  {
+   "rank_conditional": 2328,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.375
+  },
+  {
+   "rank_conditional": 1651,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.4375
+  },
+  {
+   "rank_conditional": 2398,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0
+  },
+  {
+   "rank_conditional": 1079,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.0
+  },
+  {
+   "rank_conditional": 1594,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.1875
+  },
+  {
+   "rank_conditional": 1104,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.375
+  },
+  {
+   "rank_conditional": 930,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0625
+  },
+  {
+   "rank_conditional": 878,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.125
+  },
+  {
+   "rank_conditional": 1702,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.1875
+  },
+  {
+   "rank_conditional": 1283,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.125
+  },
+  {
+   "rank_conditional": 1303,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.4375
+  },
+  {
+   "rank_conditional": 1792,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.9375
+  },
+  {
+   "rank_conditional": 2544,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.3125
+  },
+  {
+   "rank_conditional": 2764,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.8125
+  },
+  {
+   "rank_conditional": 2172,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.0625
+  },
+  {
+   "rank_conditional": 1632,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.5625
+  },
+  {
+   "rank_conditional": 1236,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.75
+  },
+  {
+   "rank_conditional": 1094,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.25
+  },
+  {
+   "rank_conditional": 1212,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.625
+  },
+  {
+   "rank_conditional": 2708,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.9375
+  },
+  {
+   "rank_conditional": 5864,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.3125
+  },
+  {
+   "rank_conditional": 3599,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.96875
+  },
+  {
+   "rank_conditional": 5436,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.890625
+  },
+  {
+   "rank_conditional": 3288,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.609375
+  },
+  {
+   "rank_conditional": 3182,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.875
+  },
+  {
+   "rank_conditional": 4756,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.484375
+  },
+  {
+   "rank_conditional": 5217,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.1875
+  },
+  {
+   "rank_conditional": 5084,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.765625
+  },
+  {
+   "rank_conditional": 3923,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.4375
+  },
+  {
+   "rank_conditional": 5901,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.2265625
+  },
+  {
+   "rank_conditional": 4372,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.09375
+  },
+  {
+   "rank_conditional": 5525,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.1015625
+  },
+  {
+   "rank_conditional": 3649,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.921875
+  },
+  {
+   "rank_conditional": 3829,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.8125
+  },
+  {
+   "rank_conditional": 2962,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.65625
+  },
+  {
+   "rank_conditional": 3619,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.125
+  },
+  {
+   "rank_conditional": 2495,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.625
+  },
+  {
+   "rank_conditional": 1889,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.9375
+  },
+  {
+   "rank_conditional": 3090,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.625
+  },
+  {
+   "rank_conditional": 3213,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.15625
+  },
+  {
+   "rank_conditional": 3100,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.3125
+  },
+  {
+   "rank_conditional": 3184,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.0
+  },
+  {
+   "rank_conditional": 2351,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 12.40625
+  },
+  {
+   "rank_conditional": 1447,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.90625
+  },
+  {
+   "rank_conditional": 2514,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.0625
+  },
+  {
+   "rank_conditional": 2314,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.34375
+  },
+  {
+   "rank_conditional": 3538,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.96875
+  },
+  {
+   "rank_conditional": 2864,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.5625
+  },
+  {
+   "rank_conditional": 2210,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.59375
+  },
+  {
+   "rank_conditional": 2011,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.0
+  },
+  {
+   "rank_conditional": 2391,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.15625
+  },
+  {
+   "rank_conditional": 1661,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.90625
+  },
+  {
+   "rank_conditional": 4939,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.46875
+  },
+  {
+   "rank_conditional": 9554,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.2109375
+  },
+  {
+   "rank_conditional": 11290,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.3125
+  },
+  {
+   "rank_conditional": 8480,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.798828125
+  },
+  {
+   "rank_conditional": 5672,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.9765625
+  },
+  {
+   "rank_conditional": 6180,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.4375
+  },
+  {
+   "rank_conditional": 10230,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.1875
+  },
+  {
+   "rank_conditional": 11368,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.078125
+  },
+  {
+   "rank_conditional": 9384,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.515625
+  },
+  {
+   "rank_conditional": 7932,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.517578125
+  },
+  {
+   "rank_conditional": 5301,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.4296875
+  },
+  {
+   "rank_conditional": 4275,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.234375
+  },
+  {
+   "rank_conditional": 3357,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.59375
+  },
+  {
+   "rank_conditional": 2573,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.21875
+  },
+  {
+   "rank_conditional": 5236,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.421875
+  },
+  {
+   "rank_conditional": 7746,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.86328125
+  },
+  {
+   "rank_conditional": 8430,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.5234375
+  },
+  {
+   "rank_conditional": 7944,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.19921875
+  },
+  {
+   "rank_conditional": 4035,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.53125
+  },
+  {
+   "rank_conditional": 1998,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.625
+  },
+  {
+   "rank_conditional": 4571,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.09375
+  },
+  {
+   "rank_conditional": 6025,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.796875
+  },
+  {
+   "rank_conditional": 2871,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.4375
+  },
+  {
+   "rank_conditional": 4911,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.40625
+  },
+  {
+   "rank_conditional": 3921,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.640625
+  },
+  {
+   "rank_conditional": 4708,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.703125
+  },
+  {
+   "rank_conditional": 4715,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.1875
+  },
+  {
+   "rank_conditional": 2833,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.09375
+  },
+  {
+   "rank_conditional": 3934,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.03125
+  },
+  {
+   "rank_conditional": 5714,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.609375
+  },
+  {
+   "rank_conditional": 5069,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.5625
+  },
+  {
+   "rank_conditional": 5996,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.828125
+  },
+  {
+   "rank_conditional": 2996,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.875
+  },
+  {
+   "rank_conditional": 5780,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.296875
+  },
+  {
+   "rank_conditional": 4966,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.6640625
+  },
+  {
+   "rank_conditional": 4295,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.71875
+  },
+  {
+   "rank_conditional": 3811,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.5
+  },
+  {
+   "rank_conditional": 3393,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.8125
+  },
+  {
+   "rank_conditional": 4444,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.90625
+  },
+  {
+   "rank_conditional": 5087,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.515625
+  },
+  {
+   "rank_conditional": 2874,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.71875
+  },
+  {
+   "rank_conditional": 4506,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.65625
+  },
+  {
+   "rank_conditional": 4524,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.734375
+  },
+  {
+   "rank_conditional": 6739,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.3203125
+  },
+  {
+   "rank_conditional": 6135,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.2265625
+  },
+  {
+   "rank_conditional": 6307,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.5625
+  },
+  {
+   "rank_conditional": 6030,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.25
+  },
+  {
+   "rank_conditional": 4292,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.046875
+  },
+  {
+   "rank_conditional": 5806,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.1640625
+  },
+  {
+   "rank_conditional": 7410,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.65283203125
+  },
+  {
+   "rank_conditional": 3792,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.40625
+  },
+  {
+   "rank_conditional": 4333,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.140625
+  },
+  {
+   "rank_conditional": 4753,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.0
+  },
+  {
+   "rank_conditional": 2875,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.8125
+  },
+  {
+   "rank_conditional": 3138,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.78125
+  },
+  {
+   "rank_conditional": 6088,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.5
+  },
+  {
+   "rank_conditional": 4724,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.25
+  },
+  {
+   "rank_conditional": 4604,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.109375
+  },
+  {
+   "rank_conditional": 5874,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.125
+  },
+  {
+   "rank_conditional": 8175,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.9375
+  },
+  {
+   "rank_conditional": 8174,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.25
+  },
+  {
+   "rank_conditional": 7010,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 13.91796875
+  },
+  {
+   "rank_conditional": 9144,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.96484375
+  },
+  {
+   "rank_conditional": 4106,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.5625
+  },
+  {
+   "rank_conditional": 4179,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.796875
+  },
+  {
+   "rank_conditional": 4861,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.28125
+  },
+  {
+   "rank_conditional": 7112,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.8642578125
+  },
+  {
+   "rank_conditional": 4155,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.796875
+  },
+  {
+   "rank_conditional": 4872,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.09375
+  },
+  {
+   "rank_conditional": 6748,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.6328125
+  },
+  {
+   "rank_conditional": 5914,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.546875
+  },
+  {
+   "rank_conditional": 5252,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.03125
+  },
+  {
+   "rank_conditional": 6651,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.38671875
+  },
+  {
+   "rank_conditional": 5221,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.765625
+  },
+  {
+   "rank_conditional": 6480,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.5546875
+  },
+  {
+   "rank_conditional": 6543,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.0
+  },
+  {
+   "rank_conditional": 3996,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.34375
+  },
+  {
+   "rank_conditional": 4917,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.46875
+  },
+  {
+   "rank_conditional": 6382,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.296875
+  },
+  {
+   "rank_conditional": 5305,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.21875
+  },
+  {
+   "rank_conditional": 6861,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.0078125
+  },
+  {
+   "rank_conditional": 6133,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.8125
+  },
+  {
+   "rank_conditional": 4160,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.59375
+  },
+  {
+   "rank_conditional": 2816,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.53125
+  },
+  {
+   "rank_conditional": 3117,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.03125
+  },
+  {
+   "rank_conditional": 5315,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.1875
+  },
+  {
+   "rank_conditional": 10209,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.125
+  },
+  {
+   "rank_conditional": 9465,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.2890625
+  },
+  {
+   "rank_conditional": 7203,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.296875
+  },
+  {
+   "rank_conditional": 5727,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.6015625
+  },
+  {
+   "rank_conditional": 6565,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.78125
+  },
+  {
+   "rank_conditional": 3979,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.15625
+  },
+  {
+   "rank_conditional": 4174,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.15625
+  },
+  {
+   "rank_conditional": 2944,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.75
+  },
+  {
+   "rank_conditional": 2991,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.15625
+  },
+  {
+   "rank_conditional": 2486,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.71875
+  },
+  {
+   "rank_conditional": 2543,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.4375
+  },
+  {
+   "rank_conditional": 2408,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.25
+  },
+  {
+   "rank_conditional": 3641,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.71875
+  },
+  {
+   "rank_conditional": 6294,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.7890625
+  },
+  {
+   "rank_conditional": 6613,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.453125
+  },
+  {
+   "rank_conditional": 15227,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.59375
+  },
+  {
+   "rank_conditional": 5912,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.8203125
+  },
+  {
+   "rank_conditional": 5419,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.3515625
+  },
+  {
+   "rank_conditional": 8519,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.92578125
+  },
+  {
+   "rank_conditional": 10416,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.40625
+  },
+  {
+   "rank_conditional": 10298,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.78125
+  },
+  {
+   "rank_conditional": 7314,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.0966796875
+  },
+  {
+   "rank_conditional": 1796,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.5625
+  },
+  {
+   "rank_conditional": 2752,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.0
+  },
+  {
+   "rank_conditional": 8594,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.15625
+  },
+  {
+   "rank_conditional": 3331,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.09375
+  },
+  {
+   "rank_conditional": 2985,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.71875
+  },
+  {
+   "rank_conditional": 3562,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.40625
+  },
+  {
+   "rank_conditional": 3671,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.71875
+  },
+  {
+   "rank_conditional": 5156,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.8359375
+  },
+  {
+   "rank_conditional": 5623,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.9609375
+  },
+  {
+   "rank_conditional": 5321,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.6875
+  },
+  {
+   "rank_conditional": 7446,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.171875
+  },
+  {
+   "rank_conditional": 6878,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.33203125
+  },
+  {
+   "rank_conditional": 7111,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.078125
+  },
+  {
+   "rank_conditional": 5059,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.25
+  },
+  {
+   "rank_conditional": 4426,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.609375
+  },
+  {
+   "rank_conditional": 4173,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.8125
+  },
+  {
+   "rank_conditional": 6127,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.3515625
+  },
+  {
+   "rank_conditional": 5320,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.1875
+  },
+  {
+   "rank_conditional": 6079,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.5625
+  },
+  {
+   "rank_conditional": 8408,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.90625
+  },
+  {
+   "rank_conditional": 8529,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.89453125
+  },
+  {
+   "rank_conditional": 6352,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.3515625
+  },
+  {
+   "rank_conditional": 7378,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.74066162109375
+  },
+  {
+   "rank_conditional": 5061,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.546875
+  },
+  {
+   "rank_conditional": 4707,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.953125
+  },
+  {
+   "rank_conditional": 8651,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.09375
+  },
+  {
+   "rank_conditional": 7233,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.61328125
+  },
+  {
+   "rank_conditional": 8153,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.166015625
+  },
+  {
+   "rank_conditional": 5671,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.90625
+  },
+  {
+   "rank_conditional": 4017,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.90625
+  },
+  {
+   "rank_conditional": 3854,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.90625
+  },
+  {
+   "rank_conditional": 3065,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.84375
+  },
+  {
+   "rank_conditional": 5734,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.2890625
+  },
+  {
+   "rank_conditional": 7874,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.8203125
+  },
+  {
+   "rank_conditional": 9774,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.140625
+  },
+  {
+   "rank_conditional": 4919,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.140625
+  },
+  {
+   "rank_conditional": 6737,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.30078125
+  },
+  {
+   "rank_conditional": 7795,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.08203125
+  },
+  {
+   "rank_conditional": 9419,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 39.140625
+  },
+  {
+   "rank_conditional": 10765,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 37.453125
+  },
+  {
+   "rank_conditional": 10933,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.375
+  },
+  {
+   "rank_conditional": 9313,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.4453125
+  },
+  {
+   "rank_conditional": 6621,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.1328125
+  },
+  {
+   "rank_conditional": 5015,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.71875
+  },
+  {
+   "rank_conditional": 5503,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.140625
+  },
+  {
+   "rank_conditional": 5895,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.96875
+  },
+  {
+   "rank_conditional": 4758,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.375
+  },
+  {
+   "rank_conditional": 5432,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.59375
+  },
+  {
+   "rank_conditional": 5344,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.6328125
+  },
+  {
+   "rank_conditional": 5018,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.84375
+  },
+  {
+   "rank_conditional": 3886,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.703125
+  },
+  {
+   "rank_conditional": 6321,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.7578125
+  },
+  {
+   "rank_conditional": 8009,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.48828125
+  },
+  {
+   "rank_conditional": 9960,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.6875
+  },
+  {
+   "rank_conditional": 7889,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.9375
+  },
+  {
+   "rank_conditional": 8943,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.28125
+  },
+  {
+   "rank_conditional": 6599,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.7265625
+  },
+  {
+   "rank_conditional": 8601,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.04296875
+  },
+  {
+   "rank_conditional": 7713,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.228515625
+  },
+  {
+   "rank_conditional": 4404,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.28125
+  },
+  {
+   "rank_conditional": 5104,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.5390625
+  },
+  {
+   "rank_conditional": 6160,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.35546875
+  },
+  {
+   "rank_conditional": 7863,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.6171875
+  },
+  {
+   "rank_conditional": 7584,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.04296875
+  },
+  {
+   "rank_conditional": 5420,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.15625
+  },
+  {
+   "rank_conditional": 6719,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.359375
+  },
+  {
+   "rank_conditional": 7114,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.26171875
+  },
+  {
+   "rank_conditional": 9953,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.7109375
+  },
+  {
+   "rank_conditional": 9233,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.953125
+  },
+  {
+   "rank_conditional": 9833,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.2265625
+  },
+  {
+   "rank_conditional": 9737,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.4921875
+  },
+  {
+   "rank_conditional": 9254,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.8046875
+  },
+  {
+   "rank_conditional": 8049,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.955078125
+  },
+  {
+   "rank_conditional": 7072,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.638671875
+  },
+  {
+   "rank_conditional": 5146,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.296875
+  },
+  {
+   "rank_conditional": 3935,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.21875
+  },
+  {
+   "rank_conditional": 8827,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.0234375
+  },
+  {
+   "rank_conditional": 5418,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.3125
+  },
+  {
+   "rank_conditional": 5746,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.296875
+  },
+  {
+   "rank_conditional": 9278,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.921875
+  },
+  {
+   "rank_conditional": 8074,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.50836181640625
+  },
+  {
+   "rank_conditional": 7328,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 37.265625
+  },
+  {
+   "rank_conditional": 6909,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.4609375
+  },
+  {
+   "rank_conditional": 6468,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.3515625
+  },
+  {
+   "rank_conditional": 6287,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 36.359375
+  },
+  {
+   "rank_conditional": 4866,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.59375
+  },
+  {
+   "rank_conditional": 5261,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.28125
+  },
+  {
+   "rank_conditional": 3618,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.125
+  },
+  {
+   "rank_conditional": 3644,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.875
+  },
+  {
+   "rank_conditional": 9945,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.03125
+  },
+  {
+   "rank_conditional": 7125,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.16455078125
+  },
+  {
+   "rank_conditional": 7362,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.4365234375
+  },
+  {
+   "rank_conditional": 6964,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.17578125
+  },
+  {
+   "rank_conditional": 8101,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.90625
+  },
+  {
+   "rank_conditional": 12405,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 39.34375
+  },
+  {
+   "rank_conditional": 10964,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 38.453125
+  },
+  {
+   "rank_conditional": 11275,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.234375
+  },
+  {
+   "rank_conditional": 10344,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.03125
+  },
+  {
+   "rank_conditional": 10992,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.0625
+  },
+  {
+   "rank_conditional": 8514,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.875
+  },
+  {
+   "rank_conditional": 5690,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.765625
+  },
+  {
+   "rank_conditional": 4249,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.84375
+  },
+  {
+   "rank_conditional": 5071,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.0
+  },
+  {
+   "rank_conditional": 3994,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.796875
+  },
+  {
+   "rank_conditional": 5704,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.4375
+  },
+  {
+   "rank_conditional": 5384,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.4453125
+  },
+  {
+   "rank_conditional": 3148,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.75
+  },
+  {
+   "rank_conditional": 4278,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0
+  },
+  {
+   "rank_conditional": 3544,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.9375
+  },
+  {
+   "rank_conditional": 2935,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.46875
+  },
+  {
+   "rank_conditional": 2690,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.5625
+  },
+  {
+   "rank_conditional": 1434,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.65625
+  },
+  {
+   "rank_conditional": 1042,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.4375
+  },
+  {
+   "rank_conditional": 2451,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.46875
+  },
+  {
+   "rank_conditional": 7575,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.80078125
+  },
+  {
+   "rank_conditional": 8382,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.671875
+  },
+  {
+   "rank_conditional": 7596,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.96484375
+  },
+  {
+   "rank_conditional": 4773,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.125
+  },
+  {
+   "rank_conditional": 5349,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.734375
+  },
+  {
+   "rank_conditional": 3466,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.578125
+  },
+  {
+   "rank_conditional": 4050,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.734375
+  },
+  {
+   "rank_conditional": 2591,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.40625
+  },
+  {
+   "rank_conditional": 3646,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.234375
+  },
+  {
+   "rank_conditional": 5622,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.03125
+  },
+  {
+   "rank_conditional": 5158,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.71875
+  },
+  {
+   "rank_conditional": 6079,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.05859375
+  },
+  {
+   "rank_conditional": 7531,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.26953125
+  },
+  {
+   "rank_conditional": 8011,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.1484375
+  },
+  {
+   "rank_conditional": 5863,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.86328125
+  },
+  {
+   "rank_conditional": 8470,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.125
+  },
+  {
+   "rank_conditional": 6114,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.9140625
+  },
+  {
+   "rank_conditional": 5696,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.6875
+  },
+  {
+   "rank_conditional": 6652,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.05859375
+  },
+  {
+   "rank_conditional": 5307,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.3984375
+  },
+  {
+   "rank_conditional": 5945,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.0390625
+  },
+  {
+   "rank_conditional": 3483,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.5
+  },
+  {
+   "rank_conditional": 6237,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.765625
+  },
+  {
+   "rank_conditional": 4318,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.3125
+  },
+  {
+   "rank_conditional": 5004,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.890625
+  },
+  {
+   "rank_conditional": 4812,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.5625
+  },
+  {
+   "rank_conditional": 3810,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.15625
+  },
+  {
+   "rank_conditional": 3153,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.625
+  },
+  {
+   "rank_conditional": 7358,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.2890625
+  },
+  {
+   "rank_conditional": 5498,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.8515625
+  },
+  {
+   "rank_conditional": 2937,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.0625
+  },
+  {
+   "rank_conditional": 2630,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.46875
+  },
+  {
+   "rank_conditional": 2428,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.71875
+  },
+  {
+   "rank_conditional": 4771,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.3046875
+  },
+  {
+   "rank_conditional": 5616,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.0234375
+  },
+  {
+   "rank_conditional": 3478,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.53125
+  },
+  {
+   "rank_conditional": 3815,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.40625
+  },
+  {
+   "rank_conditional": 4553,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.203125
+  },
+  {
+   "rank_conditional": 3495,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.15625
+  },
+  {
+   "rank_conditional": 4326,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.625
+  },
+  {
+   "rank_conditional": 4753,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.0625
+  },
+  {
+   "rank_conditional": 3754,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.1875
+  },
+  {
+   "rank_conditional": 4040,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.234375
+  },
+  {
+   "rank_conditional": 6713,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.96484375
+  },
+  {
+   "rank_conditional": 8613,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.99609375
+  },
+  {
+   "rank_conditional": 6493,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.328125
+  },
+  {
+   "rank_conditional": 5579,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.140625
+  },
+  {
+   "rank_conditional": 4861,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.890625
+  },
+  {
+   "rank_conditional": 4157,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.84375
+  },
+  {
+   "rank_conditional": 3829,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.484375
+  },
+  {
+   "rank_conditional": 2905,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.1875
+  },
+  {
+   "rank_conditional": 6908,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.505859375
+  },
+  {
+   "rank_conditional": 6946,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.62109375
+  },
+  {
+   "rank_conditional": 5781,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.015625
+  },
+  {
+   "rank_conditional": 4953,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.25
+  },
+  {
+   "rank_conditional": 5309,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.296875
+  },
+  {
+   "rank_conditional": 4359,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.71875
+  },
+  {
+   "rank_conditional": 4024,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.1875
+  },
+  {
+   "rank_conditional": 4334,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.5625
+  },
+  {
+   "rank_conditional": 4240,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.25
+  },
+  {
+   "rank_conditional": 3613,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.8125
+  },
+  {
+   "rank_conditional": 3494,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.25
+  },
+  {
+   "rank_conditional": 5668,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.3359375
+  },
+  {
+   "rank_conditional": 3985,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.1875
+  },
+  {
+   "rank_conditional": 3345,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.03125
+  },
+  {
+   "rank_conditional": 3097,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.84375
+  },
+  {
+   "rank_conditional": 3243,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.4375
+  },
+  {
+   "rank_conditional": 2806,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.0
+  },
+  {
+   "rank_conditional": 2307,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.125
+  },
+  {
+   "rank_conditional": 3008,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.34375
+  },
+  {
+   "rank_conditional": 3256,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.5625
+  },
+  {
+   "rank_conditional": 2809,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.53125
+  },
+  {
+   "rank_conditional": 880,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.125
+  },
+  {
+   "rank_conditional": 2037,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.34375
+  },
+  {
+   "rank_conditional": 2724,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.71875
+  },
+  {
+   "rank_conditional": 2140,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 13.46875
+  },
+  {
+   "rank_conditional": 1658,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.40625
+  },
+  {
+   "rank_conditional": 2965,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.09375
+  },
+  {
+   "rank_conditional": 5800,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.2578125
+  },
+  {
+   "rank_conditional": 4512,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.078125
+  },
+  {
+   "rank_conditional": 2991,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.96875
+  },
+  {
+   "rank_conditional": 4591,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.359375
+  },
+  {
+   "rank_conditional": 6046,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.484375
+  },
+  {
+   "rank_conditional": 2381,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.875
+  },
+  {
+   "rank_conditional": 7797,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.8330078125
+  },
+  {
+   "rank_conditional": 7198,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.78271484375
+  },
+  {
+   "rank_conditional": 6139,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.9921875
+  },
+  {
+   "rank_conditional": 4037,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.8125
+  },
+  {
+   "rank_conditional": 1655,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.75
+  },
+  {
+   "rank_conditional": 1607,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.0625
+  },
+  {
+   "rank_conditional": 3596,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.109375
+  },
+  {
+   "rank_conditional": 1855,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.5625
+  },
+  {
+   "rank_conditional": 2320,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.46875
+  },
+  {
+   "rank_conditional": 3265,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.625
+  },
+  {
+   "rank_conditional": 2407,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.9375
+  },
+  {
+   "rank_conditional": 1967,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.1875
+  },
+  {
+   "rank_conditional": 2155,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.0
+  },
+  {
+   "rank_conditional": 2736,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.5625
+  },
+  {
+   "rank_conditional": 2614,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.1875
+  },
+  {
+   "rank_conditional": 6245,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.1015625
+  },
+  {
+   "rank_conditional": 7294,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.759765625
+  },
+  {
+   "rank_conditional": 5621,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.1328125
+  },
+  {
+   "rank_conditional": 2574,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.1875
+  },
+  {
+   "rank_conditional": 2113,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 12.65625
+  },
+  {
+   "rank_conditional": 1849,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 9.875
+  },
+  {
+   "rank_conditional": 2500,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.5
+  },
+  {
+   "rank_conditional": 3252,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.78125
+  },
+  {
+   "rank_conditional": 4537,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.40625
+  },
+  {
+   "rank_conditional": 3508,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.78125
+  },
+  {
+   "rank_conditional": 3993,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.90625
+  },
+  {
+   "rank_conditional": 3380,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.375
+  },
+  {
+   "rank_conditional": 2199,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.96875
+  },
+  {
+   "rank_conditional": 2357,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.53125
+  },
+  {
+   "rank_conditional": 1928,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.8125
+  },
+  {
+   "rank_conditional": 2873,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.5625
+  },
+  {
+   "rank_conditional": 3332,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.25
+  },
+  {
+   "rank_conditional": 4268,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.53125
+  },
+  {
+   "rank_conditional": 4857,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.46875
+  },
+  {
+   "rank_conditional": 8188,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.1875
+  },
+  {
+   "rank_conditional": 3449,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.09375
+  },
+  {
+   "rank_conditional": 2483,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.03125
+  },
+  {
+   "rank_conditional": 3150,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.09375
+  },
+  {
+   "rank_conditional": 2945,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.25
+  },
+  {
+   "rank_conditional": 3335,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.3125
+  },
+  {
+   "rank_conditional": 3075,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.375
+  },
+  {
+   "rank_conditional": 4457,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.8125
+  },
+  {
+   "rank_conditional": 4900,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.140625
+  },
+  {
+   "rank_conditional": 3184,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.1875
+  },
+  {
+   "rank_conditional": 3205,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.09375
+  },
+  {
+   "rank_conditional": 4567,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.515625
+  },
+  {
+   "rank_conditional": 1993,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.0625
+  },
+  {
+   "rank_conditional": 613,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.6875
+  },
+  {
+   "rank_conditional": 1712,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.59375
+  },
+  {
+   "rank_conditional": 3343,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.9375
+  },
+  {
+   "rank_conditional": 1842,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.375
+  },
+  {
+   "rank_conditional": 1749,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.5
+  },
+  {
+   "rank_conditional": 1886,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.125
+  },
+  {
+   "rank_conditional": 5195,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.5234375
+  },
+  {
+   "rank_conditional": 1274,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.25
+  },
+  {
+   "rank_conditional": 3102,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.96875
+  },
+  {
+   "rank_conditional": 3321,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.65625
+  },
+  {
+   "rank_conditional": 4983,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.8125
+  },
+  {
+   "rank_conditional": 5463,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.671875
+  },
+  {
+   "rank_conditional": 5792,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.765625
+  },
+  {
+   "rank_conditional": 5997,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.890625
+  },
+  {
+   "rank_conditional": 6090,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.1796875
+  },
+  {
+   "rank_conditional": 5363,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.703125
+  },
+  {
+   "rank_conditional": 2332,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.875
+  },
+  {
+   "rank_conditional": 4340,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.21875
+  },
+  {
+   "rank_conditional": 5158,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.890625
+  },
+  {
+   "rank_conditional": 3752,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.90625
+  },
+  {
+   "rank_conditional": 3829,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.4375
+  },
+  {
+   "rank_conditional": 4977,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.265625
+  },
+  {
+   "rank_conditional": 3035,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.90625
+  },
+  {
+   "rank_conditional": 5150,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.890625
+  },
+  {
+   "rank_conditional": 6398,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.15625
+  },
+  {
+   "rank_conditional": 7487,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.435546875
+  },
+  {
+   "rank_conditional": 8450,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.1640625
+  },
+  {
+   "rank_conditional": 8027,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.53125
+  },
+  {
+   "rank_conditional": 9309,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.6328125
+  },
+  {
+   "rank_conditional": 6019,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.3984375
+  },
+  {
+   "rank_conditional": 5124,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.2578125
+  },
+  {
+   "rank_conditional": 6639,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.30859375
+  },
+  {
+   "rank_conditional": 7870,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.1923828125
+  },
+  {
+   "rank_conditional": 9278,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.484375
+  },
+  {
+   "rank_conditional": 7544,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.302734375
+  },
+  {
+   "rank_conditional": 7813,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.4169921875
+  },
+  {
+   "rank_conditional": 7785,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.373046875
+  },
+  {
+   "rank_conditional": 8877,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.81640625
+  },
+  {
+   "rank_conditional": 5948,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.9453125
+  },
+  {
+   "rank_conditional": 4845,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.328125
+  },
+  {
+   "rank_conditional": 4486,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.96875
+  },
+  {
+   "rank_conditional": 6959,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.6796875
+  },
+  {
+   "rank_conditional": 7058,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.8828125
+  },
+  {
+   "rank_conditional": 8109,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.6904296875
+  },
+  {
+   "rank_conditional": 3754,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.9375
+  },
+  {
+   "rank_conditional": 5324,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.53125
+  },
+  {
+   "rank_conditional": 5077,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.59375
+  },
+  {
+   "rank_conditional": 3821,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.4375
+  },
+  {
+   "rank_conditional": 3386,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.125
+  },
+  {
+   "rank_conditional": 3465,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.03125
+  },
+  {
+   "rank_conditional": 5170,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.46875
+  },
+  {
+   "rank_conditional": 5180,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.828125
+  },
+  {
+   "rank_conditional": 3708,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.40625
+  },
+  {
+   "rank_conditional": 4852,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0
+  },
+  {
+   "rank_conditional": 4621,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.5625
+  },
+  {
+   "rank_conditional": 3948,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.0
+  },
+  {
+   "rank_conditional": 4463,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.28125
+  },
+  {
+   "rank_conditional": 4012,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.71875
+  },
+  {
+   "rank_conditional": 4339,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.09375
+  },
+  {
+   "rank_conditional": 5504,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.0625
+  },
+  {
+   "rank_conditional": 3603,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.8125
+  },
+  {
+   "rank_conditional": 3770,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.9375
+  },
+  {
+   "rank_conditional": 3845,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.125
+  },
+  {
+   "rank_conditional": 3545,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.34375
+  },
+  {
+   "rank_conditional": 3454,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.8125
+  },
+  {
+   "rank_conditional": 4777,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.796875
+  },
+  {
+   "rank_conditional": 3067,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.125
+  },
+  {
+   "rank_conditional": 3103,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.5
+  },
+  {
+   "rank_conditional": 3096,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.40625
+  },
+  {
+   "rank_conditional": 2316,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.09375
+  },
+  {
+   "rank_conditional": 2537,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.53125
+  },
+  {
+   "rank_conditional": 2873,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.28125
+  },
+  {
+   "rank_conditional": 2996,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.8125
+  },
+  {
+   "rank_conditional": 2082,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.125
+  },
+  {
+   "rank_conditional": 2739,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.4375
+  },
+  {
+   "rank_conditional": 1608,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.8125
+  },
+  {
+   "rank_conditional": 1906,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.0
+  },
+  {
+   "rank_conditional": 1689,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 11.1875
+  },
+  {
+   "rank_conditional": 4051,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 11.25
+  },
+  {
+   "rank_conditional": 3963,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.390625
+  },
+  {
+   "rank_conditional": 3609,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.375
+  },
+  {
+   "rank_conditional": 5519,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.9140625
+  },
+  {
+   "rank_conditional": 7371,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.396484375
+  },
+  {
+   "rank_conditional": 4729,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.59375
+  },
+  {
+   "rank_conditional": 3639,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.9375
+  },
+  {
+   "rank_conditional": 3839,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.65625
+  },
+  {
+   "rank_conditional": 4253,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.109375
+  },
+  {
+   "rank_conditional": 4138,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.125
+  },
+  {
+   "rank_conditional": 4711,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.796875
+  },
+  {
+   "rank_conditional": 3802,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.46875
+  },
+  {
+   "rank_conditional": 1957,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.5625
+  },
+  {
+   "rank_conditional": 2174,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.34375
+  },
+  {
+   "rank_conditional": 2978,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.390625
+  },
+  {
+   "rank_conditional": 3666,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.109375
+  },
+  {
+   "rank_conditional": 3705,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.78125
+  },
+  {
+   "rank_conditional": 4186,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.71875
+  },
+  {
+   "rank_conditional": 4433,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.96875
+  },
+  {
+   "rank_conditional": 4828,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.5625
+  },
+  {
+   "rank_conditional": 3461,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.125
+  },
+  {
+   "rank_conditional": 4236,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.125
+  },
+  {
+   "rank_conditional": 4923,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.25
+  },
+  {
+   "rank_conditional": 3644,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.5625
+  },
+  {
+   "rank_conditional": 5160,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.34375
+  },
+  {
+   "rank_conditional": 6722,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.5859375
+  },
+  {
+   "rank_conditional": 6080,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.3984375
+  },
+  {
+   "rank_conditional": 5970,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.078125
+  },
+  {
+   "rank_conditional": 5806,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.3671875
+  },
+  {
+   "rank_conditional": 5069,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.984375
+  },
+  {
+   "rank_conditional": 3759,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0625
+  },
+  {
+   "rank_conditional": 5639,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.8125
+  },
+  {
+   "rank_conditional": 6020,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.078125
+  },
+  {
+   "rank_conditional": 6149,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.59375
+  },
+  {
+   "rank_conditional": 6870,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.54296875
+  },
+  {
+   "rank_conditional": 9093,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.65625
+  },
+  {
+   "rank_conditional": 7350,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.853515625
+  },
+  {
+   "rank_conditional": 6712,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.90625
+  },
+  {
+   "rank_conditional": 8081,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.236328125
+  },
+  {
+   "rank_conditional": 8083,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.62109375
+  },
+  {
+   "rank_conditional": 8131,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.41015625
+  },
+  {
+   "rank_conditional": 10380,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.59375
+  },
+  {
+   "rank_conditional": 11051,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.390625
+  },
+  {
+   "rank_conditional": 6120,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.9609375
+  },
+  {
+   "rank_conditional": 3388,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.8125
+  },
+  {
+   "rank_conditional": 3571,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.84375
+  },
+  {
+   "rank_conditional": 3871,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.21875
+  },
+  {
+   "rank_conditional": 6075,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.78125
+  },
+  {
+   "rank_conditional": 8029,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.97998046875
+  },
+  {
+   "rank_conditional": 9567,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.640625
+  },
+  {
+   "rank_conditional": 8793,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.8203125
+  },
+  {
+   "rank_conditional": 4367,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.59375
+  },
+  {
+   "rank_conditional": 3821,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.65625
+  },
+  {
+   "rank_conditional": 5634,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.625
+  },
+  {
+   "rank_conditional": 6151,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.84375
+  },
+  {
+   "rank_conditional": 6156,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.671875
+  },
+  {
+   "rank_conditional": 6873,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.1953125
+  },
+  {
+   "rank_conditional": 5738,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.671875
+  },
+  {
+   "rank_conditional": 5169,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.765625
+  },
+  {
+   "rank_conditional": 4726,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.03125
+  },
+  {
+   "rank_conditional": 5176,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.578125
+  },
+  {
+   "rank_conditional": 6204,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 37.765625
+  },
+  {
+   "rank_conditional": 7166,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 38.0546875
+  },
+  {
+   "rank_conditional": 6763,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.2890625
+  },
+  {
+   "rank_conditional": 7330,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.0625
+  },
+  {
+   "rank_conditional": 6923,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.78125
+  },
+  {
+   "rank_conditional": 5476,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.515625
+  },
+  {
+   "rank_conditional": 5761,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.40625
+  },
+  {
+   "rank_conditional": 4284,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.96875
+  },
+  {
+   "rank_conditional": 4068,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.8125
+  },
+  {
+   "rank_conditional": 7108,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.1328125
+  },
+  {
+   "rank_conditional": 6299,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.40625
+  },
+  {
+   "rank_conditional": 5272,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.765625
+  },
+  {
+   "rank_conditional": 4744,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.40625
+  },
+  {
+   "rank_conditional": 4703,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.4375
+  },
+  {
+   "rank_conditional": 4723,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.5625
+  },
+  {
+   "rank_conditional": 4856,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.78125
+  },
+  {
+   "rank_conditional": 5673,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.546875
+  },
+  {
+   "rank_conditional": 5843,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.53125
+  },
+  {
+   "rank_conditional": 4046,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.53125
+  },
+  {
+   "rank_conditional": 4553,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.46875
+  },
+  {
+   "rank_conditional": 4790,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.0
+  },
+  {
+   "rank_conditional": 2956,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.75
+  },
+  {
+   "rank_conditional": 3884,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.125
+  },
+  {
+   "rank_conditional": 4814,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.75
+  },
+  {
+   "rank_conditional": 4387,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.09375
+  },
+  {
+   "rank_conditional": 4156,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.5625
+  },
+  {
+   "rank_conditional": 4471,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.40625
+  },
+  {
+   "rank_conditional": 5484,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.4375
+  },
+  {
+   "rank_conditional": 4312,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.40625
+  },
+  {
+   "rank_conditional": 3576,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.15625
+  },
+  {
+   "rank_conditional": 3908,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.65625
+  },
+  {
+   "rank_conditional": 4111,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.40625
+  },
+  {
+   "rank_conditional": 4869,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.765625
+  },
+  {
+   "rank_conditional": 5029,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.875
+  },
+  {
+   "rank_conditional": 4241,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.625
+  },
+  {
+   "rank_conditional": 3936,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.6875
+  },
+  {
+   "rank_conditional": 3427,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.21875
+  },
+  {
+   "rank_conditional": 4101,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.5
+  },
+  {
+   "rank_conditional": 3541,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.4375
+  },
+  {
+   "rank_conditional": 3422,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.0625
+  },
+  {
+   "rank_conditional": 3476,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.875
+  },
+  {
+   "rank_conditional": 3089,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.0
+  },
+  {
+   "rank_conditional": 3218,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.25
+  },
+  {
+   "rank_conditional": 2924,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.0625
+  },
+  {
+   "rank_conditional": 3378,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.8125
+  },
+  {
+   "rank_conditional": 3335,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.625
+  },
+  {
+   "rank_conditional": 3528,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.46875
+  },
+  {
+   "rank_conditional": 3233,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.875
+  },
+  {
+   "rank_conditional": 3547,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.09375
+  },
+  {
+   "rank_conditional": 2966,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.875
+  },
+  {
+   "rank_conditional": 2284,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.8125
+  },
+  {
+   "rank_conditional": 2441,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.0
+  },
+  {
+   "rank_conditional": 2313,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.625
+  },
+  {
+   "rank_conditional": 2239,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.625
+  },
+  {
+   "rank_conditional": 1895,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.875
+  },
+  {
+   "rank_conditional": 2356,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.1875
+  },
+  {
+   "rank_conditional": 2027,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.875
+  },
+  {
+   "rank_conditional": 1803,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.5
+  },
+  {
+   "rank_conditional": 1882,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.1875
+  },
+  {
+   "rank_conditional": 1703,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.8125
+  },
+  {
+   "rank_conditional": 1613,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.4375
+  },
+  {
+   "rank_conditional": 1472,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.5
+  },
+  {
+   "rank_conditional": 1618,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.6875
+  },
+  {
+   "rank_conditional": 1609,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.4375
+  },
+  {
+   "rank_conditional": 1463,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.5625
+  },
+  {
+   "rank_conditional": 1322,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.875
+  },
+  {
+   "rank_conditional": 1692,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 36.5
+  },
+  {
+   "rank_conditional": 1747,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.5625
+  },
+  {
+   "rank_conditional": 1631,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.1875
+  },
+  {
+   "rank_conditional": 1524,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 33.75
+  },
+  {
+   "rank_conditional": 2297,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.0
+  },
+  {
+   "rank_conditional": 1613,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.625
+  },
+  {
+   "rank_conditional": 1230,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.4375
+  },
+  {
+   "rank_conditional": 1233,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.6875
+  },
+  {
+   "rank_conditional": 2630,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.78125
+  },
+  {
+   "rank_conditional": 1827,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 10.1875
+  },
+  {
+   "rank_conditional": 756,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 8.75
+  },
+  {
+   "rank_conditional": 1440,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 10.78125
+  },
+  {
+   "rank_conditional": 2383,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 11.03125
+  },
+  {
+   "rank_conditional": 1803,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.65625
+  },
+  {
+   "rank_conditional": 2212,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.65625
+  },
+  {
+   "rank_conditional": 3381,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.5
+  },
+  {
+   "rank_conditional": 5347,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.859375
+  },
+  {
+   "rank_conditional": 4715,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.3125
+  },
+  {
+   "rank_conditional": 5891,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.375
+  },
+  {
+   "rank_conditional": 7237,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.09765625
+  },
+  {
+   "rank_conditional": 6796,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.875
+  },
+  {
+   "rank_conditional": 6842,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.34375
+  },
+  {
+   "rank_conditional": 7059,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.703125
+  },
+  {
+   "rank_conditional": 5911,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.65625
+  },
+  {
+   "rank_conditional": 5051,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.3125
+  },
+  {
+   "rank_conditional": 4833,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.15625
+  },
+  {
+   "rank_conditional": 5745,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.21875
+  },
+  {
+   "rank_conditional": 4258,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.28125
+  },
+  {
+   "rank_conditional": 3890,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.65625
+  },
+  {
+   "rank_conditional": 3158,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.8125
+  },
+  {
+   "rank_conditional": 3121,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.625
+  },
+  {
+   "rank_conditional": 2900,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.625
+  },
+  {
+   "rank_conditional": 3272,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.875
+  },
+  {
+   "rank_conditional": 2848,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.6875
+  },
+  {
+   "rank_conditional": 2667,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.4375
+  },
+  {
+   "rank_conditional": 2564,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.0
+  },
+  {
+   "rank_conditional": 2910,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.15625
+  },
+  {
+   "rank_conditional": 4685,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.765625
+  },
+  {
+   "rank_conditional": 5204,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.21875
+  },
+  {
+   "rank_conditional": 5122,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.78125
+  },
+  {
+   "rank_conditional": 7455,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.7314453125
+  },
+  {
+   "rank_conditional": 6252,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.57421875
+  },
+  {
+   "rank_conditional": 5134,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.140625
+  },
+  {
+   "rank_conditional": 5175,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.125
+  },
+  {
+   "rank_conditional": 4951,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 37.859375
+  },
+  {
+   "rank_conditional": 7040,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 38.140625
+  },
+  {
+   "rank_conditional": 5912,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 37.0
+  },
+  {
+   "rank_conditional": 5975,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.734375
+  },
+  {
+   "rank_conditional": 6190,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.59375
+  },
+  {
+   "rank_conditional": 7018,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.515625
+  },
+  {
+   "rank_conditional": 7186,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.953125
+  },
+  {
+   "rank_conditional": 5825,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.625
+  },
+  {
+   "rank_conditional": 4675,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.125
+  },
+  {
+   "rank_conditional": 4758,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.6875
+  },
+  {
+   "rank_conditional": 4866,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.46875
+  },
+  {
+   "rank_conditional": 4467,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.28125
+  },
+  {
+   "rank_conditional": 3492,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.28125
+  },
+  {
+   "rank_conditional": 2941,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.1875
+  },
+  {
+   "rank_conditional": 2683,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.625
+  },
+  {
+   "rank_conditional": 2629,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.75
+  },
+  {
+   "rank_conditional": 2829,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.0
+  },
+  {
+   "rank_conditional": 2722,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.1875
+  },
+  {
+   "rank_conditional": 2706,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.625
+  },
+  {
+   "rank_conditional": 2826,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.25
+  },
+  {
+   "rank_conditional": 2516,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.5
+  },
+  {
+   "rank_conditional": 2620,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 37.125
+  },
+  {
+   "rank_conditional": 3254,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 36.125
+  },
+  {
+   "rank_conditional": 6645,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.8359375
+  },
+  {
+   "rank_conditional": 8459,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.15625
+  },
+  {
+   "rank_conditional": 7422,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.353515625
+  },
+  {
+   "rank_conditional": 3958,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.625
+  },
+  {
+   "rank_conditional": 3893,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.40625
+  },
+  {
+   "rank_conditional": 3924,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 36.75
+  },
+  {
+   "rank_conditional": 5568,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 39.796875
+  },
+  {
+   "rank_conditional": 5455,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.25
+  },
+  {
+   "rank_conditional": 5145,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 35.109375
+  },
+  {
+   "rank_conditional": 5355,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 36.796875
+  },
+  {
+   "rank_conditional": 5064,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.0625
+  },
+  {
+   "rank_conditional": 6568,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 34.046875
+  },
+  {
+   "rank_conditional": 5209,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.59375
+  },
+  {
+   "rank_conditional": 4010,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.6875
+  },
+  {
+   "rank_conditional": 3806,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0
+  },
+  {
+   "rank_conditional": 8313,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.671875
+  },
+  {
+   "rank_conditional": 5026,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.515625
+  },
+  {
+   "rank_conditional": 1470,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 12.09375
+  },
+  {
+   "rank_conditional": 2235,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.21875
+  },
+  {
+   "rank_conditional": 3681,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.3125
+  },
+  {
+   "rank_conditional": 4798,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.328125
+  },
+  {
+   "rank_conditional": 5846,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.0859375
+  },
+  {
+   "rank_conditional": 5194,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.59375
+  },
+  {
+   "rank_conditional": 5488,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.09375
+  },
+  {
+   "rank_conditional": 5379,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 21.53125
+  },
+  {
+   "rank_conditional": 6706,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.390625
+  },
+  {
+   "rank_conditional": 7878,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.6328125
+  },
+  {
+   "rank_conditional": 10895,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.828125
+  },
+  {
+   "rank_conditional": 9391,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 32.0625
+  },
+  {
+   "rank_conditional": 8093,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.1328125
+  },
+  {
+   "rank_conditional": 10418,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.40625
+  },
+  {
+   "rank_conditional": 7904,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.3671875
+  },
+  {
+   "rank_conditional": 3735,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.828125
+  },
+  {
+   "rank_conditional": 2837,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.5625
+  },
+  {
+   "rank_conditional": 3337,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.875
+  },
+  {
+   "rank_conditional": 2688,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0625
+  },
+  {
+   "rank_conditional": 4159,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.15625
+  },
+  {
+   "rank_conditional": 3801,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.390625
+  },
+  {
+   "rank_conditional": 5088,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.375
+  },
+  {
+   "rank_conditional": 4621,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.703125
+  },
+  {
+   "rank_conditional": 8061,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.0078125
+  },
+  {
+   "rank_conditional": 8739,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.6171875
+  },
+  {
+   "rank_conditional": 7773,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.010986328125
+  },
+  {
+   "rank_conditional": 4150,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.0625
+  },
+  {
+   "rank_conditional": 2721,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.96875
+  },
+  {
+   "rank_conditional": 2646,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.3125
+  },
+  {
+   "rank_conditional": 4265,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.15625
+  },
+  {
+   "rank_conditional": 4405,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.625
+  },
+  {
+   "rank_conditional": 3924,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.3125
+  },
+  {
+   "rank_conditional": 6231,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.21875
+  },
+  {
+   "rank_conditional": 7115,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.9140625
+  },
+  {
+   "rank_conditional": 9209,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.59375
+  },
+  {
+   "rank_conditional": 9349,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.8515625
+  },
+  {
+   "rank_conditional": 6611,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.51171875
+  },
+  {
+   "rank_conditional": 4458,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.640625
+  },
+  {
+   "rank_conditional": 3303,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.78125
+  },
+  {
+   "rank_conditional": 2261,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.5625
+  },
+  {
+   "rank_conditional": 1755,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.3125
+  },
+  {
+   "rank_conditional": 1599,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 13.90625
+  },
+  {
+   "rank_conditional": 5661,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.796875
+  },
+  {
+   "rank_conditional": 6732,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.537109375
+  },
+  {
+   "rank_conditional": 4381,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 19.375
+  },
+  {
+   "rank_conditional": 3027,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.96875
+  },
+  {
+   "rank_conditional": 3395,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.28125
+  },
+  {
+   "rank_conditional": 3552,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.84375
+  },
+  {
+   "rank_conditional": 3725,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.5
+  },
+  {
+   "rank_conditional": 3769,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.78125
+  },
+  {
+   "rank_conditional": 4042,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 17.953125
+  },
+  {
+   "rank_conditional": 3574,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 18.6875
+  },
+  {
+   "rank_conditional": 3574,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.65625
+  },
+  {
+   "rank_conditional": 5763,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.8125
+  },
+  {
+   "rank_conditional": 5938,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.765625
+  },
+  {
+   "rank_conditional": 6447,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.734375
+  },
+  {
+   "rank_conditional": 6443,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0625
+  },
+  {
+   "rank_conditional": 6080,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.9609375
+  },
+  {
+   "rank_conditional": 5465,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.265625
+  },
+  {
+   "rank_conditional": 4995,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.40625
+  },
+  {
+   "rank_conditional": 5682,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.734375
+  },
+  {
+   "rank_conditional": 6759,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.8828125
+  },
+  {
+   "rank_conditional": 7947,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.123184204101562
+  },
+  {
+   "rank_conditional": 6867,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.125
+  },
+  {
+   "rank_conditional": 5728,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.609375
+  },
+  {
+   "rank_conditional": 6654,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.5390625
+  },
+  {
+   "rank_conditional": 6387,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.765625
+  },
+  {
+   "rank_conditional": 6199,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.078125
+  },
+  {
+   "rank_conditional": 6120,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.75
+  },
+  {
+   "rank_conditional": 6654,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.140625
+  },
+  {
+   "rank_conditional": 6355,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.671875
+  },
+  {
+   "rank_conditional": 6115,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.96875
+  },
+  {
+   "rank_conditional": 6259,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.90625
+  },
+  {
+   "rank_conditional": 5751,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.28125
+  },
+  {
+   "rank_conditional": 5230,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.65625
+  },
+  {
+   "rank_conditional": 5026,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.125
+  },
+  {
+   "rank_conditional": 5025,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 30.28125
+  },
+  {
+   "rank_conditional": 6061,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.015625
+  },
+  {
+   "rank_conditional": 5884,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 31.703125
+  },
+  {
+   "rank_conditional": 5060,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.65625
+  },
+  {
+   "rank_conditional": 5510,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.921875
+  },
+  {
+   "rank_conditional": 5148,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.65625
+  },
+  {
+   "rank_conditional": 5184,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.0
+  },
+  {
+   "rank_conditional": 4905,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.140625
+  },
+  {
+   "rank_conditional": 4357,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 27.25
+  },
+  {
+   "rank_conditional": 3311,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.03125
+  },
+  {
+   "rank_conditional": 2697,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.34375
+  },
+  {
+   "rank_conditional": 1779,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.0625
+  },
+  {
+   "rank_conditional": 1908,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.0
+  },
+  {
+   "rank_conditional": 2318,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 29.5
+  },
+  {
+   "rank_conditional": 1929,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.125
+  },
+  {
+   "rank_conditional": 3149,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 28.25
+  },
+  {
+   "rank_conditional": 2620,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.40625
+  },
+  {
+   "rank_conditional": 2531,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.6875
+  },
+  {
+   "rank_conditional": 1552,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.25
+  },
+  {
+   "rank_conditional": 1670,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.8125
+  },
+  {
+   "rank_conditional": 1661,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.875
+  },
+  {
+   "rank_conditional": 1226,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.5625
+  },
+  {
+   "rank_conditional": 1159,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.625
+  },
+  {
+   "rank_conditional": 937,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.375
+  },
+  {
+   "rank_conditional": 768,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 20.75
+  },
+  {
+   "rank_conditional": 1102,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.625
+  },
+  {
+   "rank_conditional": 1297,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 25.1875
+  },
+  {
+   "rank_conditional": 963,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.875
+  },
+  {
+   "rank_conditional": 1027,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.3125
+  },
+  {
+   "rank_conditional": 833,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.625
+  },
+  {
+   "rank_conditional": 1303,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 26.5625
+  },
+  {
+   "rank_conditional": 932,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.3125
+  },
+  {
+   "rank_conditional": 793,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 22.375
+  },
+  {
+   "rank_conditional": 707,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.125
+  },
+  {
+   "rank_conditional": 866,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.25
+  },
+  {
+   "rank_conditional": 756,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.875
+  },
+  {
+   "rank_conditional": 535,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 24.125
+  },
+  {
+   "rank_conditional": 424,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.125
+  },
+  {
+   "rank_conditional": 258,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.875
+  },
+  {
+   "rank_conditional": 201,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 23.125
+  },
+  {
+   "rank_conditional": 128,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.0
+  },
+  {
+   "rank_conditional": 118,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 15.375
+  },
+  {
+   "rank_conditional": 153,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.75
+  },
+  {
+   "rank_conditional": 83,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 14.25
+  },
+  {
+   "rank_conditional": 81,
+   "prob_sampling": 0.0,
+   "logit_gap_conditional": 16.375
+  },
+  {
+   "rank_conditional": 17,
+   "prob_sampling": 9.477840649196878e-06,
+   "logit_gap_conditional": 10.875
+  },
+  {
+   "rank_conditional": 0,
+   "prob_sampling": 0.9999899864196777,
+   "logit_gap_conditional": 0.0
+  }
+ ],
+ "timings": {
+  "prefill": 0.1966499330010265,
+  "llm_step": 41.64273530978244,
+  "llm_steps": 946,
+  "depth": 39.57020389882382,
+  "host": 27.788018339837436
+ }
+}

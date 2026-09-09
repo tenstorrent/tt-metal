@@ -196,7 +196,10 @@ class ARGenerator:
         pos = torch.full((self.batch,), position, dtype=torch.int64)
         if self.window is not None:
             return self.llm.decode_windowed(feedback, pos)
-        # Fallback without a device-side window: full-vocabulary read-back, sliced on the host.
+        # Fallback without a device-side window: full-vocabulary read-back, sliced on the host. (In windowed
+        # mode the full tiled logits output of the backbone trace is never read: it is allocated inside the
+        # backbone capture, after the depth traces exist, so a depth replay may overwrite it - only the hidden
+        # (copied into the depth seed buffer first) and the window (read back first) are consumed.)
         hidden_dev, logits_dev = self.llm.decode(feedback, pos, read_back=False)
         h = ttnn.to_torch(hidden_dev).float()[0, 0, : self.batch, :LLM_HIDDEN]
         l = ttnn.to_torch(logits_dev).float()[0, 0, : self.batch, WINDOW_START:WINDOW_END]
@@ -275,7 +278,7 @@ class ARGenerator:
             assert teacher_codes.dim() == 2 and teacher_codes.shape[1] == NUM_CODEBOOKS, tuple(teacher_codes.shape)
             max_frames = min(max_frames, teacher_codes.shape[0])
         generator = torch.Generator().manual_seed(int(seed))
-        timings = {"prefill": 0.0, "llm_step": 0.0, "depth": 0.0, "host": 0.0, "per_frame": []}
+        timings = {"prefill": 0.0, "llm_step": 0.0, "llm_steps": 0, "depth": 0.0, "host": 0.0, "per_frame": []}
 
         t0 = time.perf_counter()
         self.llm.reset_cache()
@@ -338,6 +341,7 @@ class ARGenerator:
             hidden_seed, last_hidden, window_logits = self._decode(feedback, position)
             tl = time.perf_counter()
             timings["llm_step"] += tl - tfb
+            timings["llm_steps"] += 1
             timings["per_frame"].append(tl - tf)
 
         if not frame_hiddens:

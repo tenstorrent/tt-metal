@@ -8,13 +8,15 @@ Work log for the AR stage of MiniMax-Music3 on one Blackhole chip: diffusers' `M
 * changes to earlier stages: [`../../tt/llm.py`](../../tt/llm.py) gained `MusicLLM(logits_window=...)` /
   `set_logits_window`, `prepare_decode_inputs`, `decode_windowed` (the stage-02 API and tests are unchanged;
   `DepthDecoder` / `DepthStepTrace` are used as delivered by stage 03)
-* tests: [`../../tests/test_ar_generator.py`](../../tests/test_ar_generator.py) (gate, 5 tests, ~6 min on device incl. the 3-min end-token run)
+* tests: [`../../tests/test_ar_generator.py`](../../tests/test_ar_generator.py) (gate, 6 tests, ~4.5 min on device incl. the 2782-frame end-token run)
 * scripts: [`../../scripts/end_token_probe.py`](../../scripts/end_token_probe.py) (device: long free run with
   end-token statistics), [`../../scripts/end_token_control_cpu.py`](../../scripts/end_token_control_cpu.py)
   (fp32 CPU reference control of the same run, diffusers venv)
 * measured numbers: [`pcc/results.json`](pcc/results.json) (written by the gate tests),
-  [`pcc/end_token_probe_7.json`](pcc/end_token_probe_7.json), [`pcc/end_token_control_cpu_7.json`](pcc/end_token_control_cpu_7.json)
-* local-only (gitignored): `generated/ar_full.log`, `generated/gate04.log`, `generated/end_token_*.log`
+  [`pcc/end_token_probe_<seed>.json`](pcc/end_token_probe_7.json) (device, seeds 5/7/11/13/23/42),
+  [`pcc/end_token_control_cpu_<seed>.json`](pcc/end_token_control_cpu_7.json) (fp32 CPU reference, seeds 5/7/11/23)
+* local-only (gitignored): `generated/ar_full.log`, `generated/gate04.log`, `generated/gate04_final.log`,
+  `generated/ar_*_clean.log`, `generated/end_token_*.log`
 
 Hardware: one chip of the P300x2 host (`TT_METAL_VISIBLE_DEVICES=0`, board id `000004613193411b`, reported as
 P150, `tt-smi -s`), 1x1 mesh, trace region 90 MB. Software: ttnn from `~/tt-metal` at `e946955cc15`
@@ -52,7 +54,7 @@ reference's.
 | `_generate_depth_codes`: projection of `last_hidden` and `embed(sem + offset)`, 7 steps, per-step CFG 1.5 + top-50, `code.repeat(2)`, `hidden[:1]` collected | `DepthStepTrace.begin_frame(hidden_device_tensor, sem_embed)` then 7 `step()` replays; per step the host reads the `[2, 1024]` head logits and the `[1, 4096]` row-0 hidden |
 | `frame_hiddens.append(cat(last_hidden[:1], depth_hidden))` | same, fp32 on host |
 | `_embed_audio_frame` feedback | host `reference/hf_llm.embed_audio_frame` (bf16 exactly as HF: `embed + residual_sum` in bf16, then `* 8**-0.5`), written into the persistent decode input |
-| `max_frames = min(duration * 25, 9000)` | `max_frames` is the argument, capped at 9000; additionally stops with `"context"` if `L + frame_index` would reach 10240 |
+| `max_frames = min(duration * 25, 9000)` | `max_frames` is the argument, capped at 9000; additionally stops with `"context"` if `L + frame_index` would reach 10240 (a 5000-token prompt can therefore emit at most ~5239 frames; the reference has no such cap but the checkpoint advertises 10240 positions and the KV cache is sized for them - hand-off note) |
 
 Per frame the device allocates nothing. Allocation / capture order in `ARGenerator.__init__`: `MusicLLM.prepare_decode_inputs()`
 (persistent decode input / position / RoPE-index tensors), then `DepthStepTrace(depth)` (its persistent buffers and
@@ -66,7 +68,15 @@ refreshes, 1 position refresh (after the prefill), 0 trace re-captures.
 
 ## Evidence
 
-All numbers below come from `pcc/results.json` written by the gate run on 2026-09-09 (commands in "How to run").
+All numbers below come from `pcc/results.json`; every entry carries a `_meta` block (timestamp, commit, 1-minute
+host load average) naming the run that wrote it. History that matters for reading the logs: the first
+full-file run (`generated/ar_full.log`, idle host, 1500-frame end-token cap, failed only that test) measured
+13.7 frames/s; the first gate run (`generated/gate04.log`, 18:30-18:36, passed) ran while the fp32 CPU control
+occupied 10 cores and measured 9.3 frames/s; the perf and teacher-forced timings were then re-recorded from
+single-test reruns on an idle host (`generated/ar_free_running_clean.log`, `generated/ar_teacher_forced_clean.log`,
+control process SIGSTOPped); the final `results.json` is from the final gate run `generated/gate04_final.log` on an idle host
+(the second control process SIGSTOPped for its duration; `_meta.log_hint` / timestamps 19:10-19:14). PCC values and code sequences are identical across all runs
+(deterministic device execution); only host-wall timings differ.
 
 ### Prompt contract (host only)
 
@@ -91,7 +101,7 @@ contain it - see decisions). The returned `codes` / `frame0_codes` equal the inp
 | per-frame depth part (cols 4096..32767): min | 0.99647 | (diagnostic) |
 | golden semantic code = argmax of the device's guided distribution | 42.6 % of the 251 frames | (diagnostic) |
 | golden semantic code inside the device conditional row's top-50 | 99.2 % (249 / 251) | (diagnostic) |
-| wall for 250 frames (idle host) | 17.9 s (prefill 0.17 s, LLM steps 9.7 s, depth 7.9 s, host 0.1 s) | — |
+| wall for 250 frames (idle host) | 17.7 s (prefill 0.16 s, LLM steps 9.6 s, depth 7.8 s, host 0.1 s) | — |
 
 Per-frame PCC curve (every 25th frame; the full 250-entry list is `per_frame_pcc` in `results.json`):
 
@@ -103,6 +113,14 @@ Per-frame PCC curve (every 25th frame; the full 250-entry list is `per_frame_pcc
 No drift over the 250 positions (104..354): the curve is flat within 0.995-0.9997. The 42.6 % top-1 agreement
 is the expected kind of value for a top-50 *sampled* golden (the golden code is itself a draw, not the argmax); the
 99.2 % in-top-50 rate is the number that matters for the CFG restriction, matching stage 02's `golden_code_rank_check`.
+Its complement is a real property of the port, not a defect: 2 of the 251 golden semantic codes lie outside the
+device conditional row's top-50, so with device logits those two golden frames could never have been sampled -
+free-running device generation is a different sample path from the fp32 reference (as any bf16 run would be),
+and teacher forcing is the only way to compare hidden states frame by frame.
+
+Feedback-embedding dtype: the host `embed_audio_frame` sums the eight bf16 table rows in bf16 and then scales,
+exactly like HF does for a bf16 model; the golden was an fp32 run, so this rounding is part of the 0.9994 (it is
+the same choice stage 02 validated against HF bf16).
 
 ### Free-running generation (`test_free_running_generation`, 50 frames, golden prompt)
 
@@ -118,18 +136,19 @@ is the expected kind of value for a top-50 *sampled* golden (the golden code is 
 
 | section | ms / frame | share |
 |---|---|---|
-| backbone step (`decode_windowed`: 256 KB input write, trace replay, 256 KB + 1 MB read-backs) | 37.5 | 50 % |
-| depth loop (seed replay + 7 step replays + 7 x (458 KB + 256 KB) read-backs) | 33.5 | 44 % |
-| host (CFG + top-50 sampling over 200k, 7 x top-50 over 1024, feedback embedding, bookkeeping) | 4.3 | 6 % |
-| **total** | **75.4 ms / frame = 13.3 frames/s** | |
-| prefill of the 104-token golden prompt (both rows) | 137 ms | |
+| backbone step (`decode_windowed`: 256 KB input write, trace replay, 256 KB + 1 MB read-backs) | 37.8 | 50 % |
+| depth loop (seed replay + 7 step replays + 7 x (458 KB + 256 KB) read-backs) | 33.3 | 45 % |
+| host (CFG + top-50 sampling over 200k, 7 x top-50 over 1024, feedback embedding, bookkeeping) | 3.6 | 5 % |
+| **total** | **73.8 ms / frame = 13.6 frames/s** | |
+| prefill of the 104-token golden prompt (both rows) | 133 ms | |
 
-Realtime is 25 frames/s (40 ms / frame): the loop is **1.9x slower than realtime** (a 10 s clip's 250 frames
+Realtime is 25 frames/s (40 ms / frame): the loop is **1.8x slower than realtime** (a 10 s clip's 250 frames
 take about 19 s of AR time; the whole golden CPU fp32 pipeline run - AR + DiT + vocoder - took 1076 s, `manifest.json`). Both device sections match their
 stage-02 / stage-03 measurements (traced backbone step 37.1 ms incl. positions on device; depth frame 31.1 ms
 traced), i.e. the generator adds 3-4 ms of host work per frame and nothing else. The first full-file run
-(`generated/ar_full.log`, idle host) measured 13.7 frames/s (73.1 ms = 37.0 + 33.0 + 3.3); the numbers above are
-the recorded `results.json` run. **Host contention matters**: with the fp32 CPU control (10 torch threads) running
+(`generated/ar_full.log`, idle host) measured 13.7 frames/s (73.1 ms = 37.0 + 33.0 + 3.3) and the idle-host
+single-test rerun 13.3 frames/s (75.4 ms = 37.5 + 33.5 + 4.3); the numbers above are the final gate run
+(`generated/gate04_final.log`, `results.json`). **Host contention matters**: with the fp32 CPU control (10 torch threads) running
 on the same host the identical test measured 9.3 frames/s (107.8 ms = 43.2 + 42.3 + 22.7 host) - the read-back /
 dispatch path and the sampling are host-thread-sensitive, so perf numbers must be taken on an idle host (the
 `results.json` run was taken with the control process SIGSTOPped).
@@ -170,25 +189,67 @@ row, its logit gap to the row maximum and its probability under the final top-50
 The ending is a switch, not a drift: at step 2782 the end token jumps to rank 11 (gap 9.6) and at step 2783 to
 rank 0 with sampling probability 1.0 (the whole top-50 mass), i.e. the backbone signals "song over" decisively.
 Until then the end token never enters the sampling set (its probability is exactly 0 on every frame), so there is
-no premature-ending risk from the bf16 device logits either. The fp32 CPU control of the same run
-(`scripts/end_token_control_cpu.py`, 4000-frame cap, about 3 s / frame on 10 cores) is recorded in
-`pcc/end_token_control_cpu_7.json`; see the note at the end of this section for how far it got.
+no premature-ending risk from the bf16 device logits either.
 
 The probe's `collect_end_token_stats=True` costs about 49 ms of host time per frame (two top-k passes over the
 200k-vocabulary tensor); it is off in `generate` by default and in every timed run.
 
-CPU_CONTROL_NOTE
+**fp32 CPU control** (`scripts/end_token_control_cpu.py`, the diffusers loop verbatim on the fp32 CPU models, same
+prompt and seed 7, 4000-frame cap, 2.4 s / frame on 10 cores, 2087 s; `pcc/end_token_control_cpu_7.json`): the
+reference **also ends by itself, at 859 frames = 34.4 s of audio**, through the same switch (end-token sampling
+probability 0 on frames 0-856, 0.0003 at 857, 0 at 858-859, 0.84 at step 860 where it is drawn). Per-frame
+statistics side by side (device probe vs fp32 control, same frame windows):
+
+| frames | end-token rank in conditional row, min / median (device) | (fp32) | logit gap to max, min / median (device) | (fp32) | frames with sampling prob > 0 (device / fp32) |
+|---|---|---|---|---|---|
+| 0-499 | 1079 / 5878 | 295 / 4322 | 6.7 / 24.2 | 7.0 / 26.1 | 0 / 0 |
+| 500-999 | 1126 / 5313 | 0 / 4697 (ends at 859) | 12.9 / 25.3 | 0.0 / 27.5 | 0 / 2 |
+| 1000-2499 | 1737-1971 / 6067-6683 | — | 14.7-15.7 / 27.7-27.9 | — | 0 / — |
+| 2500-2783 | 0 / 4501 (ends at 2782) | — | 0.0 / 26.1 | — | 2 / — |
+
+Both stacks keep the end token thousands of ranks down with a 20-30 logit gap until the song is over, then flip
+it to rank 0 within two frames; the 391 (fp32) vs 1331 (device) distinct semantic codes and 3.3 % vs 1.0 %
+most-common-code shares are both far from degenerate. The two runs are different sample paths (bf16 device logits
+vs fp32; the draws diverge at the first frame where the top-50 sets or their probabilities differ), so the *length*
+of the song (34 s vs 111 s) is a sampling outcome of this prompt, not a systematic device effect: see the
+multi-seed table below for the spread of song lengths on device and in the reference.
+
+**Song length per seed, device vs reference** (same short-lyric prompt, `scripts/end_token_probe.py` with
+`--max-frames 9000` on device, `scripts/end_token_control_cpu.py --max-frames 4000` for the fp32 CPU reference;
+"median end-token rank" excludes the last three frames of each run):
+
+| stack | seed | frames | audio s | stop | distinct semantic codes | most common code | median end-token rank before the ending | frames with end-token sampling prob > 0 | file |
+|---|---|---|---|---|---|---|---|---|---|
+| device (bf16 backbone, traced) | 5 | 547 | 21.9 | `end_token` | 298 | 7.1 % | 6406 | 2 | `pcc/end_token_probe_5.json` |
+| device (bf16 backbone, traced) | 7 | 2782 | 111.3 | `end_token` | 1331 | 1.0 % | 5835 | 2 | `pcc/end_token_probe_7.json` |
+| device (bf16 backbone, traced) | 11 | 945 | 37.8 | `end_token` | 458 | 3.2 % | 4709 | 2 | `pcc/end_token_probe_11.json` |
+| device (bf16 backbone, traced) | 13 | 274 | 11.0 | `end_token` | 148 | 9.5 % | 4761 | 2 | `pcc/end_token_probe_13.json` |
+| device (bf16 backbone, traced) | 23 | 691 | 27.6 | `end_token` | 393 | 2.9 % | 5679 | 1 | `pcc/end_token_probe_23.json` |
+| device (bf16 backbone, traced) | 42 | 470 | 18.8 | `end_token` | 226 | 4.7 % | 5838 | 1 | `pcc/end_token_probe_42.json` |
+| fp32 CPU reference | 5 | 1899 | 76.0 | `end_token` | 948 | 1.5 % | 4969 | 2 | `pcc/end_token_control_cpu_5.json` |
+| fp32 CPU reference | 7 | 859 | 34.4 | `end_token` | 391 | 3.3 % | 4528 | 2 | `pcc/end_token_control_cpu_7.json` |
+| fp32 CPU reference | 11 | 106 | 4.2 | `end_token` | 74 | 3.8 % | 3359 | 2 | `pcc/end_token_control_cpu_11.json` |
+| fp32 CPU reference | 23 | 714 | 28.6 | `end_token` | 400 | 2.8 % | 6569 | 2 | `pcc/end_token_control_cpu_23.json` |
+
+Every run on both stacks ends by itself with the same two-frame switch of the end token from rank thousands to
+rank 0. Song lengths span 11-111 s on device (6 seeds) and 4-76 s in the fp32 reference (4 seeds); the two
+distributions overlap and the longest device song (seed 7, the one the gate test uses) is 1.5x the longest
+reference song at a sample size that cannot separate a device effect from seed luck. Code diversity is comparable
+(most common code 1.0-9.5 % on device, 1.5-3.8 % in the reference, always far below the 30 % degeneracy bar) and
+the median end-token ranks before the ending overlap (4709-6406 vs 3359-6569). Remaining risk, handed to the
+vocoder stage (listening) and the stage-07 dtype sweep: whether bf16 device logits shift the length distribution
+upward is not decidable from these samples.
 
 ## How to run
 
 ```bash
 source ~/mm3-bringup/common.sh && cd $MM3_WT
-# gate (5 tests, ~6 min incl. model build from the converted-weight cache and the 2782-frame end-token run)
+# gate (6 tests, ~4.5 min incl. model build from the converted-weight cache and the 2782-frame end-token run)
 with_hw_lock timeout 5400 $MM3_PY -m pytest $MM3_MODEL_DIR/tests/test_ar_generator.py -m "not slow" -x -q -p no:cacheprovider
 ~/mm3-bringup/checks/04.sh
 # long free run with end-token statistics (device) and the fp32 CPU control (no device, hours)
 with_hw_lock timeout 3600 $MM3_PY $MM3_MODEL_DIR/scripts/end_token_probe.py --max-frames 9000 --seed 7
-$MM3_REF_PY $MM3_MODEL_DIR/scripts/end_token_control_cpu.py --max-frames 2500 --seed 7
+$MM3_REF_PY $MM3_MODEL_DIR/scripts/end_token_control_cpu.py --max-frames 4000 --seed 7 --threads 10
 ```
 
 ## Decisions taken (nobody to ask)
@@ -211,8 +272,18 @@ $MM3_REF_PY $MM3_MODEL_DIR/scripts/end_token_control_cpu.py --max-frames 2500 --
    the golden fixture asserts groups 1..250 equal `sampled_codes.pt`. Without them the loop samples frame 0 with
    the seed (documented in the docstring).
 4. **Trace-lifetime order** (see "What was built"): the backbone decode inputs are allocated explicitly before the
-   depth traces are captured (`prepare_decode_inputs`), instead of lazily on the first decode. No
-   "Allocating device buffers is unsafe" hazard is introduced by the per-frame loop (it allocates nothing).
+   depth traces are captured (`prepare_decode_inputs`), instead of lazily on the first decode. The per-frame loop
+   allocates nothing on device. tt-metal's once-per-process warning "Allocating device buffers is unsafe due to
+   the existence of an active trace" (`allocator.cpp`) *does* appear once in every device log of this stage
+   (e.g. `generated/gate04.log`, right after "ARGenerator: host embedding tables ready"): after the depth traces
+   exist, the prefill of every `generate` call and the backbone's compile run + capture allocate device buffers.
+   Classification: prefill intermediates and outputs are read to the host and freed before any trace replays;
+   the backbone trace's own outputs (hidden, full tiled logits, window) are allocated inside its capture, after
+   the depth traces, so they may share addresses with depth-trace intermediates - the hidden is `ttnn.copy`'d
+   into the depth seed buffer and the window is read back *before* the first depth replay of each frame, and the
+   full tiled logits are never read in windowed mode (`decode(read_back=True)` after a depth replay would read a
+   possibly-overwritten buffer; the generator never does that). Evidence that nothing is corrupted: the
+   teacher-forced PCC 0.9994 over 250 frames (backbone-part min 0.9918) and bit-identical same-seed reruns.
 5. **Context bound.** `L + frame_index` must stay below `max_seq_len = 10240`; the loop stops with
    `stopped_by = "context"` instead of raising. The reference has no such bound (HF RoPE would extrapolate), but
    the checkpoint advertises 10240 positions and the pipeline's own caps (5000 + 9000) can exceed it.
@@ -223,8 +294,10 @@ $MM3_REF_PY $MM3_MODEL_DIR/scripts/end_token_control_cpu.py --max-frames 2500 --
 
 ## Open risks / hand-off
 
-* Throughput is 13.3 frames/s vs 25 realtime; all of it is the two device loops measured in stages 02/03.
+* Throughput is 13.6 frames/s vs 25 realtime; all of it is the two device loops measured in stages 02/03.
   Hand-off to stage 05/07: overlap depth(f) with backbone(f+1), on-device sampling, dtype sweep.
 * Long-prompt precision (stage 02: prefill hidden PCC 0.982 at 5000 tokens) is inherited; this stage only
   measured the 104-token golden prompt end to end.
 * `frame_hiddens` is bf16-derived (device hidden states); the DiT stage consumes it. PCC 0.9994 vs fp32.
+* Free-running song length: device 11-111 s vs reference 4-76 s over 6 / 4 seeds of the short-lyric prompt (see the
+  multi-seed table); overlapping, but too few samples to exclude a bf16 shift. Check by listening in the vocoder stage.
