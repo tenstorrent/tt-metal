@@ -82,6 +82,18 @@ gimsatul source changes. **ABI footgun:** the shim TU must compile `-DNDEBUG` (m
 
 ## 5. Evidence — full benchmark (latest solver base, 90 cells, seeds 0/7/13/42)
 
+> **⚠️ Read these numbers as distributions, not point comparisons — gimsatul is nondeterministic
+> run-to-run, even at a fixed seed.** The seed controls only the *CaDiCaL driver's* randomization; the
+> actual solve is delegated to gimsatul's 32-thread parallel portfolio (lock-free clause sharing, threads
+> racing), and which thread finds the model first depends on wall-clock scheduling/timing, not the seed.
+> So a B cell and the A cell at the same size/seed are **two independent nondeterministic computations** —
+> re-running either one gives a different wall time (e.g. 144 measured 252s in one run and 925s in
+> another for the same mode). A single-seed A-vs-B gap is therefore mostly this variance, **not** the pool
+> helping or hurting. Only the per-size *distribution* across many seeds (median wall + completion rate) is
+> a valid A-vs-B signal; a multi-seed paired sweep at 112/128/144 is in progress to firm this up. Where the
+> pool has few clauses to contribute (144: a single rigid host-set; and pure-gimsatul mode fills the pool
+> only with fixed units), B and A are expected to be a wash within that variance.
+
 Enumeration `-n 5`, solutions found (`@cap` = hit the 20-min budget):
 
 | size | **B: gimsatul+pool** | **A: gimsatul cold** | **D: clause-share portfolio** |
@@ -96,9 +108,14 @@ Enumeration `-n 5`, solutions found (`@cap` = hit the 20-min budget):
 `-n 10` deep tail (seeds 0/7): 96 → B 10·493s / A 10·1159s / D 10·958s; 128 → B 3–4@cap / A 7@cap / D 0@cap.
 Primes: B solves all sizes/seeds with **no timeouts**; D times out on the 128 prime.
 
-**Reading:** ≤80 → pool neutral (nothing hard to carry); 96 → pool wins clearly (~2.3×, only reliable
-completer); 112/128 → run-variance dominated (race territory; pool still raises B's floor); 144 → both
-gimsatul modes solve, D cannot; D not viable alone on min-host.
+**Reading (with the variance caveat above in mind):** ≤80 → pool neutral (nothing hard to carry); 96 →
+pool appears to win (~2.3×) but a per-seed single comparison; **the only size where the pool's benefit is
+mechanistically expected (the injected clauses actually prune the cliff) and shows up as more solutions is
+128** (B 3–5 vs A 1–2); 112 and 144 are within run-variance (some seeds favor A, others B — e.g. 112 s0
+favored A, 112 s1 favored B), i.e. a wash, consistent with the pool being nearly empty in pure-gimsatul
+mode; D not viable alone on min-host (times out on 128 prime + all 128/144 enums). Net: the honest claim is
+"pool clearly helps at 128, is a wash at 112/144, needs the multi-seed medians to confirm 96." This is why
+P2 (race) + P3 (keep the CaDiCaL arm searching so the pool actually fills) matter more than a single mode.
 
 ## 6. Implementation stories
 
