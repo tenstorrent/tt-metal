@@ -29,13 +29,7 @@ case "${MODEL}" in
     # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
     # just above this and wanders between ranks, so re-bisect before raising it.
     NUM_USERS_DEFAULT=86
-    # TRACE ONLY, for the reason the glm52 leg below spells out: capture_trace()'s D2H warm pass fires
-    # warmup_ack_count() records that prefill_runner then drains, and on this branch's traced runner that
-    # drain never completes -- verified locally (py-spy: the runner sits in read_metadata() at 100% CPU
-    # after a clean capture) and again in CI, where taking main's both-flags form here turned this leg
-    # into a "Status: TIMEOUT / hang triaged". main sets PREFILL_LAYER_ACK_D2H=1 as well; do not adopt it
-    # until the warm-pass drain is fixed.
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
@@ -46,31 +40,9 @@ case "${MODEL}" in
     # Same per-bank capacity bound, relaxed by the TP KV dedup below. The sparse KV format moves it
     # a long way (SP x TP fits 34 at bf16, 56 at fp8), so this sits well under the edge, not on it.
     NUM_USERS_DEFAULT=28
-    # KV-dedup default for this leg (#51968 / #55458); main's value, kept as-is.
     TP_SHARD_KV_DEFAULT=1
-    # UNTRACED, deliberately -- main's form. Trace was enabled on this leg and is backed out until the
-    # failure below is understood; it is being debugged separately, so do NOT flip PREFILL_USE_TRACE
-    # back on here without that fix.
-    #
-    # WHY. Five SC4 runs of the traced leg (2026-09-09, runs 34286884010 / 34311408715 / 34313895634 /
-    # 34316647468 / 34319986941) came back 4 pass / 1 CATASTROPHIC: round 3 read back KVPE PCC
-    # -0.001961 / 0.000283 / 0.000936 on ranks 1/2/3 -- uncorrelated, not merely degraded -- while rank 0
-    # was bit-identical to the passing rounds (0.977205). The trace captures were byte-identical to a
-    # passing round (61/59/61/49 segments), so it happens at REPLAY, and it collapses from rank 1 down,
-    # i.e. across the first D2D handoff. Prime suspects are the two buffers that trace makes persistent
-    # and the D2D consumer may still be reading when the next chunk's replay overwrites them:
-    # _trace_output and trace_metadata_msg (a stale metadata copy sends ranks 1..3 at the WRONG cache
-    # slot, which is what a ~0 PCC looks like). A ~20% silent-wrong-KV rate is not shippable.
-    #
-    # Perf is not the reason to keep it either: over those same five runs the traced leg's chunk-0
-    # pipeline fill was 2849.3 ms mean (0.24% spread) against 2550.5 ms untraced -- 11.7% SLOWER, because
-    # SC4 is non-torus, so the snake ring cannot close and _gather_kvpe_prefix_tp_sharded_high_bw pins
-    # BOTH gather extents to the full buffer whenever metadata is present. ttft/throughput differences
-    # were inside run-to-run noise (11%/28% spread), so trace buys SC4 nothing today.
+    # UNTRACED, as of now
     RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
-    # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
-    # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
-    # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;

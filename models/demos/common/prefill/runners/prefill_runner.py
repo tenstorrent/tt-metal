@@ -107,10 +107,6 @@ assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
     "tracing (the kv-only last block still writes its KV cache)."
 )
 
-# TP-sharded writes and trace used to be mutually exclusive: update_padded_kv_cache's reader took the host
-# kv_actual_global to pick its 1/tp source window, and the metadata path leaves that scalar at 0 while the
-# writer reads the real value on-device, so the two disagreed on the chunk start. The reader now performs
-# the same on-device read, so the combination is supported and this leg is exercised by the glm52 CI leg.
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
 _shutdown = False

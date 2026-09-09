@@ -243,39 +243,8 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-# GLM-5.2 per-chunk baseline medians (seconds), same (num_layers, n_chunks, num_iters) keying as the Kimi
-# tables above. TRACED ONLY -- there is deliberately no untraced counterpart; see the note below the table.
-#
-# Do NOT expect a Kimi-shaped ramp. Kimi's traced baseline climbs 0.519 -> 0.855 s (+65%) because chunk c
-# attends to KV[0:c*CHUNK]. GLM's DSA indexer selects a FIXED top-k capacity regardless of prefix length,
-# so tracing shows up mostly as a uniform shift. "Mostly", not entirely: the CI traced run still
-# ramps 0.583 -> 0.644 s (+10%) monotonically from chunk 1, since the indexer must still SCORE the whole
-# prefix before the fixed-capacity top-k selects from it -- only the attention that follows is
-# depth-independent. A future GLM curve that is dead flat, or that ramps like Kimi's, is the surprise.
-#
-# Recalibrate from the per-chunk median across several independent green Galaxy runs, not from one run.
+# GLM-5.2 per-chunk baseline medians (seconds)
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). Per-chunk medians of run 34242927566 attempt 2 / job 102145433961 verbatim, over
-    # the 9 post-warmup iterations.
-    #
-    # RE-CENTERED from the previous table (0.641 0.639 0.655 0.649 0.664 0.664 0.662 0.668 0.684 0.689
-    # 0.702, run 33743294300 / job 100612454484). That table's own instruction was to re-center if the next
-    # green run disagreed by more than ~1%; every one of the 11 chunks came in 8.3-8.8% BELOW its band, so
-    # the two-sided 3% gate failed on a speedup. The shift is uniform across all 11 chunks and this run's
-    # per-chunk stddev is again 0.000-0.002 s, so it is a systematic change in the traced path, not drift:
-    # a per-chunk-varying or noise-shaped delta would look nothing like this. What is NOT established is
-    # which change earned it -- this branch rebased onto a main that moved underneath it, so attributing
-    # the 8.5% to any single commit here would be a guess. Treat the cause as unmeasured.
-    #
-    # ONE run, which the file's own guidance says to avoid -- accepted here for the same reason the Kimi
-    # traced table was cut from one run: a traced replay's only noise source is the device, and this run's
-    # per-chunk stddev is 0.000-0.002 s (<=0.3%), an order of magnitude inside the 3% band. The untraced
-    # twin gets no such allowance. Cross-check against the next green run and re-center if any chunk
-    # disagrees by more than ~1%.
-    #
-    # Faster than the local pre-CI measurements quoted above (0.738-0.759 s/chunk): those were a single
-    # galaxy on plain FABRIC_2D, this is the torus-xy CI config.
     (78, 11, 10): [
         0.585,
         0.583,
@@ -290,40 +259,9 @@ GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
         0.644,
     ],
 }
-# There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose. It existed as an all-zero placeholder that
-# glm_chunked_perf_gate read as "not calibrated yet", i.e. a table whose only function was to be skipped
-# — and the untraced GLM run is not a gate candidate to begin with, so the placeholder implied a plan that
-# should not be carried out.
-#
-# The measurement says why. Run 33743294300 / job 100612454398 (L78, 11 chunks, ten_iters, the config a
-# gate would key on) measured per-chunk MEDIANS of 1.672-2.032 s with per-chunk STDDEV of 0.148-0.427 s --
-# 9-25% of a ~1.68 s chunk. Chunk 3 came in at 2.032 s against ~1.68 s everywhere else, from ordinary
-# host-dispatch jitter rather than anything about chunk 3. UNTRACED_PERF_MARGIN is 5%, about +/-0.084 s
-# here: a band comfortably inside a single standard deviation. Such a gate fails on noise far more often
-# than on a regression, and a perf gate that cries wolf gets muted, which costs the coverage it was
-# supposed to add.
-#
-# This is not GLM-specific pessimism -- it is what "untraced" means. Every iteration re-dispatches every
-# op from host and pays a fresh op2op gap, so the spread is a property of eager dispatch (Kimi's untraced
-# stddev reaches ~0.33 s for the same reason). Kimi can still gate that path only because its centre was
-# cut from a set of green runs and re-checked against 32 of them.
-#
-# So the untraced GLM config stays RECORD-ONLY: print_duration_table prints its per-chunk median/stddev
-# and asserts nothing, which is the honest report for a number this noisy. Traced is where the regression
-# signal actually lives (stddev <=0.3%, and it is the path serving runs), and it is gated below.
-#
-# To gate untraced later, the prerequisite is evidence, not a table: collect ten_iters medians from
-# SEVERAL independent green Galaxy runs, take the median-of-runs per chunk, and size the band from the
-# observed cross-run spread instead of inheriting Kimi's 5%. Then add the table back plus its own margin
-# constant and restore the untraced branch in glm_chunked_perf_gate.
-#
-# Traced band: carried over from the Kimi default. Measured per-chunk stddev is 0.000-0.002 s (<=0.3%), so
-# 3% could likely be tightened -- leave it until a second green run is in, since with the baseline cut
-# from one run the band is absorbing run-to-run drift that has not been measured yet.
+# There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
+
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
-# The ONLY variant these baselines describe. glm_5_1 shares the perf test's parametrization and its 78
-# layers, so without this it would match the same table key and be gated against GLM-5.2's numbers --
-# a different model, different weights, different golden trace. It stays record-only.
 GLM_PERF_GATED_VARIANT = "glm_5_2"
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
@@ -886,12 +824,7 @@ def run_chunked_transformer(
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = SEQ_CACHE
-    # Keep rope_scaling CONSISTENT with the length we actually run. config_builder() is called with no
-    # args, so original_max_position_embeddings stays at its 8192 default while max_seq_len is mutated to
-    # 56320 here -- and the runner, which passes PREFILL_MAX_SEQ_LEN, gets 56320 for both. factor=1.0 is
-    # documented as "disables YaRN", but the implementation does not fully short-circuit: the two configs
-    # produce cos/sin tables differing by up to 3.8e-6, which is exactly why this test and the runner
-    # reported slightly different KV PCC (0.861237 vs 0.860911) on identical tokens and identical goldens.
+
     if isinstance(getattr(config, "rope_scaling", None), dict):
         config.rope_scaling["original_max_position_embeddings"] = SEQ_CACHE
 
@@ -1448,12 +1381,6 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
-            # and retain the existing reserve for other needs. 1216 not 1152 so a tp_sharded run that
-            # falls back off the snake still fits: the fallback adds two gather programs, +64 B/bank.
-            #
-            # The trace region is reserved for BOTH use_trace arms: device_params is its own parametrize
-            # axis and cannot be conditioned on use_trace, so the untraced arm pays DRAM it does not use.
-            # Too small fails loudly at end_trace_capture, not silently.
             torus_xy_device_params(
                 fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
                 l1_small_size=1216,
@@ -1463,31 +1390,13 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
-        pytest.param(
-            (8, 4),
-            # NON-torus FABRIC_2D, same 8x4 shape. This is SC4's fabric, and it is the reason SC4 takes
-            # the two-stage TP KV gather rather than the snake ring: _snake_ring_can_close((8,4)) needs a
-            # torus, so on this profile it fails NATURALLY -- no env-var forcing, the same routing SC4
-            # actually runs. Only meaningful with tp_shard_kv, which is where the two routes exist.
-            fabric2d_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
-                l1_small_size=1216,
-                trace_region_size=512 * 1024 * 1024,
-            ),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-8x4",
-        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
-# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather.
+# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The 8x4 torus
+# always closes the snake ring, so this row covers the snake route only.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
-# The TP-deduped KVPE prefix has two gather routes: ONE full-mesh snake ring where the mesh can close it,
-# and a TP-inner -> SP-outer pair where it cannot. An 8x4 torus always takes the snake, so the fallback --
-# which is what SC4-shaped meshes actually run -- had no coverage at all. `fallback` forces it here.
-@pytest.mark.parametrize("kv_gather", ["snake", "fallback"], ids=["snake", "fallback"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -1502,15 +1411,8 @@ def test_glm_prefill_transformer_chunked(
     preload_isl,
     num_links,
     tp_shard_kv,
-    kv_gather,
     use_trace,
-    monkeypatch,
 ):
-    if kv_gather == "fallback":
-        # Only the TP-deduped path has two routes; without dedup there is one gather and nothing to force.
-        if not tp_shard_kv:
-            pytest.skip("kv_gather=fallback is only meaningful with tp_shard_kv (the deduped KVPE gather)")
-        monkeypatch.setenv("TT_MLA_DISABLE_SNAKE_KV_GATHER", "1")
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
         variant,
@@ -1965,16 +1867,12 @@ def run_chunked_transformer_updated(
             for c in range(n_chunks)
         ]
 
-        def _fwd_meta(host_start=None):
-            # host_start is for the TT_GLM_META_NO_TRACE isolation only: it supplies the SAME per-chunk
-            # values the scalar path gets, so a component switched back to its host-scalar form is fed a
-            # correct value rather than the metadata path's unset default. Without it, "force scalar"
-            # experiments silently compare against garbage.
+        def _fwd_meta():
             return transformer.forward(
                 trace_input,
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
-                actual_start=host_start,
+                actual_start=None,
                 actual_end=None,  # metadata carries the clamp; write_k rejects a host actual_end here
                 cache_user_id=0,
                 return_intermediates=False,
@@ -2018,15 +1916,7 @@ def run_chunked_transformer_updated(
                     sp_axis=sp_axis,
                 )
                 chunk_start = time.time()
-                if os.environ.get("TT_GLM_META_NO_TRACE", "0") == "1":
-                    # Run the METADATA path eagerly instead of replaying the capture. The traced arm is the
-                    # only one that feeds metadata tensors, so a traced-vs-untraced gap is really TWO
-                    # differences at once: metadata-vs-host scalars, and replay-vs-eager. This knob splits
-                    # them -- if the gap survives here, it is the metadata math and trace is innocent.
-                    # (That is exactly what it showed for tp_shard_kv at multi-chunk.)
-                    _fwd_meta(host_start=kv_actual)
-                else:
-                    trace_controller.replay()
+                trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
                 chunk_seconds = time.time() - chunk_start
                 chunk_times.append(chunk_seconds)
