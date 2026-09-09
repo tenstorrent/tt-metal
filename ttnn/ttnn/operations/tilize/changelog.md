@@ -494,3 +494,137 @@
   shipped rule picks on six geometries — that last one is what stops a later plan edit
   from silently reverting the tuning.
   **161 / 161 passing** across `tests/ttnn/unit_tests/operations/tilize/`.
+
+## Refinement 4 — Tile geometry: tiny tiles and the retile path
+- Date: 2026-09-09
+- What was done:
+  Both halves of the `tile=` surface landed natively on device, in one small diff
+  on top of the existing `grid2d` schedule.
+
+  **Tiny tile (ROW_MAJOR in, sub-32 tile out) — a pure knob turn, zero kernel
+  changes.** `SUPPORTED["tile_height"]` went from `[32]` to
+  `list(LEGAL_TILE_HEIGHTS)` = `[1,2,4,8,16,32]`, and that is the whole delta:
+  `tile_h` was already a plan quantity in every place that needs it
+  (`in_page_bytes = tile_h*32*elem`, `rows_per_image = ceil(H/tile_h)`, the
+  `TileDescriptor` on both CBs, the reader's per-tile-row stick count, and the pad
+  tail arithmetic). The one behavioural change is that `can_use_fast_tilize`
+  requires 32x32 output tiles (`tilize_helpers.inl:77`), so a tiny tile takes the
+  regular `tilize_init`/`tilize_block` path — which is per-tile through DEST and
+  therefore carries no width cap of its own. The list IS `LEGAL_TILE_HEIGHTS`, the
+  same source `_check_request`'s malformed-tile gate reads, so the two cannot drift.
+
+  The `alignment` interaction the verifier flagged is real and behaves: H is
+  measured against the OUTPUT tile height, so `H=48` at `tile_h=16` is three whole
+  tile-rows and takes the unpadded path with no padding argument, while Refinement
+  2's H and W tails are stated in units of `tile_h` rather than a literal 32 and
+  keep working at every tiny height.
+
+  **Retile (TILE in at one height -> TILE out at another) — a new reader block
+  operation, `retile_block`.** The input's pages are whole tiles, so the reader
+  walks FACES, not sticks, and `read_sticks_for_tilize` cannot express it at all
+  (it is stick-indexed by construction). The whole algorithm is one derived
+  quantity, `retile_copy_unit(in_tile_h, out_tile_h)` — the largest byte run that
+  is contiguous in BOTH tile layouts. Given a layout's face height
+  `a = min(tile_h, 16)` and its face-row-major layout of two `a x 16` faces per
+  face-row (`tt_metal/impl/data_format/tile.cpp:TILE_FACE_HW_CHOICES`):
+
+    * `a_in == a_out` — a face PAIR is adjacent in both layouts, so the run is a
+      slab of `min(h_in, h_out)` rows x all 32 columns (left face then right face,
+      not row-major), extending across consecutive slabs while they stay inside one
+      input tile and one output tile.
+    * `a_in != a_out` — the slabs interleave differently and the largest common run
+      is a single face FRAGMENT, `min(h_in, h_out)` rows x 16 columns.
+
+  Each run is one `noc_async_read` from the source tile page's byte offset into the
+  destination tile's byte offset, so **the output tile is assembled in place in
+  `cb_output_tiles`** and the program carries **no compute kernel at all**: a
+  re-tile is a byte re-lay between two tiled layouts, with nothing for the FPU to
+  do and no row-major intermediate for a tilize LLK to consume. That keeps DRAM
+  crossings at **1 in / 1 out** — the named-boundary minimum — where the
+  untilize-and-retilize round trip `op_design.md` ranks `rejected` would be 2 each
+  way. No `ttnn.to_layout` / `ttnn.untilize` wrapper appears at the entry point;
+  the public signature is unchanged.
+
+  Everything else is reused verbatim: the block grid, `derive_plan`'s work split
+  and core assignment, `cb_output_tiles`, and the writer kernel (which already
+  stores whole output tile pages in exactly the order the reader pushes them).
+  `cb_output_tiles`'s producer moves from compute to the reader, so it still has
+  exactly one producer and one consumer.
+
+  Host side: `is_retile` (= the input being TILE) bypasses the stick-paging
+  derivation, collapses `cb_input_rows` to a one-page stub, drops
+  `INPUT_DEPTH_ROWS * tb_in` out of the `W_FIT` denominator, forces both shard
+  partitions off, and omits the compute `KernelDescriptor`. The reader gained six
+  compile-time args and the retile branch; nothing else in the three kernels moved.
+
+  **`SUPPORTED["in_tile_height"]`** is now `["none"] + list(LEGAL_TILE_HEIGHTS)`.
+  `32` is in the list because `tile=` must be honored on a TILE input, so an
+  equal-height pair is a legal identity re-lay (`retile_copy_unit` degenerates to
+  "the whole tile" and the walk becomes a page copy), not a no-op to elide.
+
+  **EXCLUSIONS gained 24 cells**, all retile crossings, each for a structural
+  reason: retile x `shard_api in {legacy_2d, nd}` (the face walk addresses the
+  source by interleaved TILE page index; a native zero-copy CB over a resident TILE
+  shard would need the shard's own page map on both sides, and reading a core's own
+  shard back through a `TensorAccessor` is the non-implementation this op refuses
+  everywhere else — and retile is arch-gated to Blackhole, so a native sharded
+  retile cannot be verified on this box) and retile x `pad_mode in {auto,
+  explicit}` (the fill would have to land in output faces the walk never sources).
+  Neither crossing is reached by any `tile_geometry_retile` golden case, so no cell
+  moved from pass to xfail.
+
+  **L1 shrank on both halves.** `tb_in` and `tb_out` both scale with `tile_h`, and
+  on the retile path the input CB is a stub: `[1,1,2048,2048]` is 131072 B at
+  ROW_MAJOR -> 32 and 66560 B at retile 32 -> 16, with `block_width_tiles` growing
+  16 -> 32 because the freed denominator affords a wider column extent.
+  `[1,1,32,2048]` is 20 KB at `tile_h=32`, 12 KB at 16 and 2 KB at 1. Nothing grew.
+  `l1_ledger.md` gained two buffer rows, the retile footprint form, a measured
+  table, and two data-movement-budget rows.
+- Accuracy achieved: bit-exact (`torch.equal`, not a PCC — tilize is a byte
+  re-lay, so anything short of bit-exact is a bug). PCC=1.0, rtol=0, atol=0 on:
+  tiny tile at `tile_h in {16,8,4,2,1}` on `[1,1,32,64]`, `[1,1,64,128]`,
+  `[1,1,2048,64]`, `[1,1,32,2048]`, `[1,1,512,512]`, `[1,1,32,8192]` (low_l1),
+  `[3,2,64,64]`, `[8,1,249,256]` (padded fold), `[1,1,48,64]`, `[1,1,40,64]`,
+  `[1,1,33,50]`, `[1,1,3,50]`, `[1,1,5,32]`, `[1,1,7,40]`, L1->L1 and a
+  HEIGHT_SHARDED output; and retile on **all 36 legal (in, out) height pairs** on
+  `[1,1,32,64]` and `[2,1,64,96]`, plus `[1,1,2048,64]`, `[1,1,32,4096]`,
+  `[1,1,512,512]`, the four per-image-split shapes (`[1,1,20,64]`,
+  `[2,3,20,64]`, `[3,1,12,96]`, `[1,1,40,64]`), all three buffer transitions, and
+  ranks 2 and 5.
+- Golden test progress: `tile_geometry_tiny` **3/3** bf16->bf16 cells pass (39
+  further cells in that group xfail on the `dtype` / `output_dtype` axes, which is
+  Refinement 5). `tile_geometry_retile` reports **0 passed / 238 skipped** on this
+  box: `helpers.skip_if_retile_unsupported` fires before `validate()` on Wormhole,
+  exactly as the refinement's verifier note said it would. Regression slice
+  (sharded + padded + low_l1 representatives): **56 passed, 0 failed**. Whole unit
+  directory: **245 passed, 0 failed**.
+- Issues encountered:
+  * One free compile failure, fixed immediately: `kernel_main` is not a template,
+    so the DISCARDED branch of an `if constexpr` is still fully type-checked.
+    `in_tile_h` is 0 on the ROW_MAJOR path, which made
+    `unit_rows_per_tile = tile_h / unit_rows` a constexpr division by zero and
+    broke every non-retile build. Fixed by clamping through
+    `src_tile_h = in_tile_h ? in_tile_h : tile_h`, which degenerates the dead
+    instantiation to the identity re-lay. Same hazard is why `cb_input_rows` is a
+    one-page stub rather than unallocated: `read_sticks_for_tilize`'s
+    `constexpr elem_size = get_tile_size(cb)/get_tile_hw(cb)` would divide by zero
+    against an unconfigured CB.
+  * The `retile_copy_unit` model was verified on host BEFORE any device work, and
+    the first formulation was wrong: it assumed the equal-face-height unit was a
+    row-major rectangle, when it is a face-pair SLAB (left face then right face).
+    The corrected exhaustive check over all 36 pairs (`probes/probe_024.py`) is
+    what the kernel was written against.
+  * **A finding worth recording**: the retile path is NOT arch-gated in this
+    implementation. The golden gate cites "LLK for tiny tiles not fully supported
+    on Wormhole B0" — but a pure NoC face walk uses no LLK at all, so all 36 height
+    pairs are bit-exact on Wormhole. The golden cells still skip (the gate is in
+    the harness, which must not be modified), so the coverage lives in the unit
+    suite; a Blackhole box would green them without a code change.
+- Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py`
+  — 82 cases: tiny tile x 4 geometries x 5 heights, the tiny-tile `alignment`
+  re-partition, tiny tile x padding, the exhaustive 36-pair retile matrix, the six
+  golden retile scenarios verbatim, retile at grid scale, the retile per-image
+  split, retile buffer transitions, and the two `ExcludedCell` refusals. Probes
+  `probe_022.py` (tiny-tile sweep), `probe_023.py`, `probe_024.py` (the host proof
+  of `retile_copy_unit` + the six golden scenarios), `probe_025.py` (the broad
+  retile sweep), `probe_026.py` (footprints).

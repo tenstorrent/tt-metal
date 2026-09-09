@@ -348,7 +348,7 @@ is a topology change, adds 0.75 MiB of cross-core NoC, and is chasing at most th
 
 ---
 
-### [ ] Refinement 4 — Tile geometry: tiny tiles and the retile path
+### [x] Refinement 4 — Tile geometry: tiny tiles and the retile path
 
 **Goal**: add `16, 8, 4, 2, 1` to `SUPPORTED["tile_height"]` and `32, 16, 8, 4, 2, 1`
 to `SUPPORTED["in_tile_height"]` — both natively on device. Two regimes the design
@@ -400,6 +400,57 @@ Unlocks the `tile_geometry_tiny` (3) and `tile_geometry_retile` (6) golden group
 (verifiable in the kernel, and green on Blackhole where the gate allows); no
 manipulation-op wrapper appears at the entry point; the three loud categories stay
 at 0; and all prior phases still pass.
+
+**Outcome**: both axes carry their full TARGET values —
+`tile_height = [1,2,4,8,16,32]` and `in_tile_height = ["none",1,2,4,8,16,32]`.
+
+* **Tiny tile was a pure knob turn, as forecast.** `tile_h` was already a plan
+  quantity everywhere (`in_page_bytes`, `rows_per_image`, both CBs'
+  `TileDescriptor`, the reader's stick count, the pad tail arithmetic), so
+  widening `SUPPORTED["tile_height"]` to `LEGAL_TILE_HEIGHTS` was the entire
+  diff — zero kernel changes. It does drop off `can_use_fast_tilize` (which
+  needs 32x32 output tiles) onto the regular `tilize_init`/`tilize_block` path,
+  which is per-tile through DEST and so has no width cap of its own. The
+  `alignment` re-partition the verifier flagged is real and works: `H=48` at
+  `tile_h=16` is three whole tile-rows and takes the unpadded path, and the
+  padded H/W tails are stated in units of `tile_h` rather than a literal 32
+  (`test_tiny_tile_realigns_h`, `test_tiny_tile_padded`). 3/3
+  `tile_geometry_tiny` golden cells pass.
+* **Retile landed as a real face-walking reader, on the FULL height cartesian.**
+  `retile_block` is a new reader block operation built on one derived quantity,
+  `retile_copy_unit(in_tile_h, out_tile_h)`: the largest byte run contiguous in
+  BOTH tile layouts — a face-PAIR slab (`min(h_in,h_out)` rows x 32 cols) when
+  the two face heights `min(h,16)` agree, a face FRAGMENT (`min(h_in,h_out)`
+  rows x 16 cols) when they do not. The reader issues each run as one
+  `noc_async_read` from the source tile page's byte offset into the destination
+  tile's byte offset, so **output tiles are assembled in place in
+  `cb_output_tiles`** and the program carries **no compute kernel at all**. One
+  DRAM crossing each way — the named-boundary minimum, versus 2 for the
+  untilize-and-retilize round trip the design ranks `rejected`. No
+  `to_layout`/`untilize` wrapper anywhere; the entry point is unchanged.
+* **It is green on WORMHOLE, which the verifier note did not expect.** The
+  golden arch gate is on the tiny-tile *LLK*; a pure NoC face walk never touches
+  an LLK, so all 36 legal `(in, out)` height pairs are bit-exact on this box
+  (`test_retile_all_height_pairs`), together with grid-scale geometries, all
+  three buffer transitions, ranks 2-5, and the case where H is a multiple of the
+  output tile height but not the input's (which is why the reader keeps a
+  per-image split). The golden `tile_geometry_retile` cells still report as
+  `skipped` here because `helpers.skip_if_retile_unsupported` fires before
+  `validate()` — the coverage is in the unit suite instead.
+* **Two retile crossings are in EXCLUSIONS, for structural reasons**: retile x
+  sharded (the face walk addresses the source by interleaved TILE page index; a
+  native zero-copy CB over a resident TILE shard would need the shard's own page
+  map on both sides, and reading a core's own shard back through an accessor is
+  the non-implementation this op refuses everywhere else) and retile x padding
+  (the fill would have to land in output faces the walk never sources). Neither
+  is reached by any golden case. Both are the honest next lever if a Blackhole
+  box ever hosts a run.
+* **L1 shrank on both halves, as the ordering note predicted.** `tb_in` and
+  `tb_out` scale with `tile_h`, and on the retile path `cb_input_rows` collapses
+  to a one-page stub (the reader never uses it), which drops
+  `INPUT_DEPTH_ROWS * tb_in` out of the `W_FIT` denominator and roughly doubles
+  the affordable column extent: `[1,1,2048,2048]` is 131072 B at ROW_MAJOR -> 32
+  and 66560 B at retile 32 -> 16 with `bw` growing 16 -> 32. Nothing grew.
 
 ---
 
