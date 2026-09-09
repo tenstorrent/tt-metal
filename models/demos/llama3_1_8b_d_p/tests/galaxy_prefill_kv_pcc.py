@@ -187,6 +187,23 @@ def test_galaxy_prefill_kv_pcc(mesh_device, device_params, reset_seeds):
         results.append((i, ok_k, pcc_k, ok_v, pcc_v))
         logger.info(f"layer {i:>2}: K={pcc_k} {'OK' if ok_k else 'FAIL'}   V={pcc_v} {'OK' if ok_v else 'FAIL'}")
 
+    # Region diagnostic: PCC of layer 0's cache restricted to each chunk's own token slice.
+    # This separates the two failure modes a bad trace can have. A FROZEN cache offset leaves
+    # chunk 0's slice correct and later slices wrong (each chunk overwrote position 0). A wrong
+    # captured PROGRAM makes every slice wrong, chunk 0 included. The whole-cache PCC above cannot
+    # tell these apart, because layer 0's cache spans all chunks.
+    if os.getenv("PREFILL_KV_PCC_REGIONS", "0") == "1":
+        want_k0 = ref.hf_to_meta_head_perm(ref_kvs[0][0], cfg.head_dim)
+        want_v0 = ref_kvs[0][1]
+        got_k0 = gather_kv_cache(mesh_device, runtime.kv_cache.k, n_kv_local, slot_row=0, chunk_local=chunk_local)
+        got_v0 = gather_kv_cache(mesh_device, runtime.kv_cache.v, n_kv_local, slot_row=0, chunk_local=chunk_local)
+        logger.info("layer 0 per-chunk-region PCC (frozen offset => chunk 0 good, rest bad):")
+        for c in range(seq_len // chunk_size):
+            a, b = c * chunk_size, (c + 1) * chunk_size
+            _, pk = comp_pcc(want_k0[:, :, a:b, :], got_k0[:, :, a:b, :], DEFAULT_PCC)
+            _, pv = comp_pcc(want_v0[:, :, a:b, :], got_v0[:, :, a:b, :], DEFAULT_PCC)
+            logger.info(f"  REGION chunk {c} tokens [{a},{b}): K={pk:.5f} V={pv:.5f}")
+
     failures = [(i, pk, pv) for i, ok_k, pk, ok_v, pv in results if not (ok_k and ok_v)]
     logger.info(
         f"KV PCC summary ({'chunked' if chunked else 'one-shot'}): "

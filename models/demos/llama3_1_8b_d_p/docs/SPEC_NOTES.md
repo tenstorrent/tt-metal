@@ -516,31 +516,41 @@ std::nullopt,  // kv_actual_isl_tensor
 where `ring_mla` forwards the real values. This branch patches that (34 lines across `sdpa.hpp`,
 `sdpa.cpp`, `sdpa_nanobind.cpp`).
 
-**The patch is necessary but NOT sufficient, and the original conclusion survives.** With the kwargs
-plumbed, `logical_n` set to the constant cache capacity, and embedding moved inside the captured
-region, a chunked capture succeeds and replays **13.9x faster than eager dispatch** (285 ms against
-3962 ms for 4 x 4096 chunks) — closely matching the ~12x predicted from the dispatch-bound analysis
-in `docs/PROFILING.md` §1. It is also **wrong**:
+**The patch is necessary but NOT sufficient.** With the kwargs plumbed, `logical_n` set to the
+constant cache capacity, and embedding moved inside the captured region, a chunked capture succeeds
+and replays **13.9x faster than eager dispatch** (285 ms against 3962 ms for 4 x 4096 chunks) —
+closely matching the ~12x predicted from the dispatch-bound analysis in `docs/PROFILING.md` §1. It
+is also wrong: **0 of 32 layers** reach the 0.99 KV gate.
 
-| | |
-|---|---|
-| per-layer KV PCC, traced | **0.10 – 0.35** (gate 0.99), all 32 layers |
-| layer 0 specifically | K 0.352 / V 0.073 |
+Per-region PCC on layer 0's cache localises the fault (`PREFILL_KV_PCC_REGIONS=1`, 4 x 512 chunks):
 
-Layer 0 being wrong rules out per-chunk offset drift — a frozen offset still leaves chunk 0 correct.
-The corruption is total from the first layer, which points at the causal geometry rather than the
-cache index. Upstream validates the on-device derivation only for `ring_mla` (latent-V); the
-explicit-V GQA configuration does not reproduce the scalar result. So **trace mode really is MLA-only
-today**, and the remaining work is in the op's GQA path, not in its argument list.
+| region | eager | traced |
+|---|---|---|
+| chunk 0 `[0,512)` | K 0.99989 | K 0.385 / V 0.178 |
+| chunk 1 `[512,1024)` | K 0.99990 | K 0.616 / V 0.008 |
+| chunk 2 `[1024,1536)` | K 0.99990 | **K 0.00000 / V 0.00000** |
+| chunk 3 `[1536,2048)` | K 0.99990 | **K 0.00000 / V 0.00000** |
+
+PCC of exactly zero means those regions were never written. **The cache write offset stops advancing
+after chunk 1**, and the later chunks land on top of earlier positions — which is why regions 0 and
+1 are corrupted rather than clean. The fault is therefore in the per-chunk **write** offset under
+replay, not (or not only) in the ring SDPA's causal geometry as an earlier revision of this section
+claimed.
+
+Two diagnoses recorded here were wrong, and are kept so the mistakes are not repeated:
+
+- *"Layer 0 is wrong, which rules out per-chunk offset drift."* Bad reasoning: layer 0's cache spans
+  every chunk, so a stuck offset corrupts it too. The region table shows it **is** offset behaviour.
+- A real defect was found and fixed in `tt/trace.py::_fill` — the host twin of a metadata tensor must
+  replicate across the mesh, matching the device tensor's spec exactly, or most shards keep the value
+  frozen at capture. Necessary, but not the cause: 0/32 persisted after the fix.
 
 Capturing anyway is worse than not capturing: the result is fast and silently wrong. This package
-therefore still refuses the capture (`tt/trace.py::assert_traceable`), now citing the measurement
-rather than an inferred API gap. The model side is otherwise complete and validated —
-`tests/unit/test_trace_metadata_vs_ref.py` shows the metadata path is bit-identical to the scalar
-path (PCC 1.0 at offsets 0, 512 and 1024).
+therefore still refuses the capture (`tt/trace.py::assert_traceable`), now citing the measurement.
+`PREFILL_TRACE_FORCE=1` bypasses the refusal for diagnosis only.
 
-*Reproduce:* `PREFILL_USE_TRACE=1 PREFILL_CHUNKED=1 pytest
-models/demos/llama3_1_8b_d_p/tests/galaxy_prefill_kv_pcc.py -k 8x4`
+*Reproduce:* `PREFILL_KV_PCC_REGIONS=1 PREFILL_TRACE_FORCE=1 PREFILL_USE_TRACE=1 PREFILL_CHUNKED=1
+pytest models/demos/llama3_1_8b_d_p/tests/galaxy_prefill_kv_pcc.py -k 8x4`
 
 **Consequence for the spec.** `PREFILL_USE_TRACE` reads like a universal knob, and the engine
 advertises `PrefillRunParams.use_trace` for every model, but whether it is *usable* is a property of
