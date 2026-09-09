@@ -507,7 +507,15 @@ class MiniMaxH3Vae:
 
     def _decoder_subfolder(self) -> str:
         num_frames, height, width = self.decoder.latent_shape
-        return f"vae_decoder_t{num_frames}_h{height}_w{width}"
+        # `_pxdenorm` keys the cache for the same reason `_pxnorm` does on the encoder: the fold
+        # rewrites `proj_out`'s weight and bias, and the two builds disagree about what the decoder
+        # emits -- `[-1, 1]` folded against ImageNet-normalized unfolded. Loading fold-less bytes
+        # into a folded build leaves the output an unclamped ~[-2.4, 2.9], which the post-stitch
+        # clamp to `[-1, 1]` then crushes; nothing downstream errors, the video just loses its
+        # highlights and shadows. The `float` and `yuv420` output types differ in exactly this fold,
+        # so an unkeyed decoder makes them share one cache entry.
+        variant = "_pxdenorm" if self.pixel_denorm is not None else ""
+        return f"vae_decoder_t{num_frames}_h{height}_w{width}{variant}"
 
     def _state_for(self, module) -> dict[str, torch.Tensor]:
         state = self._decoder_state if module is self.decoder else self._encoder_state
