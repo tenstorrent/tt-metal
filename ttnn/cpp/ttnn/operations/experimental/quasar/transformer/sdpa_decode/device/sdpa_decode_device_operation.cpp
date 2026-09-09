@@ -37,9 +37,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
+        const bool is_quasar = input_tensor.device()->arch() == tt::ARCH::QUASAR;
         TT_FATAL(
-            input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
-                input_tensor.dtype() == DataType::BFLOAT4_B,
+            input_tensor.dtype() == DataType::BFLOAT16 || (!is_quasar && (input_tensor.dtype() == DataType::BFLOAT8_B ||
+                                                                          input_tensor.dtype() == DataType::BFLOAT4_B)),
             "Unsupported data type {}.",
             input_tensor.dtype());
     }
@@ -140,9 +141,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 mask_shape[3],
                 operation_attributes.k_chunk_size);
 
+            const bool mask_is_quasar = mask_tensor.device()->arch() == tt::ARCH::QUASAR;
             TT_FATAL(
-                mask_tensor.dtype() == DataType::BFLOAT16 || mask_tensor.dtype() == DataType::BFLOAT8_B ||
-                    mask_tensor.dtype() == DataType::BFLOAT4_B,
+                mask_tensor.dtype() == DataType::BFLOAT16 ||
+                    (!mask_is_quasar &&
+                     (mask_tensor.dtype() == DataType::BFLOAT8_B || mask_tensor.dtype() == DataType::BFLOAT4_B)),
                 "Unsupported data type for mask tensor: {}.",
                 mask_tensor.dtype());
         }
