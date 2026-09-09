@@ -323,3 +323,110 @@ def test_where_program_cache_same_input_volume_different_output_volume(device, i
         "the output-volume cases no longer collide in the program cache "
         f"(dispatches 2,3 added {deltas[1:]} entries); this test no longer covers issue 54235"
     )
+
+
+@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST"])
+def test_where_program_cache_sharded_different_shape_reuses_cache(device, isolate_program_cache, variant):
+    """Two sharded dispatches with the same accessor radix share one entry and both stay bit-exact."""
+    torch.manual_seed(0)
+
+    sharded_mc = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreGrid(y=1, x=4),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Rank-3 vs rank-4, 4 tiles each; buffer_distribution_spec squeezes both to shape_in_pages=[4].
+    pred_shapes = [(4, 32, 32), (1, 4, 32, 32)]
+
+    def to_sharded(t):
+        return ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=sharded_mc)
+
+    deltas = []
+    for pred_shape in pred_shapes:
+        pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_t = torch.randn(pred_shape, dtype=torch.bfloat16)
+        false_t = torch.randn(pred_shape, dtype=torch.bfloat16)
+
+        pred_tt = to_sharded(pred)
+        if variant == "TTT":
+            expected = torch.where(pred.bool(), true_t, false_t)
+            args = (pred_tt, to_sharded(true_t), to_sharded(false_t))
+        elif variant == "TTS":
+            expected = torch.where(pred.bool(), true_t, torch.full_like(true_t, -2.5))
+            args = (pred_tt, to_sharded(true_t), -2.5)
+        else:  # TST
+            expected = torch.where(pred.bool(), torch.full_like(false_t, 1.5), false_t)
+            args = (pred_tt, 1.5, to_sharded(false_t))
+
+        device.cache_entries_counter.reset()
+        with device.cache_entries_counter.measure():
+            result = ttnn.to_torch(ttnn.where(*args))
+        deltas.append(device.cache_entries_counter.total)
+        assert_equal(expected, result)
+
+    # First dispatch must actually cache something (guards against "program cache off, everything passes vacuously").
+    assert deltas[0] == 1, f"first sharded dispatch added {deltas[0]} cache entries, expected exactly 1"
+    # Second must reuse; if the hash ever widens, sharded on-hit re-derive stops being exercised.
+    assert deltas[1] == 0, (
+        f"sharded predicates {pred_shapes[0]} vs {pred_shapes[1]} no longer share a cache entry "
+        f"(deltas={deltas}); the sharded on-hit re-derive path is no longer covered"
+    )
+
+
+@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST"])
+def test_where_program_cache_sharded_distinct_radix_forces_miss(device, isolate_program_cache, variant):
+    """Same H,W,dtype,memory_config,shard_volume but different tensor_shape_in_pages must NOT share an entry.
+
+    Probe confirmed: patching sharded_tensor_shape_in_pages out of the key makes this pair collide
+    (deltas [1, 0]); with the key input in place it misses (deltas [1, 1]). Same MemoryConfig object
+    (grid 1x8, shard [32,32]) for both dispatches -- only the tensor's tile count varies, so the
+    accessor radix ([2] vs [4]) is what gates the miss.
+    """
+    torch.manual_seed(0)
+
+    sharded_mc = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreGrid(y=1, x=8),  # 8 cores accommodates both 2-shard and 4-shard dispatches
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Rank-4, same H=32 W=32; only batch dim varies -> tile count 2 vs 4 -> radix [2] vs [4].
+    pred_shapes = [(1, 2, 32, 32), (1, 4, 32, 32)]
+
+    def to_sharded(t):
+        return ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=sharded_mc)
+
+    deltas = []
+    for pred_shape in pred_shapes:
+        pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_t = torch.randn(pred_shape, dtype=torch.bfloat16)
+        false_t = torch.randn(pred_shape, dtype=torch.bfloat16)
+
+        pred_tt = to_sharded(pred)
+        if variant == "TTT":
+            expected = torch.where(pred.bool(), true_t, false_t)
+            args = (pred_tt, to_sharded(true_t), to_sharded(false_t))
+        elif variant == "TTS":
+            expected = torch.where(pred.bool(), true_t, torch.full_like(true_t, -2.5))
+            args = (pred_tt, to_sharded(true_t), -2.5)
+        else:  # TST
+            expected = torch.where(pred.bool(), torch.full_like(false_t, 1.5), false_t)
+            args = (pred_tt, 1.5, to_sharded(false_t))
+
+        device.cache_entries_counter.reset()
+        with device.cache_entries_counter.measure():
+            result = ttnn.to_torch(ttnn.where(*args))
+        deltas.append(device.cache_entries_counter.total)
+        assert_equal(expected, result)
+
+    assert deltas[0] == 1, f"first sharded dispatch added {deltas[0]} entries, expected exactly 1"
+    # Second dispatch MUST miss; sharing would bake the first radix into common runtime args and misread pages.
+    assert deltas[1] == 1, (
+        f"sharded predicates {pred_shapes[0]} vs {pred_shapes[1]} collided on one cache entry "
+        f"(deltas={deltas}); sharded_tensor_shape_in_pages is not gating the key"
+    )

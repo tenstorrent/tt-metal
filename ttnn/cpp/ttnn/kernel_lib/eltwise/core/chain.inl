@@ -537,8 +537,8 @@ inline constexpr bool is_fpu_kind_op_v =
     is_binary_fpu_op_v<T> || is_dest_reuse_binary_op_v<T> || is_unary_bcast_op_v<T>;
 
 /// MATH-MOP-touching element predicate. Groups every element whose init
-/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
-/// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
+/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via `copy_init`)
+/// and the FPU-kind ops (`BinaryFpu`,
 /// `DestReuseBinary`, `UnaryBcast`). The hoist gate requires all such
 /// elements in a chain (including the CopyTile-versus-FPU init clash) to be
 /// the same instantiated type — otherwise the boot-time fold leaves only the
@@ -913,7 +913,7 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     constexpr explicit CopyTileImpl(StridedTileRange range) noexcept : Base(range) {}
 
     // ---- chain pipeline hooks ----
-    static ALWI void init() { copy_tile_init(Cb); }
+    static ALWI void init() { copy_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
@@ -2605,7 +2605,7 @@ ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB
 //   - Helper does NOT wrap any "BIG init" (`compute_kernel_hw_startup`,
 //     `compute_kernel_hw_startup`, `mm_init`, `reduce_init`).
 //   - Helper owns per-element init only — `add_init`, `*_tile_init`,
-//     `init_bcast`, `copy_tile_to_dst_init_short`, `reconfig_data_format_*`,
+//     `init_bcast`, `copy_init`, `reconfig_data_format_*`,
 //     `tile_regs_*` lifecycle.
 //   - Per `compute_kernel_hw_startup.h:26-30`, mid-`MAIN()` boot is undefined.
 //     Multi-stage kernels are the only exception (one boot per stage,
