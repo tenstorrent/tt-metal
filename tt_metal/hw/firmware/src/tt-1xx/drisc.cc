@@ -44,6 +44,17 @@ uint32_t crta_count __attribute__((used));
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
 uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
+#if defined(PROFILE_STREAMING)
+// Streaming-profiler producer state for DRISC kernels. main has no DRISC profiler at all, so unlike the other
+// firmwares this block is streaming-only: a DRISC kernel built under TT_METAL_STREAMING_PROFILER resolves
+// kernel_profiler::wIndex (and zoneValid, which kernel_profiler_streaming.hpp defines itself for FW builds) out of
+// this firmware ELF via --just-symbols. Without it the kernel fails to link.
+#include "tools/profiler/kernel_profiler.hpp"
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+}  // namespace kernel_profiler
+#endif
+
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_DRISC_MAILBOX_BASE);
 
 int main() {
