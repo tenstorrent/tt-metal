@@ -623,11 +623,20 @@ inline auto invoke_binary_ng_impl(
     // cast to int32/uint32 there, so 2.5 arrives as 2 and 0.5 as 0, silently. The tensor-tensor path
     // below already handles the equivalent mismatch by promoting for DIV/MUL and rejecting for the
     // rest; do the same for a scalar rather than truncating it.
+    //
+    // Only a scalar that the integer path would actually corrupt is worth promoting. float32 carries
+    // a 24-bit mantissa, so typecasting the tensor caps exact integers at 2^24 -- 16777217 * 2.0
+    // comes back as 33554432 rather than 33554434. An integral scalar reaches the kernel intact
+    // either way, so it stays on the integer path and keeps that exactness.
     const bool scalar_needs_promotion = [&] {
         if constexpr (requires { rhs.dtype(); }) {
             return false;
         } else {
-            return is_float_arith && is_32bit_int(a_dtype) && std::holds_alternative<float>(rhs);
+            if (!is_float_arith || !is_32bit_int(a_dtype) || !std::holds_alternative<float>(rhs)) {
+                return false;
+            }
+            const float scalar_value = std::get<float>(rhs);
+            return std::trunc(scalar_value) != scalar_value;
         }
     }();
 

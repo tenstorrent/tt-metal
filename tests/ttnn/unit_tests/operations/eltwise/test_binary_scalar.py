@@ -317,6 +317,27 @@ def test_int_tensor_fractional_scalar_rejected(device, ttnn_op, tensor_dtype, ex
 
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
 @pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
+def test_int_tensor_integral_float_scalar_stays_exact(device, ttnn_op, tensor_dtype):
+    # float32 carries a 24-bit mantissa, so promoting the tensor would cap exact integers at 2^24 --
+    # 16777217 * 2.0 would come back as 33554432 rather than 33554434. An integral scalar reaches the
+    # kernel intact on the integer path, so it stays there and keeps these exact.
+    torch_input = torch.tensor([[2**24 - 1, 2**24, 2**24 + 1, 2**24 + 3]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_op(a, 2.0)
+    torch_golden = {
+        ttnn.add: torch_input + 2,
+        ttnn.subtract: torch_input - 2,
+        ttnn.multiply: torch_input * 2,
+    }[ttnn_op]
+
+    # compared as integers: routing these through float32 would silently round them
+    assert output.dtype == tensor_dtype
+    assert ttnn.to_torch(output).flatten().tolist() == torch_golden.flatten().tolist()
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
 def test_int_tensor_integer_scalar_unchanged(device, ttnn_op, tensor_dtype):
     # An integer scalar loses nothing in the pack, so it must keep the integer dtype and value.
     torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
