@@ -130,15 +130,18 @@ def run_test_matmul_in1_dram_sharded(
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
-        bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        # Shape [1, 1, 1, N]. The op broadcasts a single bias row across every
+        # output row, so the bias must stay one row tall. Padding it out to a
+        # full tile height makes it logically that many rows, all but the first
+        # of them zero, and then only the first output row receives the bias.
+        bias_row = bias.unsqueeze(2)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
-        bias_t = torch2tt_tensor(bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
+        bias_t = torch2tt_tensor(bias_row, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
 
     in0_t = ttnn.interleaved_to_sharded(
         in0_t,
@@ -729,14 +732,16 @@ def test_matmul_2d_in1_dram_sharded(
 
     if has_bias:
         bias = torch.ones(bias_shape).bfloat16().float()
-        bias_padded = bias.unsqueeze(2)
+        # Shape [1, 1, 1, N]; the op broadcasts this single row across every
+        # output row.
+        bias_row = bias.unsqueeze(2)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
-        bias_t = torch2tt_tensor(bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
+        bias_t = torch2tt_tensor(bias_row, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
