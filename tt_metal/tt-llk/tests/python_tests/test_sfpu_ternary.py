@@ -278,11 +278,6 @@ def test_ttnn_where(
 ):
 
     if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
         formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
     ) and dest_acc == DestAccumulation.Yes:
         pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
@@ -394,11 +389,6 @@ def test_ttnn_where_mcw(
     # Multi-tile tensor dimensions (2x2 tiles of 32x32).
     height = 64
     width = 64
-
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
 
     if (
         formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
