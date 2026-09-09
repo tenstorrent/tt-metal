@@ -18,6 +18,14 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.tap_filter_configs import (
+    applicable_formulations,
+    format_formulation_row,
+    slice_signature,
+    tap_device_key,
+    tap_formulation,
+    tap_slice_config,
+)
 from ..utils.tensor import local_device_to_torch
 
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
@@ -275,44 +283,77 @@ def _t_neighbor_pad(
     )
 
 
+_TAP_WARNED: set = set()
+
+
+def _warn_once(key, message: str) -> None:
+    """One warning per distinct key for the process -- the tap filter runs hundreds of times per decode."""
+    if key not in _TAP_WARNED:
+        _TAP_WARNED.add(key)
+        logger.warning(message)
+
+
+def _tap_weight(taps, channels: int, dtype, mesh_device):
+    K = len(taps)
+    wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(channels, 1, K).contiguous()
+    return ttnn.from_torch(
+        wt,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
-    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
-    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``. For fp32 operands
-    conv1d's depthwise kernel accumulates on the SFPU (see compute_depthwise_conv1d.cpp), so it
-    matches the exact shift-multiply-add form bit-for-bit -- the MAC form survives only as the
-    fallback for shapes conv1d cannot find a valid configuration for.
+    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via ``ttnn.conv1d`` (groups=C) with the
+    prepared weight cached in ``cache``. For fp32 operands conv1d's depthwise kernel accumulates on the SFPU (see
+    compute_depthwise_conv1d.cpp), so it matches the exact shift-multiply-add form bit-for-bit -- the MAC form
+    survives only as the fallback for shapes conv1d cannot run.
+
+    Which conv1d formulation to run (the full C at once, or C split into independent chunks, because the
+    activation block is ``C * K`` wide and does not fit L1 at large C however finely T is sliced) and how many
+    DRAM slices to run it with come from ``utils/tap_filter_configs.py``, measured per device class. The
+    lookup is a hint with a trial chain behind it, in this order:
+
+    1. the plan this process already ran for the exact shape (``cache``);
+    2. the tabled formulation with an explicit slice count derived from its measured reference -- the slicer
+       never searches, so it can never fail;
+    3. the tabled formulation with conv1d's own auto-slicing;
+    4. every applicable formulation in turn, widest first, then the MAC form -- exactly the probing the filter
+       did before the table existed, so a device class with no rows behaves as it always has.
+
+    A table-driven attempt that raises is logged once as a stale row; a shape the table does not know is
+    logged once with the row to add. Every step keeps the numerics: the formulations are all the same
+    depthwise conv (chunking is exact), and MAC is bit-equal to conv1d in fp32.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
-
-    # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
-    # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
-    wkey = ("w", C, stride, K, tuple(taps))
-    weight = cache.get(wkey)
-    prepared = weight is not None
-    if weight is None:
-        wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
-        weight = ttnn.from_torch(
-            wt,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=dtype,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
     if "cc" not in cache:
         cache["cc"] = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
     conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    device_key = tap_device_key(mesh_device)
+    shape = f"B={B}, T_pad={T_pad}, C={C}, K={K}, stride={stride}"
 
-    def try_direct():
-        return _depthwise_tap_conv1d(
-            x_BTC,
-            weight,
+    def run(formulation, slice_config):
+        if formulation == "mac":
+            return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
+        channels = C if formulation == "direct" else formulation
+        # The prepared (tilized/sharded) weight is specific to the parallelization conv1d runs with -- the
+        # geometry (B, T_pad) and the slice config -- and a weight prepared for another one decodes to garbage
+        # without raising (that was every 15 s MiniMax-H3 clip after a shorter warm-up clip). Key on all of it;
+        # (K, taps) because the upsampler reuses one cache for distinct sub-tap vectors.
+        wkey = ("w", channels, stride, K, tuple(taps), B, T_pad, slice_signature(slice_config))
+        weight = cache.get(wkey)
+        prepared = weight is not None
+        if weight is None:
+            weight = _tap_weight(taps, channels, dtype, mesh_device)
+        common = dict(
             B=B,
-            C=C,
             T_pad=T_pad,
             T_out=T_out,
             K=K,
@@ -321,95 +362,103 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             dtype=dtype,
             conv_config=conv_config,
             compute_config=cache["cc"],
+            slice_config=slice_config,
             cache=cache,
             wkey=wkey,
-            prepared=prepared,
         )
+        if formulation == "direct":
+            return _depthwise_tap_conv1d(x_BTC, weight, C=C, prepared=prepared, **common)
+        return _depthwise_tap_conv1d_chunked(x_BTC, weight, C=C, chunk=channels, prepared=prepared, **common)
 
-    def try_chunk(chunk):
-        # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
-        # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
-        # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
-        # configuration for the direct form. The failure is the slicer running out of L1: a
-        # depthwise conv1d lays the K sticks out contiguously, so the activation block is C*K wide
-        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and
-        # the filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops
-        # against MAC's 3K-1, on a faster op.
-        if C % chunk or chunk >= C:
-            raise RuntimeError(f"chunk {chunk} does not divide C={C}")
-        out = _depthwise_tap_conv1d_chunked(
-            x_BTC,
-            taps,
-            stride,
-            B=B,
-            C=C,
-            T_pad=T_pad,
-            T_out=T_out,
-            K=K,
-            chunk=chunk,
-            mesh_device=mesh_device,
-            dtype=dtype,
-            conv_config=conv_config,
-            compute_config=cache["cc"],
-            cache=cache,
-        )
-        logger.warning(
-            f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
-            f"using {C // chunk} chunks of {chunk}"
-        )
-        return out
+    # The attempt list: (formulation, slice config or None for auto, where it came from).
+    attempts: list[tuple] = []
+    seen: set = set()
 
-    def try_mac(exc):
-        # No chunking fits either: the shift-multiply-add form, which has no sharding constraint at
-        # all -- slower, but bit-equal to the conv1d path in fp32, so purely an availability fallback.
-        # `exc` is None when MAC is a cached winner tried before anything else has failed this call.
-        reason = f" ({exc})" if exc is not None else ""
-        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
-        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
+    def add(formulation, slice_config, source):
+        key = (formulation, slice_signature(slice_config))
+        if key not in seen:
+            seen.add(key)
+            attempts.append((formulation, slice_config, source))
 
-    # Which candidate fits depends only on (C, K, stride), so it's stable across calls: cache the
-    # winner found in warmup and try it first, skipping the dead ends that preceded it. A miss still
-    # falls through the whole chain, so this can't fail a call that would otherwise succeed. The
-    # slicer's error text is not a stable API, so any RuntimeError just tries the next candidate.
-    candidates = ["direct", 128, 64, 32, "mac"]
-    path_key = ("tap_path", C, stride, K)
-    known = cache.get(path_key)
-    if known in candidates:
-        candidates.insert(0, candidates.pop(candidates.index(known)))
+    shape_key = ("tap_path", B, T_pad, C, K, stride)
+    known = cache.get(shape_key)
+    if known is not None:
+        add(known[0], known[1], "cached")
+    else:
+        tabled = tap_formulation(device_key, C, K, stride)
+        if tabled in applicable_formulations(C):
+            channels = C if tabled == "direct" else tabled
+            explicit = tap_slice_config(device_key, channels, K, stride, T_out)
+            if explicit is not None:
+                add(tabled, explicit, "table")
+            add(tabled, None, "table")
+        else:
+            if tabled is not None:
+                _warn_once(
+                    ("tap_bad_row", device_key, C, K, stride),
+                    f"tap filter: table row {format_formulation_row(C, K, stride, tabled)} for {device_key} does not "
+                    f"apply to C={C}; ignoring it",
+                )
+            _warn_once(
+                ("tap_miss", device_key, C, K, stride),
+                f"tap filter: no table row for {device_key} at C={C}, K={K}, stride={stride}; probing the "
+                f"formulations ({shape}). Sweep this shape with tools/sweep_tap_filter_configs.py and add the row "
+                f"to utils/tap_filter_configs.py",
+            )
+    for formulation in applicable_formulations(C) + ["mac"]:
+        add(formulation, None, "trial")
 
     last_exc = None
-    for candidate in candidates:
+    for formulation, slice_config, source in attempts:
         try:
-            if candidate == "direct":
-                out = try_direct()
-            elif candidate == "mac":
-                out = try_mac(last_exc)
-            else:
-                out = try_chunk(candidate)
+            out = run(formulation, slice_config)
         except RuntimeError as exc:
             last_exc = exc
+            if source in ("table", "cached"):
+                _warn_once(
+                    ("tap_stale", device_key, C, K, stride, formulation, slice_signature(slice_config)),
+                    f"tap filter: {source} plan {formulation!r} / {slice_signature(slice_config) or 'auto slicing'} "
+                    f"failed at {shape}: {str(exc).splitlines()[0][:160]}; falling back",
+                )
             continue
-        cache[path_key] = candidate
+        cache[shape_key] = (formulation, slice_config)
+        if source == "trial":
+            if formulation == "mac":
+                _warn_once(
+                    ("tap_mac", device_key, B, T_pad, C, K, stride),
+                    f"tap filter: no conv1d formulation fits at {shape}; MAC fallback"
+                    + (f" ({str(last_exc).splitlines()[0][:120]})" if last_exc is not None else ""),
+                )
+            else:
+                _warn_once(
+                    ("tap_probed", device_key, C, K, stride, formulation),
+                    f"tap filter: probing found {formulation!r} at {shape}; add "
+                    f"{format_formulation_row(C, K, stride, formulation)} to utils/tap_filter_configs.py for "
+                    f"{device_key}",
+                )
         return out
     raise last_exc
 
 
 def _depthwise_tap_conv1d_chunked(
     x_BTC,
-    taps,
-    stride,
+    weight,
     *,
     B,
     C,
     T_pad,
     T_out,
     K,
+    stride,
     chunk,
     mesh_device,
     dtype,
     conv_config,
     compute_config,
+    slice_config,
     cache,
+    wkey,
+    prepared,
 ):
     """``_depthwise_tap_conv1d`` over independent ``chunk``-wide channel slices, concatenated back.
 
@@ -419,17 +468,6 @@ def _depthwise_tap_conv1d_chunked(
     the mantissa to TF32.
     """
     assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
-    wkey = ("w", chunk, stride, K, tuple(taps))
-    weight = cache.get(wkey)
-    prepared = weight is not None
-    if weight is None:
-        wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(chunk, 1, K).contiguous()
-        weight = ttnn.from_torch(
-            wt,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=dtype,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
     parts = []
     for start in range(0, C, chunk):
         piece = ttnn.slice(x_BTC, [0, 0, start], [B, T_pad, start + chunk])
@@ -447,6 +485,7 @@ def _depthwise_tap_conv1d_chunked(
                 dtype=dtype,
                 conv_config=conv_config,
                 compute_config=compute_config,
+                slice_config=slice_config,
                 cache=cache,
                 wkey=wkey,
                 prepared=prepared or start > 0,
@@ -494,11 +533,12 @@ def _depthwise_tap_conv1d(
     dtype,
     conv_config,
     compute_config,
+    slice_config,
     cache,
     wkey,
     prepared,
 ):
-    """The HEIGHT_SHARDED ``ttnn.conv1d`` fast path."""
+    """The HEIGHT_SHARDED ``ttnn.conv1d`` fast path; ``slice_config`` None leaves the DRAM slicing to the op."""
     out, _, (weight, _bias) = ttnn.conv1d(
         input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
         weight_tensor=weight,
@@ -515,6 +555,7 @@ def _depthwise_tap_conv1d(
         dtype=dtype,
         conv_config=conv_config,
         compute_config=compute_config,
+        slice_config=slice_config,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
