@@ -71,9 +71,15 @@ counted in the TM bucket before). Against that the v19 exact-numerics kernel cos
 the +26% (+5.2 ms) its standalone bench predicts — the deeper stream ring it enables and the
 dense-row dealing absorb most of it. Net **-2.71 ms/block (-4.3%)**.
 
-That projects the denoise to ~13.0 s and the run to ~19.5 s, but **the projection is inside the +-8%
-variance band and is not established** — only the block profile is measured. An end-to-end warm
-generation is the gate that would settle it.
+The block delta does **not** show up end to end. Job 886 on `02d862e71c4`, same shape / LoRA / knobs
+as job 841, warm: Encoder 0.3 | Denoise **13.4** | VAE 4.8 | Audio 1.4 | **Total 19.9 s** against
+20.1 s. The -2.71 ms/block predicts denoise 13.0 s; 13.4 s is what the pipeline reports, and a 0.2 s
+run delta is far under the ~1.6 s single-run resolution this file's +-8% variance band implies.
+
+**Treat the port as end-to-end flat.** What it bought is the exactness (dense-list rows at the bf16
+floor instead of a 70%-off running sum), not latency. The block-level -4.3% is real in a more precise
+instrument but is ~0.55 s of a 20 s run — below the noise floor of a single generation. Settling the
+sign would take a repeated-run A/B, which is not worth the device time at this size.
 
 ## Open levers, ranked by measured size
 
