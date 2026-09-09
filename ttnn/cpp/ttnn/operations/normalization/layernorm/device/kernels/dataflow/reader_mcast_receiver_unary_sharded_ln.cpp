@@ -88,9 +88,9 @@ void kernel_main() {
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
-    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore<> reduce_sender_sem(sem::reduce_sender);
-    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
+    Semaphore reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore reduce_sender_sem(sem::reduce_sender);
+    Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;

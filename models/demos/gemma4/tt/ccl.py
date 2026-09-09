@@ -139,7 +139,7 @@ class CCLManager:
         self._barrier_semaphores = []
         for _ in range(2):
             self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
-            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)])
+            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
             self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
         ttnn.synchronize_device(mesh_device)
 
@@ -158,7 +158,7 @@ class CCLManager:
         return sems
 
     def get_ag_semaphore(self):
-        """Returns list of 2 semaphores for all_gather (cycles double-buffer)."""
+        """Returns list of 3 semaphores for all_gather (cycles double-buffer)."""
         sems = self._ag_semaphores[self._ag_idx]
         self._ag_idx = (self._ag_idx + 1) % 2
         return sems

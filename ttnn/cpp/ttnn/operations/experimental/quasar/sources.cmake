@@ -37,6 +37,9 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
     op_slicing/op_slicing.hpp
+    # transformer
+    transformer/sdpa_decode/sdpa_decode.hpp
+    transformer/sdpa/sdpa.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -133,6 +136,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_program_factory.cpp
     binary_ng/device/binary_ng_metal_v2_factory.cpp
+    binary_ng/device/binary_ng_quasar_native_factory.cpp
     binary_ng/device/binary_ng_utils.cpp
     # binary (host front-end: add/subtract/multiply/... -> quasar binary_ng device op)
     binary/binary.cpp
@@ -215,6 +219,16 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     typecast/device/typecast_program_factory.cpp
     typecast/device/typecast_rm_chunked_program_factory.cpp
     typecast/device/typecast_sharded_program_factory.cpp
+    # transformer (Metal 2.0 fork of operations/transformer/sdpa_decode; isolated in ttnn::prim::qsr)
+    transformer/sdpa_decode/sdpa_decode.cpp
+    transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp
+    transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp
+    # transformer (Metal 2.0 fork of operations/transformer/sdpa; isolated in ttnn::prim::qsr)
+    transformer/sdpa/sdpa.cpp
+    transformer/sdpa/device/sdpa_device_operation.cpp
+    transformer/sdpa/device/sdpa_program_factory.cpp
+    transformer/sdpa/device/joint_sdpa_device_operation.cpp
+    transformer/sdpa/device/joint_sdpa_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -248,4 +262,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     typecast/typecast_nanobind.cpp
     sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
+    # transformer (nested ttnn.experimental.quasar.transformer submodule)
+    transformer/transformer_nanobind.cpp
+    transformer/sdpa_decode/sdpa_decode_nanobind.cpp
+    transformer/sdpa/sdpa_nanobind.cpp
 )

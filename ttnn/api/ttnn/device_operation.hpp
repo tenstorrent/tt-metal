@@ -25,6 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <internal/graph_function_abort.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -75,7 +76,7 @@ auto compute_program_hash(
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
 template <typename WorkloadFactory, typename device_operation_t>
-static auto create_mesh_workload_from_workload_factory(
+auto create_mesh_workload_from_workload_factory(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -224,7 +225,7 @@ void enqueue_mesh_workload(
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
 // path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` /
-// `CustomProgramSpecFactoryConcept` factories.
+// `CustomProgramSpecFactoryConcept` / `MeshWorkloadSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -246,6 +247,10 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
             [&]<CustomProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template CustomProgramSpecMeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<MeshWorkloadSpecFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadSpecFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -493,7 +498,11 @@ typename device_operation_t::tensor_return_value_t launch(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
-    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
+    // Everything below can throw: validation, output allocation and, for the circular-buffer /
+    // L1 clash of #28836, program dispatch. The guard closes the tracked scope on those paths too,
+    // marking it aborted, so the capture does not lose the failing op and misnest everything after
+    // it.
+    tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
 
     for (const auto& input_tensor_ref : input_tensors) {
         const auto& input_tensor = input_tensor_ref.get();
@@ -517,7 +526,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
     if (mesh_device->get_view().get_devices().empty()) {
-        tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+        tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }
 
@@ -543,7 +552,7 @@ typename device_operation_t::tensor_return_value_t launch(
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
-    tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+    tracked_function.end(tensor_return_value);
     return tensor_return_value;
 }
 

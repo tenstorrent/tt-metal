@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -2263,6 +2264,69 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotsReusedAcrossDisjointCores) {
     }
     // Conflicts only with the wide DFB, so it reuses slot 1 rather than taking slot 4.
     EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 1u);
+}
+
+// WH/BH firmware addresses this config as a CB-format table indexed by device_slot. Verify that
+// serialization preserves empty entries when a core's assigned slots are not consecutive.
+TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << "WH/BH use the slot-indexed CB-format DFB config";
+    }
+
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "Needs at least two worker cores in a row";
+    }
+
+    const CoreCoord coordinator(0, 0);
+    const CoreCoord worker(1, 0);
+    const CoreRange all_cores(coordinator, worker);
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+
+    for (int i = 0; i < 3; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(worker)), config);
+    }
+    const uint32_t coordinator_id =
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(coordinator)), config);
+    const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
+
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 0u);
+    EXPECT_EQ(impl.get_dataflow_buffer(wide_id)->device_slot, 3u);
+
+    constexpr size_t words_per_slot = 4;
+    constexpr size_t num_slots = 4;
+    std::vector<uint8_t> serialized(num_slots * words_per_slot * sizeof(uint32_t), 0xFF);
+    const auto dfbs = impl.dataflow_buffers_on_core(coordinator);
+    const size_t bytes_written =
+        experimental::dfb::detail::serialize_dfb_config_for_core(coordinator, dfbs, serialized);
+    EXPECT_EQ(bytes_written, serialized.size());
+
+    auto read_word = [&](size_t slot, size_t word) {
+        uint32_t value = 0;
+        std::memcpy(&value, serialized.data() + (slot * words_per_slot + word) * sizeof(uint32_t), sizeof(uint32_t));
+        return value;
+    };
+
+    const auto coordinator_dfb = impl.get_dataflow_buffer(coordinator_id);
+    EXPECT_EQ(read_word(0, 0), coordinator_dfb->uniform_alloc_addr());
+    EXPECT_EQ(read_word(0, 1), coordinator_dfb->total_size());
+    EXPECT_EQ(read_word(0, 2), coordinator_dfb->config.num_entries);
+    EXPECT_EQ(read_word(0, 3), coordinator_dfb->config.entry_size);
+    for (size_t slot : {1u, 2u}) {
+        for (size_t word = 0; word < words_per_slot; word++) {
+            EXPECT_EQ(read_word(slot, word), 0u) << "slot " << slot << ", word " << word;
+        }
+    }
+    const auto wide_dfb = impl.get_dataflow_buffer(wide_id);
+    EXPECT_EQ(read_word(3, 0), wide_dfb->uniform_alloc_addr());
+    EXPECT_EQ(read_word(3, 1), wide_dfb->total_size());
+    EXPECT_EQ(read_word(3, 2), wide_dfb->config.num_entries);
+    EXPECT_EQ(read_word(3, 3), wide_dfb->config.entry_size);
 }
 
 // The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
