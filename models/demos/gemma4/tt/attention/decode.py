@@ -79,6 +79,87 @@ def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     )
 
 
+def _rope_expand_gather_enabled() -> bool:
+    """Fold the per-user RoPE heads-broadcast into the position-embedding gather
+    instead of ``ttnn.repeat``-ing the already-gathered TILE cos/sin tensor.
+
+    ``apply_rope_decode_peruser`` broadcasts ``cos_b``/``sin_b`` from
+    ``[1, batch, 1, head_dim]`` to ``[1, batch, heads, head_dim]`` via
+    ``ttnn.repeat``. That call's target axis (heads) starts at size 1, which
+    fails ``repeat_codegen``'s TILE alignment gate
+    (``single_dim_ok``: for TILE, a repeated H/W axis must already be a
+    multiple of ``TILE_HEIGHT``/``TILE_WIDTH`` — 1 is not a multiple of 32).
+    So it falls back to the generic native path, which is an
+    untilize -> repeat -> tilize composite on the (batch-sized, bf16) cos/sin
+    tensor — measured at ~71us/device per call on real hardware (Tracy,
+    gemma-4-31B sliding layer, batch=16, TP=8), most of it the tilize step.
+
+    The fix moves the broadcast upstream of the gather instead: expand
+    ``position_idx`` (a tiny uint32 ROW_MAJOR tensor) via ``ttnn.repeat``
+    first, then do ONE ``ttnn.embedding`` gather at the expanded width. A
+    ROW_MAJOR non-bf16 tensor has no TILE alignment restriction, so this
+    repeat lands on ``RepeatCodegenDeviceOperation`` (the fast path) instead
+    of the untilize/repeat/tilize composite — measured at ~1.9us for the
+    repeat itself, ~44us/device total for the whole construction (embedding
+    gather included), vs ~71us/device for ONE of the two calls it replaces
+    (Q's cos+sin construction; K's becomes a free slice of Q's result instead
+    of a second full construction — see ``_rope_expanded_broadcast``).
+    Verified bit-exact against the current repeat-based path (max abs diff
+    0.0, both cos_b and sin_b) before being wired in here.
+
+    Applies to BOTH ``rope_presliced`` values. ``rope_presliced=True`` is the
+    actual production/DFlash decode path (model.py gathers cos/sin once per
+    layer_type, shared across all layers of that type, to avoid a per-layer
+    ttnn.embedding) — this function has no access to the original 2D table
+    once presliced (``cos_cache`` IS the presliced result by then), so for
+    this flag to have any effect on that path, the CALLER must build the
+    presliced tensor at the expanded (Q head count) width in the first place
+    — see model.py's ``decode_rope_presliced`` construction, gated on this
+    same flag. Getting this wrong (e.g. only handling ``rope_presliced=False``
+    here) makes the flag a silent no-op on real decode traffic — it was
+    initially shipped that way and confirmed via Tracy on real hardware to
+    change nothing, since ``rope_presliced=True`` is unconditionally what
+    model.py's decode loop uses whenever ``decode_rope_presliced`` is
+    populated.
+
+    Default ON. Verified bit-exact (max abs diff 0.0) at both ends of the real
+    call chain: the isolated cos_b/sin_b construction, and the full
+    ``Gemma4Model.__call__`` -> ``decode_rope_presliced`` -> ``decode_forward``
+    path with ``rope_presliced=True`` (DFlash's actual verify traffic) — not
+    just the ``rope_presliced=False`` case, which is the path an earlier,
+    incomplete version of this check covered before the ``rope_presliced=True``
+    gap above was found and fixed. Measured 6.1% total device-time reduction
+    for one layer's ``decode_forward`` call on real T3K hardware (Tracy).
+    ``GEMMA4_ROPE_EXPAND_GATHER=0`` restores the previous repeat-based path,
+    as an escape hatch if a shape/config combination outside what's been
+    measured here turns up a regression.
+    """
+    return os.environ.get("GEMMA4_ROPE_EXPAND_GATHER", "1").lower() not in ("0", "false", "no")
+
+
+def _rope_expanded_broadcast(position_idx, cos_cache, sin_cache, batch, heads):
+    """``(cos_b, sin_b)`` at ``[1, batch, heads, head_dim]``, gathered directly at
+    the broadcast width instead of gathered-then-``ttnn.repeat``'d. See
+    ``_rope_expand_gather_enabled`` for why this avoids the untilize/repeat/tilize
+    composite. Callers needing a NARROWER head count (e.g. K's ``num_local_kv``
+    when Q's ``num_local_heads`` is larger under GQA) should slice the result
+    (``result[:, :, :narrower_heads, :]``) rather than calling this again — the
+    broadcast is position-only, so every head's copy is identical and a slice is
+    exact and free.
+    """
+    idx_2d = ttnn.reshape(position_idx, (batch, 1))
+    idx_expanded = ttnn.reshape(ttnn.repeat(idx_2d, ttnn.Shape([1, heads])), (batch * heads,))
+    cos_b = ttnn.reshape(
+        ttnn.unsqueeze_to_4D(ttnn.embedding(idx_expanded, cos_cache, layout=ttnn.TILE_LAYOUT)),
+        (1, batch, heads, cos_cache.shape[-1]),
+    )
+    sin_b = ttnn.reshape(
+        ttnn.unsqueeze_to_4D(ttnn.embedding(idx_expanded, sin_cache, layout=ttnn.TILE_LAYOUT)),
+        (1, batch, heads, sin_cache.shape[-1]),
+    )
+    return cos_b, sin_b
+
+
 def decode_forward(
     hidden_states,
     cos_cache,
@@ -170,26 +251,76 @@ def decode_forward(
     #     per-layer path, kept for the it-assistant drafter / direct callers).
     use_embedding_rope = rope_presliced or len(cos_cache.shape) == 2
     if use_embedding_rope:
+        batch = tt_q.shape[1]
+        # See _rope_expand_gather_enabled: folds apply_rope_decode_peruser's
+        # heads-broadcast into the position-embedding gather instead of a
+        # post-gather ttnn.repeat, avoiding a hardware-verified ~71us/device
+        # untilize/repeat/tilize composite. Applies under BOTH rope_presliced
+        # values:
+        #   - rope_presliced=False: this function does its own gather below,
+        #     directly at the broadcast width (cos_cache/sin_cache are the
+        #     original 2D tables here).
+        #   - rope_presliced=True (the actual DFlash/production decode path —
+        #     model.py gathers once per layer_type and shares across layers):
+        #     the caller (model.py's decode_rope_presliced) must ALREADY have
+        #     produced cos_cache/sin_cache at Q's broadcast width when this
+        #     flag is on, not the plain [1,1,batch,head_dim] shape. This
+        #     function has no access to the original 2D table once presliced
+        #     (cos_cache IS the presliced result), so it cannot redo the
+        #     gather itself here — model.py must do it once per layer_type.
+        #
+        # The ``position_idx_cache is not None`` half of this condition MUST
+        # mirror model.py's own gate on its expand_gather local exactly: this
+        # function has no way to tell, just from cos_cache/sin_cache's shape,
+        # whether model.py built them via the expanded-gather (Q-head-count
+        # width) or the plain path (batch width) — the two shapes can even
+        # coincide by accident (heads == batch_pad) for some model configs.
+        # Deriving both sides from the identical fact (position_idx_cache
+        # given or not) is what keeps producer and consumer in sync; changing
+        # this condition here without changing model.py's matching one (or
+        # vice versa) silently mismatches cos_b's shape against tt_q's.
+        use_expand_gather = (
+            _rope_expand_gather_enabled() and batch > 1 and (not rope_presliced or position_idx_cache is not None)
+        )
         if rope_presliced:
-            cos_pos, sin_pos = cos_cache, sin_cache  # [1, 1, batch_pad, head_dim], shared
-        else:
+            cos_pos, sin_pos = cos_cache, sin_cache  # shared across all layers of this type
+        elif not use_expand_gather:
             # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
             # position_idx: [1, 32] uint32 padded tensor for embedding lookup
             cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT))
             sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT))
+        # else: use_expand_gather (non-presliced) does its own gather (at the
+        # broadcast width) below instead of via cos_pos/sin_pos.
+
         # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
         # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
         # which that op can't express, so fall back to the manual elementwise
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
-        batch = tt_q.shape[1]
         if batch > 1:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+            if use_expand_gather:
+                # Gather once at Q's (wider) head count; K's narrower count is a
+                # free slice of the same result — every head's copy is
+                # identical (position-only), so slicing is exact.
+                num_local_heads = config.num_attention_heads // tp
+                num_local_kv = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+                if rope_presliced:
+                    cos_b_q, sin_b_q = cos_pos, sin_pos  # already expanded by model.py, see above
+                else:
+                    cos_b_q, sin_b_q = _rope_expanded_broadcast(
+                        position_idx, cos_cache, sin_cache, batch, num_local_heads
+                    )
+                cos_b_k, sin_b_k = cos_b_q[:, :, :num_local_kv, :], sin_b_q[:, :, :num_local_kv, :]
+            else:
+                cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
+                sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
         def _rope(t, memory_config=None):
             if batch == 1:
                 return apply_rope(t, cos_pos, sin_pos, token_index=0, memory_config=memory_config)
+            if use_expand_gather:
+                cb, sb = (cos_b_q, sin_b_q) if t.shape[2] == num_local_heads else (cos_b_k, sin_b_k)
+                return apply_rope_decode_peruser(t, cb, sb)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
