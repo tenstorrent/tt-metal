@@ -23,7 +23,7 @@ constexpr uint32_t kScratchCb = tt::CBIndex::c_3;
 constexpr uint32_t kMaxCb = tt::CBIndex::c_4;
 constexpr uint32_t kCaBiasCb = tt::CBIndex::c_5;
 constexpr uint32_t kCbBiasCb = tt::CBIndex::c_6;
-constexpr CoreCoord kStatePreparationCore{0, 0};
+constexpr uint32_t kStateScratchTiles = 7;
 
 constexpr auto kStateKernel =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/device/kernels/"
@@ -66,12 +66,14 @@ uint32_t factory_head_dim_of(const Tensor& kv) { return kv.logical_shape()[-1] /
 KernelDescriptor state_kernel_descriptor(
     const CsaStateInputs& args,
     std::array<Tensor, 2>& outputs,
-    const CoreCoord& core,
+    const CoreRangeSet& state_cores,
+    const std::vector<CoreCoord>& cores,
+    uint32_t state_tiles,
     uint32_t local_valid,
     uint32_t absolute_start) {
     const uint32_t head_dim = factory_head_dim_of(args.kv);
     std::vector<uint32_t> compile_args = {
-        head_dim, 2 * head_dim / tt::constants::TILE_WIDTH, head_dim / tt::constants::TILE_WIDTH};
+        2 * head_dim / tt::constants::TILE_WIDTH, head_dim / tt::constants::TILE_WIDTH};
     TensorAccessorArgs(args.kv.buffer()).append_to(compile_args);
     TensorAccessorArgs(args.gate.buffer()).append_to(compile_args);
     TensorAccessorArgs(args.position_bias.buffer()).append_to(compile_args);
@@ -83,24 +85,36 @@ KernelDescriptor state_kernel_descriptor(
     KernelDescriptor descriptor;
     descriptor.kernel_source = kStateKernel;
     descriptor.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    descriptor.core_ranges = CoreRangeSet(CoreRange(core, core));
+    descriptor.core_ranges = state_cores;
     descriptor.compile_time_args = std::move(compile_args);
     descriptor.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
     };
-    KernelDescriptor::RTArgList runtime_args;
-    runtime_args.reserve(9);
-    runtime_args.push_back(args.kv.buffer());
-    runtime_args.push_back(args.gate.buffer());
-    runtime_args.push_back(args.position_bias.buffer());
-    runtime_args.push_back(args.base_kv_state.buffer());
-    runtime_args.push_back(args.base_score_state.buffer());
-    runtime_args.push_back(outputs[0].buffer());
-    runtime_args.push_back(outputs[1].buffer());
-    runtime_args.push_back(local_valid);
-    runtime_args.push_back(absolute_start);
-    descriptor.emplace_runtime_args(core, runtime_args);
+
+    const uint32_t num_cores = cores.size();
+    const uint32_t base_tiles = state_tiles / num_cores;
+    const uint32_t extra_tiles = state_tiles % num_cores;
+    descriptor.runtime_args.reserve(num_cores);
+    uint32_t first_tile = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        KernelDescriptor::RTArgList runtime_args;
+        runtime_args.reserve(11);
+        runtime_args.push_back(args.kv.buffer());
+        runtime_args.push_back(args.gate.buffer());
+        runtime_args.push_back(args.position_bias.buffer());
+        runtime_args.push_back(args.base_kv_state.buffer());
+        runtime_args.push_back(args.base_score_state.buffer());
+        runtime_args.push_back(outputs[0].buffer());
+        runtime_args.push_back(outputs[1].buffer());
+        runtime_args.push_back(local_valid);
+        runtime_args.push_back(absolute_start);
+        const uint32_t core_tiles = base_tiles + (i < extra_tiles ? 1 : 0);
+        runtime_args.push_back(core_tiles);
+        runtime_args.push_back(first_tile);
+        descriptor.emplace_runtime_args(cores[i], runtime_args);
+        first_tile += core_tiles;
+    }
     return descriptor;
 }
 
@@ -115,10 +129,19 @@ ProgramDescriptor CsaStatePreparationProgramFactory::create_descriptor(
     const auto [local_valid, absolute_start] =
         local_runtime(params, args.kv.logical_shape()[-2], *mesh_dispatch_coordinate);
 
+    // The 64-row slab is two tile rows of state_width_tiles each, and those tiles are independent:
+    // each one patches its own eight live rows from its own feature columns.
+    const auto grid = args.kv.device()->compute_with_storage_grid_size();
+    const uint32_t grid_cores = grid.x * grid.y;
+    const uint32_t state_tiles = 2 * factory_head_dim_of(args.kv) / tt::constants::TILE_WIDTH;
+    const uint32_t num_cores = std::min(state_tiles, grid_cores);
+    const CoreRangeSet state_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+    const std::vector<CoreCoord> cores = corerange_to_cores(state_cores, num_cores, /*row_wise=*/true);
+
     ProgramDescriptor desc;
-    const CoreRangeSet state_cores(CoreRange(kStatePreparationCore, kStatePreparationCore));
-    desc.cbs.push_back(cb_descriptor(kScratchCb, 7, state_cores));
-    desc.kernels.push_back(state_kernel_descriptor(args, outputs, kStatePreparationCore, local_valid, absolute_start));
+    desc.cbs.push_back(cb_descriptor(kScratchCb, kStateScratchTiles, state_cores));
+    desc.kernels.push_back(
+        state_kernel_descriptor(args, outputs, state_cores, cores, state_tiles, local_valid, absolute_start));
     return desc;
 }
 
@@ -140,15 +163,19 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     const uint32_t output_tiles = output_height_tiles * state_width_tiles;
 
     // Output tiles are independent -- the softmax runs per feature column and windows never interact --
-    // so they split across the grid with no cross-core traffic. The state kernel needs a core of its
-    // own because it is a RISCV_0 data movement kernel, which the reader already occupies.
-    const uint32_t num_cores = std::min(output_tiles, grid_cores - 1);
+    // so they split across the grid with no cross-core traffic. The state kernel needs cores of its
+    // own because it is a RISCV_0 data movement kernel, which the reader already occupies, so the two
+    // blocks are carved row-major with the state block starting where the compression block ends.
+    const uint32_t state_tiles = 2 * state_width_tiles;
+    const uint32_t state_core_count = std::min(state_tiles, grid_cores / 2);
+    const uint32_t num_cores = std::min(output_tiles, grid_cores - state_core_count);
     const CoreRangeSet compression_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
     const std::vector<CoreCoord> cores = corerange_to_cores(compression_cores, num_cores, /*row_wise=*/true);
-    const CoreCoord state_core = grid_to_cores(grid_cores, grid.x, grid.y, /*row_wise=*/true).back();
+    const CoreCoord state_start = grid_to_cores(grid_cores, grid.x, grid.y, /*row_wise=*/true)[num_cores];
+    const CoreRangeSet state_cores = num_cores_to_corerangeset(state_start, state_core_count, grid, /*row_wise=*/true);
+    const std::vector<CoreCoord> state_core_list = corerange_to_cores(state_cores, state_core_count, /*row_wise=*/true);
 
     ProgramDescriptor desc;
-    const CoreRangeSet state_cores(CoreRange(state_core, state_core));
     desc.cbs.push_back(cb_descriptor(kCandidateKvCb, 8, compression_cores));
     desc.cbs.push_back(cb_descriptor(kCandidateScoreCb, 8, compression_cores));
     desc.cbs.push_back(cb_descriptor(kPooledCb, 1, compression_cores));
@@ -156,7 +183,7 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     desc.cbs.push_back(cb_descriptor(kMaxCb, 1, compression_cores));
     desc.cbs.push_back(cb_descriptor(kCaBiasCb, 1, compression_cores));
     desc.cbs.push_back(cb_descriptor(kCbBiasCb, 1, compression_cores));
-    desc.cbs.push_back(cb_descriptor(kScratchCb, 7, state_cores));
+    desc.cbs.push_back(cb_descriptor(kScratchCb, kStateScratchTiles, state_cores));
 
     std::vector<uint32_t> reader_compile_args = {
         kCandidateKvCb, kCandidateScoreCb, kScratchCb, input_width_tiles, state_width_tiles, kCaBiasCb, kCbBiasCb};
@@ -232,7 +259,8 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     CsaStateInputs state_args{
         args.kv, args.gate, args.position_bias, args.predecessor_kv_state, args.predecessor_score_state};
     std::array<Tensor, 2> state_outputs{outputs[1], outputs[2]};
-    desc.kernels.push_back(state_kernel_descriptor(state_args, state_outputs, state_core, local_valid, absolute_start));
+    desc.kernels.push_back(state_kernel_descriptor(
+        state_args, state_outputs, state_cores, state_core_list, state_tiles, local_valid, absolute_start));
     return desc;
 }
 
