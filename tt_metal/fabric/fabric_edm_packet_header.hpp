@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <climits>
 #include <initializer_list>
-#include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "api/debug/assert.h"
