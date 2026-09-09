@@ -24,7 +24,6 @@ from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
 from .prefill import flush_deferred_bounded_fills, prefill_forward
 
-
 #: Ring headroom, in 64-token blocks, added on top of the sliding window.
 #: 0 (default) keeps the historical exact-window ring.
 SPEC_RING_HEADROOM_ENV = "GEMMA4_SPEC_RING_HEADROOM_BLOCKS"
@@ -300,6 +299,7 @@ class Gemma4Attention:
                 mesh_config=self.mesh_config,
                 mesh_device=self.mesh_device,
                 position_idx=packed["position_idx"],
+                position_idx_cache=packed.get("position_idx_cache"),
                 kv_write_idxs=packed.get("kv_write_idxs"),
                 attn_mask=packed["attn_mask"],
                 packed_p=packed["packed_p"],
@@ -310,6 +310,7 @@ class Gemma4Attention:
                 kv_staging=self.kv_staging,
                 embed_idx=packed.get("embed_idx"),
                 hot_pt=packed.get("hot_pt"),
+                kv_write_pack=packed.get("kv_write_pack"),
             )
 
         if is_decode:

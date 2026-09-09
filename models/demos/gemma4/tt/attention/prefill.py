@@ -842,6 +842,7 @@ def _prefill_forward_single(
             f"kv_cache={kv_cache is not None}, shared_kv={shared_kv is not None}). "
             f"Non-chunked SDPA silently returns garbage above this length."
         )
+
     else:
         # fp32 dest-acc is safe on the prefill SDPA op (unlike the decode op, where
         # it halves dest for head_dim=512). Fidelity policy and the #38306 caveat

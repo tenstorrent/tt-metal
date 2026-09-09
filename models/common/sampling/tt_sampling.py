@@ -39,7 +39,6 @@ TIEBREAK_DELTA_FLOOR = 1e-30
 # holds it exactly; larger than any padded vocabulary size, which __init__ asserts; and small enough
 # that sentinel + index cannot overflow the int32 the min reduce runs in.
 TIEBREAK_INDEX_SENTINEL = 2**24
-
 # Widest input ttnn.topk accepts in one call; vocabs beyond it must be cut into chunks.
 TOPK_MAX_WIDTH = 64 * 1024
 

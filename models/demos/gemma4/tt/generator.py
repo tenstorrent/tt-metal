@@ -1496,6 +1496,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 def _make_sample(orig, fb):
                     def _sample(logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False):
                         nonlocal wrote_feedback
+
                         if tt_out_tok is None:
                             tt_out_tok = fb
                             if not enable_trace:

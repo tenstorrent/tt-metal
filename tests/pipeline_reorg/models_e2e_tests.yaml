@@ -700,6 +700,7 @@
     wh_llmbox_perf:
       timeout: 25
       tier: 2
+
       release_ready: false
     # Single Blackhole P150: short demo + unit PCC. Cap at 6m so models
     # e2e_tier2 bh_p150 stays within the 26m team budget (GPT-OSS 15 + UNet 5
