@@ -945,13 +945,16 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr TileAddressing Addressing = Output.addressing;
     using Base = OutputStream;
     using Base::tile_base;
-    // Walk vs pinned output addressing is derived from reserve policy: upfront-reserve,
-    // per-outer direct, and caller-pre-reserved windows write distinct tiles; front-advancing
-    // policies stay pinned.
+    // Walk vs pinned output addressing is derived from reserve policy: upfront-reserve
+    // policies and caller-pre-reserved windows write distinct tiles; front-advancing policies stay pinned.
+    // `walk` emits `base + i_flat`, and out-of-order pack adds that to `fifo_wr_ptr` — the start of the
+    // window that is currently open. So it is only correct for policies that never push mid-walk, leaving
+    // the window start fixed for the whole shape. Front-advancing policies (PerOuter above all) push per
+    // outer iteration, so the window start already carries the row while the shape-global `i_flat` would
+    // add it a second time; they stay pinned and let the packer's own in-window counter address the tile.
     static constexpr bool walk =
         L1AccumulationMode == L1Accumulation::Disabled &&
-        (Reserve == ReservePolicy::Upfront || Reserve == ReservePolicy::None ||
-         (Reserve == ReservePolicy::PerOuter && DestAccumulationMode == DestAccumulation::Disabled));
+        (Reserve == ReservePolicy::Upfront || Reserve == ReservePolicy::None);
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_output_policy(Reserve, Push), "PackTile: output reserve/push policy pair is invalid");

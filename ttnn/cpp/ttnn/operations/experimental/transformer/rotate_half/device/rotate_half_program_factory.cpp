@@ -90,9 +90,6 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
         WriterDataMovementConfig(writer_compile_time_args));
 
     std::map<std::string, std::string> bcast_compute_defines = {
-        {"BCAST_OP", "mul_tiles_bcast"},
-        {"BCAST_LLKOP", "EltwiseBinaryType::ELWMUL"},
-        {"BCAST_DIM", "BroadcastType::SCALAR"},
         {"CHAIN_BCAST_OP", "compute_kernel_lib::BinaryFpuOp::Mul"},
         {"CHAIN_BCAST_DIM", "compute_kernel_lib::BroadcastDim::Scalar"},
         {"BCAST_SCALAR", "1"}};

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -14,11 +13,6 @@ void kernel_main() {
     auto Wt = get_arg(args::Wt);
 
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
-
-    // The factory launches across the full device grid and assigns zero work to idle cores.
-    if (B == 0 || Ht == 0 || Wt == 0) {
-        return;
-    }
 
     // The reader repeats the RHS row every Wt tiles, so compute can consume both streams
     // linearly while broadcasting RHS down H.

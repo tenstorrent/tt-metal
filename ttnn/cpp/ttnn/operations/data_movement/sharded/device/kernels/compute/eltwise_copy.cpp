@@ -8,7 +8,6 @@
 // this file is retired, changes here likely belong in the fork too.
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
