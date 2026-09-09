@@ -47,7 +47,7 @@ from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformat
 # At seq=128 the 1D configs run out of room (M is 4 tiles but 1D mcast blocks only over
 # N), so the 2D config — which blocks over M and K as well — wins outright. in0 is
 # L1-interleaved from nlp_concat_heads in both cases, which is what the sweep measured.
-# Numbers from test_qwen3_tts_prefill_mm_sweep_n150.py; QWEN3_TTS_PREFILL_WO_OVERRIDE=0 reverts.
+# QWEN3_TTS_PREFILL_WO_OVERRIDE=0 reverts.
 _PREFILL_WO = {
     # (seq, K, N): ("1d", num_cores) | ("2d", (grid_x, grid_y))
     (64, 2048, 2048): ("1d", 16),
@@ -664,8 +664,8 @@ class Attention(LightweightModule):
         # 16 cores wants (`width_sharded_l1_memcfg(m/32, 64, 8, 2)`). The prefill path was
         # calling `to_memory_config(..., L1_MEMORY_CONFIG)` on it, paying a
         # ShardedToInterleaved (2.9 us at m=64) to hand the matmul a layout that is then also
-        # SLOWER to consume: 36.7 us interleaved vs 33.2 us sharded, bit-exact
-        # (`test_qwen3_tts_prefill_gaps_sweep.py`). So the flatten cost -6.4 us/layer and an
+        # SLOWER to consume: 36.7 us interleaved vs 33.2 us sharded, bit-exact.
+        # So the flatten cost -6.4 us/layer and an
         # op for nothing. The earlier sweep missed this because it only tried sharded-in0 at
         # `cores in (32, 64)`, and the config that ships at m=64 is c16.
         #
@@ -978,7 +978,7 @@ class Attention(LightweightModule):
                 # with taking the interleaved output and resharding, one op cheaper.
                 # Its *input* must stay interleaved — a sharded input dispatches the
                 # sharded kernel even with no program_config, and that kernel is not
-                # bit-exact here (see test_qwen3_tts_decode_head_split.py).
+                # bit-exact here.
                 out = ttnn.rms_norm(
                     t_il,
                     epsilon=self.rms_norm_eps,
