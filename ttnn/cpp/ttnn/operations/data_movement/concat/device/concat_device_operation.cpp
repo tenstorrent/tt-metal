@@ -17,6 +17,29 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+// The dedicated sharded-to-sharded and sharded-to-interleaved factories bind a shard
+// directly as a globally-allocated circular buffer for zero-copy access -- circular
+// buffers can only be backed by L1. DRAM-sharded tensors can't take that path on either
+// side, so they must route through the generic factory instead, which stages through an
+// ordinary (non-aliased) L1 CB and addresses every tensor via TensorAccessor regardless of
+// its memory layout or buffer type. Shared between select_program_factory (routing) and
+// validate_on_program_cache_miss (which must only apply the zero-copy factories' extra
+// output-shard-matching / dim-compatibility constraints when they're actually selected).
+bool uses_zero_copy_sharded_factory(const std::vector<Tensor>& input_tensors, const MemoryConfig& output_mem_config) {
+    if (!input_tensors[0].is_sharded()) {
+        return false;
+    }
+    if (input_tensors[0].buffer()->buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+    if (output_mem_config.is_sharded() && output_mem_config.buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensors.empty()) {
@@ -24,11 +47,13 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     }
 
     const auto& input_tensors = tensor_args.input_tensors;
+    const bool input_is_sharded = input_tensors[0].is_sharded();
 
-    if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
+    if (!uses_zero_copy_sharded_factory(input_tensors, args.output_mem_config)) {
         // The launch infra allocates the output tensor before factory selection, so the
         // allocator's free window already accounts for it.
-        if (can_use_tiled_unaligned_concat(
+        if (!input_is_sharded &&
+            can_use_tiled_unaligned_concat(
                 input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
             return ConcatTiledUnalignedProgramFactory{};
         }
@@ -145,7 +170,12 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
-    if (shard_first) {
+    // The output-shard-matching and dim-compatibility constraints below are requirements of
+    // the dedicated zero-copy sharded factories (each hardcodes a specific shard-vs-dim
+    // relationship). They don't apply when DRAM sharding routes concat through the generic,
+    // TensorAccessor-based factory instead, which can write any requested output_mem_config
+    // (sharded or not, any dim) directly.
+    if (shard_first && uses_zero_copy_sharded_factory(input_tensors, args.output_mem_config)) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
@@ -382,10 +412,17 @@ Tensor concat_impl(
     uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
-        if (output_mem_config.is_sharded()) {
+        if (output_mem_config.is_sharded() || input_tensors[0].buffer()->buffer_type() == BufferType::DRAM) {
+            // Sharded->sharded always goes straight through the device op. DRAM-sharded
+            // input with an interleaved output can too: unlike L1-sharded inputs, it can't
+            // use the zero-copy shard-as-CB factories anyway (circular buffers require L1),
+            // so select_program_factory already routes it through the generic
+            // TensorAccessor-based factory, which addresses the requested output_mem_config
+            // (sharded or not) directly -- no L1 staging shard or dim-compatibility
+            // restriction needed.
             return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
         }
-        // Sharded inputs with interleaved output:
+        // Sharded inputs (L1) with interleaved output:
         // Do sharded concat with a computed sharded output config, then convert to interleaved.
         // Only valid when sharding type is compatible with the concat dimension:
         //   width concat (dim=-1) → HEIGHT_SHARDED or BLOCK_SHARDED

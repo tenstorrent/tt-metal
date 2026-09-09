@@ -396,6 +396,72 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
         assert_equal(expected, actual)
 
 
+@pytest.mark.parametrize(
+    "inputs, output_shard_shape, shard_grid, strategy, layout",
+    (
+        (
+            # width concat, HEIGHT_SHARDED (DRAM)
+            [((1, 1, 64, 32), (32, 32)), ((1, 1, 64, 32), (32, 32))],
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            # height concat, WIDTH_SHARDED (DRAM)
+            [((1, 1, 32, 64), (32, 32)), ((1, 1, 32, 64), (32, 32))],
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            # width concat, HEIGHT_SHARDED (DRAM), row-major
+            [((1, 1, 32, 32), (16, 32)), ((1, 1, 32, 32), (16, 32))],
+            (16, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+    ),
+)
+@pytest.mark.parametrize("output_is_sharded", [False, True])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_dram_sharded_concat(
+    device, inputs, output_shard_shape, shard_grid, strategy, layout, output_is_sharded, dtype
+):
+    dim = 2 if strategy == ttnn.ShardStrategy.WIDTH else 3
+
+    def dram_shard_config(shard_shape):
+        tensor_memory_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if strategy == ttnn.ShardStrategy.HEIGHT
+            else ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        )
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.DRAM, shard_spec)
+
+    input_tensors = []
+    for shape, shard_shape in inputs:
+        torch_input_tensor = random_torch_tensor(dtype, shape)
+        input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+        input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_config(shard_shape))
+        input_tensors.append((torch_input_tensor, input_tensor))
+
+    torch_output_tensor = torch.concat([t for t, _ in input_tensors], dim=dim)
+
+    if output_is_sharded:
+        output_memory_config = dram_shard_config(output_shard_shape)
+    else:
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output = ttnn.concat([tensor for _, tensor in input_tensors], dim=dim, memory_config=output_memory_config)
+    assert output.memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert output.memory_config().is_sharded() == output_is_sharded
+    output = ttnn.to_torch(output)
+    assert_equal(torch_output_tensor, output)
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
 def test_concat_5d(device, dim, dtype):
