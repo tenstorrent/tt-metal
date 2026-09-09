@@ -597,6 +597,7 @@ class ModelArgs:
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
             "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
+            "Olmo-3.1-32B-Instruct": "models/tt_transformers/model_params/Olmo-3.1-32B-Instruct",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
@@ -664,6 +665,10 @@ class ModelArgs:
         # Post-norm decoder (EXAONE-4.x): no input_layernorm; norms are applied to the
         # attention/MLP outputs before the residual adds. Set in _set_model_specific_params().
         self.use_post_norm = False
+        # Full-width QK-norm (OLMo-2/3): q_norm / k_norm are RMSNorms over the WHOLE q_proj / k_proj output
+        # (n_heads*head_dim and n_kv_heads*head_dim) applied before the head split, not per head. Set in
+        # _set_model_specific_params(); consumed by Attention.
+        self.qk_norm_full_width = False
         # Hybrid-rope inversion (EXAONE-4.x): sliding layers use the (llama3-scaled)
         # rope while full-attention layers are NoPE. rope_scaling_local feeds the local
         # rope setup; use_global_nope neutralizes the global setup's cos/sin to identity.
@@ -2563,6 +2568,10 @@ class ModelArgs:
                 # Large single-chunk prefill matters for EXAONE: chunked prefill is
                 # unsupported on sliding-window layers (48 of its 64 layers).
                 "EXAONE-4.5-33B": {"P150x8": 128},
+                # Olmo-3.1-32B: sliding-window layers need the whole prompt in ONE prefill chunk (chunked
+                # prefill raises for sliding SDPA), so the chunk must cover max_seq_len: 32k on a single
+                # P150 (32 GB, bfp4 MLP), 64k on P300 / P150x4 (p300x2).
+                "Olmo-3.1-32B": {"P150": 32, "P300": 64, "P150x4": 64, "P150x8": 64},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2865,6 +2874,17 @@ class ModelArgs:
             # itself drops mtp.* on load (_keys_to_ignore_on_load_unexpected).
             self.force_text_only = True
             self.is_multimodal = False
+
+        # OLMo-2/3 (allenai/Olmo-*): post-norm residual order with no input_layernorm —
+        #   h = x + post_attention_layernorm(attn(x)); out = h + post_feedforward_layernorm(mlp(h))
+        # — plus a FULL-WIDTH QK-norm (RMSNorm over the whole q_proj / k_proj output before the head
+        # split; see HF modeling_olmo3.py). RoPE: OLMo-3 applies its YaRN scaling only on the
+        # full_attention layers (HF #46911, OLMo 3 report); the sliding_attention layers use the plain
+        # base rope. That is exactly the framework's rope_theta_local (unscaled, rope_scaling_local=None)
+        # for sliding layers + the scaled global rope for full layers, so nothing else is needed here.
+        if self.model_type is not None and str(self.model_type).lower() in ("olmo2", "olmo3"):
+            self.use_post_norm = True
+            self.qk_norm_full_width = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -3978,6 +3998,7 @@ class ModelArgs:
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
             "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
             "EXAONE-4.5-33B": "LGAI-EXAONE/EXAONE-4.5-33B",
+            "Olmo-3.1-32B": "allenai/Olmo-3.1-32B-Instruct",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")

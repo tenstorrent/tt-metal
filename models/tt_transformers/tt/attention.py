@@ -340,6 +340,34 @@ class Attention(LightweightModule):
         else:
             self.k_norm = lambda x, mode, norm_config: x
 
+        # Full-width QK-norm (OLMo-2/3): RMSNorm over the WHOLE q / k projection output, applied to the
+        # fused-QKV activation before the head split (see _apply_qk_norm_full_width). The gamma is
+        # column-sharded exactly like the fused QKV columns (contiguous head blocks per device); under
+        # TP the statistics are reduced across devices (rms_norm_pre/post_all_gather + all_gather of the
+        # per-row sums), so the norm sees the full n_heads*head_dim / n_kv_heads*head_dim as HF does.
+        self.qk_norm_full_width = getattr(configuration, "qk_norm_full_width", False)
+        self.q_norm_fw = self.k_norm_fw = None
+        if self.qk_norm_full_width:
+            assert not self.TG, "full-width QK-norm is not implemented for the Galaxy 2D-sharded QKV layout"
+            assert f"{q_norm_str}.weight" in state_dict and f"{k_norm_str}.weight" in state_dict
+            # the per-head sites above become identity for this model
+            self.q_norm = lambda x, mode, norm_config: x
+            self.k_norm = lambda x, mode, norm_config: x
+            fw_kwargs = dict(
+                device=self.mesh_device,
+                eps=configuration.norm_eps,
+                state_dict=state_dict,
+                state_dict_prefix=None,  # weight_key already carries the layer prefix
+                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                add_unit_offset=self.rms_norm_add_unit_offset,
+                is_distributed=(lambda mode: True) if self.num_devices > 1 else None,
+                ccl_topology=self.ccl_topology,
+                tt_ccl=self.tt_ccl,
+            )
+            self.q_norm_fw = RMSNorm(dim=self.n_heads * self.head_dim, weight_key=q_norm_str, **fw_kwargs)
+            self.k_norm_fw = RMSNorm(dim=self.n_kv_heads * self.head_dim, weight_key=k_norm_str, **fw_kwargs)
+
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.args.use_fused_all_gather_matmul
         pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
@@ -722,6 +750,35 @@ class Attention(LightweightModule):
 
         return q_heads_1QSD, k_heads_1KSD
 
+    def _apply_qk_norm_full_width(self, xqkv, mode):
+        """Full-width QK-norm on the fused activation ``[.., .., rows, q_local | k_local | v_local]``.
+
+        Slices the (tile-aligned) q and k column blocks, RMS-normalises each over its full width (across
+        devices when TP-sharded), and concatenates back in the caller's memory config / dtype. Replaces the
+        per-head q_norm/k_norm for models with ``qk_norm_full_width`` (OLMo-2/3).
+        """
+        q_w = self.n_local_heads * self.head_dim
+        kv_w = self.n_local_kv_heads * self.head_dim
+        mem_cfg = xqkv.memory_config()
+        in_dtype = xqkv.dtype
+        if in_dtype != ttnn.bfloat16:
+            xqkv = ttnn.typecast(xqkv, ttnn.bfloat16)
+        d0, d1, rows = xqkv.shape[0], xqkv.shape[1], xqkv.shape[2]
+        q = ttnn.slice(xqkv, [0, 0, 0, 0], [d0, d1, rows, q_w])
+        k = ttnn.slice(xqkv, [0, 0, 0, q_w], [d0, d1, rows, q_w + kv_w])
+        v = ttnn.slice(xqkv, [0, 0, 0, q_w + kv_w], [d0, d1, rows, q_w + 2 * kv_w])
+        ttnn.deallocate(xqkv)
+        q_n = self.q_norm_fw(q, mode)
+        k_n = self.k_norm_fw(k, mode)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        out = ttnn.concat([q_n, k_n, v], dim=3, memory_config=mem_cfg)
+        for t in (q_n, k_n, v):
+            ttnn.deallocate(t)
+        if in_dtype != ttnn.bfloat16:
+            out = ttnn.typecast(out, in_dtype)
+        return out
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -793,6 +850,8 @@ class Attention(LightweightModule):
                 ttnn.deallocate(xqkv_fused_sharded)
             else:
                 xqkv_fused = xqkv_fused_sharded
+        if self.qk_norm_full_width:
+            xqkv_fused = self._apply_qk_norm_full_width(xqkv_fused, Mode.DECODE)
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
@@ -1095,6 +1154,9 @@ class Attention(LightweightModule):
         if original_seq_len != seq_len:
             xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
             seq_len = original_seq_len
+
+        if self.qk_norm_full_width:
+            xqkv_fused = self._apply_qk_norm_full_width(xqkv_fused, Mode.PREFILL)
 
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])

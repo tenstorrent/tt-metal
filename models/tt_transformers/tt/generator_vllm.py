@@ -1262,3 +1262,95 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     # from HybridAttentionForCausalLM.
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class Olmo3ForCausalLM(HybridAttentionForCausalLM):
+    """OLMo-3 / OLMo-3.1 (allenai/Olmo-3*-Instruct) for vLLM integration.
+
+    Named after the HF architecture string. The vLLM TT plugin prepends ``TT``
+    to the checkpoint architecture and has no built-in OLMo entry, so this class
+    is registered as ``TTOlmo3ForCausalLM`` through an ``EXTRA_MODELS_DIR``
+    bundle (``models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle``).
+
+    Architecture handled by ModelArgs/TransformerBlock/Attention: hybrid LLLG
+    sliding(4096)/full attention (via :class:`HybridAttentionForCausalLM`),
+    post-norm decoder (``use_post_norm``), full-width QK-norm
+    (``qk_norm_full_width``), YaRN rope on the full-attention layers only
+    (global rope scaled, local rope unscaled).
+    """
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+    }
+
+    # The checkpoint's max_position_embeddings. Prompts must fit ONE prefill chunk (sliding-window
+    # chunked prefill is not supported), so MAX_PREFILL_CHUNK_SIZES["Olmo-3.1-32B"][device] bounds the
+    # usable --max-model-len per mesh (32k on P150, 64k on P300 / P150x4).
+    MAX_SUPPORTED_SEQ_LEN = 64 * 1024
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        if max_seq_len > cls.MAX_SUPPORTED_SEQ_LEN:
+            raise ValueError(
+                f"Olmo-3 supports max_seq_len <= {cls.MAX_SUPPORTED_SEQ_LEN}; got {max_seq_len}. "
+                "Pass --max-model-len 65536 (or less) to vLLM."
+            )
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled upstream (every layer is one full-attention group),
+        # let the legacy single page_table flow through ``Generator.prefill_forward_text``.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

@@ -1,0 +1,89 @@
+# allenai/Olmo-3.1-32B-Instruct on Tenstorrent Blackhole — CONTAINER (v5.1) package, kind vllm-plugin.
+# Authored from the bring-up on a QB2 (2x p300c = 4 chips), tt-metal worktree branch jashan/olmo3-32b (base 8e18a76).
+#   uv run tt-model package --container models/autoports/allenai_olmo_3_1_32b_instruct/tt-model.yaml --out ~/tt-model-builds
+# Values marked VALIDATED are filled in by the pipeline stages that measured them (~/olmo3-bringup).
+schema: "5.1"
+repo: jashansinghTT/olmo-3.1-32b-instruct-blackhole
+name: olmo-3.1-32b-instruct
+weights:
+  repo: allenai/Olmo-3.1-32B-Instruct
+  revision: ac0587e4a7744a551c059d8cd17ba220bc940dae   # main as of 2026-09-09; public, not gated
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/jashan/tt-metal-olmo3
+  code:                        # allowlist — exactly what ships
+    - models/common
+    - models/tt_transformers/tt
+    - models/tt_transformers/model_params/Olmo-3.1-32B-Instruct   # config.json + performance/accuracy decoder configs (read via Path(__file__))
+    - models/autoports/allenai_olmo_3_1_32b_instruct/__init__.py
+    - models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle  # EXTRA_MODELS_DIR bundle: TTOlmo3ForCausalLM -> generator_vllm
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.26.0"}                                       # ships the `olmo3` tool-call and reasoning parsers
+  plugin: {path: /home/jashan/olmo3-bringup/third_party/vllm-tt-plugin}
+  extra_models_dir: models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle
+  overrides:
+    - "numpy>=1.24.4,<2"
+    - "opencv-python-headless==4.11.0.86"
+    - "transformers==5.14.1"   # HF #46911: YaRN only on the full-attention layers (tt-metal pins 5.12.1; plugin caps <5.15)
+
+serve:
+  port: 8000
+  block_size: 64
+  capabilities:
+    tool_parser: olmo3                                            # <function_calls>name(kwargs)</function_calls>
+  additional_config:
+    tt:
+      sample_on_device_mode: all
+      trace_region_size: 60000000                                 # VALIDATED by stage 06/07 (placeholder)
+  env:
+    TT_METAL_OPERATION_TIMEOUT_SECONDS: "120.0"
+
+serve_profiles:
+  - name: p150
+    description: Single Blackhole chip (TP1), bfp4 MLP; 32k context. Widest compatibility.
+    hardware: p150
+    mesh_device: P150
+    max_num_seqs: 8
+    max_model_len: 32768                                          # VALIDATED by stage 04 (16384 fallback)
+    env: {TT_METAL_VISIBLE_DEVICES: "0"}
+  - name: p300
+    description: One p300 board, both chips (TP2); 64k context.
+    hardware: p300
+    mesh_device: P300
+    max_num_seqs: 16
+    max_model_len: 65536
+    env: {TT_METAL_VISIBLE_DEVICES: "0,1"}
+    additional_config: {tt: {fabric_config: FABRIC_1D}}
+  - name: p300x2
+    description: Two p300 boards / QuietBox 2, 4 chips (TP4); 64k context, 32 users.
+    hardware: p300x2
+    mesh_device: P300x2
+    max_num_seqs: 32
+    max_model_len: 65536
+    additional_config: {tt: {fabric_config: FABRIC_1D_RING}}
+default_profile: p150
+
+verify:
+  - "from models.tt_transformers.tt.generator_vllm import Olmo3ForCausalLM; assert Olmo3ForCausalLM.model_capabilities['supports_sample_on_device']"
+  - "from pathlib import Path; d = Path('/opt/tt-metal/models/tt_transformers/model_params/Olmo-3.1-32B-Instruct'); assert (d / 'config.json').is_file() and (d / 'performance_decoder_config.json').is_file() and (d / 'accuracy_decoder_config.json').is_file()"
+  - "import json; m = json.load(open('/opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3/vllm_metadata.json')); assert m['arch'] == 'Olmo3ForCausalLM'"
+  - "from vllm.tool_parsers import ToolParserManager; ToolParserManager.get_tool_parser('olmo3')"
+  - "import inspect, transformers; from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as R; assert 'layer_type' in inspect.signature(R.forward).parameters, transformers.__version__"
+
+card:
+  description: >
+    AI2's Olmo 3.1 32B Instruct (Apache-2.0), a fully open 32B dense decoder with sliding-window/full hybrid
+    attention and 65k context, served on Tenstorrent Blackhole via vLLM with an OpenAI-compatible API including
+    native tool calling. Profiles: p150 (one chip, bfp4 MLP, 32k context), p300 (TP2, 64k), p300x2 (TP4, 64k).
+  quickstart: |
+    ### Use with your client
+    ```bash
+    curl -s localhost:20000/v1/chat/completions -H 'Content-Type: application/json' \
+      -d '{"model":"allenai/Olmo-3.1-32B-Instruct","messages":[{"role":"user","content":"Hello!"}],"max_tokens":64}'
+    ```
+    Tool calling works out of the box (`tools` in the request; `finish_reason: tool_calls`).
