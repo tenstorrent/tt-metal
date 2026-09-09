@@ -67,6 +67,7 @@ using NamedPerCoreRuntimeArgArrays = std::vector<NamedPerCoreRuntimeArgArray>;
 // on `KernelDescriptor` so that the named-arg fields are quarantined in the
 // `experimental` namespace while `KernelDescriptor` itself stays intact.
 struct NamedKernelArgs {
+    // Names must be unique and must not also appear in KernelDescriptor::named_compile_time_args.
     NamedCompileTimeArgs named_compile_time_args;
     NamedCommonRuntimeArgs named_common_runtime_args;
     NamedPerCoreRuntimeArgs named_per_core_runtime_args;

@@ -6,8 +6,8 @@ import pytest
 import ttnn
 
 
-@pytest.mark.parametrize("legacy_args", [[], [("shared.value", 3)]])
-@pytest.mark.parametrize("blaze_args", [[], [("shared.value", 4)]])
+@pytest.mark.parametrize("legacy_args", [[], [("legacy.value", 3)]])
+@pytest.mark.parametrize("blaze_args", [[], [("typed.value", 4)]])
 def test_kernel_descriptor_named_compile_time_args(legacy_args, blaze_args):
     core = ttnn.CoreCoord(0, 0)
     kernel = ttnn.KernelDescriptor(

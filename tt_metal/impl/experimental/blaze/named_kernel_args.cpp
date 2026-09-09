@@ -162,21 +162,31 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
     // CT namespace map: blaze_ct_args::ns::field (plain constexpr values)
     NamedCTArgNamespaces ct_ns_map;
     std::set<std::string> emitted_ct_args;
-    // Explicit Blaze entries win; duplicates within either field must agree.
+    // New names are unique; legacy entries may repeat with the same value. Names cannot span both fields.
     for (const auto* args : {&named_args.named_compile_time_args, &kernel_descriptor.named_compile_time_args}) {
         std::unordered_map<std::string, uint32_t> seen_ct_args;
         for (const auto& [name, value] : *args) {
             const auto [it, inserted] = seen_ct_args.emplace(name, value);
+            TT_FATAL(
+                args != &named_args.named_compile_time_args || inserted,
+                "blaze_named_compile_time_args contains duplicate name '{}'.",
+                name);
             TT_FATAL(
                 inserted || it->second == value,
                 "named_compile_time_arg '{}' is defined twice with conflicting values ({} vs {}).",
                 name,
                 it->second,
                 value);
-            if (emitted_ct_args.insert(name).second) {
-                auto [ns, field] = split_name(name);
-                ct_ns_map[ns].emplace_back(field, value);
+            if (!inserted) {
+                continue;
             }
+            TT_FATAL(
+                emitted_ct_args.insert(name).second,
+                "named_compile_time_arg '{}' is present in both named_compile_time_args and "
+                "blaze_named_compile_time_args.",
+                name);
+            auto [ns, field] = split_name(name);
+            ct_ns_map[ns].emplace_back(field, value);
         }
     }
     kernel->set_named_ct_arg_namespaces(ct_ns_map);

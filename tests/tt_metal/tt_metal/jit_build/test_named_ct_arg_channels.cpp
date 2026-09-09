@@ -101,13 +101,15 @@ void kernel_main() {}
 }
 
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, MixedEmitsBothRepresentations) {
-    const auto artifacts =
-        compile_and_inspect({{"shared.value", 3}, {"legacy.only", 6}}, {{"shared.value", 4}, {"typed.only", 5}}, R"(
+    const auto artifacts = compile_and_inspect(
+        {{"legacy.value", 3}, {"legacy.value", 3}, {"legacy.only", 6}},
+        {{"typed.only", 5}},
+        R"(
 #include "api/dataflow/dataflow_api.h"
-static_assert(get_named_compile_time_arg_val("shared.value") == 3);
+static_assert(get_named_compile_time_arg_val("legacy.value") == 3);
 static_assert(get_named_compile_time_arg_val("legacy.only") == 6);
-static_assert(blaze_ct_args::shared::value == 4);
 static_assert(blaze_ct_args::typed::only == 5);
+static_assert(blaze_ct_args::legacy::value == 3);
 static_assert(blaze_ct_args::legacy::only == 6);
 static_assert(sizeof(named_args_map) / sizeof(named_args_map[0]) == 2);
 void kernel_main() {}
@@ -163,7 +165,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
     program.impl().compile(devices_.at(0).get());
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, ConflictingValuesFailWithinEachField) {
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyConflictingValuesFail) {
     KernelDescriptor kernel = {
         .kernel_source = "void kernel_main() {}",
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
@@ -172,10 +174,30 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, ConflictingValuesFailWithinEachFi
         .config = DataMovementConfigDescriptor{},
     };
     EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
-    kernel.blaze_named_args.named_compile_time_args = {{"legacy_value", 3}};
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, BlazeDuplicateNamesFail) {
+    KernelDescriptor kernel = {
+        .kernel_source = "void kernel_main() {}",
+        .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+        .core_ranges = CoreRange(CoreCoord{0, 0}),
+        .blaze_named_args = {.named_compile_time_args = {{"typed.value", 1}, {"typed.value", 1}}},
+        .config = DataMovementConfigDescriptor{},
+    };
     EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
-    kernel.blaze_named_args.named_compile_time_args = kernel.named_compile_time_args;
-    kernel.named_compile_time_args.clear();
+    kernel.blaze_named_args.named_compile_time_args = {{"typed.value", 1}, {"typed.value", 2}};
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
+    KernelDescriptor kernel = {
+        .kernel_source = "void kernel_main() {}",
+        .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+        .core_ranges = CoreRange(CoreCoord{0, 0}),
+        .named_compile_time_args = {{"typed.value", 1}},
+        .blaze_named_args = {.named_compile_time_args = {{"typed.value", 1}}},
+        .config = DataMovementConfigDescriptor{},
+    };
     EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 

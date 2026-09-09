@@ -25,8 +25,10 @@ uint32_t n = blaze_rt_args::get<blaze_ct_args::my_op::num_tiles>();
 `get_named_compile_time_arg_val()` and `blaze_ct_args::` constants.
 `KernelDescriptor::blaze_named_args.named_compile_time_args` (Python constructor
 keyword/property `blaze_named_compile_time_args`) supplies only typed constants.
-When both fields supply a name, the explicit Blaze value wins for typed constants;
-the legacy lookup retains its own value. Argument spelling does not select an API.
+Each name may appear in only one field. Argument spelling does not select an API.
+Names must be unique within the new Blaze field, even when repeated values match.
+The legacy field still accepts repeated names with the same value and rejects
+conflicting values.
 
 Only the legacy field populates `named_ct_arg_map_generated.h`; when empty, that
 header is neither generated nor force-included. Existing Blaze callers can update

@@ -321,9 +321,8 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     EXPECT_EQ(results[3], named_common_val) << "Named common RT arg (after positional)";
 }
 
-// Test 2a: CT arg redefinition with same value succeeds (dedup).
-// Two entries with the same name and value should be silently deduplicated.
-TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
+// Test 2a: The legacy field still accepts repeated names with the same value.
+TEST_F(NamedArgsTest, TensixTestLegacyCTArgDedupSameValue) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -341,11 +340,11 @@ TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
         // Duplicate param_a with the same value — should be silently deduplicated
+        .named_compile_time_args =
+            {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}, {"my_kernel.param_a", param_a}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
-                .named_compile_time_args =
-                    {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}, {"my_kernel.param_a", param_a}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
