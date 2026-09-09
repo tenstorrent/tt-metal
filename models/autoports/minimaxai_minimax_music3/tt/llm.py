@@ -48,10 +48,52 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelArgs,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+)
 
 TILE = 32
-DTYPE_POLICIES = ("functional",)
+
+# Per-decoder precision settings by policy name (tt_transformers ModelOptimizations vocabulary).
+# "functional" reproduces ModelOptimizations.accuracy for an unknown model name exactly (bf16
+# attention weights and KV cache at HiFi4, bfp8 MLP weights at HiFi2/fp16-acc, activations follow
+# the op defaults: bfp8 Q in the prefill SDPA and a bfp8 MLP intermediate). The other policies are
+# precision probes used to localize the long-prompt accuracy loss (doc/llm/README.md); they are
+# not the shipped default. (A further probe with fp32-accumulating HiFi2 MLP matmuls does not
+# fit: the prefill w1 matmul's circular buffers grow to 1.60 MB > 1.5 MB L1 on P150.)
+_BF16_ATTENTION = {
+    TensorGroup.WQKV: PrecisionSetting.BF16,
+    TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+    TensorGroup.WO: PrecisionSetting.BF16,
+}
+_HIFI4_ATTENTION = {
+    OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+    OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+    OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+}
+DTYPE_POLICIES = {
+    "functional": {"TensorPrecision": dict(_BF16_ATTENTION), "OpFidelity": dict(_HIFI4_ATTENTION)},
+    # + bf16 activations everywhere (prefill SDPA Q, MLP intermediate) instead of the bfp8 op defaults.
+    "functional_bf16_act": {
+        "TensorPrecision": {**_BF16_ATTENTION, TensorGroup.ACTIVATION: PrecisionSetting.BF16},
+        "OpFidelity": dict(_HIFI4_ATTENTION),
+    },
+}
+
+
+def decoders_precision_for(policy: str, num_decoders: int, model_name: str) -> DecodersPrecision:
+    conf = ModelOptimizations(DTYPE_POLICIES[policy])
+    conf.__name__ = policy
+    return DecodersPrecision(num_decoders, model_name, conf)
 
 
 class MusicTransformer(Transformer):
@@ -158,7 +200,7 @@ class MusicLLM:
         max_batch_size: 2 (conditional + unconditional rows). tt_transformers pads the batch to a
             32-row tile internally; rows >= ``max_batch_size`` are padding.
         max_seq_len: context in tokens (prompt + frames). The checkpoint advertises 10240.
-        dtype_policy: ``"functional"`` (see module docstring).
+        dtype_policy: ``"functional"`` (see module docstring) or one of the probes in ``DTYPE_POLICIES``.
         block_size: paged KV-cache block size in tokens.
         hf_model_dir: the Qwen3 backbone directory; defaults to ``$HF_MODEL``. ``ModelArgs`` reads
             ``HF_MODEL`` from the environment, so it is set here when a directory is passed.
@@ -176,7 +218,7 @@ class MusicLLM:
         weight_cache_root: Optional[str] = None,
     ):
         if dtype_policy not in DTYPE_POLICIES:
-            raise ValueError(f"unknown dtype_policy {dtype_policy!r}; supported: {DTYPE_POLICIES}")
+            raise ValueError(f"unknown dtype_policy {dtype_policy!r}; supported: {sorted(DTYPE_POLICIES)}")
         assert list(mesh_device.shape) == [1, 1], f"MusicLLM runs on a 1x1 mesh, got {list(mesh_device.shape)}"
         if hf_model_dir is not None:
             os.environ["HF_MODEL"] = str(hf_model_dir)
@@ -201,7 +243,9 @@ class MusicLLM:
             dummy_weights=False,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
-            optimizations=lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
+            optimizations=lambda model_args: decoders_precision_for(
+                dtype_policy, model_args.n_layers, model_args.model_name
+            ),
             cache_hf=False,
         )
         assert self.args.dim == LLM_HIDDEN, self.args.dim
@@ -211,12 +255,24 @@ class MusicLLM:
         self.hidden_size = self.args.dim
 
         blocks_per_user = num_blocks_in_seq(max_seq_len, block_size)
+        # Chunked prefill pads the prompt to a power of two and fills whole 4096-token chunks, so a
+        # prompt longer than the largest power of two <= max_seq_len (8192 here) touches cache
+        # positions beyond max_seq_len. Those padded positions go to shared scratch blocks (only
+        # one user prefills at a time and causal attention never reads them from a real position)
+        # instead of spilling into the next user's blocks. 64 blocks = 2048 tokens for 10240.
+        chunk = self.args.max_prefill_chunk_size
+        max_chunk_end = -(-max_seq_len // chunk) * chunk  # end of the chunk holding position max_seq_len-1
+        scratch_blocks = max(0, num_blocks_in_seq(max_chunk_end, block_size) - blocks_per_user)
         self.paged_attention_config = PagedAttentionConfig(
-            block_size=block_size, max_num_blocks=max_batch_size * blocks_per_user
+            block_size=block_size, max_num_blocks=max_batch_size * blocks_per_user + scratch_blocks
         )
-        # Identity page table: user u owns blocks [u*blocks_per_user, (u+1)*blocks_per_user).
-        self.page_table = torch.arange(self.paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(
+        # Identity page table: user u owns blocks [u*blocks_per_user, (u+1)*blocks_per_user);
+        # blocks >= max_batch_size*blocks_per_user are the shared prefill scratch.
+        self.page_table = torch.arange(max_batch_size * blocks_per_user, dtype=torch.int32).reshape(
             max_batch_size, blocks_per_user
+        )
+        self.scratch_blocks = torch.arange(
+            max_batch_size * blocks_per_user, self.paged_attention_config.max_num_blocks, dtype=torch.int32
         )
         self.page_table_tt = ttnn.from_torch(
             self.page_table,
@@ -253,6 +309,9 @@ class MusicLLM:
         self._trace_id = None
         self._trace_out: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None
         self.decode_stats = {"trace_captures": 0, "trace_replays": 0, "input_refreshes": 0, "position_refreshes": 0}
+        # Optional host callback run after every prefill forward (one row, or one chunk of a row).
+        # The perf harness uses it to drain the device profiler between ~1000-op chunks; None = off.
+        self.after_prefill_chunk = None
 
     # ------------------------------------------------------------------ dtype report
     def dtype_report(self) -> dict:
@@ -334,7 +393,8 @@ class MusicLLM:
         Args:
             inputs_embeds: ``[B, S, 4096]`` (or ``[S, 4096]`` for one row) torch tensor, or a
                 ttnn tensor of shape ``[1, B, S, 4096]`` (bf16 tile layout, as :meth:`embed_tokens`
-                returns). Any logical ``1 <= S <= max_seq_len``; padding / chunking is internal.
+                returns). Any logical ``1 <= S <= max_seq_len``; padding / chunking is internal
+                (padded positions beyond ``max_seq_len`` land in shared scratch blocks).
             user_id: the cache slot(s) the rows go to. ``None`` = rows ``0..B-1``.
         Returns:
             ``(hidden, logits)`` torch fp32 tensors of shape ``[B, 4096]`` (final-norm output at the
@@ -388,14 +448,22 @@ class MusicLLM:
                 page_table=self.page_table_tt,
                 get_last_token=(last_idx // TILE) * TILE,
             )
-            return self._read_last_row(hidden, logits, last_idx % TILE)
+            result = self._read_last_row(hidden, logits, last_idx % TILE)
+            if self.after_prefill_chunk is not None:
+                self.after_prefill_chunk()
+            return result
 
         # Chunked prefill (same constraints as tt_transformers Generator.prefill_forward_single_user_text):
         # the page table must be this user's single row (SDPA checks its batch dim against the input's),
         # padded to the number of blocks of the padded prompt, and user_id must be 0 within the chunk.
         chunk_size = get_max_prefill_chunk_size(s_pad, chunk_max)
-        assert num_blocks_in_seq(s_pad, self.block_size) <= blocks_per_user, (s_pad, blocks_per_user)
+        last_chunk_start = (last_idx // chunk_size) * chunk_size
+        needed_blocks = num_blocks_in_seq(last_chunk_start + chunk_size, self.block_size)
         page_table_user = self.page_table[slot : slot + 1, :]
+        if needed_blocks > blocks_per_user:
+            extra = needed_blocks - blocks_per_user
+            assert extra <= self.scratch_blocks.numel(), (needed_blocks, blocks_per_user, self.scratch_blocks.numel())
+            page_table_user = torch.cat([page_table_user, self.scratch_blocks[:extra].unsqueeze(0)], dim=1)
         page_table_user_tt = ttnn.from_torch(
             page_table_user,
             device=self.mesh_device,
@@ -403,7 +471,6 @@ class MusicLLM:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        last_chunk_start = (last_idx // chunk_size) * chunk_size
         result = None
         for chunk_start in range(0, s_pad, chunk_size):
             chunk_end = chunk_start + chunk_size
@@ -432,8 +499,12 @@ class MusicLLM:
             if is_last:
                 hidden, logits = out
                 result = self._read_last_row(hidden, logits, (last_idx - chunk_start) % TILE)
+            else:
+                ttnn.deallocate(out)
+            if self.after_prefill_chunk is not None:
+                self.after_prefill_chunk()
+            if is_last:
                 break
-            ttnn.deallocate(out)
         assert result is not None
         return result
 
@@ -448,9 +519,23 @@ class MusicLLM:
         )
 
     def _prefill_rot_mats(self, start: int, end: int):
+        """cos/sin rows for positions [start, end); rows past max_seq_len (padding only) are zero-filled.
+
+        A padded chunk can reach past the context (10240 -> padded 16384, third chunk ends at
+        12288). Those positions only hold padding tokens that no real token attends to, so their
+        rotation is irrelevant; tt_transformers zero-pads them the same way.
+        """
         rs = self.model.rope_setup
-        assert end <= rs.cos_matrix_prefill.shape[2], (end, rs.cos_matrix_prefill.shape)
-        return [rs.cos_matrix_prefill[:, :, start:end, :], rs.sin_matrix_prefill[:, :, start:end, :]]
+        mat_len = rs.cos_matrix_prefill.shape[2]
+        assert start < mat_len, (start, mat_len)
+        stop = min(end, mat_len)
+        cos = rs.cos_matrix_prefill[:, :, start:stop, :]
+        sin = rs.sin_matrix_prefill[:, :, start:stop, :]
+        if end > mat_len:
+            padding = [(0, 0), (0, 0), (0, end - mat_len), (0, 0)]
+            cos = ttnn.pad(cos, padding=padding, value=0.0)
+            sin = ttnn.pad(sin, padding=padding, value=0.0)
+        return [cos, sin]
 
     def _read_last_row(self, hidden: ttnn.Tensor, logits: ttnn.Tensor, row: int):
         h = ttnn.to_torch(hidden).float()[0, 0, row, : self.hidden_size]

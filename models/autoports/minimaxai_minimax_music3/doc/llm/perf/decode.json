@@ -1,9 +1,10 @@
 {
   "batch": 2,
   "steps": 20,
-  "traced_replay_ms_per_step": 37.543400601134636,
-  "end_to_end_ms_per_step_with_host_input_and_readback": 41.83598789968528,
-  "tokens_per_s_per_user": 23.902865695386694,
+  "profiled": false,
+  "traced_replay_ms_per_step": 37.08852764975745,
+  "end_to_end_ms_per_step_with_host_input_and_readback": 41.40831929980777,
+  "tokens_per_s_per_user": 24.14973650004293,
   "start_position": 104,
   "signposts": [
     "PERF_DECODE",

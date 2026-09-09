@@ -1,0 +1,259 @@
+{
+  "functional": {
+    "prompt_104": {
+      "row0": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9984341364768207,
+          "tt_vs_bf16": 0.9982758346485844,
+          "bf16_vs_fp32": 0.9998871143293105
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9988246719316476,
+          "tt_vs_bf16": 0.9988491029703965,
+          "bf16_vs_fp32": 0.9999519984696603
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.9987246822307143,
+          "tt_vs_bf16": 0.9987286003054279,
+          "bf16_vs_fp32": 0.9998632476109944
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9991694468776411,
+          "tt_vs_bf16": 0.9991660076841318,
+          "bf16_vs_fp32": 0.9999633185987534
+        },
+        "argmax": {
+          "fp32": 152931,
+          "bf16": 152931,
+          "tt": 152931
+        }
+      },
+      "row1": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9996997840457369,
+          "tt_vs_bf16": 0.99970323423851,
+          "bf16_vs_fp32": 0.9999522918716384
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9992260316260618,
+          "tt_vs_bf16": 0.9992492228705294,
+          "bf16_vs_fp32": 0.9999592240867897
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.9994899896625278,
+          "tt_vs_bf16": 0.9995570221380249,
+          "bf16_vs_fp32": 0.9999495524662475
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9995302926739863,
+          "tt_vs_bf16": 0.9995354668822671,
+          "bf16_vs_fp32": 0.9999769588152415
+        },
+        "argmax": {
+          "fp32": 152931,
+          "bf16": 152931,
+          "tt": 152931
+        }
+      }
+    },
+    "prompt_5000": {
+      "row0": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9821653097494215,
+          "tt_vs_bf16": 0.9835789643094794,
+          "bf16_vs_fp32": 0.9972124065539805
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9977829900611236,
+          "tt_vs_bf16": 0.9978727849614365,
+          "bf16_vs_fp32": 0.9997333260965656
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.988678444796308,
+          "tt_vs_bf16": 0.9854044235564666,
+          "bf16_vs_fp32": 0.9981210920491413
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9979187782835706,
+          "tt_vs_bf16": 0.9971910073780673,
+          "bf16_vs_fp32": 0.999626910622316
+        },
+        "argmax": {
+          "fp32": 163403,
+          "bf16": 163403,
+          "tt": 155227
+        }
+      },
+      "row1": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9991403171556256,
+          "tt_vs_bf16": 0.9990911499758985,
+          "bf16_vs_fp32": 0.9999683302222361
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9988908517139392,
+          "tt_vs_bf16": 0.9988685898063694,
+          "bf16_vs_fp32": 0.9999727383196997
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.9935820435358593,
+          "tt_vs_bf16": 0.9940137805100571,
+          "bf16_vs_fp32": 0.9998285280712643
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9985279035161464,
+          "tt_vs_bf16": 0.9985827025685698,
+          "bf16_vs_fp32": 0.9999606962809973
+        },
+        "argmax": {
+          "fp32": 153068,
+          "bf16": 153068,
+          "tt": 153068
+        }
+      }
+    }
+  },
+  "functional_bf16_act": {
+    "prompt_104": {
+      "row0": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9989302913947551,
+          "tt_vs_bf16": 0.9987974933146453,
+          "bf16_vs_fp32": 0.9998871143293105
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9990626398839618,
+          "tt_vs_bf16": 0.9990604947476679,
+          "bf16_vs_fp32": 0.9999519984696603
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.9989185238165389,
+          "tt_vs_bf16": 0.9988614791421707,
+          "bf16_vs_fp32": 0.9998632476109944
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9991774580064315,
+          "tt_vs_bf16": 0.9991641613502981,
+          "bf16_vs_fp32": 0.9999633185987534
+        },
+        "argmax": {
+          "fp32": 152931,
+          "bf16": 152931,
+          "tt": 152931
+        }
+      },
+      "row1": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9997405895765078,
+          "tt_vs_bf16": 0.99975836202209,
+          "bf16_vs_fp32": 0.9999522918716384
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9992490472175052,
+          "tt_vs_bf16": 0.9992804380094259,
+          "bf16_vs_fp32": 0.9999592240867897
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.9996264379466543,
+          "tt_vs_bf16": 0.9996607769468234,
+          "bf16_vs_fp32": 0.9999495524662475
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9995323680972846,
+          "tt_vs_bf16": 0.9995230994920062,
+          "bf16_vs_fp32": 0.9999769588152415
+        },
+        "argmax": {
+          "fp32": 152931,
+          "bf16": 152931,
+          "tt": 152931
+        }
+      }
+    },
+    "prompt_5000": {
+      "row0": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.9894302619670331,
+          "tt_vs_bf16": 0.9892232164428457,
+          "bf16_vs_fp32": 0.9972124065539805
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.998344882669365,
+          "tt_vs_bf16": 0.9983820869861568,
+          "bf16_vs_fp32": 0.9997333260965656
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.984737439150413,
+          "tt_vs_bf16": 0.9773327190922776,
+          "bf16_vs_fp32": 0.9981210920491413
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.9971068605805943,
+          "tt_vs_bf16": 0.9956030586099134,
+          "bf16_vs_fp32": 0.999626910622316
+        },
+        "argmax": {
+          "fp32": 163403,
+          "bf16": 163403,
+          "tt": 155227
+        }
+      },
+      "row1": {
+        "prefill_hidden": {
+          "tt_vs_fp32": 0.999448350482289,
+          "tt_vs_bf16": 0.9994114785819027,
+          "bf16_vs_fp32": 0.9999683302222361
+        },
+        "prefill_logits": {
+          "tt_vs_fp32": 0.9989568615416413,
+          "tt_vs_bf16": 0.9989331668851698,
+          "bf16_vs_fp32": 0.9999727383196997
+        },
+        "decode_hidden": {
+          "tt_vs_fp32": 0.9976520117460946,
+          "tt_vs_bf16": 0.997526085027735,
+          "bf16_vs_fp32": 0.9998285280712643
+        },
+        "decode_logits": {
+          "tt_vs_fp32": 0.999179986546676,
+          "tt_vs_bf16": 0.9991474874091812,
+          "bf16_vs_fp32": 0.9999606962809973
+        },
+        "argmax": {
+          "fp32": 153068,
+          "bf16": 153068,
+          "tt": 153068
+        }
+      }
+    }
+  },
+  "_meta": {
+    "prompt_5000": "golden text_ids repeated to 5000 tokens",
+    "prompt_104": "golden text_ids",
+    "decode_input": "golden frame 0 codes via _embed_audio_frame",
+    "hf": "Qwen3ForCausalLM transformers 5.15 CPU, bf16 and fp32",
+    "tt": "MusicLLM, one entry per dtype policy",
+    "policies": {
+      "functional": null,
+      "functional_bf16_act": {
+        "policy": "functional_bf16_act",
+        "decoder_tensor_groups": {
+          "ff1_3": "DataType.BFLOAT8_B",
+          "ff2": "DataType.BFLOAT8_B",
+          "wqkv": "DataType.BFLOAT16",
+          "wo": "DataType.BFLOAT16",
+          "kv_cache": "DataType.BFLOAT16",
+          "activation": "DataType.BFLOAT16"
+        },
+        "embedding_weight": "bfloat16",
+        "norm_weights": "bfloat16",
+        "lm_head_weight": "DataType.BFLOAT16",
+        "lm_head_output": "DataType.BFLOAT16",
+        "rope_tables": "bfloat16",
+        "activations": "bfloat16 (ACTIVATION group unset -> input dtype)",
+        "kv_cache_tensor_dtype": "DataType.BFLOAT16",
+        "math_fidelity": "li_ff1_3: hifi2fp16, li_ff2: hifi2fp16, li_qkv_decode: hifi4, li_o_decode: hifi4, sdpa_decode: hifi4, li_qkv_prefill: hifi4, li_o_prefill: hifi4, sdpa_prefill: hifi4, accuracy: hifi4fp32"
+      }
+    }
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "hf_model_id": "MiniMaxAI/MiniMax-Music3",
+  "component": "language_model (Qwen3ForCausalLM, 36 layers, hidden 4096, 32 q / 8 kv heads, head_dim 128, vocab 200000)",
+  "stage": "llm_backbone",
+  "stage_number": 2,
+  "hf_advertised_context": 10240,
+  "hf_context_source": "language_model/config.json max_position_embeddings",
+  "current_supported_context": 10240,
+  "capability_reduction": false,
+  "limiting_reason": null,
+  "capacity_evidence": null,
+  "usage_contract": {
+    "batch": 2,
+    "batch_rows": "row 0 = conditional prompt, row 1 = unconditional (CFG) prompt; identical positions",
+    "max_prompt_tokens": 5000,
+    "max_frames": 9000,
+    "prompt_plus_frames_bound": "prompt <= 5000 and frames <= 9000 at 25 frames/s; the AR loop stops at 10240 total positions (10240 - 1 = last decode position tested here)",
+    "prefill_input": "embeddings [B, S, 4096] (any 1 <= S <= 10240; padded to 128/1024/next pow2 internally, chunked in 4096-token chunks above 4096, page table sliced per user)",
+    "decode_input": "pre-embedded [B, 4096] (sum of semantic + residual embeddings * 8**-0.5), position per row",
+    "outputs": "final-RMSNorm hidden [B, 4096] and logits [B, 200000] (bf16 on device, fp32 on host)"
+  },
+  "dtype_policy": {
+    "name": "functional",
+    "source": "models.tt_transformers ModelOptimizations.accuracy for an unknown base model name (the checkpoint dir is 'language_model', resolved model_name 'snapshots'), LM-head output overridden to bf16",
+    "decoder_tensor_groups": {
+      "wqkv": "bfloat16",
+      "wo": "bfloat16",
+      "kv_cache": "bfloat16",
+      "ff1_3": "bfloat8_b",
+      "ff2": "bfloat8_b",
+      "activation": "input dtype (bfloat16)"
+    },
+    "embedding_weight": "bfloat16",
+    "norm_weights": "bfloat16",
+    "lm_head_weight": "bfloat16",
+    "lm_head_output": "bfloat16 (stock default bfloat8_b overridden)",
+    "rope_tables": "bfloat16",
+    "math_fidelity": {
+      "li_ff1_3": "hifi2fp16",
+      "li_ff2": "hifi2fp16",
+      "li_qkv_decode": "hifi4",
+      "li_o_decode": "hifi4",
+      "sdpa_decode": "hifi4",
+      "li_qkv_prefill": "hifi4",
+      "li_o_prefill": "hifi4",
+      "sdpa_prefill": "hifi4",
+      "accuracy": "hifi4fp32"
+    }
+  },
+  "device": {
+    "arch": "blackhole",
+    "board": "p300c (one chip of a P300x2 host, TT_METAL_VISIBLE_DEVICES=0, PCI 0000:01:00.0)",
+    "board_id": "000004613193411b",
+    "reported_device_name": "P150",
+    "mesh_shape": [
+      1,
+      1
+    ],
+    "dram_total_bytes": 34178731008,
+    "trace_region_size": 90000000
+  },
+  "kv_cache": {
+    "paged": true,
+    "block_size": 32,
+    "max_num_blocks": 704,
+    "blocks_per_user": 320,
+    "page_table": "identity [2, 320] int32; user u owns blocks [320u, 320u+320); blocks 640..703 are shared prefill scratch for padded positions past 10240 (prompts longer than 8192)",
+    "dtype": "bfloat16",
+    "shape_per_tensor": [
+      704,
+      8,
+      32,
+      128
+    ],
+    "bytes_per_token_per_layer": 4096,
+    "bytes_per_layer": 92274688,
+    "bytes_total_36_layers": 3321888768,
+    "comment": "8 KV heads x 128 head_dim x 2 bytes x 2 (K and V) = 4 KiB per token per layer; 10240 tokens x 2 users x 36 layers = 2.81 GiB plus 64 scratch blocks (0.28 GiB), resident for the life of the model. Weights: ~8.7 GB decoder (bf16 attention 84 MB + bfp8 MLP 160 MB per layer) + 1.64 GB embedding + 1.64 GB LM head.",
+    "scratch_blocks": 64
+  },
+  "tested": {
+    "prefill": {
+      "max_seq_len": 10240,
+      "also_tested_seq_lens": [
+        1,
+        104,
+        333,
+        4000,
+        4992,
+        5000,
+        10240
+      ],
+      "non_aligned_lengths_tested": [
+        1,
+        104,
+        333,
+        4992,
+        5000,
+        10240
+      ],
+      "boundaries_covered": [
+        "single-token prompt (padded to 128)",
+        "golden prompt 104 (padded to 128) vs HF and vs the stage-01 goldens",
+        "333 (padded to 1024, non-aligned)",
+        "4000 (padded 4096, largest single chunk) vs HF",
+        "4992 and 5000 = maximum prompt (padded to 8192, chunked 2 x 4096, non-aligned) vs HF bf16 and fp32",
+        "10240 = whole context as prompt (padded to 16384, 3 executed chunks, scratch blocks) run-only"
+      ],
+      "batch_rows_tested": [
+        1,
+        2
+      ],
+      "tests": [
+        "tests/test_llm.py::test_layer0_prefill_and_decode_vs_golden",
+        "tests/test_llm.py::test_full_prefill_vs_hf",
+        "tests/test_llm.py::test_prefill_lengths_run",
+        "tests/test_llm.py::test_max_prompt_prefill_vs_hf (slow)"
+      ],
+      "coverage_note": "5000 is the AR loop's own prompt cap (_MAX_PROMPT_TOKENS in diffusers encoders.py), so it is the largest prefill the pipeline ever issues; 10240 proves the path runs for any logical length up to the context. PCC values are in doc/llm/pcc/pcc_results.json (gate + slow test), doc/llm/pcc/long_prompt_control.json (fp32 control) and the debug log quoted in doc/llm/README.md (4000 / 4992).",
+      "reference_checked_seq_lens": [
+        104,
+        4000,
+        4992,
+        5000
+      ]
+    },
+    "decode": {
+      "max_context": 10240,
+      "max_position_tested": 10239,
+      "positions_tested_vs_reference": [
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        5000
+      ],
+      "positions_tested_run_only": [
+        1,
+        333,
+        10239
+      ],
+      "batch_sizes_tested": [
+        2
+      ],
+      "traced": true,
+      "tests": [
+        "tests/test_llm.py::test_teacher_forced_decode_vs_hf",
+        "tests/test_llm.py::test_decode_determinism",
+        "tests/test_llm.py::test_prefill_lengths_run[5000] (decode at 5000 and 10239)",
+        "tests/test_llm_perf.py::test_decode_perf"
+      ],
+      "coverage_note": "Decode at the last position of the advertised context (10239) runs through the same traced graph after the 5000-token prefill; its numerics are not reference-checked (an HF 10k-token reference is out of budget). The 5000-position step is checked against HF bf16 and fp32 (long_prompt_control.json)."
+    }
+  },
+  "pcc": {
+    "bar_layer": 0.995,
+    "bar_full_stack": 0.99,
+    "artifact": "models/autoports/minimaxai_minimax_music3/doc/llm/pcc/pcc_results.json",
+    "note": "Layer 0 vs the fp32 stage-01 goldens: prefill 0.99985 / 0.99990 (users 0/1), decode 0.99992. Full stack vs HF bf16: prefill hidden 0.9990, logits 0.9986; teacher-forced decode (8 frames) hidden 0.9985-0.9996, logits 0.9924-0.9994. Long realistic prompt (golden prompt repeated to 5000 tokens): row 0 hidden 0.982 vs fp32 / 0.984 vs bf16 while HF bf16 itself is 0.997 vs fp32, logits 0.998, decode step at 5000 hidden 0.989 / logits 0.998; row 1 all >= 0.99. The excess over the bf16 reference noise is length-dependent and only partly recovered by bf16 activations (probe policy); classified and handed to the stage-07 dtype sweep, see doc/llm/README.md 'Long-prompt precision'.",
+    "long_prompt_control_artifact": "models/autoports/minimaxai_minimax_music3/doc/llm/pcc/long_prompt_control.json",
+    "bar_long_prompt_hidden": 0.98
+  },
+  "decode_trace_contract": {
+    "persistent_inputs": [
+      "x [1,1,32,4096] bf16 tile DRAM",
+      "current_pos [2] int32",
+      "rope idxs [1,32] uint32",
+      "page_table [2,320] int32 (constant)"
+    ],
+    "device_advanced_state": "current_pos and rope idxs are incremented on device (ttnn.plus_one) inside the trace; host writes them only when the requested position differs from the device shadow",
+    "per_step_host_work": "one copy_host_to_device_tensor (or ttnn.copy for a device input) of the 256 KB input tile, one execute_trace, two readbacks (hidden 256 KB, logits 12.8 MB)",
+    "outputs": "hidden [1,1,32,4096] bf16 tile; logits [1,1,32,200000] bf16 row-major (untilized on device)"
+  },
+  "notes": [
+    "No capability reduction: the advertised 10240 context is allocated (paged cache, 640 blocks of 32) and the last position 10239 is exercised by decode.",
+    "Prefill is bounded by the pipeline's own 5000-token prompt cap, not by the device; longer prefills (up to 10240) would go through the same chunked path but are not tested.",
+    "Chunked prefill inherits the tt_transformers constraints: padded length a power of two >= 2048 when chunked, one-row page table per user, user_id 0 inside the chunk.",
+    "The RVQ depth decoder, the DiT and the vocoder are separate stages; this contract covers only the Qwen3 backbone.",
+    "Prefill of a 5000-token realistic prompt is within 0.982-0.999 hidden PCC of HF (fp32); the length-dependent part of the error is a precision (not a chunking) effect and is handed to the stage-07 datatype sweep with the fp32 control as baseline."
+  ]
+}

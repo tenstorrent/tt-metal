@@ -1,0 +1,15 @@
+{
+  "batch_rows": 2,
+  "seq_len": 104,
+  "profiled": false,
+  "warmed_wall_s_both_rows": 0.14005725999595597,
+  "warmed_wall_s_per_row": 0.07002862999797799,
+  "tokens_per_s": 1485.106877044473,
+  "chunked": false,
+  "max_prefill_chunk_size": 4096,
+  "signposts": [
+    "PERF_PREFILL",
+    "PERF_PREFILL_END"
+  ],
+  "board": "000004613193411b (p300c, tt-smi -s)"
+}

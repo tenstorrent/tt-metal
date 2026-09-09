@@ -1,0 +1,20 @@
+{
+  "batch": 2,
+  "steps": 2,
+  "profiled": true,
+  "traced_replay_ms_per_step": 391.20700050261803,
+  "end_to_end_ms_per_step_with_host_input_and_readback": 400.6890350137837,
+  "tokens_per_s_per_user": 2.495700936676742,
+  "start_position": 104,
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "host_counters_measured_window": {
+    "trace_captures": 0,
+    "trace_replays": 4,
+    "input_refreshes": 2,
+    "position_refreshes": 0
+  },
+  "board": "000004613193411b (p300c, tt-smi -s)"
+}
