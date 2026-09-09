@@ -10,9 +10,11 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -107,10 +109,16 @@ public:
     // process-wide singleton (inst()) is destroyed; it is not invalidated by disable()/enable(),
     // which only clear impl_ and rebuild the registry while leaving tokens allocated. Callers
     // must not take ownership. While telemetry is disabled, TelemetryToken::record() is a no-op;
-    // snapshot() still reflects aggregates recorded while enabled. Repeat calls for the same name
-    // must agree on `unit` -- a mismatch means two call sites are feeding one stream values of
-    // different kinds, so it fails loudly rather than silently mislabelling the dump.
-    TelemetryToken& get_or_register_metric(const std::string& name, std::string unit = "ms");
+    // snapshot() still reflects aggregates recorded while enabled.
+    //
+    // `unit` labels the stream on first registration and defaults to milliseconds; omitting it
+    // on a name that already exists is a plain lookup, so a caller that just wants the token does
+    // not have to restate the unit. Repeat calls that do name a unit should agree with the
+    // registered one: a mismatch means two call sites are feeding one stream values of different
+    // kinds, which is logged as a warning (once per name) while the first unit is kept. It does
+    // not abort -- a mislabelled diagnostic metric is not worth failing a build over.
+    TelemetryToken& get_or_register_metric(
+        const std::string& name, std::optional<std::string_view> unit = std::nullopt);
 
     void dump_metrics() const;
 
@@ -121,6 +129,9 @@ private:
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
     // Name -> token index into owned_tokens_; guarded by owned_tokens_mutex_ alongside the vector.
     std::unordered_map<std::string, TelemetryToken*> tokens_by_name_;
+    // Names already reported as having conflicting units, so a call site inside a build loop
+    // warns once instead of once per build. Guarded by owned_tokens_mutex_.
+    std::unordered_set<std::string> unit_conflict_warned_;
     std::mutex owned_tokens_mutex_;
     // Registered in the constructor so the const dump_metrics() can record the window span
     // without registering a metric during teardown.

@@ -96,28 +96,51 @@ TEST_F(BuildCacheTelemetryTest, UnitDefaultsToMsAndIsRemembered) {
     EXPECT_EQ(tel.get_or_register_metric("test.byte_unit", "B").unit(), "B");
 }
 
-TEST_F(BuildCacheTelemetryTest, RegisteringOneNameWithTwoUnitsFails) {
+TEST_F(BuildCacheTelemetryTest, OmittingTheUnitIsALookupNotAnMsRegistration) {
     auto& tel = BuildCacheTelemetry::inst();
-    tel.get_or_register_metric("test.unit_conflict", "ms");
+    auto& registered = tel.get_or_register_metric("test.unit_omitted_lookup", "B");
 
-    // Silently accepting this would mix milliseconds and bytes into one set of aggregates and
-    // label the result with whichever unit happened to be registered first.
-    EXPECT_THROW(tel.get_or_register_metric("test.unit_conflict", "B"), std::runtime_error);
-    EXPECT_THROW(tel.get_or_register_metric("test.unit_conflict", ""), std::runtime_error);
-
-    // The failed registrations must not have disturbed the existing stream.
-    EXPECT_EQ(tel.get_or_register_metric("test.unit_conflict").unit(), "ms");
-    EXPECT_EQ(tel.get_or_register_metric("test.unit_conflict").snapshot().count, 0u);
+    // A caller that only wants the token should not have to restate the unit, and must not be
+    // treated as registering the default "ms" over a byte metric.
+    auto& looked_up = tel.get_or_register_metric("test.unit_omitted_lookup");
+    EXPECT_EQ(&looked_up, &registered);
+    EXPECT_EQ(looked_up.unit(), "B");
 }
 
-TEST_F(BuildCacheTelemetryTest, DefaultUnitLookupOfANonMsMetricIsAConflict) {
+TEST_F(BuildCacheTelemetryTest, ConflictingUnitKeepsTheRegisteredOneWithoutAborting) {
     auto& tel = BuildCacheTelemetry::inst();
-    tel.get_or_register_metric("test.default_unit_conflict", "B");
+    auto& token = tel.get_or_register_metric("test.unit_conflict", "ms");
+    token.record(7.0);
 
-    // The single-argument form is a registration with unit "ms", not a plain get, so it conflicts
-    // with a byte metric. Callers must name the unit they expect -- which every call site does,
-    // via per_target_telemetry_token().
-    EXPECT_THROW(tel.get_or_register_metric("test.default_unit_conflict"), std::runtime_error);
+    // Two call sites naming one metric with different units is a bug: their values land in one
+    // set of aggregates labelled with whichever unit was registered first. Telemetry is a
+    // diagnostic subsystem though, so this warns and carries on rather than killing the process
+    // -- a wrong unit in a log line should not fail a build.
+    EXPECT_EQ(&tel.get_or_register_metric("test.unit_conflict", "B"), &token);
+    EXPECT_EQ(tel.get_or_register_metric("test.unit_conflict", "B").unit(), "ms");
+
+    // ...and the existing stream is left alone: no reset, and no sample added by the call that
+    // named the wrong unit.
+    const TelemetryTokenData snap = tel.get_or_register_metric("test.unit_conflict").snapshot();
+    EXPECT_EQ(snap.count, 1u);
+    EXPECT_DOUBLE_EQ(snap.total, 7.0);
+}
+
+TEST_F(BuildCacheTelemetryTest, PerTargetTokenBuildsMetricDotTargetKey) {
+    // Both new call sites (fw/kernel link time and ELF size in build.cpp, the program_config_size
+    // streams in program.cpp) depend on this key format.
+    auto& a = per_target_telemetry_token("test.per_target", "targetA", "B");
+    auto& b = per_target_telemetry_token("test.per_target", "targetB", "B");
+
+    EXPECT_EQ(a.name(), "test.per_target.targetA");
+    EXPECT_EQ(b.name(), "test.per_target.targetB");
+    EXPECT_NE(&a, &b) << "two targets of one metric are separate streams";
+    EXPECT_EQ(a.unit(), "B");
+
+    EXPECT_EQ(&per_target_telemetry_token("test.per_target", "targetA", "B"), &a)
+        << "same metric and target must resolve to the same token";
+    EXPECT_EQ(&BuildCacheTelemetry::inst().get_or_register_metric("test.per_target.targetA"), &a)
+        << "the per-target token is the same stream as its flattened name";
 }
 
 TEST_F(BuildCacheTelemetryTest, ConcurrentRegistrationOfOneNameYieldsOneToken) {

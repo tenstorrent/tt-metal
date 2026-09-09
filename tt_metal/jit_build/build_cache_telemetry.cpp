@@ -10,10 +10,11 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
-#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "env_lib.hpp"
@@ -93,7 +94,7 @@ TelemetryToken& per_target_telemetry_token(
     std::string key(metric_name);
     key += '.';
     key += target_name;
-    return BuildCacheTelemetry::inst().get_or_register_metric(key, std::string(unit));
+    return BuildCacheTelemetry::inst().get_or_register_metric(key, unit);
 }
 
 void BuildCacheTelemetry::enable() {
@@ -259,19 +260,33 @@ void BuildCacheTelemetry::log_compile_summary() const {
         genfiles);
 }
 
-TelemetryToken& BuildCacheTelemetry::get_or_register_metric(const std::string& name, std::string unit) {
+TelemetryToken& BuildCacheTelemetry::get_or_register_metric(
+    const std::string& name, std::optional<std::string_view> unit) {
     std::lock_guard lk(owned_tokens_mutex_);
     auto [it, inserted] = tokens_by_name_.try_emplace(name, nullptr);
     if (!inserted) {
-        TT_FATAL(
-            it->second->unit() == unit,
-            "Telemetry metric '{}' is already registered with unit '{}'; cannot register it with unit '{}'",
-            name,
-            it->second->unit(),
-            unit);
+        // A mismatch means two call sites are feeding one stream values of different kinds, which
+        // mislabels the dump. That is a bug worth shouting about, but telemetry is a diagnostic
+        // subsystem: aborting the process over a metric label would take down every JIT build for
+        // a mistake that costs nothing but a wrong unit in one log line. Keep the unit the stream
+        // was registered with and warn once per name, so a build loop cannot flood the log.
+        if (unit.has_value() && it->second->unit() != *unit) {
+            if (unit_conflict_warned_.insert(name).second) {
+                log_warning(
+                    tt::LogBuildKernels,
+                    "Telemetry metric '{}' is registered with unit '{}' but was requested with unit '{}'; keeping "
+                    "'{}'. Values from these call sites are being aggregated into one stream.",
+                    name,
+                    it->second->unit(),
+                    *unit,
+                    it->second->unit());
+            }
+        }
         return *it->second;
     }
-    owned_tokens_.push_back(std::make_unique<TelemetryToken>(name, std::move(unit)));
+    owned_tokens_.push_back(
+        unit.has_value() ? std::make_unique<TelemetryToken>(name, std::string(*unit))
+                         : std::make_unique<TelemetryToken>(name));
     auto* token = owned_tokens_.back().get();
     it->second = token;
     token->set_recording_enabled(impl_ != nullptr);
