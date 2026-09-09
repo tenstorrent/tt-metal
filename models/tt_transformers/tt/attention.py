@@ -304,7 +304,9 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
-        if f"{q_norm_str}.weight" in state_dict:
+        # Full-width QK-norm (OLMo-2/3) replaces the per-head norms below; see the block after them.
+        self.qk_norm_full_width = getattr(configuration, "qk_norm_full_width", False)
+        if f"{q_norm_str}.weight" in state_dict and not self.qk_norm_full_width:
             fn_q_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
@@ -322,7 +324,7 @@ class Attention(LightweightModule):
         else:
             self.q_norm = lambda x, mode, norm_config: x
 
-        if f"{k_norm_str}.weight" in state_dict:
+        if f"{k_norm_str}.weight" in state_dict and not self.qk_norm_full_width:
             fn_k_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
@@ -345,7 +347,6 @@ class Attention(LightweightModule):
         # column-sharded exactly like the fused QKV columns (contiguous head blocks per device); under
         # TP the statistics are reduced across devices (rms_norm_pre/post_all_gather + all_gather of the
         # per-row sums), so the norm sees the full n_heads*head_dim / n_kv_heads*head_dim as HF does.
-        self.qk_norm_full_width = getattr(configuration, "qk_norm_full_width", False)
         self.q_norm_fw = self.k_norm_fw = None
         if self.qk_norm_full_width:
             assert not self.TG, "full-width QK-norm is not implemented for the Galaxy 2D-sharded QKV layout"
