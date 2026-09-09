@@ -1,0 +1,50 @@
+[
+  {
+    "region": "final-c_case17_native_0",
+    "device_us": 378.0885
+  },
+  {
+    "region": "final-c_case17_codegen_0",
+    "device_us": 454.0338
+  },
+  {
+    "region": "final-c_case17_codegen_1",
+    "device_us": 454.3747
+  },
+  {
+    "region": "final-c_case17_native_1",
+    "device_us": 377.9353
+  },
+  {
+    "region": "final-c_case17_native_2",
+    "device_us": 377.7273
+  },
+  {
+    "region": "final-c_case17_codegen_2",
+    "device_us": 454.0815
+  },
+  {
+    "region": "final-c_case17_codegen_3",
+    "device_us": 454.25109999999995
+  },
+  {
+    "region": "final-c_case17_native_3",
+    "device_us": 378.19829999999996
+  },
+  {
+    "region": "final-c_case17_native_4",
+    "device_us": 378.0046
+  },
+  {
+    "region": "final-c_case17_codegen_4",
+    "device_us": 454.2147
+  },
+  {
+    "region": "final-c_case17_codegen_5",
+    "device_us": 454.3426
+  },
+  {
+    "region": "final-c_case17_native_5",
+    "device_us": 377.882
+  }
+]

@@ -1,0 +1,738 @@
+[
+  {
+    "case": "case01",
+    "shape": [
+      1,
+      1,
+      1536,
+      32768
+    ],
+    "index_shape": [
+      1,
+      1,
+      1536,
+      256
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryStreaming",
+    "device_native": 539189.4506,
+    "device_codegen": 9949.23,
+    "device_ratio": 0.01845219706900549,
+    "device_paired_ratio": 0.0184508214961041,
+    "device_paired_range": [
+      0.018434010364085207,
+      0.018471309918515026
+    ],
+    "gather_native": 539189.4506000001,
+    "gather_codegen": 9949.23,
+    "gather_ratio": 0.018452197069005485,
+    "gather_paired_ratio": 0.0184508214961041,
+    "gather_paired_range": [
+      0.01843401036408521,
+      0.018471309918515026
+    ],
+    "host_native": 539452.1945,
+    "host_codegen": 10096.7205,
+    "host_ratio": 0.018716617715047592,
+    "host_paired_ratio": 0.018716926499985027,
+    "host_paired_range": [
+      0.018604320675723797,
+      0.01885581441907225
+    ]
+  },
+  {
+    "case": "case02",
+    "shape": [
+      1,
+      1,
+      64,
+      32000
+    ],
+    "index_shape": [
+      1,
+      1,
+      64,
+      3200
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryStreaming",
+    "device_native": 22609.41625,
+    "device_codegen": 1706.1882999999998,
+    "device_ratio": 0.07546361574018966,
+    "device_paired_ratio": 0.07546378979222643,
+    "device_paired_range": [
+      0.07539151120224938,
+      0.07552756002635563
+    ],
+    "gather_native": 22609.416250000002,
+    "gather_codegen": 1706.1882999999998,
+    "gather_ratio": 0.07546361574018964,
+    "gather_paired_ratio": 0.07546378979222643,
+    "gather_paired_range": [
+      0.07539151120224938,
+      0.07552756002635563
+    ],
+    "host_native": 22836.86,
+    "host_codegen": 1812.40325,
+    "host_ratio": 0.07936306698906943,
+    "host_paired_ratio": 0.07911391728979544,
+    "host_paired_range": [
+      0.07822242163097877,
+      0.08109770035826679
+    ]
+  },
+  {
+    "case": "case03",
+    "shape": [
+      1,
+      1,
+      32,
+      15360
+    ],
+    "index_shape": [
+      1,
+      1,
+      32,
+      7680
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryStreaming",
+    "device_native": 23088.87915,
+    "device_codegen": 1010.1571,
+    "device_ratio": 0.04375080719325433,
+    "device_paired_ratio": 0.04375079078935913,
+    "device_paired_range": [
+      0.04369396681497793,
+      0.04379730093905587
+    ],
+    "gather_native": 23088.879149999997,
+    "gather_codegen": 1010.1570999999999,
+    "gather_ratio": 0.04375080719325433,
+    "gather_paired_ratio": 0.043750790789359124,
+    "gather_paired_range": [
+      0.04369396681497793,
+      0.04379730093905587
+    ],
+    "host_native": 21445.3695,
+    "host_codegen": 1115.45025,
+    "host_ratio": 0.05201357104152484,
+    "host_paired_ratio": 0.05190167831491331,
+    "host_paired_range": [
+      0.050296809880864934,
+      0.053250926294807883
+    ]
+  },
+  {
+    "case": "case04",
+    "shape": [
+      1,
+      1,
+      20,
+      31990
+    ],
+    "index_shape": [
+      1,
+      1,
+      20,
+      7670
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryStreaming",
+    "device_native": 26660.49635,
+    "device_codegen": 2117.5831,
+    "device_ratio": 0.0794277447876547,
+    "device_paired_ratio": 0.07942673377424705,
+    "device_paired_range": [
+      0.07932552511072413,
+      0.07951264566430385
+    ],
+    "gather_native": 26629.85675,
+    "gather_codegen": 2086.90895,
+    "gather_ratio": 0.07836726158881797,
+    "gather_paired_ratio": 0.07836650779729715,
+    "gather_paired_range": [
+      0.07826928820722262,
+      0.07845520155560683
+    ],
+    "host_native": 24812.12325,
+    "host_codegen": 2324.4885,
+    "host_ratio": 0.0936835786514159,
+    "host_paired_ratio": 0.0934296601337291,
+    "host_paired_range": [
+      0.09057622529920617,
+      0.09982035758872848
+    ]
+  },
+  {
+    "case": "case05",
+    "shape": [
+      128,
+      256
+    ],
+    "index_shape": [
+      128,
+      128
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryTiled",
+    "device_native": 112.99180000000001,
+    "device_codegen": 32.51465,
+    "device_ratio": 0.28776114726909385,
+    "device_paired_ratio": 0.2877779461635587,
+    "device_paired_range": [
+      0.28759022423659475,
+      0.28798494955161913
+    ],
+    "gather_native": 112.99179999999998,
+    "gather_codegen": 32.51465,
+    "gather_ratio": 0.2877611472690939,
+    "gather_paired_ratio": 0.2877779461635587,
+    "gather_paired_range": [
+      0.28759022423659475,
+      0.28798494955161913
+    ],
+    "host_native": 155.08749999999998,
+    "host_codegen": 75.655,
+    "host_ratio": 0.48782139115015727,
+    "host_paired_ratio": 0.4899791734243394,
+    "host_paired_range": [
+      0.4432341851696691,
+      0.5677974450756954
+    ]
+  },
+  {
+    "case": "case06",
+    "shape": [
+      1,
+      1,
+      256,
+      256
+    ],
+    "index_shape": [
+      1,
+      1,
+      256,
+      128
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryTiled",
+    "device_native": 113.12594999999999,
+    "device_codegen": 34.1422,
+    "device_ratio": 0.3018069682508744,
+    "device_paired_ratio": 0.30183352129649765,
+    "device_paired_range": [
+      0.30140987300178085,
+      0.3039385809440042
+    ],
+    "gather_native": 113.12594999999999,
+    "gather_codegen": 34.1422,
+    "gather_ratio": 0.3018069682508744,
+    "gather_paired_ratio": 0.30183352129649765,
+    "gather_paired_range": [
+      0.3014098730017809,
+      0.30393858094400417
+    ],
+    "host_native": 145.355,
+    "host_codegen": 68.02250000000001,
+    "host_ratio": 0.4679749578617867,
+    "host_paired_ratio": 0.46491092740780016,
+    "host_paired_range": [
+      0.4374456993918332,
+      0.6310648912623406
+    ]
+  },
+  {
+    "case": "case07",
+    "shape": [
+      1,
+      64,
+      128
+    ],
+    "index_shape": [
+      1,
+      64,
+      64
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryTiled",
+    "device_native": 56.4769,
+    "device_codegen": 32.9664,
+    "device_ratio": 0.5837147577151012,
+    "device_paired_ratio": 0.5837117519506322,
+    "device_paired_range": [
+      0.583238930032994,
+      0.5839505144996979
+    ],
+    "gather_native": 56.4769,
+    "gather_codegen": 32.9664,
+    "gather_ratio": 0.5837147577151012,
+    "gather_paired_ratio": 0.5837117519506323,
+    "gather_paired_range": [
+      0.5832389300329939,
+      0.5839505144996979
+    ],
+    "host_native": 95.715,
+    "host_codegen": 70.44525,
+    "host_ratio": 0.7359896567936061,
+    "host_paired_ratio": 0.7377260890498475,
+    "host_paired_range": [
+      0.6561243144424133,
+      0.8223307153470601
+    ]
+  },
+  {
+    "case": "case08",
+    "shape": [
+      64,
+      128
+    ],
+    "index_shape": [
+      64,
+      64
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryTiled",
+    "device_native": 56.48245,
+    "device_codegen": 32.9651,
+    "device_ratio": 0.5836343855480773,
+    "device_paired_ratio": 0.5836192197080624,
+    "device_paired_range": [
+      0.583238930032994,
+      0.5838883507438503
+    ],
+    "gather_native": 56.48245,
+    "gather_codegen": 32.96509999999999,
+    "gather_ratio": 0.5836343855480772,
+    "gather_paired_ratio": 0.5836192197080623,
+    "gather_paired_range": [
+      0.5832389300329939,
+      0.5838883507438503
+    ],
+    "host_native": 94.51249999999999,
+    "host_codegen": 70.8125,
+    "host_ratio": 0.7492395185821982,
+    "host_paired_ratio": 0.7479103129453955,
+    "host_paired_range": [
+      0.6905147280587112,
+      0.8596070915189266
+    ]
+  },
+  {
+    "case": "case09",
+    "shape": [
+      1,
+      1,
+      128,
+      128
+    ],
+    "index_shape": [
+      1,
+      1,
+      128,
+      64
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryTiled",
+    "device_native": 56.563500000000005,
+    "device_codegen": 33.089299999999994,
+    "device_ratio": 0.584993856462206,
+    "device_paired_ratio": 0.5850151840030144,
+    "device_paired_range": [
+      0.5848565399203255,
+      0.5853462214784334
+    ],
+    "gather_native": 56.563500000000005,
+    "gather_codegen": 33.089299999999994,
+    "gather_ratio": 0.584993856462206,
+    "gather_paired_ratio": 0.5850151840030144,
+    "gather_paired_range": [
+      0.5848565399203256,
+      0.5853462214784334
+    ],
+    "host_native": 91.69,
+    "host_codegen": 67.5725,
+    "host_ratio": 0.7369669538662886,
+    "host_paired_ratio": 0.745005185624821,
+    "host_paired_range": [
+      0.6665928468608128,
+      1.015867786745731
+    ]
+  },
+  {
+    "case": "case10",
+    "shape": [
+      1,
+      1,
+      128,
+      128
+    ],
+    "index_shape": [
+      1,
+      1,
+      64,
+      128
+    ],
+    "dim": -2,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryTiled",
+    "device_native": 60.803,
+    "device_codegen": 36.844049999999996,
+    "device_ratio": 0.6059577652418465,
+    "device_paired_ratio": 0.6060036859373195,
+    "device_paired_range": [
+      0.5994840547495156,
+      0.6068298674165407
+    ],
+    "gather_native": 56.57225,
+    "gather_codegen": 33.0945,
+    "gather_ratio": 0.5849952936289435,
+    "gather_paired_ratio": 0.5850423872385855,
+    "gather_paired_range": [
+      0.5791753898290843,
+      0.5852504244482174
+    ],
+    "host_native": 119.90775,
+    "host_codegen": 91.5875,
+    "host_ratio": 0.763816350486103,
+    "host_paired_ratio": 0.7872734967860586,
+    "host_paired_range": [
+      0.6946268978141488,
+      0.9733294132470914
+    ]
+  },
+  {
+    "case": "case11",
+    "shape": [
+      1,
+      1,
+      32,
+      64
+    ],
+    "index_shape": [
+      1,
+      1,
+      32,
+      32
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 28.191499999999998,
+    "device_codegen": 24.84075,
+    "device_ratio": 0.8811432523987728,
+    "device_paired_ratio": 0.8810591726447445,
+    "device_paired_range": [
+      0.8804944032165992,
+      0.881951614104925
+    ],
+    "gather_native": 28.1915,
+    "gather_codegen": 24.84075,
+    "gather_ratio": 0.8811432523987727,
+    "gather_paired_ratio": 0.8810591726447446,
+    "gather_paired_range": [
+      0.8804944032165992,
+      0.8819516141049247
+    ],
+    "host_native": 63.852500000000006,
+    "host_codegen": 59.275000000000006,
+    "host_ratio": 0.9283113425472769,
+    "host_paired_ratio": 0.9286172666316923,
+    "host_paired_range": [
+      0.8610178970917225,
+      0.9537198875294475
+    ]
+  },
+  {
+    "case": "case12",
+    "shape": [
+      32,
+      64
+    ],
+    "index_shape": [
+      32,
+      32
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 28.1965,
+    "device_codegen": 24.833000000000002,
+    "device_ratio": 0.8807121451243949,
+    "device_paired_ratio": 0.8809228097132142,
+    "device_paired_range": [
+      0.8800160271752813,
+      0.8827706057596822
+    ],
+    "gather_native": 28.1965,
+    "gather_codegen": 24.833,
+    "gather_ratio": 0.8807121451243948,
+    "gather_paired_ratio": 0.8809228097132142,
+    "gather_paired_range": [
+      0.8800160271752814,
+      0.8827706057596821
+    ],
+    "host_native": 69.72,
+    "host_codegen": 64.79499999999999,
+    "host_ratio": 0.9293602983362018,
+    "host_paired_ratio": 0.9327587527691544,
+    "host_paired_range": [
+      0.8168058827728992,
+      1.1530828046201398
+    ]
+  },
+  {
+    "case": "case13",
+    "shape": [
+      1,
+      32,
+      64
+    ],
+    "index_shape": [
+      1,
+      32,
+      32
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 28.1892,
+    "device_codegen": 24.83185,
+    "device_ratio": 0.8808994224738552,
+    "device_paired_ratio": 0.8809125169011218,
+    "device_paired_range": [
+      0.8798146251935418,
+      0.881821568592666
+    ],
+    "gather_native": 28.1892,
+    "gather_codegen": 24.83185,
+    "gather_ratio": 0.8808994224738552,
+    "gather_paired_ratio": 0.8809125169011218,
+    "gather_paired_range": [
+      0.8798146251935416,
+      0.8818215685926661
+    ],
+    "host_native": 69.75999999999999,
+    "host_codegen": 65.535,
+    "host_ratio": 0.9394352064220184,
+    "host_paired_ratio": 0.9372297986162768,
+    "host_paired_range": [
+      0.7881540697674417,
+      1.5026023350682232
+    ]
+  },
+  {
+    "case": "case14",
+    "shape": [
+      1,
+      1,
+      64,
+      64
+    ],
+    "index_shape": [
+      1,
+      1,
+      64,
+      32
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 28.241500000000002,
+    "device_codegen": 25.4145,
+    "device_ratio": 0.8998990846803463,
+    "device_paired_ratio": 0.8999663672961056,
+    "device_paired_range": [
+      0.8883562362320362,
+      0.9101841160093793
+    ],
+    "gather_native": 28.2415,
+    "gather_codegen": 25.4145,
+    "gather_ratio": 0.8998990846803464,
+    "gather_paired_ratio": 0.8999663672961056,
+    "gather_paired_range": [
+      0.8883562362320361,
+      0.9101841160093793
+    ],
+    "host_native": 63.732749999999996,
+    "host_codegen": 58.489999999999995,
+    "host_ratio": 0.9177385253264608,
+    "host_paired_ratio": 0.9125284147889157,
+    "host_paired_range": [
+      0.7543835616438356,
+      1.0547308173850831
+    ]
+  },
+  {
+    "case": "case15",
+    "shape": [
+      1,
+      1,
+      64,
+      128
+    ],
+    "index_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "dim": -2,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 32.366550000000004,
+    "device_codegen": 28.79415,
+    "device_ratio": 0.8896267906217992,
+    "device_paired_ratio": 0.8895340020783038,
+    "device_paired_range": [
+      0.8873696472154425,
+      0.8961877252276762
+    ],
+    "gather_native": 28.3169,
+    "gather_codegen": 25.428449999999998,
+    "gather_ratio": 0.8979955432974653,
+    "gather_paired_ratio": 0.8980097722159384,
+    "gather_paired_range": [
+      0.897372098932746,
+      0.8985058392691291
+    ],
+    "host_native": 93.69999999999999,
+    "host_codegen": 94.09,
+    "host_ratio": 1.004162219850587,
+    "host_paired_ratio": 0.9939284048554857,
+    "host_paired_range": [
+      0.6062381253958201,
+      1.1855305086746135
+    ]
+  },
+  {
+    "case": "case16",
+    "shape": [
+      1,
+      1,
+      32,
+      64
+    ],
+    "index_shape": [
+      1,
+      1,
+      16,
+      64
+    ],
+    "dim": -2,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 38.09255,
+    "device_codegen": 30.4643,
+    "device_ratio": 0.7997443069576596,
+    "device_paired_ratio": 0.7998398333039611,
+    "device_paired_range": [
+      0.7990593620248914,
+      0.8002790140452835
+    ],
+    "gather_native": 27.855600000000003,
+    "gather_codegen": 21.03685,
+    "gather_ratio": 0.7552108014187452,
+    "gather_paired_ratio": 0.7552037334809747,
+    "gather_paired_range": [
+      0.752943365707374,
+      0.7560031623962338
+    ],
+    "host_native": 101.1625,
+    "host_codegen": 103.1175,
+    "host_ratio": 1.0193253428889164,
+    "host_paired_ratio": 0.9810916483459969,
+    "host_paired_range": [
+      0.9531829573934837,
+      1.2713395067387916
+    ]
+  },
+  {
+    "case": "case17",
+    "shape": [
+      1,
+      1,
+      4352,
+      128
+    ],
+    "index_shape": [
+      1,
+      1,
+      4352,
+      96
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryInterleaved",
+    "device_native": 153.92295000000001,
+    "device_codegen": 163.36475000000002,
+    "device_ratio": 1.0613410800663579,
+    "device_paired_ratio": 1.061358439751538,
+    "device_paired_range": [
+      1.0607360086856634,
+      1.0673382600264616
+    ],
+    "gather_native": 153.92295000000001,
+    "gather_codegen": 163.36475000000002,
+    "gather_ratio": 1.0613410800663579,
+    "gather_paired_ratio": 1.0613584397515379,
+    "gather_paired_range": [
+      1.0607360086856634,
+      1.0673382600264618
+    ],
+    "host_native": 199.17,
+    "host_codegen": 211.29,
+    "host_ratio": 1.0608525380328362,
+    "host_paired_ratio": 1.0518525648189865,
+    "host_paired_range": [
+      1.0419449441802007,
+      1.1075505050505052
+    ]
+  },
+  {
+    "case": "case18",
+    "shape": [
+      1,
+      151936
+    ],
+    "index_shape": [
+      1,
+      151936
+    ],
+    "dim": -1,
+    "arch": "Arch.BLACKHOLE",
+    "factory": "ttnn::prim::GatherCodegenProgramFactoryStreaming",
+    "device_native": 184128.63345000002,
+    "device_codegen": 184691.31310000003,
+    "device_ratio": 1.0030559052085335,
+    "device_paired_ratio": 1.0030543331996742,
+    "device_paired_range": [
+      1.0029645572953507,
+      1.0031757709699738
+    ],
+    "gather_native": 183978.3109,
+    "gather_codegen": 184541.89265,
+    "gather_ratio": 1.0030633053822648,
+    "gather_paired_ratio": 1.003058500070699,
+    "gather_paired_range": [
+      1.002967877373287,
+      1.0031792436795333
+    ],
+    "host_native": 184448.624,
+    "host_codegen": 185092.12875,
+    "host_ratio": 1.003488802117602,
+    "host_paired_ratio": 1.0032364202360808,
+    "host_paired_range": [
+      1.0021742163600584,
+      1.0050698626042065
+    ]
+  }
+]

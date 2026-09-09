@@ -1,0 +1,18 @@
+{
+  "production_sha": "cf8684d95bd01f0f3cb3bed53163ff78690ed62c",
+  "base_sha": "89e1256c982a5b4739d173bcc446c8c748a44b40",
+  "harness_sha": "9aa200aa7f27e834b447726bec9c7d1c2a48d864",
+  "workflow_run": 34333981154,
+  "reference_comment": 5436334701,
+  "metrics": {
+    "device": "Median of 12 window means; each window sums all op kernel durations over 10 calls, including transforms, then divides by calls.",
+    "host": "Median of 12 window medians; each unprofiled window times 30 calls including device synchronization and output allocation.",
+    "ratio": "Codegen divided by native; under 1 means faster."
+  },
+  "scope": "18 reference cases; BF16 tiled DRAM input; UINT32 tiled DRAM index; public route asserted codegen; public/native/codegen exact torch.equal against torch.gather.",
+  "ci_status": "success",
+  "artifacts": {
+    "blackhole": 10098001155,
+    "wormhole": 10098364412
+  }
+}

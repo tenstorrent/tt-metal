@@ -1,0 +1,170 @@
+[
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "native",
+    "window": 0,
+    "device_us": 378.27279999999996
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 0,
+    "device_us": 444.3283
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 1,
+    "device_us": 444.28929999999997
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "native",
+    "window": 1,
+    "device_us": 378.1162
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "native",
+    "window": 2,
+    "device_us": 378.1251
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 2,
+    "device_us": 444.2642
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 3,
+    "device_us": 444.2532
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "native",
+    "window": 3,
+    "device_us": 378.2199
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "native",
+    "window": 4,
+    "device_us": 377.8182
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 4,
+    "device_us": 444.27729999999997
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 5,
+    "device_us": 444.42040000000003
+  },
+  {
+    "label": "base-a",
+    "case": "case17",
+    "variant": "native",
+    "window": 5,
+    "device_us": 377.9598
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "native",
+    "window": 0,
+    "device_us": 377.8612
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 0,
+    "device_us": 444.2862
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 1,
+    "device_us": 444.2414
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "native",
+    "window": 1,
+    "device_us": 377.914
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "native",
+    "window": 2,
+    "device_us": 378.11420000000004
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 2,
+    "device_us": 444.17470000000003
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 3,
+    "device_us": 444.2056
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "native",
+    "window": 3,
+    "device_us": 378.0065
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "native",
+    "window": 4,
+    "device_us": 378.0915
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 4,
+    "device_us": 444.222
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "codegen",
+    "window": 5,
+    "device_us": 444.39029999999997
+  },
+  {
+    "label": "base-b",
+    "case": "case17",
+    "variant": "native",
+    "window": 5,
+    "device_us": 377.87379999999996
+  }
+]
