@@ -255,7 +255,7 @@ void BuildCacheTelemetry::dump_metrics() const {
     // One info line per token, and the per-target metrics register dozens of them, so every
     // tt-metal process would print a wall of output at exit. Off by default; opt in with
     // TT_METAL_LOG_JIT_TELEMETRY=1, mirroring the TT_METAL_LOG_KERNEL_COMPILE gate in build.cpp.
-    static const bool log_tokens = tt::parse_env<bool>("TT_METAL_LOG_JIT_TELEMETRY", false);
+    static const bool log_tokens = tt::parse_env<bool>("TT_METAL_LOG_JIT_TELEMETRY", true);
     if (!log_tokens) {
         return;
     }
