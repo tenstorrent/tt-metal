@@ -4,14 +4,14 @@
     "latents": 689,
     "max_abs_err": 0.03347015380859375,
     "pcc": 0.9999952895046547,
-    "seconds": 0.011240005493164062
+    "seconds": 0.012783527374267578
   },
   "condition_encoder_chunk1": {
     "frames": 150,
     "latents": 516,
     "max_abs_err": 0.03225517272949219,
     "pcc": 0.9999954284297997,
-    "seconds": 0.005437374114990234
+    "seconds": 0.006219148635864258
   },
   "denoise_chained": {
     "pcc_per_chunk": [
@@ -210,7 +210,7 @@
     "overlap": 0,
     "pcc": 0.9996152042042202,
     "pcc_excluding_overlap": 0.9996152042042202,
-    "seconds": 4.242645740509033,
+    "seconds": 4.1723878383636475,
     "steps": 30
   },
   "denoise_chunk1": {
@@ -404,13 +404,44 @@
     "overlap": 172,
     "pcc": 0.9995337023782324,
     "pcc_excluding_overlap": 0.9994324640462217,
-    "seconds": 3.4732296466827393,
+    "seconds": 3.453166961669922,
     "steps": 30
+  },
+  "denoise_three_windows_short_tail": {
+    "chunk_starts": [
+      0,
+      100,
+      200
+    ],
+    "frames": 301,
+    "latents": [
+      689,
+      689,
+      347
+    ],
+    "overlaps": [
+      0,
+      172,
+      172
+    ],
+    "steps": 2
   },
   "dit_forward_T100": {
     "S_pad": 128,
     "T": 100,
     "pcc": 0.9997822853151548,
+    "t": 0.23333334922790527
+  },
+  "dit_forward_T127": {
+    "S_pad": 128,
+    "T": 127,
+    "pcc": 0.9997786464544168,
+    "t": 0.23333334922790527
+  },
+  "dit_forward_T128": {
+    "S_pad": 256,
+    "T": 128,
+    "pcc": 0.9997916849299207,
     "t": 0.23333334922790527
   },
   "dit_forward_T37": {
@@ -433,16 +464,16 @@
   "dit_forward_timing": {
     "T": 689,
     "batch": 2,
-    "forward_median_ms": 116.01066589355469,
+    "forward_median_ms": 123.20399284362793,
     "forward_seconds": [
-      0.11649703979492188,
-      0.11649632453918457,
-      0.11601066589355469,
-      0.11557817459106445,
-      0.1134026050567627
+      0.1136927604675293,
+      0.12320399284362793,
+      0.1809697151184082,
+      0.12594366073608398,
+      0.11373424530029297
     ],
     "mode": "eager, host<->device latents/velocity per call",
-    "prepare_condition_median_ms": 2.357959747314453
+    "prepare_condition_median_ms": 2.9420852661132812
   },
   "scheduler": {
     "dumped_steps_checked": 9,

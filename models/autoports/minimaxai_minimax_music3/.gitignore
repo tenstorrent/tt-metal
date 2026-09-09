@@ -6,3 +6,7 @@ generated/
 # Stage 05: the diffusers scheduler step triples (0.5 MB) are test inputs and travel with the tests.
 !doc/flow_dit/pcc/scheduler_triples.pt
 !doc/flow_dit/tracy/*/perf_report.csv
+# Stage 05 Tracy raw ops dump and stacked chart are local-only (the report txt/csv/summary are committed).
+doc/flow_dit/tracy/*/ops.csv.gz
+doc/flow_dit/tracy/*/*.png
+doc/flow_dit/tracy/*/*.console.log

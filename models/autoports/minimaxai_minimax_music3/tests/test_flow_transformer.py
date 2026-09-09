@@ -160,18 +160,14 @@ def test_scheduler_matches_diffusers(golden):
             assert prev.dtype == st["prev_sample"].dtype
             worst = max(worst, float((prev - st["prev_sample"]).abs().max()))
             checked += 1
-        # sequential path (step index advances) reproduces the dumped final sample bit for bit
-        x = rec["steps"][0]["sample"].clone()
+        # sequential path: the dumped steps 0, 1, 2 are consecutive, so stepping one scheduler through them
+        # (step index advancing) must reproduce each dumped prev_sample exactly as well
         seq = FlowMatchEulerScheduler(n)
-        g = torch.Generator().manual_seed(0)
-        for i, t in enumerate(seq.timesteps):
-            v = (
-                rec["steps"][i]["velocity"]
-                if i < len(rec["steps"]) and rec["steps"][i]["i"] == i
-                else torch.randn(x.shape, generator=g)
-            )
-            x = seq.step(v, t, x)
-        assert seq.step_index == n
+        for st in rec["steps"][:3]:
+            assert seq.step_index in (None, st["i"])
+            prev = seq.step(st["velocity"], st["t"], st["sample"])
+            worst = max(worst, float((prev - st["prev_sample"]).abs().max()))
+        assert seq.step_index == min(3, n)
     logger.info(f"scheduler: {checked} dumped steps, max abs err {worst:.3e}")
     assert worst < STEP_MAX_ABS_ERR
     _record("scheduler", exact_schedule=True, dumped_steps_checked=checked, step_max_abs_err=worst)
@@ -260,9 +256,10 @@ def test_flow_transformer_forward_golden_length(flow_transformer, ref_transforme
 
 
 @pytest.mark.hardware
-@pytest.mark.parametrize("num_latents", [100, 37])
+@pytest.mark.parametrize("num_latents", [100, 37, 127, 128])
 def test_flow_transformer_short_and_unaligned(flow_transformer, ref_transformer, golden, num_latents):
-    """T=100 (short) and T=37 (not a tile multiple; S = 38) run through the same padded path and still match."""
+    """T=100 (short), T=37 (S = 38, not a tile multiple), T=127 (S = 128 = S_pad: the no-mask branch; a 37-frame
+    single-window song produces exactly this L) and T=128 (S = 129, one row past the boundary, 127 padded rows)."""
     noise, final, cond = golden["noises"][0], golden["latents"][0], golden["conditions"][0]
     t = float(FlowMatchEulerScheduler(NUM_STEPS).timesteps[7])
     latents = ((1.0 - t) * noise + t * final)[..., :num_latents].expand(BATCH, -1, -1).contiguous()
@@ -377,6 +374,38 @@ def test_denoise_chunk_golden(flow_transformer, condition_encoder, ref_trajector
     )
     assert pcc >= PCC_CHUNK
     assert cond_pcc >= PCC_CONDITION
+
+
+@pytest.mark.hardware
+def test_denoise_three_windows_short_tail(flow_transformer, condition_encoder, golden):
+    """Three windows with OUR carry and a 101-frame last window (L = 347: the carry window [3, 175) overlaps the
+    172 restored latents) - the awkward chunking tail the golden clip does not reach. 2 Euler steps per window."""
+    fh = golden["frame_hiddens"]
+    frames = 301
+    fh3 = fh.repeat(1, -(-frames // fh.shape[1]), 1)[:, :frames]
+    starts = chunk_starts_for(frames)
+    assert starts == [0, 100, 200]
+    lengths = [latent_length(min(s + CHUNK_FRAMES, frames) - s) for s in starts]
+    assert lengths == [689, 689, 347]
+    g = torch.Generator().manual_seed(0)
+    noises = [torch.randn(1, 128, L, generator=g) for L in lengths]
+    denoiser = ChunkDenoiser(flow_transformer, condition_encoder)
+    results = denoiser.denoise(fh3, noises, chunk_starts=starts, steps=2)
+    assert [r.latents.shape[-1] for r in results] == lengths
+    assert all(torch.isfinite(r.latents).all() for r in results)
+    assert [r.overlap for r in results] == [0, OVERLAP_LATENT_LENGTH, OVERLAP_LATENT_LENGTH]
+    for prev, cur in zip(results, results[1:]):
+        assert torch.equal(cur.latents[..., :OVERLAP_LATENT_LENGTH], prev.previous_latent[..., :OVERLAP_LATENT_LENGTH])
+        assert torch.equal(cur.condition[:, :OVERLAP_LATENT_LENGTH], prev.previous_condition[:, :OVERLAP_LATENT_LENGTH])
+    assert results[2].previous_latent.shape[-1] == 175 - 3 and results[2].previous_condition.shape[1] == 175 - 3
+    _record(
+        "denoise_three_windows_short_tail",
+        frames=frames,
+        chunk_starts=starts,
+        latents=lengths,
+        steps=2,
+        overlaps=[r.overlap for r in results],
+    )
 
 
 @pytest.mark.hardware

@@ -19,9 +19,10 @@ Work log for MiniMax-Music3's diffusion stage (`MiniMaxMusic3Transformer1DModel`
 * measured numbers: [`pcc/results.json`](pcc/results.json) (every PCC / timing the gate writes, including the
   per-step drift log), [`tracy/forward/perf_report.{txt,csv,summary.txt}`](tracy/forward/),
   [`pcc/scheduler_triples.pt`](pcc/scheduler_triples.pt) (test input dumped from diffusers, 0.5 MB, committed)
-* local-only (gitignored under `generated/`): `ref_trajectory.pt` (21 MB fp32 per-step reference latents; the
+* local-only (gitignored): under `generated/`: `ref_trajectory.pt` (21 MB fp32 per-step reference latents; the
   gate falls back to logging drift vs the golden final latent when it is missing), `tt_dit_cache/` (4.6 GB
-  converted bf16 weights), `gate05*.log`, `tracy/forward/{pytest.log,ops.csv.gz}`.
+  converted bf16 weights), `gate05*.log`, `dev_*.log`; under `tracy/forward/`: `pytest.log`, `ops.csv.gz`,
+  `perf_report.console.log`, `perf_report_stacked.png` (ignored by the model `.gitignore`).
 
 ## What was built
 
@@ -76,7 +77,7 @@ as ONE `[F_pad, 12288] @ [12288, 2048] + b` matmul on device over the 3-tap unfo
 resampling as a host `index_select` whose index map is taken from `F.interpolate(mode="nearest")` itself on an index
 ramp (bit-exact rounding vs the reference). Output is host fp32 because the chunk loop splices and carries windows of it.
 **Decision (nobody to ask):** the prompt allows host torch here; the only heavy op (25 M-parameter conv) is on device,
-the rest stays on the host on purpose (documented above). 68 ms for the 200-frame window including transfers.
+the rest stays on the host on purpose (documented above). 13 ms for the 200-frame window including transfers (`results.json::condition_encoder_chunk0`).
 
 ### `FlowMatchEulerScheduler` (`tt/scheduler.py`)
 
@@ -124,8 +125,10 @@ with_hw_lock $MM3_MODEL_DIR/scripts/collect_dit_perf.sh               # doc/flow
 
 ## Evidence
 
-All numbers below are from this stage's runs on the board above; the JSON in `pcc/results.json` is what the
-gate wrote on its final run (`generated/gate05_final.log`).
+All numbers below are from this stage's runs on the board above. `pcc/results.json` is rewritten by every gate
+run; the committed copy is from the final official gate run `~/mm3-bringup/checks/05.sh` (12 passed, `GATE_OK`,
+local log `generated/gate05_check.log`); the same PCC values were produced by the two earlier runs
+(`generated/gate05_dev1.log`, `generated/gate05_final.log`) - only the eager timings move run to run.
 
 ### Correctness
 
@@ -138,6 +141,9 @@ gate wrote on its final run (`generated/gate05_final.log`).
 | DiT forward, T = 689 (S_pad 768), both rows, t = 0.5, mid-trajectory latent, vs fp32 torch | PCC >= 0.99 | cond 0.99984, uncond 0.99984 (max abs err 0.47, ref rms 2.11; latent = ref_trajectory step 14) |
 | DiT forward, T = 100 (S_pad 128) vs fp32 torch | PCC >= 0.99 | 0.99978 |
 | DiT forward, T = 37 (S = 38, not a tile multiple, S_pad 128) vs fp32 torch | PCC >= 0.99 | 0.99965 |
+| DiT forward, T = 127 (S = 128 = S_pad: the no-mask branch, what a 37-frame single-window song produces) | PCC >= 0.99 | 0.99978 |
+| DiT forward, T = 128 (S = 129, one row past the pad boundary, S_pad 256) | PCC >= 0.99 | 0.99979 |
+| three windows with OUR carry on a 301-frame synthetic clip (`[0, 100, 200]`, last window 101 frames -> L = 347, carry window `[3, 175)` overlapping the 172 restored latents), 2 Euler steps each | runs, finite, overlap restore / condition splice `torch.equal` to the carry | passes (`test_denoise_three_windows_short_tail`) |
 | `denoise_chunk` chunk 0 (golden noise, 30 steps) vs golden `latents[0]` | PCC >= 0.98 | PCC 0.99962, max abs err 0.56 |
 | `denoise_chunk` chunk 1 (golden noise + golden carry from chunk 0) vs golden `latents[1]` | PCC >= 0.98 | PCC 0.99953 (0.99943 excluding the 172 restored overlap latents), condition splice `torch.equal` to golden `conditions[1]` |
 | both chunks chained with OUR carry (`-m slow`, `test_denoise_all_chunks_chained`) | PCC >= 0.98 | PCC 0.99962 / 0.99932 |
@@ -154,14 +160,19 @@ step against the fp32 reference trajectory started from the same noise/carry. Ch
 
 | what | measured |
 |---|---|
-| one DiT forward, B = 2, T = 689 (S_pad 768), warmed, condition projection precomputed | 116 ms median over 5 (min 113 ms); Tracy device time 106.4 ms + 3.3 ms gaps |
-| `prepare_condition` (once per chunk) | 2.4 ms |
-| one full 30-step chunk 0 (`denoise_chunk`, includes the condition encoder, 30 forwards, host CFG/Euler) | 4.2 s (141 ms per step) |
+| one DiT forward, B = 2, T = 689 (S_pad 768), warmed, condition projection precomputed | 123 ms median over 5 (min 114 ms; 116 / 113 ms in `gate05_final.log`); Tracy device time 106.4 ms + 3.3 ms gaps |
+| `prepare_condition` (once per chunk) | 2.9 ms |
+| one full 30-step chunk 0 (`denoise_chunk`, includes the condition encoder, 30 forwards, host CFG/Euler) | 4.2 s (139 ms per step) |
 | one full 30-step chunk 1 (516 latents, S_pad 640) | 3.5 s |
 | weight load | 7.1 s from safetensors, 0.7 s from the `TT_DIT_CACHE_DIR` cache |
 
 Tracy device report for one warmed forward (`tracy/forward/perf_report.summary.txt`, 617 device ops between the
-`PERF_DIT_FORWARD` signposts): device time 106.4 ms, op-to-op gaps 3.3 ms in total.
+`PERF_DIT_FORWARD` signposts): device time 106.4 ms, op-to-op gaps 3.3 ms in total. Provenance: `python -m tracy -r`'s
+standard post-processing aborted with "Device data missing: Op 1160195" (a warm-up-phase host op without a device
+record, see `tracy/forward/pytest.log`), so `collect_dit_perf.sh` re-processed the same logs with
+`scripts/tracy_postprocess_tolerant.py`, which dropped 25 host ops (LayerNorm / NlpCreateHeads / NLPConcatHeads)
+whose global call counts (1160195..1240067) all precede the signposted window (1265667..1896451); the window itself
+is complete (op-class counts below add up to 617).
 
 | op class | ops | device ms | note |
 |---|---|---|---|
@@ -204,7 +215,25 @@ are ~6 ms of a ~112 ms step), LayerNorm on more cores, keep latents on device be
   audibly clean (stage 06 qualitative check).
 * `ttnn.linear(activation="silu")` runs the activation as a separate op on this build (Tracy); harmless for
   correctness, 6.6 ms per forward.
-* Only one board / one golden clip; T values covered: 37, 100, 516, 689 (S_pad 128 / 640 / 768). `MAX_LATENTS`
-  9000 is asserted but the largest window the pipeline produces is 689.
+* Only one board / one golden clip; T values covered on device: 37, 100, 127 (no mask), 128, 347 (synthetic
+  3-window tail), 516, 689 (S_pad 128 / 256 / 384 / 640 / 768). `MAX_LATENTS` 9000 is asserted but the largest
+  window the pipeline produces is 689.
+* The `tt_dit` weight cache key does not hash the fold code or the safetensors: after changing
+  `fold_input_weights` / `fold_output_weights` / the QKV concat order, delete `generated/tt_dit_cache` or the old
+  tensors are silently reused.
 * Host CPU contention skews eager timings (a concurrent CPU job inflated one forward from 112 ms to 210 ms during
-  the first gate run); the numbers above are from a quiet host.
+  the first gate run; the final gate run had two 170-180 ms outliers among five samples). Treat the eager numbers as
+  upper bounds, not as the stage-07 baseline.
+
+## Stage review
+
+An independent stage-review subagent (read-only, fresh context) reviewed commits `8ba0e4e3cb1` + `70fe9db7983`
+against the stage prompt and returned `more-work-needed` with two P2 items, both fixed in the follow-up commit:
+(1) the evidence JSON had been rewritten by a gate rerun after the README cited the earlier run - the README now
+names the official gate run as the provenance and the committed JSON is that run's; (2) the `S == S_pad`
+(no attention mask) branch was reachable for a valid input but untested - T = 127 and T = 128 were added to the
+gate. Its other concerns were also applied: tolerant Tracy re-processing disclosed above, the condition-encoder
+timing taken from a quiet-host run, the raw Tracy dumps explicitly gitignored, a misleading scheduler-test comment
+replaced by a real consecutive-step check, explicit `deallocate` calls where `embed_inputs` / `_attention` rebound
+tensors, and a three-window synthetic chunk test for the short-tail carry case. The reviewer's anomaly ledger
+(per-forward 0.9998 vs per-block 0.99997 PCC = bf16 residual stream; unfused silu) matches the risks listed above.

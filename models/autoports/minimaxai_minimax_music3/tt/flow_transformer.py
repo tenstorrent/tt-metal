@@ -369,9 +369,10 @@ class FlowTransformer(LightweightModule):
         s_pad = padded_seq_len(t)
         assert cond_proj.shape[-2] == BATCH * s_pad, (cond_proj.shape, s_pad)
         x_lat = self._to_device(self._pad_rows(latents.transpose(1, 2), s_pad))
-        x = self._linear(x_lat, self.weights.w_in_latent.data)
+        x_lat_proj = self._linear(x_lat, self.weights.w_in_latent.data)
         ttnn.deallocate(x_lat)
-        x = ttnn.add(x, cond_proj, memory_config=self.mem)
+        x = ttnn.add(x_lat_proj, cond_proj, memory_config=self.mem)
+        ttnn.deallocate(x_lat_proj)
         temb = self.time_embedder(timestep.expand(BATCH) if timestep.numel() == 1 else timestep)  # [B, 2048] fp32
         rows = torch.zeros(TILE, DIM)
         rows[:BATCH] = temb
@@ -384,9 +385,10 @@ class FlowTransformer(LightweightModule):
             dtype=self.dtype,
         )
         ttnn.deallocate(rows_d)
-        x = ttnn.add(x, tok, memory_config=self.mem)
+        out = ttnn.add(x, tok, memory_config=self.mem)
         ttnn.deallocate(tok)
-        return x
+        ttnn.deallocate(x)
+        return out
 
     def _attention(self, x_norm: ttnn.Tensor, blk: _BlockWeights, s_pad: int, s_real: int) -> ttnn.Tensor:
         qkv = self._linear(x_norm, blk.wqkv.data)  # [1, 1, B*S_pad, 6144]
@@ -418,10 +420,11 @@ class FlowTransformer(LightweightModule):
         ttnn.deallocate(q_r)
         ttnn.deallocate(k_r)
         ttnn.deallocate(v)
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.mem)  # [B, 1, S_pad, 2048]
-        attn = ttnn.experimental.view(attn, (1, 1, BATCH * s_pad, DIM))
-        out = self._linear(attn, blk.wo.data)
+        merged = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.mem)  # [B, 1, S_pad, 2048]
         ttnn.deallocate(attn)
+        merged = ttnn.experimental.view(merged, (1, 1, BATCH * s_pad, DIM))
+        out = self._linear(merged, blk.wo.data)
+        ttnn.deallocate(merged)
         return out
 
     def _mlp(self, x_norm: ttnn.Tensor, blk: _BlockWeights) -> ttnn.Tensor:
