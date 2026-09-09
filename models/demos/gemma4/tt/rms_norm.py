@@ -9,8 +9,11 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
-_SHARDED_NORM_MAX_HEIGHT = 1024
 _PREFILL_ISLAND_MAX_HEIGHT = 128
+_SHARDED_NORM_MAX_HEIGHT = _PREFILL_ISLAND_MAX_HEIGHT
+# In+out bf16 shards plus RMSNorm scratch must fit L1. 26B at height=1024 on
+# an 8-core Wormhole grid overflows before scratch.
+_SHARDED_NORM_MAX_PER_CORE_BYTES = 1024 * 1024
 
 
 def sharded_norm_enabled() -> bool:
@@ -78,9 +81,14 @@ def width_shard_spec(mesh_device, dim, height):
     for gy in range(1, grid.y + 1):
         for gx in range(1, grid.x + 1):
             n = gx * gy
-            if tiles % n == 0 and (best is None or n > best[0]):
+            if tiles % n != 0 or n <= 1:
+                continue
+            per_core_bytes = int(height) * (int(dim) // n) * 2 * 2
+            if per_core_bytes > _SHARDED_NORM_MAX_PER_CORE_BYTES:
+                continue
+            if best is None or n > best[0]:
                 best = (n, gx, gy)
-    if best is None or best[0] == 1:
+    if best is None:
         return None
     num_cores, gx, gy = best
     block_w = tiles // num_cores

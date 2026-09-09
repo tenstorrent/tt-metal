@@ -676,10 +676,10 @@ def test_demo_text(
     iteration = 0
     users_decoding = True
 
-    pipeline_reads = device_sampling_params is not None and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in (
-        "1",
-        "true",
-        "yes",
+    pipeline_reads = (
+        device_sampling_params is not None
+        and enable_trace
+        and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
     )
     pending_reads = []
 
