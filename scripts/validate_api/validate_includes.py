@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Validate #include directives in C++ source files."""
+"""Validate API includes, header guards, and direct stability boundaries.
 
+This is a lexical check, not a C++ dependency resolver.
+See tt_metal/api/README.md for its scope and the compiler-based follow-up.
+"""
+
+import argparse
+import json
 import re
-import sys
 from collections import defaultdict
+from pathlib import Path
 from typing import NamedTuple, Optional
 
-from common import find_cpp_sources
+from common import CPP_EXTENSIONS
 
 
+# Legacy include-style exceptions; guards and tier boundaries still apply.
 SKIP_FILES = {
     "fabric_edm_packet_header.hpp",
     "dev_msgs.h",
@@ -181,9 +188,103 @@ STD_HEADERS = {
     "unistd.h",
 }
 
-# Regex patterns
-ANGLE_INCLUDE_PATTERN = re.compile(r"^\s*#include\s*<([^>]+)>")
-QUOTED_INCLUDE_PATTERN = re.compile(r'^\s*#include\s*"([^"]+)"')
+EXCEPTIONS = Path("scripts/validate_api/header_hygiene_exceptions.json")
+HEADER_SUFFIXES = {".h", ".hpp", ".hh", ".hxx"}
+ALLOWED_DEPENDENCIES = {
+    "stable": {"stable"},
+    "experimental": {"stable", "experimental"},
+    "internal": {"stable", "experimental", "internal"},
+}
+# Preserve ordinary string/character literals so comment markers in them are not
+# interpreted as comments. Mask raw strings too: they can contain fake directives.
+COMMENTS_AND_LITERALS = re.compile(
+    r'R"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"'
+    r'|"(?:\\.|[^"\\\n])*"'
+    r"|'(?:\\.|[^'\\\n])*'"
+    r"|//[^\n]*|/\*.*?\*/",
+    re.DOTALL,
+)
+INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")\s*$')
+PRAGMA_ONCE = re.compile(r"^\s*#\s*pragma\s+once\s*$")
+
+
+def source_lines(text: str) -> list[tuple[int, str]]:
+    """Splice continued lines, then mask comments while retaining source locations."""
+    lines = []
+    pending = []
+    start = 1
+    for number, line in enumerate(text.splitlines(), 1):
+        if not pending:
+            start = number
+        if line.endswith("\\"):
+            pending.append(line[:-1])
+            continue
+        lines.append((start, "".join(pending) + line))
+        pending = []
+    if pending:
+        lines.append((start, "".join(pending)))
+
+    def mask(match: re.Match) -> str:
+        value = match.group()
+        if value.startswith(("//", "/*", 'R"')):
+            return "".join("\n" if c == "\n" else " " for c in value)
+        return value
+
+    cleaned = COMMENTS_AND_LITERALS.sub(mask, "\n".join(line for _, line in lines))
+    return [(number, line) for (number, _), line in zip(lines, cleaned.split("\n"))]
+
+
+def tier(path: str) -> str | None:
+    if path.startswith("tt-metalium/internal/"):
+        return None  # Internal headers belong in api/internal/.
+    if path.startswith("tt-metalium/experimental/"):
+        return "experimental"
+    if path.startswith("tt-metalium/"):
+        return "stable"
+    if path.startswith("internal/"):
+        return "internal"
+    return None
+
+
+def include_target(api_root: Path, source: Path, name: str, quoted: bool) -> str | None:
+    """Recognize API-root includes and quoted relative includes, normalizing '..'."""
+    candidates = [api_root / name]
+    if quoted:
+        candidates.insert(0, source.parent / name)
+    # Prefer existing headers in include-search order. If none exists, retain
+    # the source-relative meaning of quoted paths, except canonical API-root
+    # spellings such as "internal/foo.hpp". Compilation checks existence.
+    fallback = api_root / name if name.startswith(("tt-metalium/", "internal/")) else candidates[0]
+    target = next((p for p in candidates if p.is_file()), fallback)
+    try:
+        return target.resolve().relative_to(api_root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def load_exceptions(path: Path) -> set[tuple[str, str]]:
+    entries = json.loads(path.read_text())
+    if not isinstance(entries, list):
+        raise ValueError("include exceptions must be a JSON array")
+    exceptions = set()
+    for entry in entries:
+        fields = {"source", "include", "owner", "reason", "remove_when"}
+        if not isinstance(entry, dict) or set(entry) != fields:
+            raise ValueError(f"each exception must contain exactly {sorted(fields)}")
+        if any(not isinstance(value, str) or not value.strip() for value in entry.values()):
+            raise ValueError("exception fields must be nonempty strings")
+        source, target = entry["source"], entry["include"]
+        for name in (source, target):
+            if Path(name).as_posix() != name or any(part in name for part in ("..", "*", "?", "[", "\\")):
+                raise ValueError(f"exception paths must be exact canonical API-relative paths: {name}")
+        source_tier, target_tier = tier(source), tier(target)
+        if not source_tier or not target_tier or target_tier in ALLOWED_DEPENDENCIES[source_tier]:
+            raise ValueError(f"exception is not a forbidden API include: {source} -> {target}")
+        key = (source, target)
+        if key in exceptions:
+            raise ValueError(f"duplicate include exception: {source} -> {target}")
+        exceptions.add(key)
+    return exceptions
 
 
 class Include(NamedTuple):
@@ -198,10 +299,8 @@ class Include(NamedTuple):
 
     @staticmethod
     def from_line(source_file: str, line_num: int, line: str) -> Optional["Include"]:
-        if match := QUOTED_INCLUDE_PATTERN.match(line):
-            return Include(source_file, line_num, match.group(1), quoted=True)
-        if match := ANGLE_INCLUDE_PATTERN.match(line):
-            return Include(source_file, line_num, match.group(1), quoted=False)
+        if match := INCLUDE.fullmatch(line):
+            return Include(source_file, line_num, match[1] or match[2], quoted=match[2] is not None)
         return None
 
     @property
@@ -243,40 +342,92 @@ class Include(NamedTuple):
         return None
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <directory>")
-        return 1
-
-    directory = sys.argv[1]
-    source_files = find_cpp_sources(directory, SKIP_FILES)
-
+def validate(
+    api_root: Path, exceptions: set[tuple[str, str]], *, check_unused_prefixes: bool = True
+) -> tuple[list[str], int]:
+    errors = []
+    used_exceptions = set()
     prefix_counts = defaultdict(int)
-
-    def iter_includes(filepath):
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            for line_num, line in enumerate(f, 1):
-                if include := Include.from_line(filepath, line_num, line):
-                    yield include
-
-    all_includes = [include for path in source_files for include in iter_includes(path)]
-    errors = [err for include in all_includes if (err := include.check_for_errors(prefix_counts)) is not None]
-    errors += [err for include in all_includes if (err := include.check_for_banned_header()) is not None]
-    errors += [err for include in all_includes if (err := include.check_for_umd_header()) is not None]
+    suffixes = set(CPP_EXTENSIONS) | HEADER_SUFFIXES
+    source_files = sorted(p for p in api_root.rglob("*") if p.is_file() and p.suffix in suffixes)
+    if not source_files:
+        return [f"{api_root}: no API headers or sources found; check the directory"], 0
+    header_count = 0
+    for source_file in source_files:
+        is_header = source_file.suffix in HEADER_SUFFIXES
+        source = source_file.relative_to(api_root).as_posix()
+        source_tier = tier(source) if is_header else None
+        lines = source_lines(source_file.read_text(encoding="utf-8"))
+        if is_header:
+            header_count += 1
+            if source_tier is None:
+                errors.append(
+                    f"{source_file}:1: unsupported API location; use tt-metalium/, tt-metalium/experimental/, or internal/"
+                )
+            substantive = [(number, line) for number, line in lines if line.strip()]
+            if not substantive or not PRAGMA_ONCE.fullmatch(substantive[0][1]):
+                errors.append(
+                    f"{source_file}:1: place unconditional #pragma once before declarations and other directives"
+                )
+        for number, line in lines:
+            if not re.match(r"^\s*#\s*include\b", line):
+                continue
+            include = Include.from_line(str(source_file), number, line)
+            if include is None:
+                if is_header:
+                    errors.append(f"{source_file}:{number}: use a literal #include so the API boundary can be checked")
+                continue
+            if source_file.name not in SKIP_FILES:
+                errors.extend(
+                    error
+                    for error in (
+                        include.check_for_errors(prefix_counts),
+                        include.check_for_banned_header(),
+                        include.check_for_umd_header(),
+                    )
+                    if error is not None
+                )
+            if not is_header:
+                continue
+            target = include_target(api_root, source_file, include.path, include.quoted)
+            target_tier = tier(target) if target else None
+            if target and target.startswith("tt-metalium/internal/"):
+                errors.append(
+                    f"{source_file}:{number}: internal headers belong in api/internal/, not tt-metalium/internal/"
+                )
+            elif source_tier and target_tier and target_tier not in ALLOWED_DEPENDENCIES[source_tier]:
+                key = (source, target)
+                if key in exceptions:
+                    used_exceptions.add(key)
+                else:
+                    errors.append(
+                        f"{source_file}:{number}: {source_tier} API must not include {target_tier} header <{target}>; "
+                        "move the dependency into a source file or the interface into the appropriate API tier"
+                    )
+    for source, target in sorted(exceptions - used_exceptions):
+        errors.append(f"{EXCEPTIONS}: stale exception {source} -> {target}; remove it with the repaired include")
     unused_prefixes = ALLOWED_PREFIXES - prefix_counts.keys()
+    if check_unused_prefixes and unused_prefixes:
+        errors.append(f"Unused allowed prefixes (not seen in any #include): {', '.join(sorted(unused_prefixes))}")
+    return errors, header_count
 
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path, help="API root, normally tt_metal/api")
+    parser.add_argument("--exceptions", type=Path, default=Path(__file__).with_name(EXCEPTIONS.name))
+    args = parser.parse_args()
+    try:
+        exceptions = load_exceptions(args.exceptions)
+        errors, count = validate(args.directory, exceptions)
+    except (OSError, ValueError) as error:
+        print(f"API validation: {error}")
+        return 1
     for error in errors:
         print(error)
-
-    if unused_prefixes:
-        print("\nUnused allowed prefixes (not seen in any #include):")
-        for prefix in sorted(unused_prefixes):
-            print(f"  - {prefix}")
-
-    print("Done.")
-
-    return 1 if (errors or unused_prefixes) else 0
+    print(f"API validation: {count} headers, {len(exceptions)} recorded include exceptions, {len(errors)} errors")
+    return int(bool(errors))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
