@@ -119,6 +119,7 @@ class ParallelFeedForward(Module):
         parallel_config=None,
         default_block_size=None,
         force_transpose: bool = True,
+        use_persistent_buffer: bool = True,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
@@ -134,7 +135,9 @@ class ParallelFeedForward(Module):
             default_block_size=default_block_size,
             force_transpose=force_transpose,
         )
-        return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)
+        return self.ff2(
+            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+        )
 
     def forward_fused_addcmul(
         self,

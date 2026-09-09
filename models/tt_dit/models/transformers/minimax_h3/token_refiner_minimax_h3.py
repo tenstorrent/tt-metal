@@ -128,6 +128,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
+            use_persistent_buffer=False,
         )
         return ttnn.add(prompt_1BLP, ff_out)
 
