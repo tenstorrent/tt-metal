@@ -69,8 +69,9 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
     stack, so a diagnostic can hold everything but the camera geometry fixed.
 
     Geometry the encoder bakes in at construction (``spatial_shapes``,
-    ``bev_shape``) is passed there. ``bev_reference_points`` is batch-dependent,
-    so it rides on ``forward`` with the SCA rebatch plan — same as the encoder.
+    ``bev_shape``) is passed there. ``bev_reference_points`` rides on ``forward``
+    with the SCA rebatch plan — same as the encoder, which owns the grid and
+    widens its leading dimension to the runtime batch.
     """
     dataset_config = config.dataset_config
     model_config = config.model_config

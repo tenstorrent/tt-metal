@@ -152,8 +152,6 @@ def test_temporal_self_attention_forward(
     tt_model_output = tt_model(
         query=tt_current_bev,
         reference_points=tt_reference_points_2d,
-        bev_h=bev_h,
-        bev_w=bev_w,
     )
 
     # --------------------------------------------------------------------------- #

@@ -150,17 +150,14 @@ class TTBEVFormerLayer:
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
             rebatch_plan: Shared SCA rebatch plan for this frame
             bev_reference_points: 2D BEV reference points on device [B, num_queries, 1, 2].
-                Batch-dependent, so the encoder supplies it per forward rather than
-                baking it into the layer.
+                The encoder owns the grid and widens its leading dimension to the
+                runtime batch before the layer loop.
 
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
         """
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward Start")
-
-        if use_signpost:
-            signpost(header="BEVLayer Tensor Setup Complete")
 
         if use_signpost:
             signpost(header="BEVLayer TSA Start")
@@ -297,8 +294,9 @@ class TTBEVFormerEncoder:
         feedforward_channels (int): FFN intermediate channel size
         batch_first (bool): Whether batch dimension is first
         z_cfg (Dict[str, Any]): Z-axis configuration for point sampling
-        bev_h (int): BEV grid height. Architectural — the trained BEV query embedding is
-            sized bev_h*bev_w, so a different grid needs different weights.
+        bev_h (int): BEV grid height. The reference-point grid and bev_shape are built
+            from it at construction, so the grid cannot change between forwards; a
+            different grid needs a new encoder instance.
         bev_w (int): BEV grid width. See bev_h.
         spatial_shapes: Multi-scale feature shapes [num_levels, 2]. Fixed for the lifetime
             of the encoder and its attention modules, which build their offset normalizers
@@ -376,8 +374,7 @@ class TTBEVFormerEncoder:
         self.bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
 
         # The grid itself is batch-independent: batch size only broadcasts the leading
-        # dimension. Keep the bs=1 grid and widen it per forward instead of caching a
-        # tensor per observed batch size
+        # dimension. Keep the bs=1 grid and widen it per forward.
         self._reference_points_3d = generate_reference_points(
             bev_h=bev_h,
             bev_w=bev_w,
