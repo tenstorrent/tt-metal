@@ -1,14 +1,14 @@
 {
   "end_token_short_lyric": {
-    "distinct_semantic_codes": 859,
-    "frames": 1500,
-    "max_frames": 1500,
+    "distinct_semantic_codes": 1331,
+    "frames": 2782,
+    "max_frames": 4500,
     "most_common_semantic_code": [
-      4815,
-      0.011333333333333334
+      9146,
+      0.010424155283968369
     ],
-    "seconds": 60.0,
-    "stopped_by": "max_frames"
+    "seconds": 111.28,
+    "stopped_by": "end_token"
   },
   "free_running": {
     "deterministic_same_seed": true,
@@ -20,25 +20,25 @@
     ],
     "perf": {
       "decode_stats": {
-        "input_refreshes": 400,
-        "position_refreshes": 4,
+        "input_refreshes": 150,
+        "position_refreshes": 3,
         "trace_captures": 1,
-        "trace_replays": 400
+        "trace_replays": 150
       },
-      "depth_loop_ms": 32.97079445031819,
+      "depth_loop_ms": 33.50537978272483,
       "frames": 50,
-      "frames_per_s_warm": 13.673873832824542,
-      "host_sampling_embed_ms": 3.295533785906931,
-      "llm_step_ms": 36.970228746569916,
-      "ms_per_frame_all": 73.2369901790448,
-      "ms_per_frame_warm": 73.1321651951673,
-      "prefill_s": 0.13157292403047904,
+      "frames_per_s_warm": 13.259960518777676,
+      "host_sampling_embed_ms": 4.338919779733189,
+      "llm_step_ms": 37.5093037077664,
+      "ms_per_frame_all": 75.35408103528123,
+      "ms_per_frame_warm": 75.41500584288177,
+      "prefill_s": 0.137114551034756,
       "realtime_frames_per_s": 25.0,
-      "realtime_gap_x": 1.8283041298791827,
+      "realtime_gap_x": 1.8853751460720443,
       "section_share": {
-        "depth": 0.45019585584920097,
-        "host": 0.044998480563212824,
-        "llm_step": 0.5048056635875862
+        "depth": 0.44464203871673785,
+        "host": 0.05758078700196265,
+        "llm_step": 0.4977771742812995
       }
     },
     "seed7_codes_head": [
@@ -408,12 +408,12 @@
       0.9995485503011778
     ],
     "timings": {
-      "depth": 7.851800202159211,
-      "host": 0.10169647820293903,
-      "llm_step": 9.595746108214371,
-      "prefill": 0.1588873480213806
+      "depth": 7.911866765178274,
+      "host": 0.13360859389649704,
+      "llm_step": 9.655917793454137,
+      "prefill": 0.17301059799501672
     },
-    "wall_seconds": 17.714630706002936
+    "wall_seconds": 17.88209423603257
   },
   "text_ids": {
     "exact_match": true,

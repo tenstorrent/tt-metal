@@ -291,7 +291,10 @@ def test_free_running_generation(ar, manifest):
 @pytest.mark.timeout(3600)
 def test_end_token_for_short_lyric(ar):
     """A very short lyric with a generous max_frames ends by itself with the end token (qualitative check)."""
-    max_frames = 1500  # 60 s of audio; a one-line lyric should end well before that
+    # scripts/end_token_probe.py (seed 7, this prompt, 9000-frame cap) ended at frame 2782 = 111 s of audio, with the
+    # end token's sampling probability reaching 1.0; a 60 s cap was too short (a one-line lyric still yields a full
+    # ~2 min song). Generation is deterministic per seed, so the same frame count is expected here.
+    max_frames = 4500  # 3 min of audio
     out = ar.generate(
         "Genre: acoustic pop. BPM: 96. Key: C major. A short intimate vocal phrase over one guitar.",
         "[verse]\nMorning light through the pine",
