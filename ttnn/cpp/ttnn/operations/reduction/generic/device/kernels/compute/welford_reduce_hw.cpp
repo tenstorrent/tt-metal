@@ -45,7 +45,6 @@ void kernel_main() {
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
     const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
-    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
     constexpr auto reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool is_std = get_arg(args::is_std) != 0;
 
@@ -174,10 +173,8 @@ void kernel_main() {
         }
         // Apply the user scalar to the reduced output: var(s*x)=s^2 var(x), std(s*x)=|s| std(x).
         // mul_unary_tile is an SFPU op on DEST at full fp32 precision (issue #45222).
-        if (apply_post_mul) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(input_dst, post_mul_scaler_bits);
-        }
+        binop_with_scalar_tile_init();
+        mul_unary_tile(input_dst, post_mul_scaler_bits);
         tile_regs_commit();
         dfb_combined.pop_front(onetile);
 
