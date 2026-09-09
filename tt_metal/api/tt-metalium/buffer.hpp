@@ -137,7 +137,7 @@ struct ShardedBufferConfig {
 class BufferShardingArgs {
 public:
     BufferShardingArgs() = default;
-    BufferShardingArgs(std::nullopt_t) {}
+    BufferShardingArgs(std::nullopt_t /*nullopt*/) {}
 
     BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
         buffer_distribution_spec_(std::move(buffer_distribution_spec)),

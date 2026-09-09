@@ -379,13 +379,13 @@ private:
     uint32_t forwarder_service_burst_size_ = 0;
     uint32_t trid_ring_capacity_ = 0;
 
-    MemoryRegion status_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion shared_ring_region_{};
-    MemoryRegion channel_region_{};
-    MemoryRegion shared_control_region_{};
-    MemoryRegion credit_notify_scratch_region_{};
+    MemoryRegion status_region_;
+    MemoryRegion connection_info_region_;
+    MemoryRegion connection_handshake_region_;
+    MemoryRegion shared_ring_region_;
+    MemoryRegion channel_region_;
+    MemoryRegion shared_control_region_;
+    MemoryRegion credit_notify_scratch_region_;
 
     size_t memory_map_end_address_ = 0;
 };

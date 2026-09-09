@@ -1526,7 +1526,7 @@ private:
     ConnectionValidationMode mode_{ConnectionValidationMode::RELAXED};
     std::optional<detail::GraphIndexData<TargetNode, GlobalNode>> graph_data_;
     std::optional<detail::ConstraintIndexData<TargetNode, GlobalNode>> constraint_data_;
-    std::unique_ptr<detail::TopologySatSession, detail::TopologySatSessionDeleter> sat_session_{};
+    std::unique_ptr<detail::TopologySatSession, detail::TopologySatSessionDeleter> sat_session_;
     detail::TopologySatHardEncoding sat_enc_{};
 };
 
