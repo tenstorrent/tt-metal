@@ -342,12 +342,6 @@ _UNARY_SWEEP_ARGNAMES = (
 )
 
 
-# Approximate exp carried an xfail table for three Float16_b-output combinations that
-# overshot the default 5% rtol. All three hold it now, measured over eleven unseeded runs,
-# so they are swept plain. The _APPROX_ACCURACY_MAX ceiling that keeps the argument inside
-# that range stays load-bearing.
-
-
 @pytest.mark.nightly
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
@@ -388,9 +382,6 @@ def test_eltwise_unary_sfpu(
         _skip_bh_unsupported_float_combo(formats, dest_acc)
     else:
         _skip_bh_unless_fp32(formats, dest_acc)
-
-    # Exp, Exp2 and Elu in approx mode need no bf8_b guard: Bfp8_b's own rtol of 0.2
-    # absorbs the approximation error that the narrower float outputs reject.
 
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 
