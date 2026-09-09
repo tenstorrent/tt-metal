@@ -1,27 +1,37 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``reset_slots`` and ``remap_slots`` at the served batch, with the fused conv.
+"""The three slot-boundary paths vLLM drives, at the served batch, fused conv.
 
-These are the two request-boundary methods vLLM calls that touch linear state:
-``prefill_forward`` resets a slot it is about to refill
-(``generator_vllm.py``), and a scheduler ``slot_remap`` permutes decode rows.
-Both were written against the composite conv layout, tiled
-``[1, batch, channels, kernel]``.  The fused KDA decode path stores the state as
-its row-major user-major window ``[batch, kernel, channels]`` instead, which
-differs in rank, layout *and* which axis is the fixed slot.
+Each of these touches per-slot linear state, and each was written against the
+composite conv layout, tiled ``[1, batch, channels, kernel]``:
 
-``full_model_mixed_slots.py`` covers both methods but at batch 2, where
-``kernel * batch`` is not tile aligned so the fused path never engages -- so
-neither was ever run against the layout the served batch uses.  Enabling the
-fused conv without this test crashed a CI eval run inside ``reset_slots`` with
-"Optional output tensor with Row Major input is not supported right now for
-Elementwise operations", and would have silently permuted the kernel axis
-instead of the slot axis in ``remap_slots``.
+1. ``reset_slots`` -- ``generator_vllm.prefill_forward`` clears a slot it is
+   about to refill.
+2. ``single_slot_prefill_view`` -- the active-row optimization, on by default,
+   narrows the model to that one slot for the prefill.
+3. ``remap_slots`` -- a scheduler ``slot_remap`` permutes decode rows.
 
-Both assertions are exact: reset must zero the named slots and leave every other
-slot bit identical, and remap must move each slot's state to its new row bit
-identically.
+The fused KDA decode path instead stores the state *as* its row-major user-major
+window ``[batch, kernel, channels]``, which differs in rank, in layout, and in
+which axis is the fixed slot. So each of the three did the wrong thing on it:
+``reset_slots`` raised "Optional output tensor with Row Major input is not
+supported right now for Elementwise operations", ``single_slot_prefill_view``
+raised "Input rank 3 and begins 4 must have the same size", and ``remap_slots``
+addressed the kernel axis instead of the slot axis. The first two killed the vLLM
+EngineCore on the first request; both were found by CI, not here.
+
+Why they were not found here: ``full_model_mixed_slots.py`` covers 1 and 3, and
+``vllm_reduced_target.py`` covers the whole adapter lifecycle, but both at
+batch 2 -- and the fused decode path needs ``kernel * batch`` tile aligned, so at
+batch 2 it never engages. Every test that touched this state exercised the one
+layout the served batch does not use.
+
+The assertions are exact rather than PCC: reset must zero exactly the named slots
+and leave every peer bit identical, remap must move each slot's state to its new
+row bit identically, and the narrowed prefill must advance its own slot without
+touching any other. The test also refuses to pass vacuously -- it fails if no
+layer took the fused path, or if prefill left the state at zero.
 """
 
 from __future__ import annotations
@@ -72,6 +82,7 @@ def main() -> None:
     parser.add_argument("--num-layers", type=int, default=8)
     parser.add_argument("--prompt-tokens", type=int, default=64)
     parser.add_argument("--reset-slots", type=int, nargs="+", default=[3, 17])
+    parser.add_argument("--narrow-slot", type=int, default=9)
     args = parser.parse_args()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
@@ -153,6 +164,58 @@ def main() -> None:
         result["remap_misplaced"] = len(misplaced)
         if misplaced:
             raise AssertionError(f"remap_slots put the wrong state in {misplaced[:6]}")
+
+        # 3. The narrowed single-slot prefill.  This is what vLLM actually does
+        # per scheduler step, and it slices the conv state with a rank-4 start,
+        # so on the fused window it raised "Input rank 3 and begins 4 must have
+        # the same size" and killed the engine.  Drive it through the same
+        # public entry point vLLM uses, then check the narrowed slot advanced and
+        # every other slot is untouched.
+        generator.reset()
+        before = _linear_state(generator)
+        narrow = int(args.narrow_slot)
+        one = torch.zeros((BATCH, args.prompt_tokens), dtype=torch.long)
+        one[narrow] = torch.tensor(prompt, dtype=torch.long) + narrow
+        lens = [0] * BATCH
+        lens[narrow] = args.prompt_tokens
+        # Count the narrowing rather than assuming it: the view only engages for
+        # exactly one active row with batch > 1 and QWEN36_PREFILL_NARROW unset,
+        # and a test that silently skipped it would pass while covering nothing.
+        narrow_calls = []
+        original_view = generator.model.single_slot_prefill_view
+
+        def counting_view(slot):
+            narrow_calls.append(int(slot))
+            return original_view(slot)
+
+        generator.model.single_slot_prefill_view = counting_view
+        generator.prefill_forward(
+            one,
+            page_table=generator._page_table,
+            kv_cache=generator.kv_cache,
+            prompt_lens=lens,
+        )
+        generator.model.single_slot_prefill_view = original_view
+        ttnn.synchronize_device(mesh)
+        if narrow_calls != [narrow]:
+            raise AssertionError(f"narrowed prefill view did not engage for slot {narrow}: calls={narrow_calls}")
+        after = _linear_state(generator)
+        narrowed_moved, narrow_peers = 0, []
+        for pre, post in zip(before, after):
+            for slot in range(BATCH):
+                same = _same(_slot(pre, slot), _slot(post, slot))
+                if slot == narrow:
+                    narrowed_moved += 0 if same else 1
+                elif not same:
+                    narrow_peers.append((pre[0], pre[1], slot))
+        result["narrow_slot"] = narrow
+        result["narrow_view_calls"] = narrow_calls
+        result["narrowed_state_moved"] = narrowed_moved
+        result["narrow_disturbed_peers"] = len(narrow_peers)
+        if narrow_peers:
+            raise AssertionError(f"narrowed prefill disturbed peer slots {narrow_peers[:6]}")
+        if not narrowed_moved:
+            raise AssertionError("narrowed prefill left the target slot's state unchanged")
 
         result["status"] = "SLOT_LIFECYCLE_EXACT"
         print(json.dumps(result, indent=2), flush=True)

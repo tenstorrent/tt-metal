@@ -335,7 +335,9 @@ class Qwen36Model:
         try:
             for layer in self.layers:
                 if layer.layer_kind == "linear_attention" and getattr(layer, "linear_kda_decode_ready", False):
-                    borrowed.append((layer, layer._linear_kda_borrow_legacy_conv_state()))
+                    window = layer._linear_kda_borrow_legacy_conv_state()
+                    if window is not None:
+                        borrowed.append((layer, window))
             yield
         finally:
             for layer, window in borrowed:
@@ -528,6 +530,14 @@ class Qwen36Model:
         ``batch_indices=[0]`` writes exactly slot ``slot``'s blocks.  Linear
         attention keeps ``conv``/``recurrent`` state indexed by row, so this
         swaps in one-row copies and splices them back on exit.
+
+        The slicing below is written against the composite conv layout, tiled
+        ``[1, batch, channels, kernel]``, so the whole body borrows that layout:
+        with the fused conv the state is a rank-3 row-major
+        ``[batch, kernel, channels]`` window, where a four-element slice start is
+        invalid and axis 1 is the kernel rather than the slot.  The inner prefill
+        chunk borrows too, and that nesting is safe because borrowing is a no-op
+        once the state is already composite.
         """
         if not 0 <= int(slot) < self.batch:
             raise ValueError(f"slot {slot} is outside the fixed batch {self.batch}")
@@ -535,72 +545,73 @@ class Qwen36Model:
         saved_batch = self.batch
         swapped = []
         layer_batches = []
-        try:
-            for layer in self.layers:
-                caches = layer.caches
-                if layer.layer_kind == "full_attention":
-                    original = caches["batch_indices"]
-                    caches["batch_indices"] = _to_device_int32_row(self.mesh_device, [0])
-                    swapped.append((layer, "batch_indices", original, None))
-                    continue
-                # conv is (1, batch, width, kernel); recurrent is (batch, heads, dv, dv)
-                conv = caches["conv"]
-                conv_row = ttnn.clone(
-                    ttnn.slice(conv, (0, slot, 0, 0), (1, slot + 1, conv.shape[-2], conv.shape[-1])),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                caches["conv"] = conv_row
-                swapped.append((layer, "conv", conv, slot))
-                recurrent = caches["recurrent"]
-                recurrent_row = ttnn.clone(
-                    ttnn.slice(
-                        recurrent,
-                        (slot, 0, 0, 0),
-                        (slot + 1, recurrent.shape[1], recurrent.shape[2], recurrent.shape[3]),
-                    ),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=recurrent.dtype,
-                )
-                caches["recurrent"] = recurrent_row
-                swapped.append((layer, "recurrent", recurrent, slot))
-            # Every decoder layer carries its own ``batch`` and shapes its
-            # per-chunk reshapes from it (conv selectors, state windows), so
-            # narrowing the model alone leaves the layers expecting the full
-            # slot count and they fail on a reshape volume mismatch.
-            for layer in self.layers:
-                layer_batches.append((layer, layer.batch))
-                layer.batch = 1
-            self.batch = 1
-            yield slot
-        finally:
-            self.batch = saved_batch
-            for layer, original_batch in layer_batches:
-                layer.batch = original_batch
-            for layer, name, original, target_slot in swapped:
-                produced = layer.caches[name]
-                layer.caches[name] = original
-                if target_slot is None:
-                    ttnn.deallocate(produced)
-                    continue
-                axis = 1 if name == "conv" else 0
-                pieces = []
-                if target_slot:
-                    pieces.append(_slot_span(original, axis, 0, target_slot))
-                pieces.append(produced)
-                if target_slot + 1 < saved_batch:
-                    pieces.append(_slot_span(original, axis, target_slot + 1, saved_batch))
-                merged = (
-                    pieces[0]
-                    if len(pieces) == 1
-                    else ttnn.concat(pieces, dim=axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                )
-                ttnn.copy(merged, original)
-                if merged is not produced:
-                    ttnn.deallocate(merged)
-                for piece in pieces:
-                    if piece is not merged:
-                        ttnn.deallocate(piece)
-            ttnn.synchronize_device(self.mesh_device)
+        with self._linear_conv_state_as_composite():
+            try:
+                for layer in self.layers:
+                    caches = layer.caches
+                    if layer.layer_kind == "full_attention":
+                        original = caches["batch_indices"]
+                        caches["batch_indices"] = _to_device_int32_row(self.mesh_device, [0])
+                        swapped.append((layer, "batch_indices", original, None))
+                        continue
+                    # conv is (1, batch, width, kernel); recurrent is (batch, heads, dv, dv)
+                    conv = caches["conv"]
+                    conv_row = ttnn.clone(
+                        ttnn.slice(conv, (0, slot, 0, 0), (1, slot + 1, conv.shape[-2], conv.shape[-1])),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    caches["conv"] = conv_row
+                    swapped.append((layer, "conv", conv, slot))
+                    recurrent = caches["recurrent"]
+                    recurrent_row = ttnn.clone(
+                        ttnn.slice(
+                            recurrent,
+                            (slot, 0, 0, 0),
+                            (slot + 1, recurrent.shape[1], recurrent.shape[2], recurrent.shape[3]),
+                        ),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        dtype=recurrent.dtype,
+                    )
+                    caches["recurrent"] = recurrent_row
+                    swapped.append((layer, "recurrent", recurrent, slot))
+                # Every decoder layer carries its own ``batch`` and shapes its
+                # per-chunk reshapes from it (conv selectors, state windows), so
+                # narrowing the model alone leaves the layers expecting the full
+                # slot count and they fail on a reshape volume mismatch.
+                for layer in self.layers:
+                    layer_batches.append((layer, layer.batch))
+                    layer.batch = 1
+                self.batch = 1
+                yield slot
+            finally:
+                self.batch = saved_batch
+                for layer, original_batch in layer_batches:
+                    layer.batch = original_batch
+                for layer, name, original, target_slot in swapped:
+                    produced = layer.caches[name]
+                    layer.caches[name] = original
+                    if target_slot is None:
+                        ttnn.deallocate(produced)
+                        continue
+                    axis = 1 if name == "conv" else 0
+                    pieces = []
+                    if target_slot:
+                        pieces.append(_slot_span(original, axis, 0, target_slot))
+                    pieces.append(produced)
+                    if target_slot + 1 < saved_batch:
+                        pieces.append(_slot_span(original, axis, target_slot + 1, saved_batch))
+                    merged = (
+                        pieces[0]
+                        if len(pieces) == 1
+                        else ttnn.concat(pieces, dim=axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    )
+                    ttnn.copy(merged, original)
+                    if merged is not produced:
+                        ttnn.deallocate(merged)
+                    for piece in pieces:
+                        if piece is not merged:
+                            ttnn.deallocate(piece)
+                ttnn.synchronize_device(self.mesh_device)
 
     def prefill_forward(
         self,

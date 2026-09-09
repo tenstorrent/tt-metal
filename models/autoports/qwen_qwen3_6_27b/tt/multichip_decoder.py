@@ -582,12 +582,22 @@ class MultichipDecoder(OptimizedDecoder):
     def _linear_kda_borrow_legacy_conv_state(self):
         """Run an inherited composite conv against the re-laid conv state."""
         window = self.caches["conv"]
+        if len(window.shape) != 3:
+            # Already composite: a caller further out borrowed it, or a
+            # one-slot prefill view swapped in a composite row.  Borrowing
+            # again would permute the composite as if it were the window.
+            # Reentrancy has to be decided from the live layout, because
+            # ``linear_kda_decode_ready`` is a static flag and every caller
+            # keys off it.
+            return None
         kernel = window.shape[1]
         legacy = ttnn.permute(ttnn.to_layout(window, ttnn.TILE_LAYOUT), (0, 2, 1))
         self.caches["conv"] = ttnn.reshape(legacy, (1, self.batch, window.shape[-1], kernel))
         return window
 
     def _linear_kda_restore_window_conv_state(self, window):
+        if window is None:
+            return
         legacy = self.caches["conv"]
         kernel = window.shape[1]
         advanced = ttnn.permute(legacy, (0, 1, 3, 2))

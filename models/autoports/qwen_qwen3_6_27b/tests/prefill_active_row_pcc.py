@@ -49,7 +49,12 @@ def _linear_state(generator, slot):
     out = []
     for layer in generator.model.layers:
         if layer.layer_kind == "linear_attention":
-            out.append(_host(layer.caches["conv"])[:, slot].clone())
+            conv = _host(layer.caches["conv"])
+            # Composite conv is [1, batch, channels, kernel]; the fused KDA path
+            # stores the state as its row-major [batch, kernel, channels] window,
+            # where the fixed slot is axis 0. Indexing axis 1 there would compare
+            # kernel taps across slots and pass while measuring nothing.
+            out.append((conv[:, slot] if conv.dim() == 4 else conv[slot]).clone())
             out.append(_host(layer.caches["recurrent"])[slot].clone())
     return out
 
