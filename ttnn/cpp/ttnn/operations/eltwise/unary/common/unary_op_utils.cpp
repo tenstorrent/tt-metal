@@ -1172,6 +1172,21 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
     defines[get_macro_definition(op_type)] = "1";
 }
 
+void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
+    switch (dtype) {
+        case DataType::FLOAT32:
+            defines.erase("INP_FLOAT");
+            defines["INP_FLOAT32"] = "1";
+            break;
+        case DataType::INT32: defines["INP_INT32"] = "1"; break;
+        case DataType::UINT32: defines["INP_UINT32"] = "1"; break;
+        default:
+            if (!defines.contains("INP_FLOAT32")) {
+                defines["INP_FLOAT"] = "1";
+            }
+    }
+}
+
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::LGAMMA:

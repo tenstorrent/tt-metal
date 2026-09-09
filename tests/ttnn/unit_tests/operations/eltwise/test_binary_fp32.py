@@ -184,6 +184,22 @@ def test_squared_sum_fp32_activ(device):
     assert status
 
 
+def test_add_fp32_softplus_activ(device):
+    # A fused activation on float32 must run the float32 SFPU variant: the bf16 variant of softplus returns 0 below -5.
+    x_torch = torch.linspace(-16.0, 8.0, 1024, dtype=torch.float32).reshape(1, 1, 32, 32)
+    y_torch = torch.zeros_like(x_torch)
+    z_torch = torch.nn.functional.softplus(x_torch, beta=1.0, threshold=20.0)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_add = ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
+    tt_out = ttnn.to_torch(z_tt_add)
+    tt_alone = ttnn.to_torch(ttnn.softplus(x_tt, beta=1.0, threshold=20.0))
+
+    assert not (tt_out == 0).any()
+    assert torch.allclose(z_torch, tt_out, atol=1e-4, rtol=0)
+    assert torch.allclose(tt_alone, tt_out, atol=1e-5, rtol=0)
+
+
 @pytest.mark.parametrize(
     "ttnn_function",
     [

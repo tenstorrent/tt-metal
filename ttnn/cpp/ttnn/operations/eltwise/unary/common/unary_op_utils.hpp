@@ -109,6 +109,10 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
+// INP_FLOAT32 / INP_INT32 / INP_UINT32 / INP_FLOAT: the SFPU kernels select their algorithm on these.
+// Float32 wins over the bf16-class default when both operands of a fused op contribute.
+void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines);
+
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
