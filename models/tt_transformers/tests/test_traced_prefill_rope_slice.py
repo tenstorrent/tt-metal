@@ -10,7 +10,12 @@ import torch
 
 import ttnn
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model import Transformer, _get_trace_rope_table_len, _pad_prefill_rope_tables
+from models.tt_transformers.tt.model import (
+    Transformer,
+    _get_trace_rope_table_len,
+    _pad_prefill_rope_tables,
+    _prefill_rope_setups_to_pad,
+)
 
 
 def test_resumed_prefill_rope_slice_matches_trace_length_near_context_limit(device):
@@ -117,3 +122,27 @@ def test_trace_rope_table_supports_every_bucket_and_dynamic_start():
 
     assert table_len >= max_seq_len + max(trace_prefill_seq_lens)
     assert all(table_len % seq_len == 0 for seq_len in trace_prefill_seq_lens)
+
+
+@pytest.mark.parametrize(
+    "rope_setup_class, has_local, expected",
+    [
+        (None, False, ["global"]),
+        (None, True, ["global", "local"]),
+        (object, False, []),
+        (object, True, ["local"]),
+    ],
+    ids=["builtin", "builtin_local", "custom", "custom_local"],
+)
+def test_only_setups_owning_shared_prefill_tables_are_padded(rope_setup_class, has_local, expected):
+    # A custom rope_setup_class, as Qwen2.5-VL and Qwen3-VL pass, has cos_matrix
+    # and sin_matrix but no cos_matrix_prefill, so padding it raises AttributeError.
+    rope_setup = SimpleNamespace(name="global", cos_matrix=object(), sin_matrix=object())
+    rope_local_setup = (
+        SimpleNamespace(name="local", cos_matrix_prefill=object(), sin_matrix_prefill=object()) if has_local else None
+    )
+
+    selected = _prefill_rope_setups_to_pad(rope_setup, rope_local_setup, rope_setup_class)
+
+    assert [setup.name for setup in selected] == expected
+    assert all(hasattr(setup, "cos_matrix_prefill") for setup in selected)

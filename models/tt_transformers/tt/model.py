@@ -32,6 +32,21 @@ def _get_trace_rope_table_len(max_seq_len, trace_prefill_seq_lens):
     return ((min_table_len + slice_alignment - 1) // slice_alignment) * slice_alignment
 
 
+def _prefill_rope_setups_to_pad(rope_setup, rope_local_setup, rope_setup_class):
+    """Select the RoPE setups whose shared prefill tables Transformer slices.
+
+    A caller-supplied rope_setup_class builds its prefill cosine and sine mats
+    per request on the host, inside its own prepare_inputs_prefill, and its
+    forward never calls Transformer._slice_prefill_rot_mats. Such a setup owns
+    no cos_matrix_prefill to pad. rope_local_setup always comes from the
+    built-in classes, so it always owns one.
+    """
+    rope_setups = [] if rope_setup_class is not None else [rope_setup]
+    if rope_local_setup is not None:
+        rope_setups.append(rope_local_setup)
+    return rope_setups
+
+
 def _pad_prefill_rope_tables(rope_setups, max_seq_len, trace_prefill_seq_lens):
     table_len = _get_trace_rope_table_len(max_seq_len, trace_prefill_seq_lens)
     pad_len = table_len - max_seq_len
@@ -121,11 +136,12 @@ class Transformer(LightweightModule):
         # Dynamic starts share one table across fixed-width trace buckets. The
         # tail prevents out-of-range reads and the common multiple preserves
         # the tensor-bound slice partition geometry for every traced length.
-        rope_setups = [self.rope_setup]
-        if hasattr(self, "rope_local_setup"):
-            rope_setups.append(self.rope_local_setup)
         _pad_prefill_rope_tables(
-            rope_setups,
+            _prefill_rope_setups_to_pad(
+                self.rope_setup,
+                getattr(self, "rope_local_setup", None),
+                rope_setup_class,
+            ),
             args.max_seq_len,
             args.trace_prefill_supported_seq_lens,
         )
