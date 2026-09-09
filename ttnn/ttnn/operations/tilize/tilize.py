@@ -47,6 +47,12 @@ DOMINANT = 16
 # other, that can read an e4m3 stick, so the honest contract is "supported where
 # the silicon has it".
 #
+# It is stronger than "untested": off Blackhole the input tensor is
+# UNCONSTRUCTIBLE. `tt_metal/impl/tensor/distributed_tensor_apis.cpp:47` fires
+# `TT_FATAL(mesh_device.arch() == tt::ARCH::BLACKHOLE, "FP8_E4M3 is only
+# supported on Blackhole hardware")` inside `to_device`, so an unconditional
+# entry here would claim an input no caller can build.
+#
 # Consequences of stating it here rather than anywhere else:
 #   * `validate()` iterates SUPPORTED, so on Wormhole an fp8 call is refused
 #     with `UnsupportedAxisValue` — the registry's own refusal — instead of
