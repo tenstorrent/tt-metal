@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
-# the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
-# parameters (fabric config, batch/seq) and the in-body setup select the right path automatically.
+# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy
+# honors QWEN_BH_PREFETCHER (CI exports it; vLLM/default stays on the no-prefetcher path).
+# Prefetcher setup follows model_args.use_prefetcher, matching test_qwen_decoder.py.
 import torch
 import pytest
 from loguru import logger
@@ -88,10 +88,9 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     logger.info(f"Qwen3 Model Loaded")
 
     model_config = model_args.get_model_config()
-    if _IS_BLACKHOLE:
-        # Blackhole bring-up runs the unit test without the runtime DRAM prefetcher.
-        model_args.use_prefetcher = False
-        model_config["USE_PREFETCHER"] = False
+    # Prefetcher is on for Wormhole; on Blackhole it is opt-in (CI yamls export QWEN_BH_PREFETCHER=1).
+    use_prefetcher = model_args.use_prefetcher
+    if not use_prefetcher:
         prefetcher_setup = None
         worker_sub_device_id = None
     else:
@@ -122,14 +121,16 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
 
     prev_pcc = None
     logger.info("Run Qwen_MLP_PF")
-    if not _IS_BLACKHOLE:
-        # Wormhole reuses one input across iterations to assert PCC stability of the prefetcher path.
-        torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    if use_prefetcher:
+        # Prefetcher path reuses one input across iterations to assert PCC stability.
+        # Decode ring layout is [1, 1, 32, dim] (padded batch); BH unit params use seq_len=1.
+        pf_seq = 32 if mode == "decode" else seq_len
+        torch_input = torch.randn(1, 1, pf_seq, model_args.dim)
         # Explicitly allocate global CB to avoid memory fragmentation
         prefetcher_setup.create_global_cb()
 
     for i in range(20):
-        if _IS_BLACKHOLE:
+        if not use_prefetcher:
             torch_input = (torch.rand(batch_size, seq_len, model_args.dim) * 2) - 1
             tt_input = model_args.prepare_residual_tensor_decode(
                 torch_input,
@@ -170,7 +171,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         logger.info(f"tt_output_torch shape: {tt_output_torch.shape}")
         logger.info("Qwen MLP Done")
 
-        if _IS_BLACKHOLE:
+        if not use_prefetcher:
             tt_output_torch = tt_output_torch[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(
                 -1, 1, model_args.dim
             )
@@ -183,7 +184,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
-        if not _IS_BLACKHOLE:
+        if use_prefetcher:
             if prev_pcc is not None:
                 assert prev_pcc == pcc_message, f"PCC changed from {prev_pcc} to {pcc_message} during inference."
             prev_pcc = pcc_message
