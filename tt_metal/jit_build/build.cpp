@@ -882,12 +882,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     }
 
-    auto t0_compile = std::chrono::steady_clock::now();
-    auto compiled = compile(out_dir, settings, state_changed);
-    auto compile_elapsed_ms =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_compile).count();
     static auto& tok_compile = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::compile");
-    tok_compile.record(compile_elapsed_ms);
+    auto compiled = record_elapsed(tok_compile, [&] { return compile(out_dir, settings, state_changed); });
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -927,12 +923,9 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             const std::string_view target_kind = target->is_fw_ ? "fw" : "kernel";
             // Only link() is per-target work (compile() and populate_link_objs() are shared across
             // targets), and only this branch links at all -- cache hits would record ~0 ms noise.
-            auto t0_link = std::chrono::steady_clock::now();
-            target->link(target_out_dir, settings, link_objs);
-            auto link_elapsed_ms =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_link).count();
-            per_target_telemetry_token(fmt::format("{}_link_time", target_kind), target->target_name_, "ms")
-                .record(link_elapsed_ms);
+            record_elapsed(
+                per_target_telemetry_token(fmt::format("{}_link_time", target_kind), target->target_name_, "ms"),
+                [&] { target->link(target_out_dir, settings, link_objs); });
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
@@ -1076,21 +1069,15 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     TTZoneScopedD(JIT);
-    auto t0 = std::chrono::steady_clock::now();
-    build.build(settings);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build");
-    tok.record(elapsed_ms);
+    record_elapsed(tok, [&] { build.build(settings); });
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
-    auto t0 = std::chrono::steady_clock::now();
     const JitBuildState& primary = *targets[0];
-    primary.build(settings, targets);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build_for_processors");
-    tok.record(elapsed_ms);
+    record_elapsed(tok, [&] { primary.build(settings, targets); });
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
