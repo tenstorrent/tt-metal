@@ -495,3 +495,26 @@ ignored `build_Release/libexec/` install tree. See `review_round_08.md`.
 
 The review loop is complete. The full prepared regression — 178 groups, 1,000
 definitions, 18,860 known cases — is the last outstanding requirement.
+
+## Full prepared regression: complete
+
+Ran the complete prepared suite once at `d73b7563716`, the first execution ever:
+**178/178 groups, 18,860 cases collected, 12,553 passed, 6,210 skipped, 95
+failures and 2 errors in seven groups**, in 3h48m on the N300. The collected
+total matches the manifest's previously derived 18,860 exactly, so that figure is
+now confirmed by execution. Every group produced complete JUnit XML and the
+committed fidelity reports were byte-identical afterwards.
+
+No failure traces to the migration. T119 (58) needs a 110-core Blackhole grid,
+timeouts and an active profiler; T162/T163 (20) are 1x4/2x4 fabric UDM fixtures
+that segfault during setup on a two-chip host, proven unrelated by an untouched
+copy test crashing identically under the same fixture; T151 (12) is the already
+documented Quasar one-chip-mesh readback issue, after the kernels run; T166 (4)
+is an upstream `binary_ng` "Invalid subtile broadcast type" from the test's own
+`ttnn.multiply` by a `[1,1,32,32]` tensor, reproduced standalone with no
+migrated code in the path and in files the branch never touched; T106 (2) needs
+64 cores where Wormhole has 56; T168 (1) is Blackhole-only.
+
+Hardware limits are unchanged: the Quasar, Blackhole, Galaxy, T3K and
+1x4-fabric lanes still have no numerical coverage here. See
+`full_regression_2026-09-09.md`.
