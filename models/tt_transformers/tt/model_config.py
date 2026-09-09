@@ -690,6 +690,8 @@ class ModelArgs:
         self.sdpa_decode_q_chunk_size = 0
         self.sdpa_decode_k_chunk_size = 0
         self.sdpa_decode_use_default_compute_config = False
+        # True => Attention passes program_config=None to the decode SDPA (op auto-selects grid/chunks).
+        self.sdpa_decode_use_default_program_config = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -1724,6 +1726,8 @@ class ModelArgs:
         sharp accuracy cliff once the context exceeds one chunk.
         """
         q_chunk, k_chunk = self.sdpa_decode_q_chunk_size, self.sdpa_decode_k_chunk_size
+        if getattr(self, "sdpa_decode_use_default_program_config", False) and prefetcher is None:
+            return None
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -2885,11 +2889,12 @@ class ModelArgs:
         if self.model_type is not None and str(self.model_type).lower() in ("olmo2", "olmo3"):
             self.use_post_norm = True
             self.qk_norm_full_width = True
-            # Blackhole decode SDPA: with the framework's explicit (8x8) program config and auto chunk sizes the
-            # paged flash-decode kernel hangs for 40 query heads / 8 KV heads (GQA ratio 5) — 32/8 is fine and so
-            # is 40/8 with explicit chunks (bisected on a P150, 2026-09-09). Pin the chunk sizes.
-            self.sdpa_decode_q_chunk_size = 32
-            self.sdpa_decode_k_chunk_size = 256
+            # Blackhole decode SDPA: with the framework's explicit (8x8) program config the paged flash-decode kernel
+            # is broken for 40 query heads / 8 KV heads (GQA ratio 5): auto chunk sizes hang the device and explicit
+            # chunk sizes give wrong attention once the position exceeds a few hundred tokens (PCC 0.1-0.3 vs torch);
+            # 32/8 heads are fine. The op's own auto-selected configuration is correct (PCC 0.9997) and hang-free
+            # (bisected on a P150, 2026-09-09), so this model passes no decode SDPA program config.
+            self.sdpa_decode_use_default_program_config = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
