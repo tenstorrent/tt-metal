@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXAMPLES_SRCS
+    migrated_run1000_groupnorm/migrated_run1000_groupnorm.cpp
     example/example.cpp
     example/device/example_device_operation.cpp
     example/device/multi_core_program_factory.cpp
@@ -17,6 +18,7 @@ set(TTNN_OP_EXAMPLES_SRCS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_EXAMPLES_NANOBIND_SRCS
+    migrated_run1000_groupnorm/migrated_run1000_groupnorm_nanobind.cpp
     example/example_nanobind.cpp
     example_multiple_return/example_multiple_return_nanobind.cpp
     examples_nanobind.cpp
