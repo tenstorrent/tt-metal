@@ -448,9 +448,8 @@ struct mailboxes_t {
 };
 
 // DevicePrintMemoryLayout asserts
-#if !defined(ENV_LLK_INFRA)
-// LLK configures its own print buffer sizes instead of using the legacy Metal layout.
-static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+#ifdef DEVICE_PRINT_BUFFER_SIZE
+static_assert(sizeof(DevicePrintMemoryLayout) == DEVICE_PRINT_BUFFER_SIZE);
 #endif
 static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)

@@ -979,7 +979,7 @@ std::vector<uint32_t> sfpu_quasar_run(
     for (const auto& [buf, data] : inputs) {
         slow_dispatch::WriteToBuffer(*buf, *data);
     }
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
     std::vector<uint32_t> dest;
     slow_dispatch::ReadFromBuffer(*out_buf, dest);
     return dest;
