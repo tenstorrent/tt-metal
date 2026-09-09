@@ -23,6 +23,10 @@ GENERATED_DIR = MODEL_DIR / "generated"
 # 8B decode step for batch 2 fits comfortably; the tt_transformers demos use 52-90 MB on P150.
 TRACE_REGION_SIZE = int(os.environ.get("MM3_TRACE_REGION_SIZE", 90_000_000))
 
+# Stage 05: the DiT's converted bf16 weights (4.6 GB) are cached by models.tt_dit.utils.cache.load_model
+# under TT_DIT_CACHE_DIR (cache hit: 0.7 s instead of 7 s of safetensors -> device conversion).
+os.environ.setdefault("TT_DIT_CACHE_DIR", str(GENERATED_DIR / "tt_dit_cache"))
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long sweeps, excluded from the stage gate (-m 'not slow')")
