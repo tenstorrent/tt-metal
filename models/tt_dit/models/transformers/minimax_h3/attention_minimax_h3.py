@@ -588,7 +588,9 @@ class MiniMaxH3Attention(Module):
             raw = (
                 self.vsa_config.streaming and os.environ.get("VSA_RAW", "1") == "1"
             )  # VSA_RAW=0: host assembly (debug)
-            o_c, vsa_indices = self.vsa_stage(q_BHNE, k_BHNE, v_BHNE, compute_o_c=use_gate, raw_selection=raw)
+            o_c, vsa_indices = self.vsa_stage(
+                q_BHNE, k_BHNE, v_BHNE, v_1bnf=v_1BNF, compute_o_c=use_gate, raw_selection=raw
+            )  # o_c is [1, 1, S_local, H*d]: gated in after the head concat below
             if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
                 self._dump_vsa_indices(vsa_indices)
 
@@ -628,20 +630,25 @@ class MiniMaxH3Attention(Module):
             )
             ttnn.deallocate(vsa_indices)
 
+            gate_1BNF = None
             if use_gate:
+                # The gate projection is a fused TP all-gather matmul: issued before vsa_sdpa it queues behind
+                # the SP K/V gathers on the CCL cores and delays the attention by as much as it saves (measured),
+                # so it stays here, overlapping the head concat.
                 gate_1BNF = self.to_gate_compress(
-                    spatial_1BND,
+                    spatial_1BND,  # still the block input here
                     compute_kernel_config=self.mm_compute_kernel_config,
                     parallel_config=matmul_parallel_config,
                     default_block_size=agmm_block_size(self.hidden_size, self.inner_dim // tp_factor),
                 )
-                gate_BHNE = create_heads(gate_1BNF)
-                spatial_BHNE = ttnn.addcmul(spatial_BHNE, gate_BHNE, o_c)
-                ttnn.deallocate(gate_BHNE)
-                ttnn.deallocate(o_c)
-
             spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
             spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+            if use_gate:
+                # gate_compress and o_c are both [1, 1, S_local, H*d]: the gated add runs after the head
+                # concat, so neither needs a head split (the gate's create_heads alone was 2.3 ms at 15 s)
+                spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BNF, o_c)
+                ttnn.deallocate(gate_1BNF)
+                ttnn.deallocate(o_c)
             if not self.use_fused_agmm and tp_factor > 1:
                 spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                     spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis

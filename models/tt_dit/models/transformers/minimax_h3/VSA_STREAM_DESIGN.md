@@ -487,3 +487,34 @@ comparison should be made end to end or with clocks pinned. Not a kernel issue: 
 Method notes: the Tracy device profiler covers ~1000 programs per run (`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT`
 did not extend it here and `--dump-device-data-mid-run` aborted), so the pipeline was instrumented with
 synced host timers instead, and clocks were read with `tt-smi -s` in a sampling loop.
+
+## 9. Coarse-stage layout pass (2026-09-09)
+
+Op inventory at 15 s / 768p before this pass (one device): the coarse stage ran 27 ops in 4.1 ms of wall
+between the QKV projection and the K/V all-gathers -- nine transposes (2.9 ms of op time), six matmuls
+(2.3 ms), masks/softmax/top-k (~1 ms) -- and the gate branch cost another 2.3 ms after the attention for
+the gate's head split. Changes (all in `vsa_stages_minimax_h3.py` / `attention_minimax_h3.py`):
+
+- V is pooled un-split: `A[slots, S_local] @ V[S_local, H*d]` on the pre-head-split projection (0.22 ms,
+  full-grid multicast, `in0_block_w=4`), head split on the pooled tensor (26 us). The batch-broadcast form
+  `A @ V[1,H,S,d]` works but measured 3.4 ms, so Q and K keep the folded `[H*d, S] @ [S, slots]` product
+  with one input transpose each.
+- K is returned pooled in its transposed form (the scores consume `k_c^T`): its two output transposes are
+  gone. Q's transpose back is on the pooled tensor (8 us).
+- The coarse output is built in the head-concatenated layout, `B^T[S_local, T] @ o_c_tiles[T, H*d]`, and
+  the gate is applied after `concatenate_heads` on the fine output: the two large `o_c` transposes and the
+  gate's `create_heads` (2.3 ms) disappear. `MiniMaxH3VSACoarseStage.__call__` now returns `o_c` as
+  `[1, 1, S_local, H*d]` and takes the un-split V as `v_1bnf=` (head-split `v_bhnd` remains the fallback).
+
+Result: transposes 9 -> 3 (-1.8 ms of op time), create-heads -2.5 ms, ops per block 80 -> 75, block wall
+64.3 -> 63.6 ms. The wall moves less than the op time because most of the removed work was overlapping the
+K/V all-gathers or other ops rather than sitting on the critical path. Gates unchanged: attention oracle
+99.51-99.57 %, transformer sparsity-0 vs dense 99.9998 %, traced block replay bit-exact.
+
+Tried and reverted: issuing the gate projection (a fused TP all-gather matmul) before `vsa_sdpa` to hide it
+under the SP K/V gathers. It queues behind the K gather on the CCL cores, then contends with the V gather
+(2.1 -> 6.2 ms) and delays `vsa_sdpa` by exactly what it saves. CCL ops on different mesh axes do not
+overlap here.
+
+What remains on the pre-attention critical path is the pair of K/V all-gathers (8.1 ms, CCL cores only,
+nothing else running); everything else in the coarse stage is now ~3.4 ms and largely overlapped.
