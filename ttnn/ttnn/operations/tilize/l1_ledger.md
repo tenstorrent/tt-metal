@@ -12,12 +12,15 @@ Named block axes (all four appear in every row): `leading`, `tile_row`, `tile_co
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_input_rows` | `input_depth_rows * block_width_tiles` = `2 * block_width_tiles` | `block_width_tiles` pages — one tile-row of the block. `compute_kernel_lib::tilize` waits for and pops exactly `block_width_tiles` pages per iteration (`tilize_helpers.inl:233-259`) and `read_sticks_for_tilize` reserves/pushes exactly that many per tile-row (`tilize_helpers_dataflow.inl:110-127`), so one tile-row is the peak simultaneously-resident set. | `{leading: streams -> the block's row range walks images (never resident), tile_row: streams -> window = input_depth_rows tile-rows, tile_col: spans -> block_width_tiles pages, within_tile: spans -> one page IS one tile's row-major bytes (tile_h sticks x 32 elements, at an L1 stride of block_width_tiles*32*elem)}` | `input_tensor.dtype`. Phase 0 `Float16_b`. **Not `Float32` under 16-bit DEST**: `fp32_dest_acc_en` is set **iff** `input_tensor.dtype == float32`, so the page width and the DEST width move together by construction. This CB carries the *tensor's* bytes, not accumulator values — `tilize` performs no arithmetic, so there is no accumulation width to widen past the tensor's own format. | `reader` | `compute` | whole program (every block) | **Refinement 1 — ZERO-COPY when the input shard IS the block** (`plan.input_native`): the CB is placed on the input buffer via `ttnn.cb_descriptor_from_sharded_tensor`, so its capacity is the shard's own bank size and it costs **no additional L1 at all** (the tensor was already resident). The page size is re-stated as `tb_in` — the shard's own paging is one ROW_MAJOR stick, and `block_width_tiles` sticks-worth of contiguous bytes is exactly one tile-row page group, because `block_width_tiles == shard_cols_tiles` on that path. The reader then issues no NoC read; it marks the block's pages available. | **Cannot share with `cb_output_tiles`.** Three independent reasons, any one sufficient: (1) **concurrent lifetime** — the two are pipelined against each other within a block (compute reads one while writing the other), and `compute_kernel_lib::tilize` `static_assert`s `input_dfb != output_dfb` (`tilize_helpers.inl:98-99`) precisely because tilize is not an in-place permutation; (2) **differing page format** whenever `dtype=` requests a cast (Phase 0 they match, but the sharing decision must hold across the dtype refinements); (3) **differing tile-descriptor semantics** — this page is row-major bytes, the other is a 4-face tile. Rule 3 patterns 1 and 2 were both attempted and are foreclosed by (1). |
 | `cb_output_tiles` | `output_depth_batches * write_rows_per_barrier * block_width_tiles` = `2 * write_rows_per_barrier * block_width_tiles` | `write_rows_per_barrier * block_width_tiles` pages — the batch of whole-tile-page writes in flight behind one `noc_async_write_barrier`. The second batch of capacity is compute's overlap window, not part of the live set. **IMPLEMENTED capacity is `2 * wrpb * W`, not the design's `(wrpb + 1) * W`** — see "Deviations" below: the capacity must be an exact multiple of the write-batch quantum or a full batch straddles the FIFO wrap, which both CB endpoints refuse. | `{leading: streams -> not resident, tile_row: spans -> a write_rows_per_barrier-deep window (this is the one axis whose live set genuinely spans more than one unit, and capacity scales with it), tile_col: spans -> block_width_tiles pages, within_tile: spans -> one page IS one output tile}` | `dtype` if given else `input_tensor.dtype`. Phase 0 `Float16_b`. Same DEST-width argument as above; `output_tensor.buffer_page_size()` is used verbatim so block-float (`Bfp8_b` = 1088 B, `Bfp4_b`) and tiny-tile page sizes are exact rather than computed. This is the CB whose format performs the value-preserving cast at pack time. | `compute` | `writer` | whole program (every block) | **Refinement 1 — ZERO-COPY when the output shard IS the block** (`plan.output_native`): placed on the output buffer the same way, again costing no additional L1, and the program then carries **no writer kernel at all** — the packer has already written every tile into the output shard. Order matches because compute emits tile-rows left-to-right across the whole shard width, which is the order a TILE shard stores its pages in. | **Cannot share with `cb_input_rows`** — same three reasons, stated from this side. In particular the pipelining is an explicit design decision (the two depth knobs exist to make the stages overlap), which per Rule 3 pattern 3 is exactly the reason that must be *recorded* rather than left as an unexplained non-reuse. |
+| `cb_pad_row` (Refinement 2, `plan.pad_active` only) | **1** page of `block_row_bytes` = `block_width_tiles * 32 * element_size(in_dtype)` bytes — i.e. `tb_in / tile_h`, ONE row of the block, not one tile-row | the same 1 page. Nothing is ever pushed or popped: the reader seeds it once per kernel and thereafter only reads from it, so the live set IS the capacity. | `{leading: absent, tile_row: absent -> the fill is row-invariant, so ONE row serves every padded row of every block, tile_col: spans -> block_width_tiles*32 elements, within_tile: partial -> one ROW of a tile-row, not a tile}` | `input_tensor.dtype` — the fill is written into `cb_input_rows`, so it is encoded in the INPUT's format (`pad_fill_word`); the output cast happens later at pack time, exactly as it does for a real element. No `page_size`/DEST interaction: this CB never reaches the unpacker. | `reader` (seeds it) | `reader` (reads it as a local NoC source) | whole program; **allocated at all only when a pad region exists** | **Deliberately NOT shared, and deliberately not eliminated.** Sharing with `cb_input_rows` is foreclosed by concurrency: the reader reads this page as a NoC *source* while the same barrier writes `cb_input_rows` pages, and `cb_input_rows` is simultaneously being popped by compute — a single-producer/single-consumer CB cannot be both. Sharing with `cb_output_tiles` is worse (compute owns it). Eliminating it means filling each padded row with a RISC store loop over `block_row_bytes` (up to 32 KB, per row, on the critical path of whichever core owns a tail block) instead of one DM-engine transfer; `[1,1,1,50304]` at 31 pad rows per tile-row is the shape that makes that the difference. The page is `1/tile_h` of a `cb_input_rows` page, so at `tile_h = 32` this row adds **1.5%** to the footprint (see the total below). |
 
-Two CBs is the inventory floor: each crosses a thread boundary (`reader`→`compute`,
+Two CBs is the inventory floor for an UNPADDED call: each crosses a thread boundary (`reader`→`compute`,
 `compute`→`writer`), and the one candidate for elimination — an in-place transform —
-is forbidden by the helper's `static_assert`. There is **no** scratch buffer, no
-intermediate between compute phases (there is only one compute phase), and no scaler,
-mask or constant CB.
+is forbidden by the helper's `static_assert`. There is no intermediate between compute
+phases (there is only one compute phase) and no scaler or mask CB. A padded call adds
+exactly ONE more — `cb_pad_row`, the constant CB — and it is one *row*, not one tile:
+the fill is invariant along `tile_row`, so a single row serves every padded row of
+every block, which is what keeps a constant buffer from being priced per tile.
 
 ## Symbol table
 
@@ -41,6 +44,8 @@ predicate establishing it.
 | `block_row_extent` | `1 <= block_row_extent <= R` | **Appears in no capacity expression.** It is the runtime `num_blocks` handed to `compute_kernel_lib::tilize`, which processes one tile-row per iteration with its own wait/push per iteration (`tilize_helpers.inl:233-259`), so it is an axis both CBs *stream over* — never one either spans. This is the reason the coarsest row extent (the core's whole row-group) is taken unconditionally: it costs zero L1. |
 | `shard_rows_tiles`, `shard_cols_tiles`, `num_shard_rows`, `num_shard_cols` | shard-derived; `num_shard_rows * shard_rows_tiles == R` and `num_shard_cols * shard_cols_tiles == C` are CHECKED, and a partition failing either is refused as a plan driver | `shard_partition()` derives them from the shard spec against the tensor's padded 2-D view. Only `shard_cols_tiles` enters a capacity expression, and only as `block_width_tiles`; the rest size the work split. |
 | `input_pages_per_row` | `>= 1`; `1` whenever a ROW_MAJOR page IS a whole row | `ceil(input_padded_W / page_width)`. `> 1` only for a width/block-cutting shard read through the accessor, which puts the reader on its strided branch. Appears in no capacity expression. |
+| `pad_active` | `{0, 1}` | Derived from the two shapes, not from the request: 1 iff the output's padded grid reaches past the input's LOGICAL extent on any of the three axes (`in_num_images < num_images`, `in_rows_per_image < rows_per_image*tile_h`, `in_row_bytes < C*32*elem`). 0 on every tile-aligned call whether or not a padding argument was passed, which is what keeps the Phase 0 reader branch byte-identical. |
+| `in_num_images`, `in_rows_per_image`, `in_row_bytes`, `rows_per_image_out`, `pad_word` | tensor-derived (the first three from the input's LOGICAL shape, left-padded to rank 2) | **None appears in any capacity expression.** They are the pad *boundary*, consumed as reader CT args; the only capacity the padding adds is the single `cb_pad_row` page, whose size is `block_row_bytes` and therefore already bounded by `block_width_tiles`. |
 | `R`, `C`, `num_row_groups`, `num_w_chunks`, `num_images`, `rows_per_image` | tensor-derived, unbounded in principle | **None of these appears in any capacity expression.** They size the *work split*, not the footprint. Their absence from the table above is the whole `low_l1` proof. |
 
 ## Total per-core footprint
@@ -48,10 +53,19 @@ predicate establishing it.
 ```
 L1_per_core = input_depth_rows     * block_width_tiles * tb_in
             + output_depth_batches * write_rows_per_barrier * block_width_tiles * tb_out
+            + [pad_active] * block_width_tiles * (tb_in / tile_h)      # cb_pad_row
 
             = 2 * block_width_tiles * tb_in
             + 2 * write_rows_per_barrier * block_width_tiles * tb_out
+            + [pad_active] * block_width_tiles * (tb_in / tile_h)
 ```
+
+`[pad_active]` is 0 or 1 — the pad row is allocated only where a pad region exists.
+It scales with `block_width_tiles` like everything else and with **no tensor
+dimension**, so the `low_l1` claim below is unchanged; at `tile_h = 32` it is
+`1/64` of the two streaming terms' `2*tb_in + 2*tb_out` (1.5%), and it is folded
+into the `W_FIT` denominator (`derive_plan` adds `in_page_bytes // tile_h` to
+`denom` when `pad_active`) rather than spent behind the budget's back.
 
 Closed-form upper bound, used as the `W_FIT` solve. Since
 `block_width_tiles * write_rows_per_barrier <= block_width_tiles * (WRITE_BATCH_MIN_TILES/block_width_tiles + 1)
@@ -62,7 +76,7 @@ L1_per_core <= 2*block_width_tiles*tb_in + 2*(block_width_tiles + WRITE_BATCH_MI
 ```
 
 which inverts to
-`W_FIT = (budget - 2*WRITE_BATCH_MIN_TILES*tb_out) // (2*tb_in + 2*tb_out)`,
+`W_FIT = (budget - 2*WRITE_BATCH_MIN_TILES*tb_out) // (2*tb_in + 2*tb_out + [pad_active]*tb_in/tile_h)`,
 clamped into `[1, FAST_TILIZE_WIDTH_CAP]`. This is the expression
 `tilize_program_descriptor.derive_plan` evaluates verbatim; the only change from
 the design's form is the `2*` on the output depth (batches, not `wrpb + 1`) —
@@ -111,6 +125,23 @@ construction rather than by care. The harness that produced this table is
 `tests/ttnn/unit_tests/operations/tilize/probes/probe_002.py`.
 | `[1,1,1,50304]` bf16, `low_l1=True` | `LOW_L1_WIDTH_CAP` = 4 (393 w-chunks, ~7 blocks/core) | 2 | **40 KB** — the widest grid in the suite, at the same footprint as the narrowest |
 
+**Padded footprints (Refinement 2)**, read out of the built plan the same way
+(`probes/probe_018.py`). The `+pad` column is `cb_pad_row` — the whole cost of
+the padding path:
+
+| Shape (`pad_mode="auto"`) | `bw` | `wrpb` | cores reached | streaming CBs | `+pad` | `L1_per_core` |
+|-------|------|--------|---------------|---------------|--------|---------------|
+| `[1,1,50,50]` hw tails | 1 | 4 | 4 (only 4 tiles exist) | 20 KB | 64 B | **20 KB** |
+| `[1,1,1,2048]` single stick, 31 pad rows / tile-row | 1 | 4 | 64 / 64 | 20 KB | 64 B | **20 KB** |
+| `[1,1,32,4090]` short_wide W tail | 2 | 2 | 64 / 64 | 24 KB | 128 B | **24 KB** |
+| `[1,1,1,50304]` logits row, C=1572 | 12 | 1 | 64 / 64 | 96 KB | 768 B | **97 KB** |
+| `[8,1,249,2048]` H tail through the fold | 64 | 1 | 64 / 64 | 512 KB | 4096 B | **516 KB** |
+| `[1,1,50,50]`, `low_l1=True` | 1 | 4 | 4 | 20 KB | 64 B | **20 KB** (identical to `False`) |
+
+The pad row is `<= 0.8%` of the total on every one of them, it holds no tensor
+dimension, and the `low_l1` pair is again bit-for-bit the same footprint — the
+padded path inherits the dimension-independence rather than re-arguing it.
+
 ## Audit self-check
 
 1. **Capacity vs live set, both directions.**
@@ -127,6 +158,11 @@ construction rather than by care. The harness that produced this table is
    `write_rows_per_barrier`). `block_row_extent` is tagged `streams` in both rows and
    correctly absent from both capacities — verified against the helper's per-tile-row
    wait/push, not assumed.
+   *`cb_pad_row`:* capacity == live set == 1 page, so there is nothing to over- or
+   under-account. It is the one row whose live set does **not** scale with
+   `tile_row`, and that is the load-bearing claim: the fill is invariant along
+   that axis, so a per-tile-row (or per-tile) constant buffer would be `tile_h`x
+   (or `tile_h * block_width_tiles`x) larger for no benefit.
 2. **Page format vs DEST width, both directions.** `fp32_dest_acc_en` is set **iff**
    the input dtype is `float32`, and both CBs carry the tensor's own format. No
    `Float32` page under 16-bit DEST; no 16-bit page under fp32 DEST. `tilize` performs
@@ -134,10 +170,15 @@ construction rather than by care. The harness that produced this table is
    *(The fp32-output refinement additionally requires `Fp32Mode::Lossless` +
    `UnpackToDestFp32` — a correctness requirement of the LLK path, recorded in
    `op_design.md` → Key Risks, not a page-format finding.)*
-3. **Disjoint lifetime, no justification.** No CB pair has disjoint lifetimes — both
-   are live for the whole program and deliberately pipelined against each other. Both
-   `Shares with / why not` cells are filled with three concrete reasons each, one of
-   them a `static_assert` citation.
+3. **Disjoint lifetime, no justification.** No CB pair has disjoint lifetimes — all
+   are live for the whole program, and the two streaming CBs are deliberately
+   pipelined against each other. Both `Shares with / why not` cells are filled with
+   three concrete reasons each, one of them a `static_assert` citation.
+   `cb_pad_row`'s cell is filled too: it cannot alias either streaming CB because
+   the reader reads it as a NoC **source** in the same barrier that writes
+   `cb_input_rows`, so their live ranges overlap exactly; and eliminating it in
+   favour of a RISC store loop is priced there (up to 32 KB of per-word stores per
+   padded row, on the critical path of whichever core owns a tail block).
 4. **Bounds and closed form.** Every symbol in the total appears in the symbol table
    with a bound and its predicate. The total is closed-form in
    `{input_depth_rows, output_depth_batches, write_rows_per_barrier,
@@ -146,12 +187,23 @@ construction rather than by care. The harness that produced this table is
    over a stated expression, not a search that settled for a finer block. The
    inventory was minimized first (two CBs, the thread-boundary floor, with the
    in-place candidate ruled out by citation) before any budget expression was written.
+   *`cb_pad_row`:* `block_row_bytes` = `block_width_tiles * 32 * elem`, bounded by
+   `block_width_tiles <= FAST_TILIZE_WIDTH_CAP` and `elem <= 4`, so `<= 32 KB`; and
+   it is inside the `W_FIT` inversion (`denom += tb_in / tile_h` when
+   `pad_active`), not spent outside the budget.
 5. **Every capacity is a multiple of its transfer quantum.** Added by the
    implementation, because it is the audit the two CB endpoints enforce at
    runtime. `cb_input_rows` = `2 * W` pages against a `W`-page push/pop quantum;
    `cb_output_tiles` = `2 * wrpb * W` pages against a `wrpb * W`-page pop quantum
    and a `W`-page push quantum. Both hold for every reachable `(W, wrpb)` pair
    because `W` divides `C` exactly, so a single core never mixes two quanta.
+   `cb_pad_row` has no quantum at all — nothing is pushed or popped on it, so the
+   wrap invariant does not apply; the reader's local reads out of it are plain
+   L1 addresses, never CB-relative ones. The padded reader branch pushes and waits
+   `block_width_tiles` per tile-row exactly like the helper it replaces, including
+   on a short last tile-row: the ACTUAL page count is always the full
+   `block_width_tiles` because a tile-row's pages are whole tiles whether their
+   rows came from the tensor or from the fill.
 
 ## Deviations from `op_design.md`
 
@@ -209,6 +261,8 @@ fit and full occupancy). Named memory boundary: **DRAM**.
 | output (TILE) | **1** | Each output tile page is written exactly once, by the one core that owns it. `block_id` → `(row_group, w_chunk)` is a bijection onto a partition of the `R x C` tile grid, so no tile is produced twice. | **0** bytes. |
 | input, **L1 shard consumed natively** (Refinement 1) | **0** | The shard is already in this core's L1 and the CB is placed on it, so the reader issues no transfer of any kind. Not "one crossing made cheap" — no crossing. | **0** bytes. An accessor read of a core's own shard would have added `in_bytes` of cross-core NoC for no reason; that is exactly the non-implementation this refinement avoids. |
 | output, **L1 shard produced natively** (Refinement 1) | **0** | The packer writes the tiles into the output shard's own L1; the program carries no writer kernel. | **0** bytes. |
+| input, **padded** (Refinement 2) | **1**, and *less* than 1 in bytes | Each stick's column slice is still read exactly once — the pad does not add a re-fetch, it *removes* reads. A fully padded row (an H tail row, an all-pad tile column, an all-pad leading slice) issues **no DRAM transfer at all**: it is one local L1->L1 read out of `cb_pad_row`. So a padded call crosses DRAM with exactly the input's LOGICAL bytes, never its padded bytes. | **0** bytes of cross-core. The pad row's transfers are core-local (source and destination are both this core's L1), so they are L1 bandwidth, not NoC-between-cores. |
+| output, **padded** | **1** | Unchanged: every output tile page, pad positions included, is written once by its owning core. The fill costs output bytes because the output genuinely IS larger — that is the caller's request, not overhead. | **0** bytes. |
 | input or output, **sharded but on the OTHER side's cut** (cross-spec, DRAM-sharded) | **1** | A genuinely non-local operand: this core's block needs bytes that live in another core's L1 (or in a DRAM bank), so the `TensorAccessor` leg is a real remote transfer and is the correct mechanism. | `<= ` the operand's bytes, once. The only cross-core traffic this op ever generates, and only where the two placements genuinely disagree. |
 
 **Totals per tier.**
@@ -226,6 +280,14 @@ byte counts are split-invariant:
 |-----------|--------------|------------|
 | read | `R * tile_h * num_w_chunks`, or **0** when the input is consumed natively | `block_width_tiles * 32 * element_size(in_dtype)` (`= C*32*elem` when `num_w_chunks == 1`, i.e. a whole contiguous DRAM page) |
 | write | `R * C` (one per output tile, independent of the split), or **0** when the output is produced natively | `tb_out` (one whole tile page) |
+| read, **padded** (Refinement 2) | the same `R * tile_h * num_w_chunks` **total transactions**, re-partitioned: the ones whose row carries data stay DRAM reads (of `valid_bytes <= block_row_bytes`), and the fully padded ones become core-local L1->L1 reads of `block_row_bytes`. Plus, once per kernel, `log2(block_width_tiles)` seed transfers (`<= 8`) and one `TILE_WIDTH * elem` RISC store loop (`<= 128` B). | unchanged per transaction; the W tail adds no transaction at all (it is `< TILE_WIDTH*elem` bytes of in-place `fill_l1_range`, after the barrier) |
+
+The padded transaction count is therefore **identical** to the unpadded one for the
+same `(R, C, num_w_chunks)`, with a fraction of the reads redirected from DRAM to
+local L1. `[1,1,1,2048]` is the extreme: `H = 1`, so 31 of every 32 reads never
+touch DRAM. The one thing padding adds per kernel is the seed, and it is
+deliberately `log2`-many DM transfers rather than a `block_row_bytes` store loop —
+which is the whole reason `cb_pad_row` exists as a buffer rather than as a loop.
 
 Read transactions are the only term the split moves, which is why `num_w_chunks` is
 **minimized** rather than maximized: `max(w_chunks_for_l1, w_chunks_for_occupancy)`

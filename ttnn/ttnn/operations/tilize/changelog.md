@@ -210,3 +210,126 @@
   `cb.buffer_address() == tensor.buffer_address()` per side, and pin that the native-output
   path emits 2 kernels rather than 3. Plus one assertion that the block extents are read off
   the shard spec. **85/85 passing** across `tests/ttnn/unit_tests/operations/tilize/`.
+
+---
+
+## Refinement 2 — Padding: `pad_mode`, `pad_value`, `alignment`, ranks 0 and 1
+
+- **Date**: 2026-09-09
+- **What was done**: the design's deferred `grid2d_padded` regime, as an ADDITIVE step on
+  the Phase 0 block rather than a second path.
+
+  **The block schedule is untouched.** The grid, the core assignment, the two streaming CBs,
+  `compute_kernel_lib::tilize`'s call and the writer are byte-identical; the fill lives
+  entirely inside the reader's `load_block`, behind a compile-time `pad_active` branch, so
+  the unpadded path compiles to exactly what it was.
+
+  **Two pad regions, two mechanisms**, because they are genuinely different arithmetic:
+  * the **W tail** — bytes `[valid_bytes, block_row_bytes)` of a row that HAS data. At most
+    one tile's worth (`C = ceil(W/32)`), filled in place with
+    `dataflow_kernel_lib::fill_l1_range<elem_size>`, the alignment-aware helper written for
+    exactly "a row whose pad offset is not 4-byte aligned".
+  * a **fully padded ROW** — an H tail row, a row of an all-pad tile COLUMN (an explicit
+    target past the round), or a row of an all-pad leading slice. Sourced by ONE local
+    L1→L1 NoC read out of **`cb_pad_row`**, a new scratch CB holding a single block ROW of
+    pre-filled bytes. The DM engine moves it; the RISC never store-loops a row. `cb_pad_row`
+    is seeded once per kernel — `TILE_WIDTH` elements by hand (`<= 128` B), then
+    `log2(block_width_tiles)` doubling local reads — so no store loop is ever proportional
+    to the block width.
+
+  The two phases are ordered read → barrier → fill, so a RISC store into the tail of a row
+  cannot race the NoC write into its head.
+
+  **The reader's block read is SEGMENTED per image.** `read_sticks_for_tilize` spans one
+  contiguous stick run (`start_page + block_row + row`), which is only a tile-row index when
+  `H % tile_h == 0`; with an H tail the source rows restart at every image boundary. The
+  padded branch splits the global tile-row index into `(image, row_in_image)` first, keeping
+  the helper's own shape (one reserve / read-burst / barrier / push per tile-row).
+  RECORDED GAP: a `rows_per_segment` + `pad_value` pair alongside `byte_offset_within_page`
+  would close both the segmentation and the fill upstream in the helper.
+
+  **`pad_active` is derived from the GEOMETRY, not the argument** — 1 iff the output's padded
+  grid reaches past the input's LOGICAL extent on any axis. That is what keeps an
+  already-aligned call on the Phase 0 branch whether or not `pad_value=` was passed, and it
+  is asserted directly in the new test file rather than inferred from values.
+
+  **The fill is encoded host-side into the INPUT dtype's bit pattern** (`pad_fill_word`), so
+  the output cast happens at pack time exactly as it does for a real element. bfloat16 rounds
+  to nearest EVEN (checked against torch's own conversion, since the oracle is
+  `F.pad(x.bfloat16(), value=v)`); integers are a two's-complement bit_cast masked to
+  `elem_size * 8` bits, written width-generically so Refinement 5's integer dtypes need no
+  second implementation.
+
+  **Ranks 0 and 1 needed no special case.** A TILE `TensorSpec`'s default alignment is already
+  rank 2, so `[]` → padded `[32,32]` and `[64]` → `[32,64]` fall out; `derive_plan` left-pads
+  the input's logical shape to 2 and H=1 / W=1 go through the same tail arithmetic as any
+  other short dim.
+
+  **One additive nanobind binding**, `ttnn.TensorSpec.with_padded_shape(logical, padded, ...)`
+  (`ttnn/cpp/ttnn-nanobind/tensor.cpp`), for the one thing that is NOT derivable from
+  (logical shape, tile): an explicit target beyond the tile round. A spec's default alignment
+  caps the padded shape AT the round, so `[1,1,32,50] -> [1,1,32,128]` was inexpressible. It
+  takes the `MemoryConfig` whole (covering every placement at once) and degenerates to the
+  matching default constructor when the target IS the round — and it is used ONLY where the
+  target exceeds the round, so every already-verified call keeps the constructor it was
+  verified with.
+
+- **SUPPORTED after Refinement 2** (delta only): `pad_mode=["none", "auto", "explicit"]`,
+  `pad_value=["none", "zero", "positive", "negative"]`,
+  `alignment=["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"]`,
+  `rank=[0, 1, 2, 3, 4, 5, 6]`. `EXCLUSIONS` still empty.
+
+- **Accuracy achieved**: PCC = **1.0**, rtol = **0**, atol = **0** — `torch.equal` on BOTH
+  views of every case: the logical readback (`to_torch`, which must still be the input at the
+  input's shape) and the PADDED readback (`to_torch_with_padded_shape`, which must equal
+  `F.pad(x, value=fill)`). 32 cases in `test_tilize_padded.py`: w/h/hw tails at all three
+  pad_value signs, ranks 0/1/2/3/5, five explicit targets (three of them past the tile round),
+  four buffer/low_l1 crossings, a height-sharded output, an ND-sharded input on a width-cut
+  page (strided read + W tail), an ND-sharded output, and three grid-scale geometries
+  (`[1,1,1,2048]`, `[1,1,32,4090]`, `[8,1,249,2048]`). tilize does no arithmetic, so these are
+  equalities, not tolerances.
+
+- **Golden test progress**: `test_golden.py` **53 passed, 0 failed, 0 XPASS** (from 32 after
+  Refinement 1) — the three loud categories stay at 0. New: `padding_auto` 7,
+  `padding_explicit` 4, `padding_crossed` 3, the four padded `work_geometry` members, rank 0
+  and rank 1, and both padded LOOSE_CASES (`[1,1,1,50304]` at C=1572, `[8,1,49,2048]`).
+  `test_golden_main_tests.py` **127 passed** (from 47), every one of the 32 remaining failures
+  an honest `dtype` refusal (float32 15 / int32 7 / uint32 6 / uint16 4 — Refinement 5) plus
+  the 2 pre-existing `use_module_device` × `device_params` collection errors.
+  `test_translated.py` **707 passed** (from 422).
+
+- **Issues encountered**:
+  1. **A sharded `memory_config` may carry no ShardSpec.** `MemoryConfig(WIDTH_SHARDED, L1)`
+     with only the family named is a contract case (`test_translated.py`'s own comment: "the
+     op derives the output shard spec itself"). `_output_tensor_spec` handed that config's
+     `None` spec to a constructor and `TypeError`'d — latent since Refinement 1, newly
+     REACHABLE here because those cases all pass `output_padded_shape`. Fixed by applying
+     `TensorSpec`'s own `height_sharded` / `width_sharded` / `block_sharded` cut over the
+     compute grid, derived off the PADDED spec so the shard's height is the padded height.
+     +5 cases.
+  2. **A resident input shard has nowhere to put the fill**, so `pad_active` clears
+     `input_native` and a padded call reads its input through the accessor. Not a regression
+     of Refinement 1's nativeness claim — a shard holds only the caller's own bytes, and
+     writing the pad into it would corrupt the input tensor. The OUTPUT side stays native.
+  3. **A deliberate divergence from the translated reference suite, left as-is.** 50
+     `test_translated.py` cases assert that a non-tile-aligned input with **no** padding
+     argument is zero-padded by default. The immutable acceptance test
+     `test_tilize.py::test_tilize_rejects_unaligned_input_without_padding` ("DO NOT MODIFY")
+     asserts the opposite, and `feature_spec.TARGET`'s own `pad_mode` comment agrees
+     ("none — no padding argument; an unaligned input is refused"). The acceptance test and
+     the registry declaration win. Those 50 were failing before this refinement as well (on
+     the `alignment` gate); they now fail with the intended `ValueError` instead of a support
+     refusal, which is what the Phase 0 note said would happen once padding landed.
+  4. My first hand-derived bfloat16 round-to-nearest-even expectation was wrong (an exact tie
+     with an even mantissa stays put, it does not round up). Replaced the hand-computed
+     constant with a comparison against torch's own conversion across seven values, since
+     torch's rounding IS the oracle.
+
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_padded.py` — 32 cases.
+  Beyond values, four of them assert the *mechanism* rather than the result:
+  `pad_active` tracks the pad REGION and not the argument (both directions), `cb_pad_row`
+  exists iff the fill path does and costs exactly one block row, and `pad_fill_word`'s
+  bfloat16 rounding matches torch while a negative integer fill is a non-truncating
+  two's-complement bit_cast at the element width. Plus the two malformed-request refusals
+  (target smaller than the input; target not a whole number of tiles).
+  **117 / 117 passing** across `tests/ttnn/unit_tests/operations/tilize/`.

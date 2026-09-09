@@ -167,7 +167,7 @@ shard-driven plan — the shard, not `W_CAP`, fixes the block extent.
 
 ---
 
-### [ ] Refinement 2 — Padding: `pad_mode`, `pad_value`, `alignment`, ranks 0 and 1
+### [x] Refinement 2 — Padding: `pad_mode`, `pad_value`, `alignment`, ranks 0 and 1
 
 **Goal**: add `"auto"` and `"explicit"` to `SUPPORTED["pad_mode"]`, `"zero"` /
 `"positive"` / `"negative"` to `SUPPORTED["pad_value"]`, `"w_non_aligned"` /
@@ -222,6 +222,54 @@ padded output is **unchanged** (only the padded shape grows — promoting the lo
 shape is the named bug); the `padding_auto` / `padding_explicit` / `padding_crossed`
 golden groups pass; the three loud categories stay at 0; Phase 0's 249 cells and
 Refinement 1's cells still pass.
+
+**Outcome**: DONE. All four axes carry their TARGET values (`pad_mode` +auto/explicit,
+`pad_value` +zero/positive/negative, `alignment` all four, `rank` +0/1) and the whole
+graded matrix is green: `test_golden.py` **53 passed, 0 failed, 0 XPASS** (from 32 after
+Refinement 1) — all 7 `padding_auto`, 4 `padding_explicit`, 3 `padding_crossed`, the four
+padded `work_geometry` members, rank 0 and rank 1, plus both padded LOOSE_CASES
+(`[1,1,1,50304]` at C=1572 and `[8,1,49,2048]`). `test_golden_main_tests.py` went
+47 → **127** passing with every remaining failure an honest `dtype` refusal
+(Refinement 5); `test_translated.py` 422 → **707**.
+
+The fill is produced in the kernel and the block schedule is untouched: the grid, the
+core assignment, the two streaming CBs, the compute call and the writer are byte-identical,
+and the padded path is one compile-time reader branch plus **one** extra CB —
+`cb_pad_row`, a single block ROW (not tile) of pre-filled bytes, `<= 0.8%` of the
+per-core footprint on every measured shape. A fully padded row costs one local L1→L1
+DM transfer out of it, so a padded call crosses DRAM with the input's LOGICAL bytes and
+`[1,1,1,2048]` (H=1) never DRAM-reads 31 of every 32 rows. `pad_active` is derived from
+the two shapes rather than from the argument, which is what keeps an already-aligned
+call on the Phase 0 branch even when `pad_value=` is passed.
+
+Four things a padded call exposed that an unpadded one cannot:
+1. **The H tail breaks the reader's contiguous-stick-run invariant** exactly as the notes
+   predicted — source rows restart at every image boundary — so the padded block read is
+   SEGMENTED per image. `[8,1,249,2048]` is the witness. Recorded helper gap: a
+   `rows_per_segment` + `pad_value` pair alongside `byte_offset_within_page` would close
+   both the segmentation and the fill in `read_sticks_for_tilize`.
+2. **An explicit target beyond the tile round is not expressible from (logical shape, tile)**
+   — a `TensorSpec`'s default alignment caps the padded shape AT the round. Added one
+   additive nanobind binding, `ttnn.TensorSpec.with_padded_shape(logical, padded, ...)`, and
+   used it ONLY where the target exceeds the round, so every already-verified call keeps its
+   Phase 0 / Refinement 1 constructor. Ranks 0/1 needed nothing: a TILE spec's default
+   alignment is already rank 2, so `[]` → `[32,32]` and `[64]` → `[32,64]` fall out.
+3. **A sharded `memory_config` may name only the FAMILY** (`MemoryConfig(WIDTH_SHARDED, L1)`
+   with no ShardSpec — a contract case in `test_translated.py`). `_output_tensor_spec` used
+   to `TypeError` on it, latent since Refinement 1 and newly reachable here; it now applies
+   `TensorSpec`'s own `height_sharded`/`width_sharded`/`block_sharded` cut over the compute
+   grid, derived off the PADDED spec so the shard's height is the padded height. +5 cases.
+4. **A resident input shard cannot hold the fill**, so `pad_active` clears `input_native` and
+   a padded call reads its input through the accessor. The OUTPUT side stays native — the
+   packer writes whole tiles, pad positions included, into the output shard.
+
+Deliberate divergence, recorded rather than resolved: 50 `test_translated.py` cases assert
+that a non-tile-aligned input with **no** padding argument is zero-padded by default. The
+immutable acceptance test `test_tilize.py::test_tilize_rejects_unaligned_input_without_padding`
+("DO NOT MODIFY") asserts the opposite — padding is opt-in — and `feature_spec.TARGET`'s own
+`pad_mode` comment agrees ("none — no padding argument; an unaligned input is refused"). The
+acceptance test and the registry declaration win; those 50 were failing before this
+refinement too (on the `alignment` gate), and now fail with the intended `ValueError`.
 
 ---
 

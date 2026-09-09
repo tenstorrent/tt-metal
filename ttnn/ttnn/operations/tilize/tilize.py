@@ -574,7 +574,14 @@ def _auto_padded_shape(logical_shape, tile_h):
     return shape
 
 
-def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile, padded_shape=None):
+_SHARD_FAMILY_DERIVATION = {
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED: "block_sharded",
+}
+
+
+def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile, padded_shape=None, core_grid=None):
     """TensorSpec for the output at ANY placement.
 
     Three constructors, one per placement family: an ND config carries an
@@ -593,6 +600,34 @@ def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile, p
     on the constructor it was verified with.
     """
     shape = ttnn.Shape(list(logical_shape))
+
+    # A sharded `memory_config` may name only the FAMILY and leave the shard
+    # shape to the op ("give me a width-sharded output, you pick the cut") —
+    # `ttnn.MemoryConfig(WIDTH_SHARDED, L1)` with no ShardSpec. There is nothing
+    # to read the block grid off then, and no shard spec to hand a TensorSpec
+    # constructor, so the canonical derivation is applied: `TensorSpec`'s own
+    # `height_sharded` / `width_sharded` / `block_sharded`, which cut the
+    # PADDED 2-D view into one shard per core over the compute grid. Deriving it
+    # off the padded spec is what makes the shard's height the padded height,
+    # which is the shape the caller of a padded call is asking for.
+    derivation = None
+    if (
+        out_memory_config.is_sharded()
+        and out_memory_config.shard_spec is None
+        and out_memory_config.nd_shard_spec is None
+    ):
+        derivation = _SHARD_FAMILY_DERIVATION.get(out_memory_config.memory_layout)
+        if derivation is None:
+            raise ValueError(
+                f"tilize: memory_config names {out_memory_config.memory_layout} but carries no shard spec, "
+                "and there is no canonical cut for that layout to derive one from"
+            )
+        if core_grid is None:
+            raise ValueError("tilize: a shard-spec-less memory_config needs a core grid to derive the cut from")
+        unsharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, out_memory_config.buffer_type)
+        base = _output_tensor_spec(logical_shape, out_dtype, unsharded, out_tile, padded_shape)
+        return getattr(base, derivation)(core_grid, ttnn.ShardOrientation.ROW_MAJOR)
+
     if padded_shape is not None:
         return ttnn.TensorSpec.with_padded_shape(
             shape, ttnn.Shape(list(padded_shape)), out_dtype, ttnn.TILE_LAYOUT, out_memory_config, out_tile
@@ -661,8 +696,12 @@ def tilize(
         target = [int(d) for d in list(output_padded_shape)]
         if target != _auto_padded_shape(input_tensor.shape, out_tile_h):
             padded_shape = target
+    grid_size = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    )
     output_tensor = ttnn.allocate_tensor_on_device(
-        _output_tensor_spec(input_tensor.shape, out_dtype, out_memory_config, out_tile, padded_shape),
+        _output_tensor_spec(input_tensor.shape, out_dtype, out_memory_config, out_tile, padded_shape, core_grid),
         device,
     )
 
