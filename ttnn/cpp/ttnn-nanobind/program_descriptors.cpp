@@ -1140,7 +1140,7 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "reload_table_addr",
             &tt::tt_metal::ProgramDescriptor::reload_table_addr,
-            "L1 address of the runtime binary-reload stage table, 0 if this program does not reload")
+            "L1 address of the runtime binary-reload stage table; None if this program does not reload")
         .def_rw(
             "reload_core_ranges",
             &tt::tt_metal::ProgramDescriptor::reload_core_ranges,
