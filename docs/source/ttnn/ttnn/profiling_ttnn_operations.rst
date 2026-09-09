@@ -192,7 +192,7 @@ The per-class instruction availability, per-unpacker busy and issue-ready metric
 - **Math Src Data Ready Rate (%)**: ``MATH_SRC_DATA_READY / ref_cnt``, the fraction of cycles the math unit had both source registers valid.
 - **FPU SFPU Overlap (%)**: ``max(0, FPU_COUNTER + SFPU_COUNTER - MATH_COUNTER) / ref_cnt``, the cycles both units were busy at once (``MATH_COUNTER`` counts fpu-or-sfpu cycles).
 - **T0..T3 Instrn Per Issue-Ready Cycle** (ratio): ``THREAD_INSTRUCTIONS_<t> / max(1, ref_cnt - THREAD_STALLS_<t>)``, instructions issued per cycle the thread was not stalled.
-- **L1_CLIENT_<PORT>_<EVENT> Rate (%)**: the l1_client counter selected for the run over the wall-clock span of the capture window, named after the selection (e.g. ``L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP Rate``). Carry events (``*_CARRY`` other than ``PENDING_REQS``) pulse once per four lane events, so their rates are scaled by 4. The column is dynamic and appears after the fixed perf counter columns.
+- **L1_CLIENT_<PORT>_<EVENT> Rate (%)**: the l1_client counter selected for the run over the wall-clock span of the capture window, named after the selection (e.g. ``L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP Rate``). Carry events (``*_CARRY`` other than ``PENDING_REQS``) pulse once per four lane events, so their rates are scaled by 4. The column is dynamic and appears after the fixed perf counter columns. Events 1-3 count per SBank of the port rather than per lane (so THCON aliases TRISC SBank 0), and the pending-request carry is left raw because its divisor differs per port.
 
 *Composite Metrics*
 

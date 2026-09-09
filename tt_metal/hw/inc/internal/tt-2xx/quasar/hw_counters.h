@@ -43,7 +43,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters PERF_
 constexpr std::size_t NUM_FPU_COUNTERS = 3;
 
 // TDMA_UNPACK: sels 2/256/257 are dead on A0 (fidelity off) and 258 duplicates 3. Three unpackers per thread:
-// sel 9 is unpacker2/thread0 and sel 10 unpacker0/thread1.
+// sel 9 is unpacker2/thread0 and sel 10 unpacker0/thread1; both and the odd-TID writes read 0 on every op swept so far.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
@@ -76,7 +76,7 @@ constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
 // INSTRN: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 any-stall per thread, 36-50
 // thread-ORed backend stalls; grants (>= 256) are ibuffer dequeues. Xsearch is tied to 0 (its grants alias
-// THREAD_INSTRUCTIONS); thread 3, THCON and SRCS_STALL_* read 0 on every op swept so far.
+// THREAD_INSTRUCTIONS); thread 3, THCON, CFG_1, UNPACK_1/2, PACK_0/1 and SRCS_STALL_* read 0 on every op swept so far.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 51> instrn_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
