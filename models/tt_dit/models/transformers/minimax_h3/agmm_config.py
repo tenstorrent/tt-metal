@@ -51,7 +51,11 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int], tuple[int, int, int]] = {
     (7168, 1344): (8, 8, 6),
     (5376, 7168): (8, 3, 14),
     # attention to_gate_compress (VSA): K_tiles_per_device = 42 -> K_block 7; N = 56 tiles -> N_block 8.
-    # Valid-by-construction, not sweep-measured (the gate matmul is off the dense path).
+    # Swept at M=4768, 302 combos: 755.5 us here against 752.5 us for the best combo reachable at
+    # subblock (2, 2) -- (8, 7, 10) -- and 746.6 us for the global best, (8, 7, 7) at subblock (4, 1),
+    # which `default_block_size` cannot express (it forces (2, 2), and 7 is not divisible by
+    # subblock_w = 2). 0.4% from the reachable optimum in a space whose median is 55% worse, so the
+    # divisibility constraints alone landed inside the top 9 of 302. Left as it was.
     (5376, 1792): (8, 7, 8),
 }
 

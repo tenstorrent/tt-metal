@@ -226,6 +226,30 @@ the per-step index uploads and the host scheduler round trip are **collectively 
 Do not build a full-forward profiled target for this. (A full forward is ~5000 ops and would blow
 Tracy's 1000-op-per-device drop limit anyway.)
 
+### S1b — The VSA gate's matmul blocking: no headroom
+
+`to_gate_compress` (`14400 x 1344 x 1792`, 5.89 ms, the largest of O1's four rows) was the only AGMM
+shape whose `(K, N)` entry came from the divisibility constraints rather than a sweep. Job 905 swept
+it at M=4768, 302 combos, 9m37s:
+
+| combo | us | note |
+|---|---|---|
+| `(8, 7, 7)` sb `(4, 1)` | 746.6 | global best; `default_block_size` forces sb `(2, 2)`, so unreachable |
+| `(8, 7, 10)` sb `(2, 2)` | 752.5 | best reachable |
+| **`(8, 7, 8)` — shipped** | **755.5** | **0.4% off the reachable optimum** |
+| median of 302 | 1157.7 | +55% |
+| worst | 3126.1 | +319% |
+
+Blocking matters enormously for this shape — only 9 of 302 combos land within 2% of best — and the
+by-construction entry is already one of the 9. **There is nothing to win here**; do not re-sweep it.
+
+What remains of O1 is therefore (a) the M=14400 re-sweep for the other three shapes, which is a
+different question (does the optimum move with M?) and needs a top-N re-timing rather than a full
+sweep — one shape at M=14400 extrapolates to ~29 min against the ~1506 s job cap — and (b) getting
+input 0 out of `DEV_0_DRAM_INTERLEAVED`. Note also that an AGMM's device time includes its
+all-gather (~116 MB/device over 2 links), so a meaningful part of these four rows is link-bound
+communication that no blocking change can touch.
+
 ### S2 — Tracing the denoise on 4x8: dead
 
 Warm pass: `first step 3.4s | steady 10.2s over 3 steps (3387 ms/step)`. The first step is **not**
