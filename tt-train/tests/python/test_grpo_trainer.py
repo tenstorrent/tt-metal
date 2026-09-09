@@ -174,7 +174,7 @@ class _RecordingCallback(TrainerCallback):
     def on_train_end(self, trainer):
         self.train_end += 1
         # `step_time_s` is the full per-step wall time that is computed
-        # after all non-monitor `on_step_end`` callback. Record this here.
+        # after all non-monitor `on_step_end` callbacks. Record this here.
         self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
