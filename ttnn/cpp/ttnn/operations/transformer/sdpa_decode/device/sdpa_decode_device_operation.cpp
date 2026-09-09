@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -115,11 +116,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             const auto mask_shape = mask_tensor.padded_shape();
             const auto mask_shape_unpadded = mask_tensor.logical_shape();
 
+            // The reader walks the mask as whole tiles of Q's head count rounded up to a tile. A
+            // TILE Q already carries that in its padded shape; a ROW_MAJOR Q does not pad dim 2, so
+            // round it here rather than demanding padding Q cannot express.
             TT_FATAL(
-                mask_shape[2] == q_shape[2],
+                mask_shape[2] == tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT),
                 "Expect same number of padded heads in mask as in Q, got {} and {}",
                 mask_shape[2],
-                q_shape[2]);
+                tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT));
             TT_FATAL(
                 mask_shape_unpadded[2] == q_shape_unpadded[2],
                 "Expect same number of heads in mask as in Q, got {} and {}",
@@ -429,9 +433,13 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
         const auto& sink_shape = attention_sink.padded_shape();
         TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
+        // The reader reads the sink as PNHt whole tiles, i.e. Q's head count rounded up to a
+        // tile. A TILE Q already carries that in its padded shape; a ROW_MAJOR Q does not pad
+        // dim 2, so round it here rather than demanding padding Q cannot express.
         TT_FATAL(
-            sink_shape[0] == q_shape[2],
-            "Attention sink must have the same padded num heads as Q but got {}",
+            sink_shape[0] == tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT),
+            "Attention sink must have Q's num heads rounded up to a tile ({}) but got {}",
+            tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT),
             sink_shape[0]);
         TT_FATAL(
             sink_shape[1] == tt::constants::TILE_WIDTH,

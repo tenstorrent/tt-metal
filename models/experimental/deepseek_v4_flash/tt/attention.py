@@ -24,7 +24,6 @@ from .layers import (
     BatchedLinearDecode,
     DeepSeekV4RMSNorm,
     LinearDecode,
-    _rms_norm_unweighted,
 )
 from .l1_weights import packed_weight_spec
 from .paged_cache import PagedLayerView
@@ -430,6 +429,7 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     inputs here are ``[1, B, H, Dh]`` (SDPA-decode's head layout), whose ``B*H`` rows are
     contiguous because ``H`` is tile-aligned.
     """
+    _signpost("apply_rope start")
     device = x.device()
     d = x.shape[-1]
     shape = list(x.shape)
@@ -446,8 +446,9 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     assert cos.memory_config().buffer_type == ttnn.BufferType.DRAM, "cos must be DRAM-interleaved"
     assert sin.memory_config().buffer_type == ttnn.BufferType.DRAM, "sin must be DRAM-interleaved"
 
+    tile_height = ttnn.TILE_SIZE if x.layout == ttnn.TILE_LAYOUT else 1
     if not x.is_sharded():
-        x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, device))
+        x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, device, tile_height=tile_height))
 
     # The op takes its row count off dim -2 alone, so a batched ``[1, B, H, Dh]`` has to be
     # folded onto that dim first. The shard already spans all ``rows``, so both reshapes are
@@ -459,6 +460,7 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     out_sh = ttnn.experimental.fused_partial_rope(x, cos, sin, _trans_mat_for(rot), rope_dim)
     if folded:
         out_sh = ttnn.reshape(out_sh, shape, memory_config=mem_config)
+    _signpost("apply_rope end")
     return out_sh
 
 
@@ -1548,7 +1550,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             scale=self.scaling,
             program_config=self._sdpa_pcfg,
             compute_kernel_config=_HIFI4_SDPA,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             **bounds,
         )  # [1, B, H, Dh]
 
@@ -1583,6 +1584,14 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         all-reduces them. Column mode instead gathers all groups, computes N/TP
         hidden features per rank, and gathers the final hidden state.
         """
+        # SDPA-decode hands back its output in Q's layout, so a ROW_MAJOR q leaves ``attn``
+        # untilized. o_a is fed the head fold of this tensor, and a fold that is neither tiled
+        # nor a one-replica-per-core height shard is a layout ``matmul_decode`` gets wrong
+        # (measured: ~0.58 PCC on the attention block, correct as soon as this is tiled). Tilize
+        # once here and the whole epilogue -- o_a, o_b and the fold between them -- runs on the
+        # layout it was written for. Everything ahead of this point stays ROW_MAJOR.
+        attn = ttnn.to_layout(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
+
         _, m, h, dh = attn.shape
         groups = self.local_o_groups
         in_per_group = (h * dh) // groups
@@ -1720,14 +1729,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         q = self.q_b_proj(q_b_input)  # [1, 1, B, H*Dh]
         if q_b_input is not q_a:
             ttnn.deallocate(q_b_input)
-        if q.layout == ttnn.ROW_MAJOR_LAYOUT:
-            # Fused q_b leaves one physical row per token. SDPA-decode matches its
-            # tile-padded sink against Q's padded head count, so Q must be tiled.
-            q = ttnn.to_layout(ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
-        q = ttnn.reshape(q, [1, tokens_n, h, dh], memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device))
+        assert self.fuse_q_b_norm, "q_b_norm must be fused"
 
-        if not self.fuse_q_b_norm:
-            q = _rms_norm_unweighted(q, self.eps)
+        # A ROW_MAJOR q has one physical row per head, so its shard must not be tile-padded:
+        # ``fused_partial_rope`` takes its row count straight off the shard height.
+        q_tile_height = ttnn.TILE_SIZE if q.layout == ttnn.TILE_LAYOUT else 1
+        q = ttnn.reshape(
+            q,
+            [1, tokens_n, h, dh],
+            memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device, tile_height=q_tile_height),
+        )
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [1, B, H, Dh]
 
         # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a

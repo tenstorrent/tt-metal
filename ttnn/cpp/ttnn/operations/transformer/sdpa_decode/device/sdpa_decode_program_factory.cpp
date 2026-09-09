@@ -172,17 +172,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
     if (tilize_q) {
-        // The reader walks exactly PNHt * TILE_HEIGHT rows of the buffer and compute tilizes them
-        // one 32-row band at a time, so the head count must genuinely fill those rows rather than
-        // merely being padded up to them — otherwise the last band reads past the tensor.
-        TT_FATAL(
-            input_tensor_q.padded_shape()[2] % TILE_HEIGHT == 0,
-            "ROW_MAJOR Q is tilized on chip in {}-row bands, so its head count must be a multiple "
-            "of {}: got {} padded rows ({} heads). Convert Q to TILE_LAYOUT for other head counts.",
-            TILE_HEIGHT,
-            TILE_HEIGHT,
-            input_tensor_q.padded_shape()[2],
-            num_q_heads);
         // The GQA gather path writes face-sized fragments of a tiled output; an untilized output
         // has no faces to address.
         TT_FATAL(
@@ -472,12 +461,26 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Tile Configurations ==========
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
-    const bool use_half_tile = is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
+    // A tiny (16x32) Q tile halves the Q/mask/statistics footprint and the math for <=16 heads.
+    // ROW_MAJOR Q takes it whenever it can: a full tile would make compute tilize 32-row bands out
+    // of a buffer that only has num_q_heads rows, reading past the tensor.
+    //
+    // A half-tile mask CB is filled by reading half of each of the mask's full-tile pages, i.e. its
+    // top two faces, which is exactly the 16 head rows the mask populates. That only holds for a
+    // format whose tile is plain face-major data; a block-float mask keeps all four faces' exponents
+    // at the front of the page, so half of it is not a tile.
+    const bool mask_is_face_major =
+        !use_attention_mask || attn_mask->dtype() == DataType::BFLOAT16 || attn_mask->dtype() == DataType::FLOAT32;
+    const bool use_half_tile =
+        (is_causal || (tilize_q && mask_is_face_major)) && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
     const auto q_tile = use_half_tile ? half_tile : full_tile;
     const auto k_tile = full_tile;
     const auto v_tile = full_tile;
     const auto mask_tile = use_half_tile ? half_tile : full_tile;
-    const auto out_tile = full_tile;
+    // The output carries Q's tile geometry when it is untilized: the writer pages an untilized
+    // output by row and counts those rows out of the CB's tile size, so a full tile here would walk
+    // 32 rows per batch out of a 16-row band and spill into the next batch.
+    const auto out_tile = (use_half_tile && is_output_row_major) ? half_tile : full_tile;
     const auto scalar_tile = use_half_tile ? half_tile : full_tile;
     const auto im_tile = use_half_tile ? half_tile : full_tile;
     const auto stats_tile = use_half_tile ? half_tile : full_tile;
@@ -489,6 +492,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
+
+    if (tilize_q) {
+        // The reader walks PNHt bands of the buffer and compute tilizes each one, so the head count
+        // must genuinely fill those bands rather than merely being padded up to them — otherwise the
+        // last band reads past the tensor.
+        TT_FATAL(
+            input_tensor_q.padded_shape()[2] % q_tile.get_height() == 0,
+            "ROW_MAJOR Q is tilized on chip in {}-row bands, so its head count must be a multiple "
+            "of {}: got {} padded rows ({} heads). Convert Q to TILE_LAYOUT for other head counts.",
+            q_tile.get_height(),
+            q_tile.get_height(),
+            input_tensor_q.padded_shape()[2],
+            num_q_heads);
+    }
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
