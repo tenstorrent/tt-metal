@@ -225,7 +225,7 @@ def test_embedding_tiled_input_qwen_like_shapes(
     """TILE UINT32 indices + RM weights + TILE output; shapes from Qwen-Image text encoder (TP-sharded hidden)."""
     torch.manual_seed(1234)
 
-    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    torch_input_tensor = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 

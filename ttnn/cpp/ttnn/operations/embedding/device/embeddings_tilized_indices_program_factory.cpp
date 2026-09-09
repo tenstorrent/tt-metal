@@ -117,10 +117,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .data_format_metadata = weights_data_format,
     });
 
-    // The reader loads one full TILE page of indices (`input.get_aligned_page_size()`) into this
-    // scratch buffer, then decodes faces via face_offset. Size it to that page, not a single face:
-    // a face-sized CB overflows Watcher NOC sanitize (UINT32 TILE page is 4096 B).
-    uint32_t index_tile_page_size = tt::align(TILE_HW * input_element_size_bytes, alignment);
+    // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
+    // then decodes faces via face_offset. Size it to the input's aligned page size to avoid Watcher NOC sanitize overflows.
+    uint32_t index_tile_page_size = a.buffer()->aligned_page_size();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INDEX_SCRATCH,
         .entry_size = index_tile_page_size,
