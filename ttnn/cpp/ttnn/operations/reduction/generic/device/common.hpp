@@ -53,18 +53,24 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
 }
 
 // True when the reduce uses the SFPU path instead of the FPU GMPOOL/matmul path.
-// Int32 always uses SFPU (FPU has no Int32 support). Float32 opts in only when the host requests
-// the accurate path (`use_sfpu_reduce`): the FPU truncates fp32 to tf32, so the SFPU preserves full
-// fp32. mean arrives as SUM (the host lowers it to SUM + a 1/N post-mul), and fast-mode float/bf16
-// MIN arrives as MAX with negate=true via -MAX(-x), so only accurate MIN reaches here as MIN.
+// Int32 always uses SFPU (FPU has no Int32 support). Float32 and bf16 MIN opt in only when the host
+// requests the accurate path (`use_sfpu_reduce`): for fp32 that buys precision, since the FPU
+// truncates to tf32; for bf16 MIN it is the only real MIN, since the FPU has no MIN pool. mean
+// arrives as SUM (the host lowers it to SUM + a 1/N post-mul), and fast-mode float/bf16 MIN arrives
+// as MAX with negate=true via -MAX(-x), so only accurate MIN reaches here as MIN.
 inline bool use_sfpu_reduce_path(
     tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
     if (dtype == tt::tt_metal::DataType::INT32) {
         return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MIN;
     }
-    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
+    if (!use_sfpu_reduce) {
+        return false;
+    }
+    if (dtype == tt::tt_metal::DataType::FLOAT32) {
+        return math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN;
+    }
+    return dtype == tt::tt_metal::DataType::BFLOAT16 && math_op == ReduceOpMath::MIN;
 }
 
 // True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,

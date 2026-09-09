@@ -213,13 +213,21 @@ Tensor reduce(
     const bool use_sfpu_fp32_max = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MAX && !negate;
     const bool use_sfpu_fp32_min = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
 
-    const bool use_sfpu_fp32_reduce = use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min;
+    // bf16 MIN takes the same accurate/fast switch, for a different reason: the FPU has no MIN pool
+    // (only MAX gets GMPOOL), so accurate mode is the only real MIN and fast mode means -MAX(-x).
+    // fp32_dest_acc_en is required not for precision but for the H-axis split, whose stage 2 folds
+    // FP32 partials and so needs the 32-bit DEST.
+    const bool use_sfpu_bf16_min = !fast_and_approximate_mode && arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en &&
+                                   input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
+                                   reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
+    const bool use_sfpu_min = use_sfpu_fp32_min || use_sfpu_bf16_min;
 
-    // The FPU has no float/bf16 MIN primitive, so fast-mode MIN lowers to -MAX(-x) via the fused
-    // negate kernels. Accurate fp32 MIN drives the LLK MIN reduce directly (like Int32 MIN) and must
-    // skip that lowering.
+    const bool use_sfpu_reduce = use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_min;
+
+    // Fast-mode MIN lowers to -MAX(-x) via the fused negate kernels. Accurate MIN drives the LLK MIN
+    // reduce directly (like Int32 MIN) and must skip that lowering.
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
-        !use_sfpu_fp32_min) {
+        !use_sfpu_min) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
@@ -252,7 +260,7 @@ Tensor reduce(
     // The accurate fp32 SFPU path also post-muls (the SFPU ignores the scaler CB): mean applies its
     // 1/N here, the rest their user scalar.
     const bool use_post_mul =
-        ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_fp32_reduce);
+        ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_reduce);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -297,7 +305,7 @@ Tensor reduce(
         ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
           (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
            reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
-         use_sfpu_fp32_reduce);
+         use_sfpu_reduce);
 
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
@@ -330,7 +338,7 @@ Tensor reduce(
             /*post_mul_scaler=*/1.0f,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
+            /*use_sfpu_reduce=*/use_sfpu_reduce);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
@@ -349,7 +357,7 @@ Tensor reduce(
             /*post_mul_scaler=*/post_mul,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
+            /*use_sfpu_reduce=*/use_sfpu_reduce);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
@@ -391,7 +399,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/1.0f,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*use_sfpu_reduce=*/use_sfpu_reduce,
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
@@ -408,7 +416,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/post_mul,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*use_sfpu_reduce=*/use_sfpu_reduce,
                 /*num_h_slices=*/1,
                 /*output_layout=*/rm_dense_out_layout);
         }
@@ -452,8 +460,10 @@ Tensor reduce(
         if (num_h_slices >= 2) {
             // Both stages run the user's op; AVG becomes SUM because stage 1's unit scaler plus
             // stage 2's post-mul is what applies the 1/N.
+            // Stage 2 folds FP32 partials, so bf16 MIN still needs the SFPU flag set there: Float32
+            // MIN reaches the SFPU only in accurate mode, and the FPU has no MIN to fall back to.
             const bool split_use_sfpu = reduce_math == tt::tt_metal::ReduceOpMath::MAX   ? use_sfpu_fp32_max
-                                        : reduce_math == tt::tt_metal::ReduceOpMath::MIN ? use_sfpu_fp32_min
+                                        : reduce_math == tt::tt_metal::ReduceOpMath::MIN ? use_sfpu_min
                                                                                          : use_sfpu_fp32_mean;
             const auto split_math =
                 reduce_math == tt::tt_metal::ReduceOpMath::AVG ? tt::tt_metal::ReduceOpMath::SUM : reduce_math;
@@ -526,7 +536,7 @@ Tensor reduce(
         /*post_mul_scaler=*/post_mul,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h,
-        /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+        /*use_sfpu_reduce=*/use_sfpu_reduce,
         /*num_h_slices=*/1,
         /*output_layout=*/use_rm_dense ? rm_dense_out_layout : tt::tt_metal::Layout::TILE);
 }

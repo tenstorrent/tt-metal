@@ -776,16 +776,17 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
 def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall TILE input — tiled stage 1, RM stage 2. TILE input defaults to TILE output."""
     selects = reduce_op in ("max", "min")
-    if fast_and_approximate_mode and reduce_op != "mean":
-        pytest.skip("fast_and_approximate_mode only affects mean")
+    # fast_and_approximate_mode picks the engine for mean and for bf16 min; for the rest it is inert.
+    # bf16 min in fast mode is -MAX(-x), which sets negate and so declines the split — still exact,
+    # so it stays in the matrix as the un-split reference.
+    if fast_and_approximate_mode and reduce_op not in ("mean", "min"):
+        pytest.skip("fast_and_approximate_mode only affects mean and bf16 min")
     if selects and output_layout is not None:
         pytest.skip("output_layout is only supported for sum and mean")
     if shape[2] > 4096 and not selects and dtype == ttnn.bfloat16:
         pytest.skip("bf16 accumulation over this many rows exceeds the shared tolerance below")
     if selects and dtype != ttnn.bfloat16:
         pytest.skip("max/min take the split on bf16 only; fp32 would tf32-truncate in stage 2")
-    if reduce_op == "min":
-        pytest.skip("min lowers to -MAX(-x) and the split rejects negate")
     torch.manual_seed(0)
     torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
@@ -800,7 +801,7 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate
     op_kwargs = {"dim": -2, "keepdim": False}
     if not selects:
         op_kwargs["output_layout"] = output_layout
-    if reduce_op == "mean":
+    if reduce_op in ("mean", "min"):
         op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
     tt_output = ttnn_op(tt_input, **op_kwargs)
     # A TILE input defaults to TILE output: stage 1's ROW_MAJOR partials must not leak out as the

@@ -324,6 +324,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             // Welford never splits the H axis; {1, Ht} selects the reader's un-split path.
             {"num_h_slices", 1u},
             {"slice_Ht", Ht},
+            // Only the split pads past-the-end tiles, so these are inert here; the reader still
+            // names them unconditionally, so every build of it has to supply them.
+            {"padding_identity_bits", 0u},
+            {"elem_bytes", 0u},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     } else {

@@ -55,7 +55,11 @@ constexpr bool is_sfpu_reduce_path() {
         pool_type != ckernel::PoolType::MIN) {
         return false;
     }
-    if constexpr (data_format != DataFormat::Int32) {
+    // The FPU has no MIN pool, so a bf16 MIN that reaches a kernel at all has to run on the SFPU.
+    // fp32_mode is not consulted: it carries the Float32 accuracy opt-in, and the host expresses the
+    // bf16 fast/accurate choice upstream instead, by lowering fast-mode MIN to MAX + negate.
+    constexpr bool bf16_min = data_format == DataFormat::Float16_b && pool_type == ckernel::PoolType::MIN;
+    if constexpr (!bf16_min && data_format != DataFormat::Int32) {
         // pool_type is already narrowed to MAX/SUM/MIN above and all three have an SFPU fold, so
         // Float32 only has to opt in via Accurate mode. Everything else non-Int32 stays on the FPU.
         if constexpr (fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32) {
