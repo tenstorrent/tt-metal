@@ -519,52 +519,91 @@ python models/autoports/qwen_qwen3_6_27b/doc/decode_perf/prefill_state_seam_prob
 reports (before and after), both program-config sweeps, the logits A/Bs, the
 prefill-state seam comparison and the perf points.
 
-## CI
+## The layout audit, and three pre-existing failures
 
-The first dispatch pair, at `44e1aefadcc`, found a regression this document's
-local validation had missed. Enabling the fused conv changes `caches["conv"]`
-from the composite tiled `[1, batch, channels, kernel]` to the fused path's
-row-major `[batch, kernel, channels]` window, and two request-boundary methods in
-`model.py` were written against the composite layout only:
+Enabling the fused conv changes `caches["conv"]` from the composite tiled
+`[1, batch, channels, kernel]` to the fused path's row-major
+`[batch, kernel, channels]` window — a different rank, a different layout, and a
+different axis for the fixed slot. **Three** request-boundary paths were written
+against the composite layout only, and CI found the first two before this audit
+did:
 
-- `reset_slots` masked with a `(1, batch, 1, 1)` mask and an in-place elementwise
-  write; a preallocated row-major output is rejected, so it raised *"Optional
-  output tensor with Row Major input is not supported right now for Elementwise
-  operations"* and killed the vLLM EngineCore **on the first request**.
-  `vllm_tt_plugin` reaches it through `prefill_forward(empty_slots=...)`, so the
-  KDA-enabled serving path was broken end to end.
-- `remap_slots` indexed the conv slot axis as dim 1, which on the window is the
-  kernel axis.
+| path | what it did on the window | found by |
+| --- | --- | --- |
+| `reset_slots` | in-place elementwise write; a preallocated row-major output is rejected | CI evals `34395194736` |
+| `single_slot_prefill_view` | rank-4 slice start on a rank-3 tensor; axis 1 is the kernel, not the slot | CI evals `34404082346` |
+| `remap_slots` | addressed the kernel axis instead of the slot axis | this audit |
 
-Both now borrow the composite layout for the duration of the call, reusing the
-borrow/restore pair the prefill chunk already uses. Decode is 88.74 ms/token
-before and after, since these are request boundaries rather than the step.
+The first two killed the vLLM EngineCore on the first request. All three now
+borrow the composite layout for the duration of the call, reusing the
+borrow/restore pair the prefill chunk already uses. Because the narrowed view
+nests inside that chunk's own borrow, borrowing is now decided from the **live
+layout** — rank 3 means window, anything else means already composite and
+borrowing is a no-op — rather than from `linear_kda_decode_ready`, a static flag
+every caller keys off. Decode is 88.74 ms/token before and after; these are
+request boundaries, not the step.
 
-**Why the suite missed it, and the general lesson.** `full_model_mixed_slots.py`
-covers both methods and `vllm_reduced_target.py` covers the whole adapter
-lifecycle including `empty_slots` and `slot_remap` — but at batch 2, and the
-fused decode path needs `kernel * batch` tile aligned, so at batch 2 it never
+**Why the suite missed them, and the general lesson.**
+`full_model_mixed_slots.py` covers `reset_slots` and `remap_slots`, and
+`vllm_reduced_target.py` covers the whole adapter lifecycle — but at batch 2, and
+the fused decode path needs `kernel * batch` tile aligned, so at batch 2 it never
 engages. Every test that touched this state exercised the one layout the served
 batch does not use. That is the same shape of mistake as the per-layer harnesses
-passing no active mask: **a test pinned to a batch the model does not ship at is
-not testing the model.** Fixed by giving `vllm_reduced_target.py` a `--batch`
-(default 2, so its recorded behaviour is unchanged; `--batch 32` reports
-`fused_kda_decode=3/3` and all five checkpoints pass) and by adding
-`tests/slot_lifecycle_b32.py`, which asserts exact reset and exact remap at
-batch 32 with the fused conv live, and refuses to pass vacuously.
+passing no active mask, which is what sent the previous handoff chasing a phantom
+114 ms: **a test pinned to a batch or a call shape the model does not ship at is
+not testing the model.**
 
-**Also worth knowing: a crashed engine can report success.** Of the first pair,
-benchmarks `34395177910` went red, but evals `34395194736` reported
-**success** with a dead EngineCore — its `run-evals` job exited 0 after the
-traceback. The tell was the duration: 10 minutes for a model that needs ~15 just
-to stage and load weights. Do not read a green evals run as a passing model
-without checking the job duration and grepping the log for `EngineCore
-encountered a fatal error`.
+Fixed by giving `vllm_reduced_target.py` a `--batch` (default 2, so its recorded
+behaviour is unchanged; `--batch 32` reports `fused_kda_decode=3/3` and all five
+checkpoints pass) and by `tests/slot_lifecycle_b32.py`, which asserts all three
+paths exactly at batch 32 with the fused conv live. It refuses to pass vacuously:
+it fails if no layer took the fused path, if prefill left the state at zero, or
+if the narrowing view did not actually fire — it counts the invocations, because
+the view only engages for exactly one active row with batch > 1.
+
+### Pre-existing failures, not from this work
+
+Found while sweeping every device test that touches per-slot state. Each was
+re-run against the baseline commit `38153c48c8a` in an isolated sparse worktree
+(models only, so `ttnn` still loads from the built tree) and reproduces
+**bit-for-bit identically**, so none is caused by anything here:
+
+| test | failure | note |
+| --- | --- | --- |
+| `prefill_active_row_pcc.py --batch 8` | slot 1 `argmax_match=False` | `doc/ci_dispatch_qb2` records "argmax match: True, every slot"; linear-state PCC has also drifted from the recorded 0.99857-0.99904 to 0.9996. Likely window is `25d269f6ed7`, which changed the multichip prefill recurrence. |
+| `mixed_prompt_state.py` | `TT_FATAL: Invalid arguments to reshape`, `new_volume == old_volume`, in the composite prefill chunk's selector reshape | fused conv is off here (batch 2, `linear_final`), so it is unrelated to the conv work |
+| `linear_recurrent_state_transition.py --batch 1 --real-weights` | decode_5 0.9846, decode_7 0.9682 against HF | matches `doc/ci_dispatch_qb2`'s own ranked risk #1, "recurrent-state divergence at long context is unmeasured" |
+
+Everything else passed: `full_model_trace_lifecycle`,
+`multichip_linear_attention_smoke`, `multichip_stacked_decoder_smoke`,
+`full_attention_inactive_kv`, `linear_recurrent_state_transition --batch 32`
+(PCC 0.9999), `full_model_mixed_slots`, `check_conv_taps --multichip
+--active-mask --batch 32`, `multichip_traced_decode` (PCC 1.0), and both new
+tests.
+
+## CI
+
+**A crashed engine can report success.** Two evals runs reported job success with
+a dead EngineCore — `run-evals` exited 0 after the traceback. The tell is
+duration: 10 minutes, then 10 minutes, for a model that needs ~15 just to stage
+and load weights. The second also emitted an `r1_gpqa_diamond` score of **20
+against a published 89.2** — that is the dead engine, not a quality regression.
+Do not read a green evals run as a passing model without checking the job
+duration and grepping for `EngineCore encountered a fatal error`.
 
 | run | workflow | tt-metal | outcome |
 | --- | --- | --- | --- |
 | `34360774551` | benchmarks | `38153c48c8a` | pre-change baseline |
-| `34395177910` | benchmarks | `44e1aefadcc` | failure — the `reset_slots` regression |
-| `34395194736` | evals | `44e1aefadcc` | "success", engine dead |
-| `34404067300` | benchmarks | `2092bf3424d` | dispatched after the fix |
-| `34404082346` | evals | `2092bf3424d` | dispatched after the fix |
+| `34395177910` | benchmarks | `44e1aefadcc` | failure — `reset_slots` |
+| `34395194736` | evals | `44e1aefadcc` | "success", engine dead — `reset_slots` |
+| `34404067300` | benchmarks | `2092bf3424d` | failure — transient `git clone` TLS error in the image build, model never ran |
+| `34404082346` | evals | `2092bf3424d` | "success", engine dead — `single_slot_prefill_view` |
+| `34413443092` | benchmarks | `2092bf3424d` | cancelled once the same defect was known |
+| `34414429853` | evals | `e970b4f966d` | dispatched after all three fixes |
+| `34414440695` | benchmarks | `e970b4f966d` | dispatched after all three fixes |
+
+`34404067300` is worth one note of its own: the image build died in a `git clone`
+of tt-metal with `curl 56 GnuTLS recv error` / `fatal: early EOF`. The workflow's
+`docker-image` input skips the build, so the retry reused the image the evals run
+had just produced from the same SHA rather than rebuilding — which is also why
+`34413443092` reached the model in four minutes instead of seventy.
