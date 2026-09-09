@@ -2349,7 +2349,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 if (counter_type_raw >= QUASAR_L1_CLIENT_EVENT_BASE) {
                     l1_client_sel = counter_type_raw - QUASAR_L1_CLIENT_EVENT_BASE;
                     // Selections past the 37x8 mux are stale data; leave counter_type_raw out of range so it is skipped.
-                    if (*l1_client_sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS) {
+                    if (*l1_client_sel < QUASAR_L1_CLIENT_NUM_SELECTIONS) {
                         counter_type_raw = static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT);
                     }
                 }

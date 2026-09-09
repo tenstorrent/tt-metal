@@ -268,6 +268,7 @@ static_assert(UNPACK2_BUSY_THREAD0 <= 255, "PerfCounterType must leave 256 and u
 // Quasar's l1_client counter has 296 selections (subport*8 + event) behind one enum value. A record
 // carries QUASAR_L1_CLIENT_EVENT_BASE + selection in counter_type; the host maps it back.
 constexpr std::uint32_t QUASAR_L1_CLIENT_EVENT_BASE = 256;
+constexpr std::uint32_t QUASAR_L1_CLIENT_NUM_SELECTIONS = 37 * 8;  // subports x events, host-visible copy
 
 union PerfCounter {
     struct {
@@ -508,6 +509,9 @@ constexpr std::uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
 static_assert(
     QUASAR_L1_CLIENT_SEL < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS,
     "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event, below 296");
+static_assert(
+    QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS == QUASAR_L1_CLIENT_NUM_SELECTIONS,
+    "host copy of the l1_client selection count is stale");
 static_assert(
     QUASAR_L1_CLIENT_EVENT_BASE + QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS < (1u << 16),
     "l1_client encoding must fit the 16-bit counter_type");
