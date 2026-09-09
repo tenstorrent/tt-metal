@@ -30,7 +30,8 @@ The sequence is built on device without host round-trips:
 
 Because both selectors are plain tensors, ``DepthStepTrace`` captures one depth step (embed the
 previous code, project, scatter, forward, all seven heads) as a single trace and replays it for
-every step with only the small selector / code-id buffers rewritten.
+every step with only the small selector / code-id buffers rewritten; a second small trace seeds
+steps 0 / 1 from two persistent buffers, so a whole frame allocates nothing on device.
 """
 
 from __future__ import annotations
@@ -105,6 +106,26 @@ class DepthDecoder(LightweightModule):
             packer_l1_acc=False,
         )
         self.mem = ttnn.DRAM_MEMORY_CONFIG
+        self.l1 = ttnn.L1_MEMORY_CONFIG
+        # RMSNorm: the interleaved kernel parallelizes over tile rows and the padded sequence has
+        # only two, so it ran on 2 cores (75 us). Width-sharding the [64, 4096] activation over a
+        # 4x4 grid (shards [64, 256]) runs the norm on 16 cores in ~7 us plus two ~3 us resharding
+        # ops (measured with Tracy; 8x4 / 8x8 grids were slower because of per-op dispatch gaps).
+        norm_cores = 16
+        self.norm_mem = ttnn.create_sharded_memory_config(
+            shape=(ROWS, DEPTH_HIDDEN // norm_cores),
+            core_grid=ttnn.CoreGrid(y=4, x=4),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[4, 4],
+            subblock_w=4,
+            block_h=ROWS // TILE,
+            block_w=DEPTH_HIDDEN // norm_cores // TILE,
+            inplace=False,
+        )
         self.load_seconds = self._load_weights(state_dict)
 
     # ------------------------------------------------------------------ construction
@@ -218,7 +239,18 @@ class DepthDecoder(LightweightModule):
         )
 
     def _rms_norm(self, x: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.rms_norm(x, epsilon=DEPTH_NORM_EPS, weight=w, compute_kernel_config=self.compute_config)
+        xs = ttnn.interleaved_to_sharded(x, self.norm_mem)
+        y = ttnn.rms_norm(
+            xs,
+            epsilon=DEPTH_NORM_EPS,
+            weight=w,
+            program_config=self.norm_program_config,
+            compute_kernel_config=self.compute_config,
+        )
+        ttnn.deallocate(xs)
+        out = ttnn.sharded_to_interleaved(y, self.mem)
+        ttnn.deallocate(y)
+        return out
 
     def rows_to_device(self, x: torch.Tensor) -> ttnn.Tensor:
         """Host [B, 4096] (B <= 32) -> the padded ``[1, 1, 32, 4096]`` decode-row tensor."""
@@ -317,19 +349,23 @@ class DepthDecoder(LightweightModule):
         )
 
     def _attention(self, x: ttnn.Tensor, layer: dict) -> ttnn.Tensor:
-        qkv = self._linear(x, layer["wqkv"])  # [1, 1, 64, 12288]
+        # The head split / merge ops also run on 2 cores (one per batch row's single tile row);
+        # keeping their operands in L1 cuts them from 155 / 52 us to 113 / 38 us (Tracy).
+        qkv = ttnn.linear(
+            x, layer["wqkv"], compute_kernel_config=self.compute_config, memory_config=self.l1, dtype=self.dtype
+        )  # [1, 1, 64, 12288]
         qkv = ttnn.experimental.view(qkv, (LLM_BATCH, 1, SEQ_PAD, 3 * DEPTH_HIDDEN))  # zero-copy tile-aligned row split
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv, num_heads=DEPTH_HEADS, num_kv_heads=DEPTH_HEADS, transpose_k_heads=False, memory_config=self.mem
+            qkv, num_heads=DEPTH_HEADS, num_kv_heads=DEPTH_HEADS, transpose_k_heads=False, memory_config=self.l1
         )
         ttnn.deallocate(qkv)
         attn = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=True, compute_kernel_config=self.sdpa_compute_config, memory_config=self.mem
+            q, k, v, is_causal=True, compute_kernel_config=self.sdpa_compute_config, memory_config=self.l1
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.mem)  # [2, 1, 32, 4096]
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.l1)  # [2, 1, 32, 4096]
         attn = ttnn.experimental.view(attn, (1, 1, ROWS, DEPTH_HIDDEN))
         return self._linear(attn, layer["wo"])
 
@@ -403,14 +439,25 @@ class DepthDecoder(LightweightModule):
 
 
 class DepthStepTrace:
-    """One depth step as a single trace with fixed shapes.
+    """One depth step as a single trace with fixed shapes, plus a seeding trace for step 0/1.
 
     Per replay the host rewrites three small buffers: the scatter selector ``E`` (``[64, 32]``; all
     zero for the first step, which appends nothing), the code-id row (``[1, 32]`` uint32, offset
     table indices) and the gather selector ``SEL`` (``[32, 64]``). The trace embeds + projects the
     code, scatters it into the persistent sequence buffer, runs the stack and all seven heads, and
-    leaves the logits in a persistent output buffer. ``begin_frame`` seeds the sequence (steps 0
-    and 1) eagerly before the first replay.
+    leaves the logits in a persistent output buffer. ``begin_frame`` writes the backbone hidden and
+    the semantic-code embedding into two persistent seed buffers and replays a second, small trace
+    that projects and scatters them into steps 0 / 1 of the sequence.
+
+    Trace-lifetime contract: every device buffer this class touches is allocated in ``__init__``
+    (persistent inputs / outputs) or inside a capture (trace-owned intermediates). Nothing is
+    allocated after the captures, so replays never race a live post-capture buffer (tt-metal:
+    "Allocating device buffers is unsafe due to the existence of an active trace" - a buffer
+    allocated after capture must be dead before ``execute_trace``). Callers must keep the same
+    rule: a device tensor allocated after ``DepthStepTrace`` was built must not be alive across
+    ``step`` / ``begin_frame`` unless it is one of the persistent buffers; to seed from a device
+    tensor (stage 04: the backbone hidden), pass it to ``begin_frame`` and it is copied into the
+    persistent seed buffer with ``ttnn.copy`` (no allocation).
     """
 
     def __init__(self, decoder: DepthDecoder, cq_id: int = 0):
@@ -418,7 +465,10 @@ class DepthStepTrace:
         self.dev = decoder.mesh_device
         self.cq_id = cq_id
         d = decoder
+        # Persistent buffers (allocated before any capture).
         self.seq = d.new_sequence()
+        self.seed_hidden = d.rows_to_device(torch.zeros(LLM_BATCH, DEPTH_HIDDEN))
+        self.seed_semantic = d.rows_to_device(torch.zeros(LLM_BATCH, DEPTH_HIDDEN))
         self.scatter_buf = ttnn.clone(d.scatter_none, memory_config=d.mem)
         self.gather_buf = ttnn.clone(d.gather[1], memory_config=d.mem)
         self.ids_buf = d.code_ids_to_device(torch.zeros(LLM_BATCH, dtype=torch.int64), 1)
@@ -427,10 +477,30 @@ class DepthStepTrace:
         ]
         self._host_scatter_none = torch.zeros(1, 1, ROWS, TILE, dtype=torch.bfloat16)
         self._host_gather = [_one_hot_gather(s).reshape(1, 1, TILE, ROWS).to(torch.bfloat16) for s in range(MAX_STEPS)]
+        self.seed_trace_id = None
         self.trace_id = None
         self.hidden_out = None
         self.logits_out = None
         self._capture()
+
+    def _seed_graph(self):
+        d = self.d
+        first = ttnn.matmul(
+            d.scatter[0],
+            d.project(self.seed_hidden),
+            compute_kernel_config=d.compute_config,
+            memory_config=d.mem,
+            dtype=d.dtype,
+        )
+        second = ttnn.matmul(
+            d.scatter[1],
+            d.project(self.seed_semantic),
+            compute_kernel_config=d.compute_config,
+            memory_config=d.mem,
+            dtype=d.dtype,
+        )
+        seq = ttnn.add(first, second, memory_config=d.mem)
+        ttnn.copy(seq, self.seq)
 
     def _step_graph(self):
         d = self.d
@@ -446,9 +516,12 @@ class DepthStepTrace:
         return hidden, logits
 
     def _capture(self):
-        # Compile run (program cache) of the exact op sequence - including the two output copies -
-        # then capture. Any op first seen inside the capture would compile and load its kernels,
-        # which is a host write and fails the capture ("Writes are not supported during trace capture").
+        # 1. Compile runs (program cache) of BOTH exact op sequences - including the output copies -
+        #    before any capture: an op first seen inside a capture would compile and load its
+        #    kernels, which is a host write and fails the capture ("Writes are not supported during
+        #    trace capture"); and a compile run between two captures would allocate while a trace
+        #    is live (the allocator warning above).
+        self._seed_graph()
         hidden, logits = self._step_graph()
         self.hidden_out = ttnn.clone(hidden, memory_config=self.d.mem)
         self.logits_out = ttnn.clone(logits, memory_config=self.d.mem)
@@ -457,25 +530,39 @@ class DepthStepTrace:
         ttnn.synchronize_device(self.dev)
         ttnn.deallocate(hidden)
         ttnn.deallocate(logits)
+        # 2. Captures. Allocations inside a capture are trace-owned and fine.
+        self.seed_trace_id = ttnn.begin_trace_capture(self.dev, cq_id=self.cq_id)
+        self._seed_graph()
+        ttnn.end_trace_capture(self.dev, self.seed_trace_id, cq_id=self.cq_id)
         self.trace_id = ttnn.begin_trace_capture(self.dev, cq_id=self.cq_id)
         hidden, logits = self._step_graph()
         ttnn.copy(hidden, self.hidden_out)
         ttnn.copy(logits, self.logits_out)
         ttnn.end_trace_capture(self.dev, self.trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.dev)
-        # The compile + capture runs scattered garbage into self.seq; begin_frame resets it.
+        # The compile/capture runs used scatter_none, so self.seq is still the zero sequence; the
+        # seed replay in begin_frame overwrites it anyway.
 
     def _write(self, buf: ttnn.Tensor, host: torch.Tensor, dtype, layout):
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=dtype, layout=layout), buf, cq_id=self.cq_id)
 
-    def begin_frame(self, global_hidden: torch.Tensor, semantic_embed: torch.Tensor) -> None:
-        """Seed steps 0 and 1 (projected global hidden and semantic-code embedding) for a new frame."""
-        d = self.d
-        zeros = torch.zeros(1, 1, ROWS, DEPTH_HIDDEN, dtype=torch.bfloat16)
-        self._write(self.seq, zeros, d.dtype, ttnn.TILE_LAYOUT)
-        seq = d.place_step(self.seq, d.project(global_hidden), 0)
-        seq = d.place_step(seq, d.project(semantic_embed), 1)
-        ttnn.copy(seq, self.seq)
+    def _seed(self, buf: ttnn.Tensor, value: TensorLike) -> None:
+        if isinstance(value, torch.Tensor):
+            pad = torch.zeros(TILE, DEPTH_HIDDEN, dtype=torch.bfloat16)
+            pad[: value.shape[0]] = value.to(torch.bfloat16)
+            self._write(buf, pad.reshape(1, 1, TILE, DEPTH_HIDDEN), self.d.dtype, ttnn.TILE_LAYOUT)
+        else:
+            ttnn.copy(value, buf)  # a persistent [1, 1, 32, 4096] device row tensor (e.g. the backbone hidden)
+
+    def begin_frame(self, global_hidden: TensorLike, semantic_embed: TensorLike) -> None:
+        """Seed steps 0 / 1 (projected backbone hidden and semantic-code embedding) for a new frame.
+
+        Both arguments are host ``[2, 4096]`` tensors or ``[1, 1, 32, 4096]`` device row tensors.
+        Allocation-free: two buffer writes and one trace replay.
+        """
+        self._seed(self.seed_hidden, global_hidden)
+        self._seed(self.seed_semantic, semantic_embed)
+        ttnn.execute_trace(self.dev, self.seed_trace_id, cq_id=self.cq_id, blocking=False)
 
     def step(self, index: int, prev_code: Optional[torch.Tensor]) -> ttnn.Tensor:
         """Depth step ``index`` (1..7): append ``prev_code`` (codebook ``index - 1``, None for index 1), return all-head logits.
@@ -502,6 +589,8 @@ class DepthStepTrace:
         return t[:, (k - 1) * AUDIO_VOCAB_SIZE : k * AUDIO_VOCAB_SIZE]
 
     def release(self):
-        if self.trace_id is not None:
-            ttnn.release_trace(self.dev, self.trace_id)
-            self.trace_id = None
+        for attr in ("trace_id", "seed_trace_id"):
+            tid = getattr(self, attr)
+            if tid is not None:
+                ttnn.release_trace(self.dev, tid)
+                setattr(self, attr, None)

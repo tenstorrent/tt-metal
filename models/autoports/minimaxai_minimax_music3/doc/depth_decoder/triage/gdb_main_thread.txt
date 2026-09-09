@@ -1,0 +1,6 @@
+in tt::tt_metal::distributed::FDMeshCommandQueue::clear_expected_num_workers_completed(
+in tt::tt_metal::distributed::FDMeshCommandQueue::~FDMeshCommandQueue(
+in tt::tt_metal::distributed::FDMeshCommandQueue::~FDMeshCommandQueue(
+in tt::tt_metal::distributed::MeshDeviceImpl::close_impl(
+in tt::tt_metal::distributed::MeshDevice::close(
+in nanobind::detail::nb_func_vectorcall_complex(

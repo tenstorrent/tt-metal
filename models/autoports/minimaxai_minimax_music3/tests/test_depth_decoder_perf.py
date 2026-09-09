@@ -83,6 +83,7 @@ def test_eager_frame_perf(depth_decoder, frame_inputs):
 
     for _ in range(3):
         frame()
+        _drain_profiler(dev)  # keep the per-core profiler buffers from overflowing during warmup
     ttnn.synchronize_device(dev)
     _drain_profiler(dev)
     _signpost("PERF_DEPTH_EAGER")
@@ -109,8 +110,10 @@ def test_traced_frame_perf(depth_decoder, frame_inputs):
                 trace.step(index, None if index == 1 else r_codes[:, index - 2])
                 trace.logits_for(index)
 
+        _drain_profiler(dev)  # trace capture emitted many ops
         for _ in range(3):
             frame()
+            _drain_profiler(dev)
         ttnn.synchronize_device(dev)
         _drain_profiler(dev)
         _signpost("PERF_DEPTH_TRACED")

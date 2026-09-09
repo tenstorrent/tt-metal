@@ -16,6 +16,7 @@ Every PCC / timing is written to ``doc/depth_decoder/pcc/pcc_results.json``.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -38,6 +39,9 @@ DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "depth_decoder"
 
 
 def _record(name: str, **fields):
+    # Watcher / profiler runs inflate timings; they must not overwrite the committed evidence.
+    if os.environ.get("TT_METAL_WATCHER") or os.environ.get("TT_METAL_DEVICE_PROFILER"):
+        return
     out = DOC_DIR / "pcc"
     out.mkdir(parents=True, exist_ok=True)
     path = out / "pcc_results.json"
@@ -166,6 +170,54 @@ def test_golden_frame_depth_loop(depth_decoder, depth_ref, golden_frame):
     assert min(per_step) >= PCC_GOLDEN, per_step
 
 
+# ----------------------------------------------------------------------------- 2b. distinct batch rows
+def test_distinct_batch_rows(depth_decoder, depth_ref):
+    """Row 0 = golden frame 1, row 1 = golden frame 2: each row must reproduce ITS OWN golden depth hiddens.
+
+    Every other test feeds identical rows, which would hide a row copy / swap in the tile-aligned
+    row splits, the head split, or the one-hot selectors. Also checks per-row PCC vs the torch
+    reference for hidden and all heads.
+    """
+    root = R.reference_dir()
+    frame_hiddens = torch.load(root / "frame_hiddens.pt")
+    codes = torch.load(root / "sampled_codes.pt")
+    embed_weight = R.load_embed_weight()
+    frames = [0, 1]
+    g_hidden = torch.stack([frame_hiddens[0, f, :4096] for f in frames]).float()
+    s_embed = torch.stack([embed_weight[int(codes[f, 0]) + AUDIO_CODE_OFFSET] for f in frames]).float()
+    r_codes = torch.stack([codes[f, 1:] for f in frames])  # [2, 7]
+    golden = torch.stack(
+        [frame_hiddens[0, f, 4096:].reshape(NUM_CODEBOOKS - 1, 4096) for f in frames]
+    ).float()  # [2, 7, 4096]
+
+    ref_hiddens, ref_logits = REF.teacher_forced_depth_loop(depth_ref, g_hidden, s_embed, r_codes)
+    hiddens, logits = depth_decoder.teacher_forced_loop(g_hidden, s_embed, r_codes)
+    tt_h = torch.stack([DepthDecoder.rows_to_host(h) for h in hiddens], dim=1)  # [2, 7, 4096]
+    tt_l = torch.stack([DepthDecoder.rows_to_host(l) for l in logits], dim=1)  # [2, 7, 1024]
+    ref_h = torch.stack(ref_hiddens, dim=1)
+    ref_l = torch.stack(ref_logits, dim=1)
+    per_row_golden = [_pcc(golden[b].flatten(), tt_h[b].flatten()) for b in range(2)]
+    per_row_ref_hidden = [_pcc(ref_h[b].flatten(), tt_h[b].flatten()) for b in range(2)]
+    per_row_ref_logits = [min(_pcc(ref_l[b, i], tt_l[b, i]) for i in range(NUM_CODEBOOKS - 1)) for b in range(2)]
+    # The two rows must actually differ (otherwise the test proves nothing) and must not be swapped.
+    swapped = _pcc(golden[1].flatten(), tt_h[0].flatten())
+    logger.info(
+        f"distinct rows: per-row PCC vs own golden {per_row_golden}, vs ref hidden {per_row_ref_hidden}, "
+        f"min head logits {per_row_ref_logits}, row0-vs-row1-golden {swapped:.4f}"
+    )
+    _record(
+        "distinct_batch_rows_frames_1_2",
+        per_row_pcc_vs_own_golden=per_row_golden,
+        per_row_hidden_pcc_vs_ref=per_row_ref_hidden,
+        per_row_min_head_logits_pcc_vs_ref=per_row_ref_logits,
+        row0_vs_row1_golden_pcc=swapped,
+    )
+    assert swapped < 0.9, swapped
+    assert min(per_row_golden) >= PCC_GOLDEN, per_row_golden
+    assert min(per_row_ref_hidden) >= PCC_LAYER, per_row_ref_hidden
+    assert min(per_row_ref_logits) >= PCC_LAYER, per_row_ref_logits
+
+
 # ----------------------------------------------------------------------------- 3. determinism
 def test_determinism(depth_decoder, golden_frame):
     g = golden_frame
@@ -186,14 +238,25 @@ def test_determinism(depth_decoder, golden_frame):
 
 
 # ----------------------------------------------------------------------------- 4. traced step vs eager + perf
-def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame):
-    """``DepthStepTrace`` (one trace per depth step) reproduces the eager loop and is timed per 7-step frame."""
+def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame, capfd):
+    """``DepthStepTrace`` (one trace per depth step) reproduces the eager loop and is timed per 7-step frame.
+
+    Also asserts the frame is allocation-free after capture: tt-metal's "Allocating device buffers
+    is unsafe due to the existence of an active trace" warning must not appear (it is printed once
+    per device on the first post-capture allocation).
+    """
     g = golden_frame
     eager_hiddens, eager_logits = depth_decoder.teacher_forced_loop(
         g["global_hidden"], g["semantic_embed"], g["residual_codes"]
     )
     eager_logits = [DepthDecoder.rows_to_host(l) for l in eager_logits]
 
+    # Persistent device inputs exist BEFORE the traces are built (stage-04 pattern: the backbone's
+    # hidden buffer outlives the depth trace); nothing may be allocated on device after this line
+    # until the traces are released.
+    dev_hidden = depth_decoder.rows_to_device(g["global_hidden"])
+    dev_semantic = depth_decoder.rows_to_device(g["semantic_embed"])
+    capfd.readouterr()  # drop everything logged so far
     trace = DepthStepTrace(depth_decoder)
     try:
 
@@ -214,6 +277,13 @@ def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame):
         # Second frame must not see state from the first one.
         traced2 = run_frame()
         assert all(torch.equal(a, b) for a, b in zip(traced, traced2))
+        # Seeding from persistent device row tensors (stage 04: the backbone hidden) is bit-identical.
+        trace.begin_frame(dev_hidden, dev_semantic)
+        traced3 = []
+        for index in range(1, NUM_CODEBOOKS):
+            trace.step(index, None if index == 1 else g["residual_codes"][:, index - 2])
+            traced3.append(trace.logits_for(index))
+        assert all(torch.equal(a, b) for a, b in zip(traced, traced3))
 
         # Perf: warmed frames (7 traced steps + per-step logits read-back), host wall time.
         for _ in range(3):
@@ -227,6 +297,12 @@ def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame):
         traced_ms = (time.perf_counter() - t0) / n * 1e3
     finally:
         trace.release()
+    captured = capfd.readouterr()
+    unsafe = [l for l in (captured.err + captured.out).splitlines() if "Allocating device buffers is unsafe" in l]
+    assert not unsafe, unsafe
+    ttnn.deallocate(dev_hidden)
+    ttnn.deallocate(dev_semantic)
+    _record("traced_frame_allocation_free", no_unsafe_allocation_warning=True)
 
     # Eager counterpart.
     for _ in range(3):
