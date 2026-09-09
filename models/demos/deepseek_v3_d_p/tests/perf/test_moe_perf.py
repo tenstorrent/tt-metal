@@ -36,6 +36,9 @@ _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and p
 # which are TorusXY; re-point it when bh_sc1 is ring-cabled and test_mistral4_moe follows.
 _MISTRAL4_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe"
 _CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4' --wrapper-invocation"
+# SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs, and the only shape a Tracy-capable CI
+# workflow can host -- blaze builds without Tracy, and an (8,1) row cannot run on a Galaxy.
+_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1' --wrapper-invocation"
 
 # Migration starting threshold, NOT a gate. Measured 2026-09-04 on bh-glx-120-b03u02, unwrapped
 # FABRIC_2D, DDR 14000, single run: 2_661_495 ns, split Combine 615_339 / Dispatch 595_076 /
@@ -45,6 +48,8 @@ _CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabr
 # test_mla_perf.py: local, one run, DDR 14000 against baselines cut at 16000 -- and here also a
 # different fabric from every sibling row. Replace BOTH with the first CI result on this fabric.
 _MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
+# Placeholder until the first CI LoudBox sample; see test_mistral4_moe_perf_loudbox.
+_MISTRAL4_MOE_LB_8X1_NS_UNCALIBRATED = 4_000_000
 _RECORD_ONLY_MARGIN = 10.0
 
 
@@ -165,4 +170,28 @@ def test_mistral4_moe_perf_galaxy():
         batch_size=1,
         margin=_RECORD_ONLY_MARGIN,
         comments="isl5k_glx_8x4_fabric2d_record_only",
+    )
+
+
+@pytest.mark.timeout(0)
+def test_mistral4_moe_perf_loudbox():
+    """Mistral Small 4 MoE at the PP=4 stage shape (SP=8 x TP=1) on the CI LoudBox.
+
+    This is the op-level row that matches what PP=4 actually runs. The 8x4 galaxy row measures the
+    single-rank shape, and its lever ranking does not carry across: collectives are ~21% of a layer
+    at TP=4 and 0.2% at TP=1, and MoE routing goes 26% -> 37%.
+
+    UNCALIBRATED: the threshold below is a placeholder and the margin admits any measurement, so this
+    reports rather than gates. Re-cut both from the first CI LoudBox sample and record the run number
+    here, the way the DeepSeek row above was cut.
+    """
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_8X1,
+        expected_device_perf_ns_per_iteration=_MISTRAL4_MOE_LB_8X1_NS_UNCALIBRATED,
+        subdir="mistral4_moe",
+        model_name="mistral4_moe_lb_8x1_torus_y",
+        num_iterations=1,
+        batch_size=1,
+        margin=_RECORD_ONLY_MARGIN,
+        comments="isl5k_lb_8x1_torus_y",
     )
