@@ -236,24 +236,33 @@ PinLimits query_pin_limits(const std::shared_ptr<tt::tt_metal::distributed::Mesh
 // Reads every word rather than only the connected ones: the unconnected are zero, the line is
 // one cache line either way, and taking a peer list here would make a hot-path read depend on
 // state that can change.
+//
+// MASKED TO THE LOW 32 BITS, because the high half of each word now carries that peer's measured
+// turnaround (see credit_pack in host_uva_layout.hpp). Summing the raw words would add ~10^6 to
+// the count per credit and the send gate would open on the first message and never close.
 inline uint64_t credit_total(const HostRegion& region, uint32_t core) {
     uint64_t sum = 0;
     for (uint32_t p = 0; p < kMaxCreditPeers; ++p) {
-        sum += load_acquire(region.reg_at(credit_word_offset(core, p)));
+        sum += credit_count_of(load_acquire(region.reg_at(credit_word_offset(core, p))));
     }
     return sum;
 }
 
-// A credit means the peer consumed the message and freed its RX control slot, so `credit >= n`
-// is "n messages have landed over there". Monotonic and idempotent, so a sampled read cannot
-// see a torn or receding value. This is the same evidence fabtests collects per window with
-// its 4-byte ack (bw_tx_comp -> ft_rx(FT_RMA_SYNC_MSG_BYTES)), gathered once instead.
+// The turnaround one PEER reported with its most recent credit for this core, in nanoseconds on
+// THAT PEER'S clock. Not summed and not averaged across peers -- it belongs to one message, and
+// the only caller that can use it is the sender of that message, which knows which peer it went
+// to.
 //
-// It closes the bandwidth interval on a --symmetric SENDING side, which receives nothing and
-// whose own counters can only say "posted". SHARED by both programs rather than copied: it
-// was private to t6_host_uva.cpp, so the replica had no way to close its bracket on a tx-only
-// run at all (TODO.md T10).
-//
+// Zero means "no credit from this peer yet", which is indistinguishable from a genuinely
+// zero turnaround. The caller treats zero as absent, which is right: deliver_to_l1 brackets a
+// PCIe write and a doorbell, so a true zero does not occur.
+inline uint64_t credit_turnaround_ns(const HostRegion& region, uint32_t core, uint32_t peer_host) {
+    if (peer_host >= kMaxCreditPeers) {
+        return 0;
+    }
+    return credit_turnaround_of(load_acquire(region.reg_at(credit_word_offset(core, peer_host))));
+}
+
 // Returns false on timeout, and the caller reports rather than aborts: a drain that timed out
 // means the interval is wider than intended, which weakens a number without invalidating a run.
 inline bool drain_credits(HostRegion& region, uint32_t cores, uint64_t want, uint64_t budget_ns,

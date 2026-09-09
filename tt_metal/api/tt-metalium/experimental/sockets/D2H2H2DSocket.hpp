@@ -42,31 +42,26 @@
 
 namespace tt::tt_metal::experimental {
 
-// Operand layout. Named rather than indexed at every use site: "operand[2]" appearing in four
-// files is how a producer and a consumer end up disagreeing about which register holds the
-// length. These are the SAME indices the device kernel writes and the tt-direct driver reads
-// -- the kernel is shared between programs, so they are not this file's to choose.
+// Operand layout
 enum : uint32_t {
     kArgDestUva = 0,     // TX: where these bytes are going
     kArgLength = 1,      // TX and RX: how many bytes
     kArgElapsed = 2,     // running sum of every stage measured so far
-    // SLOT 3 IS OVERLOADED AND BOTH USES ARE LIVE. On the TX/immediate form the kernel
+    // Slot 3 is overloaded. On the TX/immediate form the kernel
     // writes its own core index here (host_scan.cpp reads region reg 3); on an RX store
     // notice the same slot carries the DESTINATION UVA (host_scan.cpp reads it from
-    // kNoticeUvaOffset, service_rx reads it back as dest_uva). The old comment said "which
-    // core to reply to on a round trip", which is the one use that is dead -- do not delete
-    // this constant on the strength of that.
+    // kNoticeUvaOffset, service_rx reads it back as dest_uva).
     kArgOriginCore = 3,
     kArgCount = 4,
 };
 
 struct SocketConfig {
-    // THE VOLUME LADDER, or null. Owned by the caller and must outlive the socket -- it is
+    // volume ladder, or null. Owned by the caller and must outlive the socket -- it is
     // handed straight to ScanConfig, which hands it to every worker.
     const VolumeLadder* ladder = nullptr;
     LadderSync* ladder_sync = nullptr;  // non-null only when quiescing
 
-    // THE PAYLOAD THIS RUN CARRIES. Needed only to size the receive-slot sweep: the number of
+    // Payload. Needed only to size the receive-slot sweep: the number of
     // slots a message of this size leaves in an arena is what the scanner should look at, not
     // the maximum.
     uint32_t payload_bytes = 0;
@@ -76,10 +71,10 @@ struct SocketConfig {
     bool pin = true;
     bool roundtrip = false;
 
-    // `send_window` 0 means unset -> cores-in-use, the behaviour before the knob existed; `send_blocking` selects
-    // post-and-wait and implies a window of 1. The window caps CONCURRENCY; the shape decides
+    // `send_window` 0 means unset -> cores-in-use; `send_blocking` selects
+    // post-and-wait and implies a window of 1. The window caps concurrency; the shape decides
     // whether the thread parks or spins. A window of 1 is NOT the blocking sender -- it gives
-    // the blocking sender's concurrency while still spinning in try_wait() and still SKIPPING
+    // the blocking sender's concurrency while still spinning in try_wait() and still skipping 
     // on an unreturned credit. Keeping them separate is what lets one measurement tell the two
     // causes apart.
     uint32_t send_window = 0;
@@ -96,29 +91,53 @@ struct SocketConfig {
     // entirely, which is what hid it.
     uint64_t warmup_msgs = 0;
 
+    // Credit RTT (h2h:credit-raw and h2h:net). Off by default, for the same reason
+    // TransportConfig::measure_retire is: it adds work to the SENDER THREAD, which is this
+    // path's measured bottleneck (a bandwidth run must not pay for a number it does not print)
+    //
+    // The cost is one credit_total() read per IN-FLIGHT message per lap -- the pass skips
+    // unarmed watches on a bool. At --send-window 1, where h2h:net is the only place it means
+    // anything, that is one cache line per lap.
+    //
+    // hop_window_ns is an elapsed span (max close - min open), not a sum of accounted work; there
+    // is no line item to remove, and removing a per-thread duration from a wall-clock envelope is
+    // the S/T-into-S/W confusion this file was rebuilt to eliminate.
+    bool measure_credit = false;
+
     double ns_per_cycle = 0.0;  // 0 => a cycles-flagged accumulator contributes no sample
 };
 
 // Everything the path counts. Atomics because scan workers, the sender thread and the caller's
 // shutdown wait all read and write them concurrently.
 //
-// THREE SEPARATE BARRIERS, AND COLLAPSING ANY PAIR ENDS RUNS SHORT.
 //   tx_done    outbound TX jobs finished servicing -- what a producer waits on before
 //              re-arming. NOT the scanner's job total: one message produces two serviced jobs
 //              (the TX and the RX delivery), so a producer watching the total sees its target
 //              met at double rate and never waits (measured 134/160, 149/160).
 //   delivered  bytes written into a Tensix L1.
 //   (home_done / replies REMOVED -- the round-trip barrier they served went with libfabric.
-//    Nothing incremented them; every reader saw a structural 0. TODO_D2H2H2D.md P6.)
+//
 struct SocketCounters {
     std::atomic<uint64_t> routed_local{0};
     std::atomic<uint64_t> routed_remote{0};
     std::atomic<uint64_t> routed_nowhere{0};
     std::atomic<uint64_t> delivered{0};
     std::atomic<uint64_t> tx_done{0};
-    // std::atomic<uint64_t> home_done{0};   <- never incremented anywhere
-    // std::atomic<uint64_t> replies{0};     <- never incremented anywhere
     std::atomic<uint64_t> errors{0};
+    // flush_slots/flush_calls is how many payloads one MPI_Win_flush retired. The flush is a full
+    // round trip, so the whole point of the kPayloadLocal phase is to divide that cost across a
+    // lap's worth of messages -- but nothing checked that it actually does. A ratio near 1 means
+    // every message is paying its own round trip and the batching is not happening.
+    std::atomic<uint64_t> flush_calls{0};
+    std::atomic<uint64_t> flush_slots{0};
+    //   credit_net_no_resp   the credit carried a zero turnaround -- an old peer, or a credit
+    //                        posted from a path that has no measurement to report.
+    //   credit_net_skew      resp >= raw: the peer claims to have spent longer on the delivery
+    //                        than we spent waiting for the whole round trip. Physically
+    //                        impossible, so it is evidence of clock skew and the sample is
+    //                        DROPPED rather than published as a negative or clamped to zero.
+    std::atomic<uint64_t> credit_net_no_resp{0};
+    std::atomic<uint64_t> credit_net_skew{0};
     std::atomic<uint64_t> rejects[8];
 
     SocketCounters() {
@@ -144,9 +163,7 @@ struct SocketCounters {
 // ---------------------------------------------------------------------------
 // Sending must not happen on a scan thread. The send path waits on completions, and a worker
 // inside it is a worker not scanning -- so it cannot DELIVER the peer's inbound traffic, so
-// the peer never returns the credit it is waiting for. At one core the pool has one worker and
-// the stall is total: measured delivered=0 with ~129k scans in 15 s, where an unblocked worker
-// does 100M+. Hence one dedicated sender thread.
+// the peer never returns the credit it is waiting for.
 //
 // ONE sender thread, not one per worker: the transport is ONE endpoint with ONE request table,
 // already serialised inside itself, so a second thread would add contention rather than
@@ -206,7 +223,7 @@ public:
 
     Transport& transport() const { return transport_; }
 
-    // EXTRA PEERS FOR A MESH, registered before open(). The constructor takes one transport
+    // Registered before open(). The constructor takes one transport
     // because at two hosts there is exactly one; a mesh passes the first as that primary and
     // the rest through here. Must be called before open() -- open() builds the table from them
     // and the sender thread reads it without synchronisation afterwards.
@@ -248,7 +265,10 @@ private:
     uint64_t deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t stage, uint64_t& stage_ns,
                            bool rec);
 
-    uint64_t elapsed_ns_of(const Job& job, bool& usable) const;
+    // `visibility_ns` receives the read-back half of the split elapsed operand -- the cost of
+    // PROVING the push landed, which is inside the returned total. Zero when the probe was not
+    // armed or the message predates kFlagElapsedSplit.
+    uint64_t elapsed_ns_of(const Job& job, bool& usable, uint64_t& visibility_ns) const;
 
     // ---- the middle hop --------------------------------------------------
 
@@ -262,16 +282,25 @@ private:
 
     // A credit for a remotely-armed notice: the sender cannot see its slot is free any other
     // way. The credit has to name a peer as well as a core.
-    void return_credit(uint32_t origin_selector);
+    // `turnaround_ns` is the kHopRemoteHostToRemoteT6 delta we just measured for the message
+    // being credited, on OUR clock. It rides home in the credit word so the sender can subtract
+    // it from its own post -> credit-visible bracket -- tt-fabric's responder pattern. See
+    // credit_pack().
+    void return_credit(uint32_t origin_selector, uint64_t turnaround_ns);
 
     // ---- shared helpers --------------------------------------------------
     void fail(const std::string& what);
     void retire_tx(uint32_t core);
     static void add_sample(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns);
     static void add_sample_with_size(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t amt);
-    // The hop's sample plus the payload that crossed it, under the one warmup gate. Feeds the
-    // stripped CSV's bandwidth column; see basic_csv_header().
+    // The hop's sample plus the payload that crossed it, under the one warmup gate.
     static void add_sample_with_payload(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t payload);
+    // The same, plus the ELAPSED WINDOW that contains those bytes -- which is the denominator a
+    // bandwidth needs. Four fields behind one bool, for the reason add_sample() gives: a leg
+    // whose bytes and window came from two differently-gated sites would divide one population
+    // by another's clock. See Span and basic_csv_header().
+    static void add_sample_with_window(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns,
+                                       uint64_t payload, uint64_t open_ns, uint64_t close_ns);
     bool recording() const { return recording_.load(std::memory_order_relaxed); }
 
     bool recording_now();
@@ -295,8 +324,7 @@ private:
         uint32_t dest_host = 0;
     };
 
-    // A message in flight, per core. Three phases because the payload must be IN THE PEER'S
-    // MEMORY before its notice is posted -- that is what puts the bytes ahead of the trigger.
+    // A message in flight, per core. 
     struct SendSlot {
         // kPayloadLocal sits BETWEEN the other two, and it exists because those are two different
         // facts. MPI_Rput's handle retires when THIS host is done with the TX arena; it promises
@@ -306,7 +334,8 @@ private:
         // So the flush is amortised over every slot sitting in this phase at once -- which is why
         // it is a phase rather than a call inside send_poll(). Flushing where the notice is armed
         // would put a full round trip on each message; flushing per lap divides one round trip by
-        // the send window. See sender_loop().
+        // the send window (sender_loop())
+	//
         enum Phase : uint8_t { kIdle = 0, kAwaitPayload = 1, kAwaitNotice = 2, kPayloadLocal = 3 };
         uint8_t phase = kIdle;
         SendReq r{};
@@ -323,6 +352,23 @@ private:
         // tail pointer and no lap check.
         uint32_t rx_slot = 0;
     };
+
+    // Single outstanding credit measurement per core, and one is all a core can have: its
+    // destination has a single RX control word, so a second message cannot be armed until the
+    // first is credited.
+    //
+    // Armed when the notice retires (we know the message's absolute count there) and disarmed by
+    // the sender loop's credit pass. Owned by the sender thread ALONE: nothing else reads or
+    // writes it, which is why it needs no lock and no atomics.
+    struct CreditWatch {
+        bool armed = false;
+        bool timed = false;      // the message passed the straddler test when it was posted
+        uint64_t want = 0;       // credit_total(core) must reach this
+        uint64_t t0 = 0;         // when the payload was posted -- the same t0 the h2h rows use
+        uint64_t length = 0;
+        uint32_t dest_host = 0;  // whose turnaround word to read back
+    };
+    std::vector<CreditWatch> credit_watch_;
 
     void sender_loop();
     bool send_try_start(SendSlot& slot, uint32_t core, WorkerStats& ws, bool rec);
@@ -350,9 +396,7 @@ private:
 
     // Per-core state. Sized to the provisioned maximum rather than cfg_.cores so an
     // out-of-range core index from a corrupt operand indexes a real slot instead of running
-    // off the end. PER (PEER, CORE) since wire v2: a credit is an ABSOLUTE count written by
-    // the receiver, so with one shared word several peers report the last writer and never the
-    // total, and the gate stops opening the moment a core changes destination.
+    // off the end. 
     std::vector<std::vector<std::atomic<uint64_t>>> credit_out_;  // remote deliveries echoed back
     std::vector<std::atomic<uint64_t>> delivered_per_core_;       // the value rdma_signal carries
     // Single delivery at a time per core. The H2D endpoint, its write pointer and the per-core
@@ -384,9 +428,8 @@ private:
     std::atomic<bool> transport_failed_{false};
 
     // Each core has a single queue. A destination core has one RX control word, so at most one message
-    // may be outstanding to it; per-core queues make that STRUCTURAL rather than a check, which
-    // is what lets the sender hold a window across cores. It also removes the head-of-line
-    // stall where one core's unreturned credit parked every other core's sends.
+    // may be outstanding to it; (per-core queues) lets the sender hold a window across cores. It also
+    // removes the head-of-line stall where one core's unreturned credit parked every other core's sends.
     std::mutex send_m_;
     std::condition_variable send_cv_;
     std::vector<std::deque<SendReq>> send_q_;  // indexed by src_core

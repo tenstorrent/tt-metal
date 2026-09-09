@@ -194,18 +194,6 @@ std::string format_table(const RunStats& s) {
         o << line;
     }
 
-    // THE DIAGNOSTIC ROWS, WHICH USED TO BE COMPUTED AND THEN DROPPED ON THE FLOOR.
-    //
-    // This loop runs from kHopStageCount to kHopCount and did not exist. Every diag:* hop was
-    // accumulated, written to the CSV, and never printed -- so `run_point`'s `ret=` column in
-    // run_sweep_{server,peer}.sh, which greps stdout for "^  diag:h2h-retire", matched nothing
-    // and printed "-" on EVERY point of every campaign these scripts have ever run. The
-    // extraction was written against a table that does not print what it is looking for.
-    //
-    // diag:h2h-retire is the one that matters and is the reason this is worth fixing: on verbs
-    // `host->remote_host` brackets the POST ONLY (a descriptor handoff, flat in payload size),
-    // so the transfer itself is invisible unless this row is readable. Reading the post as a
-    // transfer is what produced the 240 GB/s figure the CSV now writes empty.
     {
         bool any = false;
         for (uint32_t h = kHopStageCount; h < kHopCount; ++h) {
@@ -297,10 +285,6 @@ std::string format_table(const RunStats& s) {
             s.total_found() ? 100.0 * static_cast<double>(s.total_stolen()) / static_cast<double>(s.total_found())
                             : 0.0);
         o << line;
-        // CREDIT-BOUND OR POST-BOUND? Printed next to the stealing figures because it is the
-        // same question one level down: stealing says whether workers are balanced, this says
-        // whether the send path can proceed at all. Ratio against `found`, since one skip per
-        // message is normal pacing and many skips per message is the credit ladder throttling.
         if (s.total_tx_credit_skips() > 0) {
             std::snprintf(line, sizeof(line),
                           "  tx credit skips %" PRIu64 " (%.1f per message serviced) -- armed TX banks\n"
@@ -344,8 +328,6 @@ std::string format_table(const RunStats& s) {
         o << line;
     }
 
-    // THE BANDWIDTH LINE, laid out like fabtests' show_perf() so the two can be read side by
-    // side against `fi_rma_bw` on the same NIC pair. Same columns, same MB = 10^6 bytes.
     if (s.timed_ns > 0 && s.total_timed_bytes() > 0) {
         const double usec = static_cast<double>(s.timed_ns) / 1e3;
         const uint64_t xfers = static_cast<uint64_t>(s.timed_iters) * s.cores * s.xfers_per_iter;
@@ -355,16 +337,11 @@ std::string format_table(const RunStats& s) {
                       "  %-8u%-8u%-10.2f%10s%10.2f%13.2f%13.4f\n",
                       "bytes", "iters", "total_MB", "time", "MB/sec", "usec/xfer", "Mxfers/sec",
                       s.payload_bytes, s.timed_iters, static_cast<double>(s.total_timed_bytes()) / 1e6,
-                      // auto_unit rather than fabtests' fixed "%8.2fs": their runs are seconds
-                      // long by construction (size_to_count picks 200-20,000 iterations), and a
-                      // short run here would print 0.00s for a perfectly good measurement.
                       auto_unit(static_cast<double>(s.timed_ns)).c_str(), s.timed_mb_per_s(),
                       xfers > 0 ? usec / static_cast<double>(xfers) : 0.0,
                       xfers > 0 ? static_cast<double>(xfers) / usec : 0.0);
         o << line;
-        // A named local rather than a conditional on `.c_str()`: the temporary string would
-        // survive the call, but only just, and it is the kind of expression that stops being
-        // correct the moment someone hoists it.
+
         const std::string window_str = s.window ? std::to_string(s.window) : std::string("per-core credit");
         std::snprintf(line, sizeof(line),
                       "  %u core%s x %u xfer%s/iter, warmup %u discarded, window %s, sender %s\n"
@@ -378,18 +355,11 @@ std::string format_table(const RunStats& s) {
              "  The wall figure above spans setup and teardown too, so it is a floor, not a rate.\n";
     }
 
-    // LAST, so it is the final thing on stdout rather than something to scroll back for. A row
-    // built from the wrong population invalidates every comparison made against it, so it
-    // belongs after the numbers it disqualifies, not above them.
     o << sample_count_warning(s);
 
     return o.str();
 }
 
-// EVERY DURATION IN ALL THREE UNITS, as asked. Derived columns rather than a unit flag:
-// a spreadsheet that has to multiply by 1000 is a spreadsheet where someone eventually
-// multiplies the wrong column, and these files are meant to be compared across runs and
-// machines.
 std::string csv_header() {
     return "tag,mode,provider,payload_bytes,cores,iters,workers,stage,stage_index,is_stage,clock_domain,"
            "count,"
@@ -399,79 +369,15 @@ std::string csv_header() {
            "rel_sd,uncertainty_ns,below_uncertainty,"
            "mb_per_s_mean,mb_per_s_best,wall_mb_per_s,"
            "messages,delivered,total_bytes,wall_ns,stolen,clock_overhead_ns,"
-           // APPENDED, NOT INSERTED. Anything already pivoting these files by column
-           // position keeps working; only readers that want the new fields need to change.
-           //
-           // run_id/run_started_utc: rows APPEND across invocations, and without an id the
-           //   only way to separate runs is position in the file. See ANALYSIS.md B.2.1 --
-           //   that is how a 1.945x bimodality in stage 1 hid inside a provider comparison.
-           // role/host_ident/symmetric/tx_side: stages 1-2 are recorded by the sender and
-           //   stage 3 plus the total by the receiver, in different processes and files.
-           // warmup/warmup_applied: two different facts, and they used to disagree.
-           // ns_per_cycle/device_clock_ghz: the scalar that converted stage 1 out of cycles.
            "run_id,run_started_utc,role,host_ident,symmetric,tx_side,"
            "warmup,warmup_applied,ns_per_cycle,device_clock_ghz,"
-           // THE COMPLETION-BOUNDED BRACKET. `timed_mb_per_s` is the only bandwidth in this
-           // file; every other rate column is per-hop and now EMPTY wherever the hop's
-           // interval does not contain the bytes (rate_is_bandwidth=0). See
-           // hop_rate_is_bandwidth() and MEASURING-BANDWIDTH.md.
-           //
-           // These are per-RUN values repeated on every row, like wall_ns above: the file is
-           // one row per hop, and a reader grouping by run_id gets the same constant from
-           // whichever row it happens to hold.
            "rate_is_bandwidth,timed_ns,timed_bytes,timed_mb_per_s,timed_iters,xfers_per_iter,window,"
-           // PER-ROW, unlike `warmup`/`warmup_applied` beside it, which are run-level and say
-           // only that a warmup was configured. Three rows used to ignore the gate while
-           // carrying warmup_applied=1, so the file asserted something false about them. See
-           // hop_samples_warmup_gated().
            "samples_warmup_gated,"
-           // BYTES THIS HOP PUT ON THE WIRE, and the rate that follows from them. Written only
-           // for hops that call add_sample_with_size(); EMPTY, not 0, everywhere else, so a
-           // reader cannot mistake "this hop does not track it" for "this hop moved nothing".
-           //
-           // wire_mb_per_s divides these bytes by THIS HOP's own duration, so it is subject to
-           // the same caveat as every other per-hop rate -- it is a rate only where the bytes
-           // actually crossed inside the interval (rate_is_bandwidth). It is here because the
-           // gap between it and a payload-derived rate is the per-message protocol overhead,
-           // which is 2x at a 32 B payload and nothing at 1 MiB, and no column showed it.
            "wire_bytes,wire_mb_per_s,"
-           // WHICH H2D IMPLEMENTATION. Appended like everything above it. See RunStats::h2d
-           // for why the filename was not a good enough record of this.
            "h2d,"
-           // WHICH SENDER SHAPE. Appended, not inserted, for the same reason as everything
-           // above it. Pairs with `window`: the two are independent knobs and a file that
-           // records only one of them cannot distinguish "one in flight, spinning" from
-           // "one in flight, parked" -- which is the whole question the shapes exist to
-           // answer. See RunStats::sender_shape.
            "sender_shape\n";
 }
 
-// EVERY ROW OF A RUN HOLDS ONE POPULATION, AND NOTHING CHECKED THAT UNTIL NOW.
-//
-// hop_samples_warmup_gated() is a hand-maintained table that returns true for everything, so
-// it records an intention; this function tests the consequence. The two are not the same
-// thing and the difference has cost real numbers twice:
-//
-//   * Three rows spanned the whole run while the stages beside them spanned the timed window
-//     (diag:decode, diag:h2h-retire, and half of diag:steal-wait). Every one of them was
-//     found by comparing sample counts -- none of them could fail a run, and the CSV said
-//     warmup_applied=1 on all of them alike.
-//   * diag:h2h-retire at 256 B on verbs reports 25.8 us built from ONE sample where every
-//     sibling row holds 100. It reproduces across three campaigns, it carries
-//     samples_warmup_gated=1, and the point PASSes. 2.3x its neighbours off 1% of the
-//     population, and nothing anywhere said so.
-//
-// MODAL RATHER THAN DERIVED, deliberately. The obvious check is against
-// timed_iters * cores * xfers_per_iter, but that number is right only for the modes and roles
-// where it is right, and a check that is wrong in a corner cries wolf until it gets deleted.
-// The mode of the observed counts needs no such knowledge: whatever the population should
-// have been, the rows should agree on it, and the outlier is the row that does not.
-//
-// TWO TIERS, because the tolerances differ by three orders of magnitude. A few samples of
-// disagreement is the documented gate-flip race -- the scanner reads the flag just before the
-// service path sets it (ANALYSIS.md B.1) -- and is not worth shouting about. A percent or
-// more is a row measuring a different event over a different window, which is the defect
-// class above.
 std::string sample_count_warning(const RunStats& s) {
     std::vector<std::pair<uint32_t, uint64_t>> pop;
     std::map<uint64_t, int> tally;
@@ -486,9 +392,6 @@ std::string sample_count_warning(const RunStats& s) {
     if (pop.size() < 2) {
         return {};
     }
-    // Ties break toward the LARGER count, because the failure that actually happens is a row
-    // losing samples, not a row inventing them. With two rows at 100 and 1 there is no mode,
-    // and calling 1 the population would name 100 as the outlier -- backwards.
     uint64_t modal = 0;
     int best = 0;
     for (const auto& [n, count] : tally) {
@@ -539,9 +442,6 @@ std::string format_trace_csv(const RunStats& s, const std::string& tag) {
     const std::vector<TraceBucket> t = s.merged_trace();
     const uint64_t width_ns = 1ull << s.trace_shift;
 
-    // Find the last bucket that holds anything, so trailing empties are not written. A run
-    // shorter than the span would otherwise emit thousands of zero rows and a plot of it would
-    // show a long flat tail that is absence, not a stall.
     uint32_t last = 0;
     for (uint32_t i = 0; i < kTraceBuckets; ++i) {
         if (t[i].n > 0) {
@@ -559,9 +459,6 @@ std::string format_trace_csv(const RunStats& s, const std::string& tag) {
           << s.role << ',' << (s.tx_side ? 1 : 0) << ',' << width_ns << ',' << s.total_trace_clamped() << ','
           << i << ',' << (static_cast<uint64_t>(i) * width_ns) << ',' << t[i].bytes << ',' << cum << ',';
         char rate[32] = "";
-        // Bytes over the BUCKET WIDTH, which is the derivative of the cumulative curve and the
-        // instantaneous rate. Empty rather than 0 for a bucket with no samples, so a gap reads
-        // as a gap.
         if (t[i].n > 0) {
             std::snprintf(rate, sizeof(rate), "%.3f", static_cast<double>(t[i].bytes) * 1000.0 / static_cast<double>(width_ns));
         }
@@ -577,34 +474,32 @@ std::string format_trace_csv(const RunStats& s, const std::string& tag) {
 // ===========================================================================
 // THE STRIPPED CSV
 //
-// Four rows, eleven columns, and every derived number reproducible from the raw columns in
+// Four rows, thirteen columns, and every derived number reproducible from the raw columns in
 // the SAME row with a calculator:
 //
-//   bandwidth_gb_per_s == payload_bytes / total_ns    <- the three LEG rows
-//   bandwidth_gb_per_s == payload_bytes / window_ns   <- the END_TO_END row only
-//   latency_us         == total_ns / samples / 1000
-//   payload_bytes      == samples * bytes_per_message
+//   bandwidth_gb_per_s   == payload_bytes / hop_window_ns  <- all three LEG rows
+//   bandwidth_gb_per_s   == payload_bytes / window_ns      <- the END_TO_END row only
+//   messages_per_second  == samples * 1e9 / <that row's denominator>
+//   latency_us           == total_ns / samples / 1000
+//   payload_bytes        == samples * bytes_per_message
+//
+//   payload_bytes / total_ns        the PER-CORE PUSH RATE -- bytes over the time cores spent
+//                                   inside the leg. This is what the t6->host bandwidth cell
+//                                   printed until 2026-09-07: 29.207 GB/s at 512 K, 93% of
+//                                   Gen5 x8. It is a real number and it is NOT a link rate; it
+//                                   does not become one by multiplying by `cores`.
+//   total_ns / hop_window_ns        MESSAGES IN FLIGHT (T/W) -- the concurrency, and exactly the
+//                                   factor by which S/T understates S/W.
+//
+// so S/W == (S/T) x (T/W) is checkable on the row, which is the whole reason both columns stay.
 //
 // GB/s needs no scale factor: 1 byte/ns is 1e9 B/s is 1 GB/s decimal. The division is the
 // answer as written.
 //
-// The third identity is the integrity check. Bytes and samples are bumped at the same site
-// under the same warmup gate, so if that identity fails the row is counting two different
-// populations and nothing else in it should be believed.
-//
-// ONE WINDOW FOR EVERY ROW: window_ns is the run's completion-bounded bracket, repeated on
-// all four rows. That is deliberate, not a copy-paste artifact -- it is what makes the four
-// bandwidths directly comparable, since each is "bytes crossing THIS point" over the same
-// wall clock.
-//
-// WHICH PROCESS FILLS WHICH ROW: t6->host and host->remote_host are recorded by the sender,
-// remote_host->remote_t6 and END_TO_END by the receiver. Rows the local process did not
-// measure carry samples=0 and empty derived cells. host_ident says which side wrote them, so
-// a reader concatenating both files does not sum across roles.
 // ===========================================================================
 std::string basic_csv_header() {
-    return "stage,samples,payload_bytes,window_ns,bandwidth_gb_per_s,latency_us,total_ns,"
-           "bytes_per_message,cores,run_id,host_ident\n";
+    return "stage,samples,payload_bytes,window_ns,hop_window_ns,bandwidth_gb_per_s,"
+           "messages_per_second,latency_us,total_ns,bytes_per_message,cores,run_id,host_ident\n";
 }
 
 std::string format_basic_csv(const RunStats& s, const std::string& tag) {
@@ -617,36 +512,31 @@ std::string format_basic_csv(const RunStats& s, const std::string& tag) {
         const Dist d = s.merged(h);
         const uint64_t bytes = s.merged_payload_bytes(h);
 
-        // EMPTY, NOT ZERO, for anything this process did not measure. A zero bandwidth is a
-        // claim that nothing moved; an empty cell is "this row belongs to the other side".
         char bw[32] = "";
+        char msgs[32] = "";
         char lat[32] = "";
-        // TWO DIFFERENT DENOMINATORS, AND USING ONE FOR BOTH IS THE BUG THIS REPLACES.
-        //
-        // A LEG's rate is bytes over the time spent INSIDE that leg: payload / total_ns.
-        // END_TO_END's rate is bytes over the run's completion-bounded window:
-        // payload / window_ns.
-        //
-        // Dividing every row by window_ns -- which is what this did -- makes all four
-        // columns print the SAME number, because in a backpressured pipeline every hop
-        // moves the same bytes through the same window. The three leg columns were the
-        // end-to-end value repeated three times, and a t6->host column computed that way
-        // can never say anything about t6->host.
-        const uint64_t denom = (h == kHopOneWayTotal) ? s.timed_ns : d.sum;
+        const uint64_t hop_window = s.merged_hop_window_ns(h);
+        const uint64_t denom = (h == kHopOneWayTotal) ? s.timed_ns : hop_window;
         if (bytes > 0 && denom > 0) {
             std::snprintf(bw, sizeof(bw), "%.6f",
                           static_cast<double>(bytes) / static_cast<double>(denom));
+        }
+        if (d.n > 0 && denom > 0) {
+            std::snprintf(msgs, sizeof(msgs), "%.1f",
+                          static_cast<double>(d.n) * 1e9 / static_cast<double>(denom));
         }
         if (d.n > 0) {
             std::snprintf(lat, sizeof(lat), "%.3f",
                           static_cast<double>(d.sum) / static_cast<double>(d.n) / 1000.0);
         }
+        char hwin[32] = "";
+        if (hop_window > 0) {
+            std::snprintf(hwin, sizeof(hwin), "%" PRIu64, hop_window);
+        }
         std::snprintf(line, sizeof(line),
-                      "%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%s,%s,%" PRIu64 ",%u,%u,%s,%u\n",
-                      // END_TO_END rather than ONEWAY_TOTAL: it is the whole path, and the row
-                      // is read by people who did not name the hops.
-                      h == kHopOneWayTotal ? "END_TO_END" : hop_name(h), d.n, bytes, s.timed_ns, bw, lat,
-                      d.sum, s.payload_bytes, s.cores, s.run_id.c_str(), s.host_ident);
+                      "%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%s,%s,%s,%s,%" PRIu64 ",%u,%u,%s,%u\n",
+                      h == kHopOneWayTotal ? "END_TO_END" : hop_name(h), d.n, bytes, s.timed_ns, hwin,
+                      bw, msgs, lat, d.sum, s.payload_bytes, s.cores, s.run_id.c_str(), s.host_ident);
         o << line;
     }
     return o.str();
@@ -655,13 +545,6 @@ std::string format_basic_csv(const RunStats& s, const std::string& tag) {
 std::string format_csv(const RunStats& s, const std::string& tag) {
     std::ostringstream o;
     char line[1024];
-    // EVERY HOP, NOT JUST THE EIGHT STAGES.
-    //
-    // The diagnostic hops -- l1-write and doorbell (the two halves of the H->D leg), decode,
-    // notice, steal-wait -- were printed to the console and dropped from the file, so "this leg
-    // may have sub-legs" was answerable only from scrollback. They are in the file now, with
-    // `is_stage` distinguishing them: filter is_stage=1 for the six legs plus two totals,
-    // is_stage=0 for the breakdown inside them.
     for (uint32_t h = 0; h < kHopCount; ++h) {
         const Dist d = s.merged(h);
         if (d.n == 0) {
@@ -674,10 +557,6 @@ std::string format_csv(const RunStats& s, const std::string& tag) {
         const char* domain = hop_crosses_device_clock(h) ? "device" : (hop_crosses_host_clock(h) ? "host" : "none");
         const double mn = static_cast<double>(d.min), mx = static_cast<double>(d.max);
 
-        // PER-HOP RATE, WRITTEN ONLY WHERE IT IS ONE. An empty field parses as NaN in pandas
-        // and is skipped by awk's arithmetic, so a reader that averages the column no longer
-        // silently folds in 240 GB/s from a hop that never carried a byte. Zero would NOT do
-        // that: zero is a number and it would drag the mean the other way.
         char rate_mean[32] = "";
         char rate_best[32] = "";
         if (hop_rate_is_bandwidth(h)) {
@@ -704,35 +583,17 @@ std::string format_csv(const RunStats& s, const std::string& tag) {
             mn / 1e3, d.mean / 1e3, mx / 1e3,
             mn / 1e6, d.mean / 1e6, mx / 1e6,
             d.rel_stddev(), bound, (bound > 0 && d.mean < static_cast<double>(bound)) ? 1 : 0,
-            // Bandwidth per stage: this payload divided by the time THIS stage took -- and
-            // EMPTY for any stage whose interval does not contain the payload, which is what
-            // hop_rate_is_bandwidth() decides above. The two host-to-host stages are the ones
-            // this removes, and they are the ones that read 240 GB/s.
             rate_mean, rate_best,
-            // THROUGHPUT AT THE WALL CLOCK. Honest arithmetic over the wrong span: `wall_ns`
-            // runs from BankScanner::start() to join(), so it contains kernel JIT, first-touch
-            // faults, the warmup and teardown, while `total_bytes` is ungated and includes the
-            // warmup payloads. It cannot exceed the hardware -- it is a real elapsed time --
-            // but it is biased LOW by however much setup the run paid.
-            //
-            // `timed_mb_per_s` below is the same quantity over the completion-bounded bracket
-            // and is the number to quote. This column stays because a large gap between the two
-            // is itself the diagnostic: it says setup dominated the run.
             s.wall_ns > 0 ? static_cast<double>(s.total_bytes()) * 1000.0 / static_cast<double>(s.wall_ns) : 0.0,
             s.total_found(), s.total_delivered(), s.total_bytes(), s.wall_ns, s.total_stolen(),
             s.clock_overhead_ns);
-        // The identity columns go through the stream rather than the snprintf: they include
-        // three strings of caller-controlled length, and silently truncating a row at 1024
-        // bytes is exactly the class of corruption csv_schema_error() exists to prevent.
+
         o << line << ',' << s.run_id << ',' << s.run_started_utc << ',' << s.role << ',' << s.host_ident << ','
           << (s.symmetric ? 1 : 0) << ',' << (s.tx_side ? 1 : 0) << ',' << s.warmup << ','
           << (s.warmup_applied ? 1 : 0) << ',' << s.ns_per_cycle << ','
           << (s.ns_per_cycle > 0.0 ? 1.0 / s.ns_per_cycle : 0.0) << ','
           << (hop_rate_is_bandwidth(h) ? 1 : 0) << ',';
-        // EMPTY, NOT ZERO, when the bracket never closed. A run that aborted before the stop
-        // stamp has no bandwidth measurement; writing 0.0 would put it in the same cell as a
-        // run that genuinely moved nothing, and a sweep averaging the column would then be
-        // pulled toward zero by its own failures.
+
         if (s.timed_ns > 0) {
             o << s.timed_ns << ',' << s.total_timed_bytes() << ',' << s.timed_mb_per_s() << ',';
         } else {
@@ -740,14 +601,11 @@ std::string format_csv(const RunStats& s, const std::string& tag) {
         }
         o << s.timed_iters << ',' << s.xfers_per_iter << ',' << s.window << ','
           << (hop_samples_warmup_gated(h) ? 1 : 0) << ',';
-        // EMPTY for a hop that does not track wire bytes, so "not measured" and "measured
-        // zero" stay distinguishable -- the same reasoning as the per-hop rate cells above.
+
         const uint64_t wire = s.merged_wire_bytes(h);
         if (wire > 0) {
             o << wire << ',';
             if (d.mean > 0 && d.n > 0) {
-                // Bytes per sample over the mean duration of a sample: the same arithmetic as
-                // mb_per_s_mean, on wire bytes instead of payload.
                 const double per_sample = static_cast<double>(wire) / static_cast<double>(d.n);
                 std::snprintf(line, sizeof(line), "%.3f", per_sample * 1000.0 / d.mean);
                 o << line;
@@ -764,13 +622,7 @@ std::string format_csv(const RunStats& s, const std::string& tag) {
 std::string ladder_csv_header() {
     return "tag,run_id,provider,cores,workers,chunk_bytes,checkpoint,nominal_bytes,actual_bytes,"
            "stage,stage_index,is_stage,rate_is_bandwidth,quiesced,quiesce_clean,quiesce_degraded,discarded_bytes,"
-           // WINDOW: only the messages between the previous checkpoint and this one. This is
-           // the column that shows drift -- warmup, thermal, credit steady-state -- because
-           // each row is an independent sample rather than an average diluted by everything
-           // before it.
            "win_count,win_min_ns,win_mean_ns,win_max_ns,win_rel_sd,win_mb_per_s,"
-           // CUMULATIVE: every message from the start. The last row of a run equals the
-           // matching row in the main CSV, which is the check that the two agree.
            "cum_count,cum_min_ns,cum_mean_ns,cum_max_ns,cum_rel_sd,cum_mb_per_s\n";
 }
 
@@ -784,16 +636,10 @@ std::string ladder_csv_rows(const RunStats& s, const std::string& tag) {
         for (uint32_t h = 0; h < kHopCount; ++h) {
             const Dist w = s.ladder_window(i, h);
             const Dist c = s.ladder_cumulative(i, h);
-            // A hop with no samples in EITHER view contributed nothing at this checkpoint and
-            // is omitted -- writing a zero row would put "this hop does not run in this mode"
-            // in the same cell as "this hop ran and measured nothing".
             if (w.n == 0 && c.n == 0) {
                 continue;
             }
             auto rate = [&](const Dist& d) -> std::string {
-                // Bytes over the hop's OWN mean duration, and only where that interval
-                // actually contains the bytes -- the same rule the main CSV applies via
-                // hop_rate_is_bandwidth(). Empty, not zero, everywhere else.
                 if (!hop_rate_is_bandwidth(h) || d.n == 0 || d.mean <= 0.0) {
                     return "";
                 }
@@ -819,10 +665,6 @@ std::string ladder_csv_rows(const RunStats& s, const std::string& tag) {
               << s.ladder.chunk_bytes << ',' << i << ',' << nominal << ',' << actual << ','
               << hop_name(h) << ',' << h << ',' << (h < kHopStageCount ? 1 : 0) << ','
               << (hop_rate_is_bandwidth(h) ? 1 : 0) << ',' << (s.ladder.quiesced ? 1 : 0) << ','
-              // RUN-LEVEL, repeated per row like wall_ns: how many checkpoints held every
-              // worker inside the budget, and how many gave up and proceeded. quiesced=1 with
-              // a non-zero degraded count is a ladder that ASKED for exact boundaries and did
-              // not get them everywhere -- which is a different thing from not asking.
               << s.ladder.quiesce_clean << ',' << s.ladder.quiesce_degraded << ','
               << s.ladder.discarded_bytes << ',';
             emit(w);

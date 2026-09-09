@@ -5,10 +5,9 @@
 //
 // Where an on-chip coprocessor moves the data, the register file lives in that core's
 // local SRAM, that one core sweeps the banks looking for armed status words, and it is
-// the data mover. Here the
-// register file lives in PINNED HOST MEMORY, the host sweeps the banks, and the host is
-// the data mover. Three consequences fall out of that and they are the reason this is a
-// separate program rather than a flag on the old one:
+// the data mover. Here the register file lives in PINNED HOST MEMORY, the host sweeps
+// the banks, and the host is the data mover. Three consequences fall out of that and
+// they are the reason this is a separate program rather than a flag on the old one:
 //
 //   1. The bank sweep is no longer serial. A host walks them from many pinned threads at once
 //
@@ -30,9 +29,7 @@
 // and one for the NIC. That is the whole reason a single MR over the whole region works.
 //
 // Included by the host program AND by the RV32 Tensix kernels, so it must stay free of
-// anything host-only -- <stdint.h> and constexpr arithmetic only. Kernels reach it as
-// "../host_uva_layout.hpp"; a quote-include resolves against the including file's own
-// directory, so no kernel include path is needed.
+// anything host-only -- <stdint.h> and constexpr arithmetic only.
 #pragma once
 
 #include <stdint.h>
@@ -71,36 +68,11 @@ constexpr uint32_t kCtrlRx = kDataRegisters + 1;  // 31: host -> T6, RX SLOT 0 (
 // Measured as a silent stall with no deadline to fire, at two hosts as soon as the destination
 // CORE varied, long before three hosts made two source HOSTS collide.
 //
-// One slot per source does not scale: memory O(hosts) per host and
-// O(hosts^2) arenas across the job -- 448 at 8 hosts, ~32,000 at 64. A design whose cost grows
-// with the number of possible senders cannot make a galaxy-scale claim.
-//
-// The pool is shared and the sender claims. A sender takes a ticket with a one-sided
-// fi_fetch_atomic(FI_SUM) on the destination's slot_head, and slot = ticket % kRxSlots. There
-// is NO per-peer state on the receiver at all, so 2 hosts and 200 hosts cost the same. verbs
-// on this fabric advertises FI_ATOMIC (checked: caps on the FI_EP_MSG endpoint this build
-// negotiates), and RoCE RC does FetchAdd natively on 8 bytes.
-//
-// Overrun is the sender's job. slot_tail is published by the RECEIVER as it drains, and a
-// sender must not lap it: ticket - tail < kRxSlots. Pushed lazily rather than per message --
-// per message would be the credit again, and O(peers) pushes is the cost this design exists to
-// avoid.
-//
-// Slot count is runtime - costs no memory.
-//
-// The obvious build gives each slot its own arena, which triples the region and caps nothing.
-// The obvious fix -- fixed subdivision -- caps the payload instead: slots x max_payload is the
-// arena, so 3 slots means 512 KiB messages and a 1 MiB point has to be refused.
-//
-// Neither trade is necessary, because the payload is constant (`--bytes` is fixed
-// per point). A ring of variable-size claims therefore degenerates to a ring of equal slots
+// A ring of variable-size claims therefore degenerates to a ring of equal slots
 // with no allocator, no padding and no straddling the wrap:
 //
 //     slots = kArenaBytes / payload_bytes
 //
-// 96 slots at 16 KiB, 3 at 512 KiB, 1 at 1.5 MiB. Depth is size-dependent, which is the right
-// shape -- small messages, where the protocol overhead dominates, get the most concurrency --
-// and the payload ceiling stays a whole arena.
 constexpr uint32_t kPayloadStampOffset = 0;   // uint32 iteration
 constexpr uint32_t kPayloadDestOffset = 4;    // uint32 destination selector
 constexpr uint32_t kPayloadHeaderBytes = 8;
@@ -209,8 +181,21 @@ constexpr uint64_t kFlagReply = 1ull << 3;
 
 constexpr uint64_t kFlagRemoteNotice = 1ull << 4;
 
+constexpr uint64_t kFlagElapsedSplit = 1ull << 5;
+
 constexpr uint64_t kFlagKnownMask =
-    kFlagPullDelivery | kFlagStamped | kFlagCycles | kFlagReply | kFlagRemoteNotice;
+    kFlagPullDelivery | kFlagStamped | kFlagCycles | kFlagReply | kFlagRemoteNotice | kFlagElapsedSplit;
+
+// The two halves of register 2 under kFlagElapsedSplit. Shared by the kernel that writes them
+// and the host that reads them, so the pair cannot drift the way "operand[2] >> 32" repeated in
+// two files would.
+constexpr uint64_t kElapsedFieldMask = 0xFFFFFFFFull;
+constexpr uint64_t elapsed_pack(uint64_t total, uint64_t visibility) {
+    return ((visibility > kElapsedFieldMask ? kElapsedFieldMask : visibility) << 32) |
+           (total > kElapsedFieldMask ? kElapsedFieldMask : total);
+}
+constexpr uint64_t elapsed_total_of(uint64_t w) { return w & kElapsedFieldMask; }
+constexpr uint64_t elapsed_visibility_of(uint64_t w) { return (w >> 32) & kElapsedFieldMask; }
 
 // THE CREDIT REGISTER.
 //
@@ -238,8 +223,7 @@ constexpr uint32_t kNoticeOriginOffset = 24;
 constexpr uint32_t kNoticeUvaOffset = 32;
 
 // ---------------------------------------------------------------------------
-// THE ARENA IS AN L1 MIRROR, AND THAT IS WHAT MAKES A STORE COST TWO FIELDS
-// INSTEAD OF THREE.
+// The arena is an L1 mirror
 //
 // A store names three things: source, destination, length. The source is the sender's own
 // arena; the destination is an address in the FAR core's L1. Carrying both offsets to the
@@ -263,11 +247,6 @@ constexpr uint32_t kNoticeUvaOffset = 32;
 //     one-message-per-core limit becomes purely a property of the single control word rather
 //     than of the buffer. Giving a core depth is now a control-word question.
 //
-// INCOMPATIBLE WITH H2D RING ALIASING, and the two must never both be on. Aliasing requires
-// fifo_size == payload so the ring's write pointer returns to 0 for a FIXED target offset
-// (h2d_socket.cpp:663-667 wraps only on the exact-fill case). An L1-mirror arena is written
-// at VARYING offsets, which walks the write pointer somewhere the device is not reading.
-// Refused by name where both are requested.
 // ---------------------------------------------------------------------------
 
 // THE RECEIVE STATUS CONTROL REGISTER, in the receiving core's L1.
@@ -537,8 +516,6 @@ static_assert(rx_slots_capacity(kArenaBytes) == 1, "a whole-arena payload leaves
 static_assert(rx_slots_capacity(kArenaBytes / 2) == 2, "half an arena leaves two");
 static_assert(rx_slots_capacity(16384) == kRxNoticeSlots, "small payloads are bounded by the notice lines");
 
-
-
 // Deferred to here because they need kArenaBytes, which is declared below the receive-SCR
 // contract. Both are the same claim from two directions: one number addresses the arena and
 // the L1, so the field carrying it has to span the larger of the two -- and they are equal.
@@ -620,38 +597,6 @@ constexpr uint64_t kArenaArrayOffset = align_up(kHeaderBytes + kBankArrayBytes, 
 static_assert(kArenaArrayOffset == kAlign2M, "header + 128 banks fits in the first 2 MiB");
 static_assert(kArenaStride % kPageBytes == 0, "arena stride keeps every arena page-aligned");
 
-// ---------------------------------------------------------------------------
-// CORE INDEXING, AND A DELIBERATE DIVERGENCE FROM rdma_reg_layout.hpp.
-//
-// The older tree numbers cores `logical_y * 16 + logical_x` -- a FIXED row stride of 16,
-// independent of the real grid width. It has a good reason: its register file lives in a
-// fixed on-chip SRAM window, and pinning the row width means every bank keeps its address when
-// the grid changes shape. The header even records the arithmetic that forced the grid
-// height down to 15 to fit 528 KiB of on-chip SRAM.
-//
-// NONE OF THAT APPLIES HERE, and copying it would cost real memory. On an 11x10
-// Blackhole grid a fixed stride of 16 makes the indices SPARSE: (10,9) is 154, so 110
-// live cores span 155 slots. At 3 MiB of arena per slot that is 465 MiB to hold 330 MiB
-// of arenas, and it would overflow kProvisionedCores = 128 outright.
-//
-// So this tree numbers cores by the ACTUAL grid width, which makes the indices
-// contiguous 0..N-1. Two things follow, and both are handled rather than assumed:
-//
-//   - The prefix pin becomes meaningful. `header + banks + N * 3 MiB` covers exactly the
-//     cores in use only because index N-1 is the last one used. Under a fixed stride it
-//     would cover a third of them.
-//   - grid_width becomes part of the wire contract. Two parties with different widths
-//     compute different indices for the same physical core, which is the same failure
-//     shape as a chips_per_host mismatch: each reads the wrong bank and finds it idle.
-//     So it is published in RegionHeader and compared on attach, exactly like
-//     chips_per_host.
-//
-// A UVA from this tree and a UVA from that older tree therefore mean different cores for
-// the same selector value. That is safe because they are different programs addressing
-// different regions and no word crosses between them -- but it is the reason
-// host_uva_drift.cpp checks the SELECTOR FORMULA (which is shared) and not core_index
-// (which is not).
-// ---------------------------------------------------------------------------
 constexpr uint32_t core_index(uint32_t logical_x, uint32_t logical_y, uint32_t grid_width) {
     return logical_y * grid_width + logical_x;
 }
@@ -750,6 +695,27 @@ constexpr uint64_t credit_word_offset(uint32_t core, uint32_t peer_host) {
 static_assert(credit_word_offset(0, 0) == reg_offset(0, kArgCreditReg), "peer 0 IS the register");
 static_assert(credit_word_offset(0, kMaxCreditPeers - 1) + 8 == reg_offset(0, kArgCreditReg) + kRegisterBytes,
               "the last credit word must not leave register 4's line");
+
+// The credit is the only backward-flowing
+// event this protocol has, so `post -> credit visible` is the only sender-side bracket that
+// ends on remote evidence. But the credit is returned AFTER deliver_to_l1() has finished the
+// L1 write, the doorbell and wait_delivered(), so that bracket contains the whole
+// remote_host->remote_t6 leg and is not an h2h number on its own.
+//
+// PACKED RATHER THAN A SECOND REGISTER, and that is not just economy. Two separate one-sided
+// puts have no ordering guarantee between them under MPI, so a sender that saw credit n could
+// read a turnaround belonging to n-1. One 8-byte write is indivisible, so the count and the
+// turnaround a reader pairs are always the same message's.
+//
+constexpr uint64_t kCreditCountMask = 0xFFFFFFFFull;
+constexpr uint64_t credit_pack(uint64_t count, uint64_t turnaround_ns) {
+    return ((turnaround_ns > kCreditCountMask ? kCreditCountMask : turnaround_ns) << 32) |
+           (count & kCreditCountMask);
+}
+constexpr uint64_t credit_count_of(uint64_t w) { return w & kCreditCountMask; }
+// Nanoseconds, on the RECEIVER's clock. Saturated at ~4.29 s by credit_pack; a turnaround that
+// long means something is wrong upstream of this number.
+constexpr uint64_t credit_turnaround_of(uint64_t w) { return (w >> 32) & kCreditCountMask; }
 static_assert(bank_offset(1) - bank_offset(0) == kBankBytes, "banks are contiguous");
 static_assert(tx_arena_offset(0) == kAlign2M, "arena array starts at 2 MiB");
 static_assert(rx_arena_offset(0) == kAlign2M + kArenaBytes, "RX follows TX within a core");

@@ -26,11 +26,8 @@
 // is (see host_clock.hpp): the kernel stamps its own cycle counter into an operand
 // register, and a startup calibration establishes the cycles->ns scale and the offset,
 // with an uncertainty bound carried alongside. Every cross-domain stage is reported WITH
-// that bound. A 3 us stage measured with a +/- 12 us bound is not a measurement, and the
-// table says so rather than printing a confident number.
+// that bound.
 //
-// Stages 2 and 5 cross a HOST-to-HOST domain and use the peer clock offset. Stages 3 and
-// 4 are single-domain and need no correction.
 #pragma once
 #include <thread>
 #include <array>
@@ -47,10 +44,6 @@
 
 namespace tt::tt_metal::experimental {
 
-// CLOCK_MONOTONIC_RAW, not CLOCK_MONOTONIC: raw is not slewed by NTP, and an adjtime step
-// mid-run would show up as a stage that took negative time (ns) through the vDSO,
-// which is a real floor under any single-stage measurement here -- hence
-// measure_clock_overhead_ns(), reported rather than assumed negligible.
 inline uint64_t now_ns() {
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
@@ -75,6 +68,11 @@ enum Hop : uint32_t {
     kHopH2HRetire,
     kHopSendQueueWait,
     kHopPullWait,
+    kHopD2HVisibility,
+    kHopH2HPayloadAtPeer,
+    kHopH2HCreditRaw,
+    kHopH2HNet,
+    kHopD2HFenced,
     kHopCount
 };
 
@@ -86,11 +84,6 @@ inline const char* hop_name(uint32_t h) {
         case kHopHostToRemoteHost: return "host->remote_host";
         case kHopRemoteHostToRemoteT6: return "remote_host->remote_t6";
         case kHopOneWayTotal: return "ONEWAY_TOTAL";
-        // PROPOSED REMOVAL 2026-08-26 -- the return half. See the enum.
-        // case kHopRemoteT6ToRemoteHost: return "remote_t6->remote_host";
-        // case kHopRemoteHostToHost: return "remote_host->host";
-        // case kHopHostToT6: return "host->t6";
-        // case kHopRoundTripTotal: return "ROUNDTRIP_TOTAL";
         case kHopNotice: return "diag:notice";
         case kHopDecode: return "diag:decode";
         case kHopStealWait: return "diag:steal-wait";
@@ -99,58 +92,45 @@ inline const char* hop_name(uint32_t h) {
         case kHopH2HRetire: return "diag:h2h-retire";
         case kHopSendQueueWait: return "diag:sendq-wait";
         case kHopPullWait: return "diag:pull-wait";
+        case kHopD2HVisibility: return "diag:d2h-visibility";
+        case kHopH2HPayloadAtPeer: return "h2h:payload-at-peer";
+        case kHopH2HCreditRaw: return "h2h:credit-raw";
+        case kHopH2HNet: return "h2h:net";
+        case kHopD2HFenced: return "diag:d2h-fenced";
         default: return "?";
     }
 }
 
-// Whether a stage's timestamps cross a clock domain, and therefore whether its number
-// carries the calibration's uncertainty. Reported per row so nobody has to remember which
-// is which.
 inline bool hop_crosses_device_clock(uint32_t h) {
-    return h == kHopT6ToHost || h == kHopRemoteHostToRemoteT6;
+    return h == kHopT6ToHost || h == kHopD2HVisibility || h == kHopD2HFenced ||
+           h == kHopRemoteHostToRemoteT6;
 }
-inline bool hop_crosses_host_clock(uint32_t) { return false; }
+
+inline bool hop_crosses_host_clock(uint32_t h) { return h == kHopH2HNet; }
 
 inline bool hop_rate_is_bandwidth(uint32_t h) {
     switch (h) {
         case kHopT6ToHost:              // the producer's own copy into its arena
         case kHopRemoteHostToRemoteT6:  // MMIO write into the destination L1
-        // PROPOSED REMOVAL 2026-08-26 -- the return half. See the enum.
-        // case kHopRemoteT6ToRemoteHost:  // the far core's copy into its arena
-        // case kHopHostToT6:              // MMIO write home
         case kHopL1Write:               // the noc_write half of the above
         case kHopH2HRetire:             // post -> completion: the transfer, by construction
+        case kHopD2HFenced:             // kHopT6ToHost with the read-back probe taken back out
             return true;
         default:
             return false;
     }
 }
 
-// A companion to hop_rate_is_bandwidth() above, and it exists for the same reason: a
-// property that differs per row must be stated per row, not left to be remembered.
-//
 inline bool hop_samples_warmup_gated(uint32_t h) {
-    return h < kHopCount;  // every hop, now. See the note above before changing this.
+    return h < kHopCount;
 }
 
-// A streaming distribution; posted-write queueing, invisible in an average.
-//
-// Welford for the variance, so a long run does not lose precision to the catastrophic
-// cancellation a naive sum-of-squares suffers at these magnitudes.
 struct Dist {
     uint64_t n = 0;
     uint64_t min = UINT64_MAX;
     uint64_t max = 0;
-    // THE SOURCE OF TRUTH, AND IT IS AN INTEGER. Latency is `sum / n` -- two integers and one
-    // division, which is a number a reader can check against the CSV with a calculator. That
-    // is the whole reason this field replaced the incremental mean below.
     uint64_t sum = 0;
-    // DERIVED, and exactly equal to sum/n. Kept as a field rather than an accessor so the
-    // existing call sites (format_table, format_csv, the ladder rows) compile unchanged.
     double mean = 0.0;
-    // NO LONGER MAINTAINED BY THIS STRUCT -- see the note on add(). The field stays because
-    // the transport retire path computes its own m2 and assigns it (host_transport.cpp and
-    // D2H2H2DSocket::append_transport_stats); removing it would break those.
     double m2 = 0.0;
 
     void add(uint64_t v) {
@@ -159,30 +139,8 @@ struct Dist {
         max = std::max(max, v);
         sum += v;
         mean = static_cast<double>(sum) / static_cast<double>(n);
-        // WELFORD REMOVED, DELIBERATELY.
-        //
-        // What was here kept a running mean and an m2 variance accumulator, updated per
-        // sample, and merge() below combined two threads' partials with the parallel form.
-        // The mean it produced was algebraically identical to sum/n -- the incremental
-        // shape existed only so the VARIANCE could be computed in one pass without
-        // catastrophic cancellation (durations ~1e4 ns, squared ~1e8, summed over ~1e5
-        // samples ~1e13, with the variance a small difference between huge numbers).
-        //
-        // The variance reached the output through exactly one column, rel_sd. Nothing in
-        // the bandwidth/latency numbers needs it, and a mean that is a float produced by a
-        // non-obvious combination cannot be validated by hand against the CSV -- which is
-        // the property these rows exist to have. So: plain integer sum, plain division.
-        //
-        //   const double d = static_cast<double>(v) - mean;
-        //   mean += d / static_cast<double>(n);
-        //   m2 += d * (static_cast<double>(v) - mean);
     }
 
-    // A PLAIN SUM REDUCTION. Work stealing scatters one core's messages across whichever
-    // workers serviced them, so per-worker partials must combine -- but sums do not care
-    // which worker recorded what, and neither do min/max. The n==0 special cases the
-    // parallel-Welford version needed are gone with it: adding zero and taking min against
-    // UINT64_MAX are already the right answers.
     void merge(const Dist& o) {
         if (o.n == 0) {
             return;
@@ -192,17 +150,32 @@ struct Dist {
         min = std::min(min, o.min);
         max = std::max(max, o.max);
         mean = static_cast<double>(sum) / static_cast<double>(n);
-        //   const double na = ..., nb = ...;  const double delta = o.mean - mean;
-        //   m2 += o.m2 + delta * delta * na * nb / tot;
-        //   mean += delta * nb / tot;
     }
 
-    // ZERO FOR ANY DIST THIS STRUCT FILLED, because m2 is no longer accumulated above. Still
-    // meaningful for the transport retire Dist, which has its m2 assigned from elsewhere.
-    // The rel_sd column therefore reads 0 for every hop row -- that is "not measured", and it
-    // is why the stripped CSV does not carry the column at all.
     double stddev() const { return n > 1 ? std::sqrt(m2 / static_cast<double>(n - 1)) : 0.0; }
     double rel_stddev() const { return mean > 0.0 ? stddev() / mean : 0.0; }
+};
+
+struct Span {
+    uint64_t first = UINT64_MAX;
+    uint64_t last = 0;
+
+    void add(uint64_t open_ns, uint64_t close_ns) {
+        first = std::min(first, open_ns);
+        last = std::max(last, close_ns);
+    }
+
+    void merge(const Span& o) {
+        if (o.empty()) {
+            return;
+        }
+        first = std::min(first, o.first);
+        last = std::max(last, o.last);
+    }
+
+    bool empty() const { return first == UINT64_MAX || last <= first; }
+
+    uint64_t ns() const { return empty() ? 0 : last - first; }
 };
 
 constexpr uint32_t kTraceBuckets = 2048;
@@ -215,19 +188,11 @@ struct TraceBucket {
     uint32_t reserved = 0;
 };
 
-// Per-worker counters. The whole point of the pool is that workers
-// do not interfere; an unpadded array would reintroduce exactly the false sharing the 64 B
-// bank stride exists to avoid. Instrumentation that perturbs what it measures is worse
-// than none.
 struct alignas(64) WorkerStats {
     Dist hop[kHopCount];
     uint64_t hop_wire_bytes[kHopCount] = {};
-    // PAYLOAD BYTES COUNTED AT EACH HOP, for the stripped CSV's bandwidth column. Bumped at
-    // the same site that records the hop's sample, under the same warmup gate, so
-    // `payload_bytes == samples * bytes_per_message` holds and is the row's integrity check.
-    // NOT reset by ladder_seal_window(): samples are archived into a window and zeroed there,
-    // these stay cumulative, and both end up as full-run totals.
     uint64_t hop_payload_bytes[kHopCount] = {};
+    Span hop_window[kHopCount];
     uint64_t scanned = 0;
     uint64_t found = 0;
     uint64_t stolen = 0;
@@ -237,8 +202,6 @@ struct alignas(64) WorkerStats {
     uint64_t rejected[8] = {};
     uint64_t idle_spins = 0;
     uint64_t delivered = 0;   // messages written into a Tensix L1
-    // ARMED TX BANKS PASSED OVER because the peer's credit had not come back yet.
-    //
     uint64_t tx_credit_skips = 0;
     TraceBucket trace[kTraceBuckets];
     uint64_t trace_clamped = 0;  // samples that landed past the last bucket
@@ -254,16 +217,12 @@ struct alignas(64) WorkerStats {
     char pad[64];
 };
 
-
-// Volume ladder: per-leg timing as a function of BYTES MOVED SO FAR.
 inline uint64_t ladder_now_ns() {
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
 }
 
-// Seals the current window and opens a new one. Local to one worker by construction, which is
-// what lets the quiesced path call it without holding anything.
 inline void ladder_seal_window(WorkerStats& ws) {
     ws.ladder_windows.emplace_back();
     std::copy(std::begin(ws.hop), std::end(ws.hop), ws.ladder_windows.back().begin());
@@ -293,7 +252,6 @@ struct VolumeLadder {
     uint64_t total_bytes = 0;    // the RECORDED volume this ladder spans
     uint64_t discarded_bytes = 0;  // what --steady dropped before the counters started
     std::vector<uint64_t> marks; // nominal cumulative thresholds, doubling from chunk_bytes
-    // Counted at the end so a reader can tell an exact ladder from one that gave up mid-run.
     uint32_t quiesce_clean = 0;
     uint32_t quiesce_degraded = 0;
 
@@ -327,14 +285,11 @@ inline void ladder_note_quiesced(WorkerStats& ws, LadderSync& sync, const Volume
         return;
     }
 
-    // Seal MY window first -- purely local, nothing another worker can observe half-done.
     ladder_seal_window(ws);
 
     const uint32_t gen = sync.generation.load(std::memory_order_acquire);
     const uint32_t n = sync.arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (n >= workers) {
-        // Last in: advance and release. Reset `arrived` BEFORE bumping the generation, or a
-        // fast worker could enter the next checkpoint and see a stale count.
         sync.clean.fetch_add(1, std::memory_order_relaxed);
         sync.arrived.store(0, std::memory_order_release);
         sync.next_mark.store(mark + 1, std::memory_order_release);
@@ -345,7 +300,6 @@ inline void ladder_note_quiesced(WorkerStats& ws, LadderSync& sync, const Volume
     const uint64_t start = ladder_now_ns();
     while (sync.generation.load(std::memory_order_acquire) == gen) {
         if (ladder_now_ns() - start > LadderSync::kQuiesceBudgetNs) {
-            // Give up on the stragglers. Advance so the run continues, and mark the ladder degraded
             sync.degraded.fetch_add(1, std::memory_order_relaxed);
             sync.arrived.store(0, std::memory_order_release);
             sync.next_mark.store(mark + 1, std::memory_order_release);
@@ -387,13 +341,11 @@ struct RunStats {
     uint32_t window = 0;
     std::string sender_shape = "none";
 
-    // Carried into the report so every cross-domain row can state its bound.
     uint64_t device_clock_uncertainty_ns = 0;
     uint64_t host_clock_uncertainty_ns = 0;
     bool device_clock_valid = false;
     bool host_clock_valid = false;
 
-    // Run shape, for the CSV key.
     uint32_t payload_bytes = 0;
     uint32_t cores = 0;
     uint32_t iters = 0;
@@ -401,7 +353,7 @@ struct RunStats {
     std::string mode = "oneway";  // oneway | roundtrip | local
 
     std::string run_id;           // unique per process
-    std::string run_started_utc;  // ISO-8601, so runs order across files and machines
+    std::string run_started_utc;
 
     double ns_per_cycle = 0.0;
 
@@ -528,6 +480,14 @@ struct RunStats {
         }
         return t;
     }
+
+    uint64_t merged_hop_window_ns(uint32_t h) const {
+        Span s;
+        for (const auto& w : per_worker) {
+            s.merge(w.hop_window[h]);
+        }
+        return s.ns();
+    }
     uint64_t total(uint64_t WorkerStats::*field) const {
         uint64_t t = 0;
         for (const auto& w : per_worker) {
@@ -552,13 +512,6 @@ struct RunStats {
 std::string format_table(const RunStats& s);
 std::string format_csv(const RunStats& s, const std::string& tag);
 std::string csv_header();
-
-// THE STRIPPED CSV. Four rows, eleven columns, every derived number reproducible by hand:
-//
-//   bandwidth_gb_per_s == payload_bytes / window_ns      (1 byte/ns == 1 GB/s, no scale factor)
-//   latency_us         == total_ns / samples / 1000
-//   payload_bytes      == samples * bytes_per_message    (the integrity check)
-//
 std::string basic_csv_header();
 std::string format_basic_csv(const RunStats& s, const std::string& tag);
 

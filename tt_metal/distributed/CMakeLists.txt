@@ -69,6 +69,7 @@ if(USE_MPI)
     list(
         APPEND
         DISTRIBUTED_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/D2DSocket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/D2H2H2DSocket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/host_clock.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/host_deliver.cpp

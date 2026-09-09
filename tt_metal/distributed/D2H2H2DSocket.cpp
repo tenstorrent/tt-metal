@@ -71,9 +71,7 @@ bool D2H2H2DSocket::open(std::string& err) {
     sc.ladder_sync = cfg_.ladder_sync;
     sc.workers = cfg_.workers;
     sc.pin_threads = cfg_.pin;
-    // Delivery driven by RX control word. An armed, valid ctrl_rx that is
-    // never scanned looks exactly like one that is rejected, and those are different bugs -- so
-    // this is not a mode flag, it is always on.
+    // Delivery driven by RX control word, it is always on.
     sc.scan_rx = true;
     // Only the slots this payload can use.
     // Stopping after `msgs * 2` serviced jobs counts two different things
@@ -149,9 +147,19 @@ void D2H2H2DSocket::add_sample_with_payload(WorkerStats& ws, bool rec, uint32_t 
     }
 }
 
-// Rings the completion doorbell for a core whose TX control word we have finished with. Called
-// on EVERY path out of the TX handler, including the error paths -- a kernel blocked on a
-// completion that never comes is a hang, and a hang says far less than an error count.
+void D2H2H2DSocket::add_sample_with_window(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns,
+                                           uint64_t payload, uint64_t open_ns, uint64_t close_ns) {
+    if (!rec) {
+        return;
+    }
+    ws.hop[hop].add(ns);
+    ws.hop_payload_bytes[hop] += payload;
+    if (open_ns > 0 && close_ns > open_ns) {
+        ws.hop_window[hop].add(open_ns, close_ns);
+    }
+}
+
+// Rings the completion doorbell for a core whose TX control word we have finished with.
 void D2H2H2DSocket::retire_tx(uint32_t core) {
     const uint64_t n = tx_retired_[core].fetch_add(1, std::memory_order_relaxed) + 1;
     if (deliverer_ != nullptr) {
@@ -159,19 +167,22 @@ void D2H2H2DSocket::retire_tx(uint32_t core) {
     }
 }
 
-// kArgElapsed carries the running sum of every stage measured so far. Each
-// party brackets its OWN stage on its OWN clock, adds its measurement, and passes the total on;
-// the last hop reports the sum. No stage is ever computed by subtracting one machine's
-// timestamp from another's.
+// kArgElapsed carries the running sum of every stage measured.
 //
 // The Tensix is the one party that cannot produce nanoseconds -- it publishes CYCLES, flagged.
 // A cycle count read as nanoseconds is wrong by roughly the clock rate and still looks like a
 // plausible duration, so with no measured rate this contributes no sample rather than a
 // converted guess.
-uint64_t D2H2H2DSocket::elapsed_ns_of(const Job& job, bool& usable) const {
-    const uint64_t raw = job.operand_count > kArgElapsed ? job.operand[kArgElapsed] : 0;
+uint64_t D2H2H2DSocket::elapsed_ns_of(const Job& job, bool& usable, uint64_t& visibility_ns) const {
+    visibility_ns = 0;
+    const uint64_t word = job.operand_count > kArgElapsed ? job.operand[kArgElapsed] : 0;
+    // 2 fields or one -- never the value. 
+    const bool split = (ctrl_flags(job.ctrl) & kFlagElapsedSplit) != 0;
+    const uint64_t raw = split ? elapsed_total_of(word) : word;
+    const uint64_t raw_vis = split ? elapsed_visibility_of(word) : 0;
     if ((ctrl_flags(job.ctrl) & kFlagCycles) == 0) {
         usable = true;
+        visibility_ns = raw_vis;
         return raw;  // already nanoseconds
     }
     if (cfg_.ns_per_cycle <= 0.0) {
@@ -179,6 +190,7 @@ uint64_t D2H2H2DSocket::elapsed_ns_of(const Job& job, bool& usable) const {
         return 0;
     }
     usable = true;
+    visibility_ns = static_cast<uint64_t>(static_cast<double>(raw_vis) * cfg_.ns_per_cycle);
     return static_cast<uint64_t>(static_cast<double>(raw) * cfg_.ns_per_cycle);
 }
 
@@ -189,17 +201,11 @@ bool D2H2H2DSocket::recording_now() {
     if (cfg_.warmup_msgs == 0) {
         return false;  // the caller owns the gate -- do not second-guess its producer loop
     }
-    // max(), NOT a sum: where the roles are split one side only sends and the other only
-    // receives, so one of these counters never advances at all. "How many messages has THIS
-    // side handled, in whichever direction it handles."
     const uint64_t handled = std::max(counters_.tx_done.load(std::memory_order_relaxed),
                                       counters_.delivered.load(std::memory_order_relaxed));
     if (handled < cfg_.warmup_msgs) {
         return false;
     }
-    // open_recording_gate(), NOT set_recording(true): the gate opening and the interval
-    // starting are the same event. This was set_recording alone once, which is half of why
-    // timed_ns came out empty -- a device producer opened the gate and nothing stamped t0.
     open_recording_gate();
     return true;
 }
@@ -262,9 +268,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         dst_l1 = off;
     }
 
-    // serialize a core's deliveries -- see deliver_m_ in the header. Taken BEFORE the stage
-    // clock so the lock wait is billed as queueing rather than appearing inside this stage
-    // under a name that says PCIe.
+    // serialize a core's deliveries
     std::lock_guard<std::mutex> deliver_guard(deliver_m_[job.core]);
 
     const uint64_t t0 = now_ns();
@@ -298,11 +302,8 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
 
     add_sample(ws, rec, kHopL1Write, t1 - t0);
     add_sample(ws, rec, kHopDoorbell, t1b - t1);
-    // Zero on the push path (wait_delivered returns immediately); the device pull on the socket
-    // path. Sampled unconditionally so the row's population matches every other stage's -- a
-    // diagnostic that only appears in one mode cannot be compared across modes.
     add_sample(ws, rec, kHopPullWait, t2 - t1b);
-    add_sample(ws, rec, stage, t2 - t0);
+    add_sample_with_window(ws, rec, stage, t2 - t0, length, t0, t2);
     stage_ns = t2 - t0;
     ws.delivered++;
     // one for each message delivered -- the receiving side's contribution to the volume ladder.
@@ -319,7 +320,8 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         const uint32_t origin_sel =
             job.operand_count > 2 ? static_cast<uint32_t>(job.operand[2])
                                   : t6_global_selector(topo_.ident, cfg_.chip, job.core, topo_.chips_per_host);
-        return_credit(origin_sel);
+        // The turn around travels with the credit.
+	return_credit(origin_sel, stage_ns);
     }
     return length;
 }
@@ -350,18 +352,10 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     // that side report a confident zero.
     if (rec) {
         ws.timed_bytes += moved;
-        // The H2D row's bandwidth numerator. deliver_to_l1() recorded the sample for `stage`;
-        // this is the payload that crossed inside it.
-        ws.hop_payload_bytes[stage] += moved;
-        // Receiving side: the trace is a DELIVERY curve here, where the tx side's is a send
-        // curve. Same distinction the two roles' timed_bytes already carry.
         trace_add(ws, rec, timed_start_ns(), moved, stage_ns);
     }
     const uint64_t total_ns = carried_ns + stage_ns;
 
-    // This was the last hop: the sum that arrived plus our delivery.
-    // END_TO_END in the stripped CSV -- same bytes as the H2D row, since these are the bytes
-    // that completed the whole path.
     add_sample_with_payload(ws, rec, kHopOneWayTotal, total_ns, moved);
     return moved;
 }
@@ -395,17 +389,19 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
     // STAGE 1: the sender's OWN measurement of its push, taken on the sender's clock and
     // published with the message. Nothing is subtracted across a domain.
     bool usable = false;
-    uint64_t accumulated = elapsed_ns_of(job, usable);
+    uint64_t visibility_ns = 0;
+    uint64_t accumulated = elapsed_ns_of(job, usable, visibility_ns);
     const bool returning = (ctrl_flags(job.ctrl) & kFlagReply) != 0;
     if (!usable) {
         accumulated = 0;
     } else if (!returning && accumulated > 0) {
-        // Outbound: the whole carried value IS this sender's push, so it is stage 1. On a return
-        // leg the carried value is a running total of everything so far, not this leg alone, so
-        // it is not a stage-4 sample -- the far sender's own push cost would have to arrive as
-        // an increment, which needs an echo kernel that does not exist. Stage 4 therefore stays
-        // empty rather than being filled with a running total mislabelled as one leg.
-        add_sample_with_payload(ws, rec, kHopT6ToHost, accumulated, length);
+        add_sample_with_window(ws, rec, kHopT6ToHost, accumulated, length, timed_start_ns(), now_ns());
+        if (visibility_ns > 0) {
+            add_sample(ws, rec, kHopD2HVisibility, visibility_ns);
+            if (accumulated > visibility_ns) {
+                add_sample(ws, rec, kHopD2HFenced, accumulated - visibility_ns);
+            }
+        }
     }
 
     const uint32_t reach = uva_host_reach(dest_uva, topo_);
@@ -413,8 +409,6 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
 
     switch (reach) {
         case kHostReachNoSuchHost:
-            // A provisioning answer, not a corrupt-address answer -- counted apart for the same
-            // reason a resolver splits "no table entry" from "bad region".
             counters_.routed_nowhere.fetch_add(1, std::memory_order_relaxed);
             counters_.tx_done.fetch_add(1, std::memory_order_release);
             retire_tx(job.core);
@@ -508,10 +502,6 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
               "never within one";
         return false;
     } else {
-        // THE TIGHTEST PEER'S QUEUE, because one sender thread posts to all of them, so a depth
-        // the narrowest endpoint cannot honour is a depth the sender cannot use. tx_depth() is 0
-        // where the provider has no such number, which means "do not clamp", not "clamp to
-        // zero".
         uint64_t depth = 0;
         for (Transport* t : peers_.all()) {
             const uint64_t d = t->tx_depth();
@@ -531,17 +521,12 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
         send_window_ = cfg_.send_window;
     }
 
-    // ANNOUNCED, because a run whose shape is only discoverable by reading the CSV afterwards is
-    // how four pair runs came to set a variable the binary did not have. stderr, not stdout,
-    // because a sweep driver captures stdout into a shell variable and prints only its own
-    // verdict line.
     std::cerr << "  sender      "
               << (send_blocking_ ? "BLOCKING (post-and-wait, credit waited)"
                                  : "windowed (post-and-poll, credit skipped)")
               << ", window " << send_window_ << " of " << structural << " core"
               << (structural == 1 ? "" : "s");
-    // The TIGHTEST peer's depth -- the same number the clamp used, so the line reports what
-    // actually bounded the window rather than one arbitrary endpoint's figure.
+
     uint64_t announce_depth = 0;
     for (Transport* t : peers_.all()) {
         const uint64_t d = t->tx_depth();
@@ -570,7 +555,7 @@ void D2H2H2DSocket::stop_transport() {
     sender_.join();
 }
 
-void D2H2H2DSocket::return_credit(uint32_t origin_selector) {
+void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_ns) {
     const uint32_t origin_host = t6_selector_host(origin_selector, topo_.chips_per_host);
     const uint32_t origin_core = t6_selector_core(origin_selector);
     if (origin_host >= credit_out_.size()) {
@@ -589,7 +574,8 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector) {
         fail("credit: origin host " + std::to_string(origin_host) + ": " + peer_why_name(why));
         return;
     }
-    if (const std::string e = back->post_credit(origin_core, topo_.ident, n, my_stage_slot()); !e.empty()) {
+    if (const std::string e = back->post_credit(origin_core, topo_.ident, n, turnaround_ns, my_stage_slot());
+        !e.empty()) {
         fail("credit: " + e);
         transport_failed_.store(true, std::memory_order_release);
     }
@@ -661,7 +647,7 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
     if (slot.phase != SendSlot::kIdle) {
         return false;
     }
-    // THE CREDIT CHECK IS A SKIP, NOT A WAIT, in the windowed shape. It used to park this thread
+    // Credit check is a skip, not a wait, in the windowed shape. It used to park this thread
     // for up to kCreditWaitNs, so one core's unreturned credit stalled every other core's sends.
     // Checked BEFORE dequeuing: a request pulled off and found unsendable would have to be
     // pushed back, reordering it against its own core's traffic.
@@ -676,7 +662,7 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
             if (!send_blocking_) {
                 return false;
             }
-            // THE BLOCKING SHAPE PARKS HERE. Safe only because this is the dedicated sender
+            // Safe only because this is the dedicated sender
             // thread: the scan workers keep delivering while it sleeps, and delivering is what
             // makes the peer return the credit. It reinstates the head-of-line stall on purpose
             // -- that is the behaviour under measurement, not a defect.
@@ -773,12 +759,6 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
     Completion c;
     bool failed = false;
 
-    // ONE PHASE ADVANCE, AND IT IS THE ONLY PLACE THE TWO SHAPES DIFFER -- everything after it
-    // (the ordering, the samples, tx_done, retire_tx) is the same code either way, which is what
-    // makes the switch a switch rather than two implementations free to drift. In the blocking
-    // shape this always returns true: a wait() that times out comes back with c.ok false and its
-    // own message, so the `timed_out` arms are unreachable there and the error still names the
-    // operation.
     auto advance = [this, &slot](OpHandle& op, Completion& out) -> bool {
         if (send_blocking_) {
             out = slot.tp->wait(op, kCompletionTimeoutMs);
@@ -801,11 +781,6 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
             failed = true;
         }
         if (!failed) {
-            // LOCAL completion only -- this side is done with the TX arena, which is NOT the same
-            // as the peer having the bytes. The notice cannot be armed until the sender's flush
-            // pass has closed that gap; it does so once per endpoint per lap and then calls
-            // send_arm_notice(). Under libfabric the gap is already closed and the slot spends a
-            // single lap here; under MPI this is the phase hazard 1 lives in.
             slot.phase = SendSlot::kPayloadLocal;
             return true;
         }
@@ -825,13 +800,25 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
             failed = true;
         }
         if (!failed) {
-            notice_sent_[slot.r.src_core].fetch_add(1, std::memory_order_release);
+            const uint64_t seq = notice_sent_[slot.r.src_core].fetch_add(1, std::memory_order_release) + 1;
             sender_state_.store(0, std::memory_order_relaxed);
-            const uint64_t stage_ns = now_ns() - slot.t0;
-            add_sample_with_size(ws, rec, kHopHostToRemoteHost, stage_ns,
+            const uint64_t t_close = now_ns();
+            const uint64_t stage_ns = t_close - slot.t0;
+            const bool timed = rec && slot.t0 >= timed_start_ns();
+            add_sample_with_size(ws, timed, kHopHostToRemoteHost, stage_ns,
                                  static_cast<uint64_t>(slot.r.length) + kNoticeBytes);
-            if (rec) {
+            if (timed) {
                 ws.hop_payload_bytes[kHopHostToRemoteHost] += slot.r.length;
+                ws.hop_window[kHopHostToRemoteHost].add(slot.t0, t_close);
+            }
+            if (cfg_.measure_credit && slot.r.src_core < credit_watch_.size()) {
+                CreditWatch& w = credit_watch_[slot.r.src_core];
+                w.armed = true;
+                w.timed = timed;
+                w.want = seq;
+                w.t0 = slot.t0;
+                w.length = slot.r.length;
+                w.dest_host = slot.r.dest_host;
             }
             const uint64_t moved = slot.r.length;
             ws.bytes += moved;
@@ -866,10 +853,6 @@ void D2H2H2DSocket::send_fail_slot(SendSlot& slot) {
 }
 
 bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
-    // The RX notice, posted only now: the payload has completed AND been flushed, so a peer that
-    // sees the trigger is guaranteed the bytes behind it. The two halves of that guarantee come
-    // from different places -- local completion from the payload's own handle, remote visibility
-    // from Transport::flush() -- and on the MPI backend only the second one is load-bearing.
     sender_state_.store(3, std::memory_order_relaxed);
     if (const std::string e = slot.tp->post_notice(
             slot.r.dest_core, slot.rx_slot, slot.r.length,
@@ -887,11 +870,14 @@ bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
 
 void D2H2H2DSocket::sender_loop() {
     std::vector<SendSlot> slots(kProvisionedCores);
+    if (cfg_.measure_credit) {
+        credit_watch_.assign(kProvisionedCores, CreditWatch{});
+    }
     WorkerStats& ws = sender_stats_;
     const uint32_t n = cfg_.cores ? cfg_.cores : 1u;
 
-    // Reused across laps so the hot path allocates nothing. Never longer than the number of
-    // connected peers: one entry per ENDPOINT with at least one slot waiting on a flush.
+    const bool net_pairable = peers_.all().size() == 1;
+
     std::vector<Transport*> to_flush;
     to_flush.reserve(8);
 
@@ -908,22 +894,23 @@ void D2H2H2DSocket::sender_loop() {
             }
         }
 
-        // THE FLUSH PASS -- ONE ROUND TRIP PER ENDPOINT PER LAP, NOT ONE PER MESSAGE. This is the
-        // whole reason kPayloadLocal is a phase: a flush retires every operation outstanding to
-        // its target, so one call releases every slot queued behind it and the cost divides by
-        // the window rather than multiplying by the message count. Doing it inside send_poll()
-        // would put a full round trip on each message's critical path.
-        //
-        // Empty on the libfabric backend, where a reaped completion already means remote arrival.
         to_flush.clear();
+        uint32_t pending_payloads = 0;
         for (uint32_t c = 0; c < n; ++c) {
             if (slots[c].phase != SendSlot::kPayloadLocal) {
                 continue;
             }
+            ++pending_payloads;
             Transport* const tp = slots[c].tp;
             if (std::find(to_flush.begin(), to_flush.end(), tp) == to_flush.end()) {
                 to_flush.push_back(tp);
             }
+        }
+        // How deep the batch actually was. Counted before the flushes run, so it is the number
+        // of payloads those calls are about to retire.
+        if (!to_flush.empty()) {
+            counters_.flush_calls.fetch_add(to_flush.size(), std::memory_order_relaxed);
+            counters_.flush_slots.fetch_add(pending_payloads, std::memory_order_relaxed);
         }
         for (Transport* const tp : to_flush) {
             const std::string e = tp->flush();
@@ -931,9 +918,6 @@ void D2H2H2DSocket::sender_loop() {
                 continue;
             }
             fail("transport flush: " + e);
-            // EVERY slot on this endpoint dies, not just one. A failed flush leaves it unknown
-            // whether the payloads landed, and arming a trigger over bytes that may not be there
-            // is precisely what the flush exists to prevent.
             for (uint32_t c = 0; c < n; ++c) {
                 if (slots[c].phase == SendSlot::kPayloadLocal && slots[c].tp == tp) {
                     send_fail_slot(slots[c]);
@@ -942,27 +926,56 @@ void D2H2H2DSocket::sender_loop() {
             progressed = true;
         }
 
-        // Strictly after the flush, and that ordering IS the protocol's guarantee.
         for (uint32_t c = 0; c < n; ++c) {
-            if (slots[c].phase == SendSlot::kPayloadLocal) {
-                progressed |= send_arm_notice(slots[c]);
+            if (slots[c].phase != SendSlot::kPayloadLocal) {
+                continue;
             }
+            const uint64_t t_at_peer = now_ns();
+            const bool at_peer_timed = rec && slots[c].t0 >= timed_start_ns();
+            add_sample_with_window(ws, at_peer_timed, kHopH2HPayloadAtPeer, t_at_peer - slots[c].t0,
+                                   slots[c].r.length, slots[c].t0, t_at_peer);
+            progressed |= send_arm_notice(slots[c]);
         }
 
-        // Counted here rather than during the poll: the flush pass can retire a slot, and a
-        // window computed before that would hold back sends against capacity already freed.
+        // THE CREDIT PASS -- post -> the far side has ACTED, and the subtraction that turns it
+        // into an h2h number.
+        //
+        for (uint32_t c = 0; cfg_.measure_credit && c < n; ++c) {
+            CreditWatch& w = credit_watch_[c];
+            if (!w.armed) {
+                continue;
+            }
+            if (credit_total(region_, c) < w.want) {
+                continue;
+            }
+            w.armed = false;
+            const uint64_t t_credit = now_ns();
+            if (t_credit <= w.t0) {
+                continue;  // the clock went backwards; nothing here is salvageable
+            }
+            const uint64_t raw = t_credit - w.t0;
+            add_sample_with_window(ws, w.timed, kHopH2HCreditRaw, raw, w.length, w.t0, t_credit);
+            if (!net_pairable) {
+                continue;
+            }
+            const uint64_t resp = credit_turnaround_ns(region_, c, w.dest_host);
+            if (resp == 0) {
+                counters_.credit_net_no_resp.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            if (resp >= raw) {
+                counters_.credit_net_skew.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            add_sample(ws, w.timed, kHopH2HNet, raw - resp);
+        }
+
         for (uint32_t c = 0; c < n; ++c) {
             if (slots[c].phase != SendSlot::kIdle) {
                 ++in_flight;
             }
         }
-        // Rotating origin so a core with a permanently full queue cannot starve the others -- a
-        // fixed order would reintroduce on the send side the imbalance the work-stealing pool
-        // exists to avoid.
         for (uint32_t k = 0; k < n; ++k) {
-            // THE WINDOW -- the one condition that separates N=1 from N=8. Everything downstream
-            // is identical, which is what makes a sweep over it measure concurrency rather than
-            // two code paths.
             if (in_flight >= send_window_) {
                 break;
             }
@@ -976,26 +989,6 @@ void D2H2H2DSocket::sender_loop() {
 
         // THE CREDIT FLUSH, and the reason a receive-only host does not deadlock.
         //
-        // return_credit() posts an unwaited one-sided word from the SCAN workers, on purpose: a
-        // credit is idempotent and monotonic, and putting a round trip in the middle of the
-        // receive path is exactly what that design avoids. But unwaited is not unflushed. Under
-        // MPI a put with no following synchronisation has no guaranteed completion at all -- it
-        // lands at the next synchronisation call. On a host that is only receiving, the passes
-        // above find no payloads, so nothing above ever flushes, and the peer parks in
-        // credit-wait for a credit sitting in this host's own runtime.
-        //
-        // ON AN IDLE LAP *OR* ON A DEADLINE -- and the deadline is not optional.
-        //
-        // `!progressed` alone was the whole condition, on the reasoning that an idle thread is
-        // about to yield anyway so the flush is free. That holds while the window is small. It
-        // fails as the core count rises: with 64 slots something advances on nearly every lap,
-        // `progressed` is almost never false, and a credit posted by return_credit() can sit
-        // locally complete in this host's runtime indefinitely.
-	// 
-        // The flush also runs once kCreditFlushInterval has elapsed regardless of progress.
-        // That bounds credit latency by wall time rather than by whether this host happens to
-        // find an idle lap, which is the property the receive path actually needs. One clock read
-        // per lap against a lap that already does `n` send_polls is not a cost worth avoiding.
         const auto credit_now = std::chrono::steady_clock::now();
         if (!progressed || (credit_now - last_credit_flush_) >= kCreditFlushInterval) {
             bool flushed_any = false;
@@ -1046,16 +1039,9 @@ void D2H2H2DSocket::append_transport_stats(RunStats& s) const {
     // absent from the table.
     s.per_worker.push_back(sender_stats_);
 
-    // THE RESOLVED SHAPE, not what was requested.
     s.window = send_window_;
     s.sender_shape = send_blocking_ ? "blocking" : "windowed";
 
-    // The progress thread's post->completion samples, when the transport was built to measure
-    // them. FOLDED OVER EVERY PEER with the same Welford merge the distributions use -- taking
-    // one endpoint's figures would report a fraction of the run's completions as all of them.
-    //
-    // NOT w.bytes: total_bytes() sums that field and the sender has already counted these same
-    // payloads, so setting it would double the wall-clock throughput column.
     RetireStats rs{};
     for (Transport* t : peers_.all()) {
         const RetireStats one = t->retire_stats();
@@ -1083,27 +1069,12 @@ void D2H2H2DSocket::append_transport_stats(RunStats& s) const {
         d.max = rs.max_ns;
         d.mean = rs.mean_ns;
         d.m2 = rs.m2;
-        // SUM MUST BE SET TOO, or this row loses its mean. Dist::sum is the source of truth
-        // now and Dist::merge() recomputes mean as sum/n -- a Dist assigned a mean but no sum
-        // would come back through merged() reading zero. RetireStats carries a mean, not a
-        // sum, so it is reconstituted here; that is the one place in the code where sum is
-        // derived from mean rather than the other way round.
         d.sum = static_cast<uint64_t>(rs.mean_ns * static_cast<double>(rs.n));
         s.per_worker.push_back(w);
     }
 }
 
 void D2H2H2DSocket::dump_transport(std::string& into) const {
-    // A sender parked in state 2 or 3 is waiting for
-    // one specific operation, and these say whether the provider was given it (posted), whether
-    // anything came back (retired), and whether something came back that belonged to nobody
-    // (unmatched). A stall with outstanding=1 and unmatched=0 is a completion the provider never
-    // produced; unmatched>0 is one we failed to attribute.
-    //
-    // ONE LINE PER PEER, ACCUMULATED into a single stream rather than assigned per peer --
-    // assigning would leave only the last one, which is exactly the shape of bug this dump
-    // exists to catch. Summing them would hide an endpoint that stopped completing behind ones
-    // that did not.
     std::ostringstream m;
     for (Transport* tp_i : peers_.all()) {
         const TransportDiag d = tp_i->diag();
@@ -1123,9 +1094,6 @@ void D2H2H2DSocket::dump_transport(std::string& into) const {
 
 RunStats D2H2H2DSocket::collect() const {
     RunStats s = scanner_ ? scanner_->collect() : RunStats{};
-    // THE BRACKET: a duration only when both stamps landed and the end is after the start, so an
-    // aborted run writes an EMPTY throughput cell rather than a 0.0 that a sweep would average
-    // in.
     const uint64_t t0 = timed_start_ns_.load(std::memory_order_relaxed);
     const uint64_t t1 = timed_end_ns_.load(std::memory_order_relaxed);
     s.timed_ns = (t0 > 0 && t1 > t0) ? (t1 - t0) : 0;
@@ -1144,17 +1112,10 @@ std::string D2H2H2DSocket::stall_dump(const char* where) const {
       << " routed_remote=" << counters_.routed_remote.load()
       << " errors=" << counters_.errors.load() << "\n";
     m << "    sender: " << sender_state_.load() << "  (0=idle 1=credit-wait 2=payload 3=notice)\n";
-    // credit_flushes IS THE DISCRIMINATOR for a credit-wait stall: a peer parked short of its
-    // last credit while this number is not advancing means the credits are posted but unflushed,
-    // which is the failure the deadline in sender_loop() exists to prevent. A number that climbs
-    // while the peer still starves points somewhere else entirely -- the scan, or the wire.
     m << "    credit_flushes=" << credit_flushes_.load(std::memory_order_relaxed) << "\n";
     std::string t;
     dump_transport(t);
     m << t;
-    // Is the RX direction being scanned, and is the scanner rejecting what it finds? An armed,
-    // valid ctrl_rx that is never serviced is either not scanned or rejected, and those are
-    // different bugs. scan_rx is unconditional here, so only the rejects vary.
     m << "    scan_rx=yes  rejects:";
     for (uint32_t i = 0; i < 8; ++i) {
         const uint64_t n = counters_.rejects[i].load();
