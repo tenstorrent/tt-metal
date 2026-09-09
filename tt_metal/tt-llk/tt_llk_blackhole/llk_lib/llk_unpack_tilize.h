@@ -93,8 +93,9 @@ inline void _llk_unpack_tilize_init_(
     // programmed here.
     TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111);
 
-    // Program descriptor Z_dim = num_faces so Ch0 auto-addressing wraps at the
-    // correct face count. Mirrors the restore in _llk_unpack_tilize_uninit_.
+    // Descriptor Z_dim = num_faces, the per-operand baseline. It is consumed by the BFP
+    // exponent section size (XDim*YDim*ZDim*WDim), not by any address wrap: ZDim only
+    // multiplies ADC_ZW.W, which tilize clears to 0.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
