@@ -400,7 +400,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
     "inputs, output_shard_shape, shard_grid, strategy, layout",
     (
         (
-            # width concat, HEIGHT_SHARDED (DRAM)
+            # width concat, HEIGHT_SHARDED
             [((1, 1, 64, 32), (32, 32)), ((1, 1, 64, 32), (32, 32))],
             (32, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
@@ -408,7 +408,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
             ttnn.TILE_LAYOUT,
         ),
         (
-            # height concat, WIDTH_SHARDED (DRAM)
+            # height concat, WIDTH_SHARDED
             [((1, 1, 32, 64), (32, 32)), ((1, 1, 32, 64), (32, 32))],
             (64, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
@@ -416,42 +416,66 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
             ttnn.TILE_LAYOUT,
         ),
         (
-            # width concat, HEIGHT_SHARDED (DRAM), row-major
+            # width concat, HEIGHT_SHARDED, row-major: RM height-sharded pages span the full
+            # tensor width, so these flow through the generic factory natively
             [((1, 1, 32, 32), (16, 32)), ((1, 1, 32, 32), (16, 32))],
             (16, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ROW_MAJOR_LAYOUT,
         ),
+        (
+            # height concat, WIDTH_SHARDED, row-major: a width-sharded RM output pages by
+            # shard width, so this must be staged through an interleaved result
+            [((1, 1, 32, 64), (32, 32)), ((1, 1, 32, 64), (32, 32))],
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
     ),
+)
+@pytest.mark.parametrize(
+    "input_buffer_types",
+    [
+        (ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.L1),
+    ],
+    ids=["dram_dram", "l1_dram", "dram_l1", "l1_l1"],
 )
 @pytest.mark.parametrize("output_is_sharded", [False, True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_dram_sharded_concat(
-    device, inputs, output_shard_shape, shard_grid, strategy, layout, output_is_sharded, dtype
+    device, inputs, output_shard_shape, shard_grid, strategy, layout, input_buffer_types, output_is_sharded, dtype
 ):
+    if all(buffer_type == ttnn.BufferType.L1 for buffer_type in input_buffer_types) and not output_is_sharded:
+        pytest.skip("No DRAM sharding on either side; covered by test_sharded_concat")
+
     dim = 2 if strategy == ttnn.ShardStrategy.WIDTH else 3
 
-    def dram_shard_config(shard_shape):
+    def shard_config(shard_shape, buffer_type):
         tensor_memory_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             if strategy == ttnn.ShardStrategy.HEIGHT
             else ttnn.TensorMemoryLayout.WIDTH_SHARDED
         )
         shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        return ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.DRAM, shard_spec)
+        return ttnn.MemoryConfig(tensor_memory_layout, buffer_type, shard_spec)
 
+    assert len(inputs) == len(input_buffer_types)
     input_tensors = []
-    for shape, shard_shape in inputs:
+    for (shape, shard_shape), buffer_type in zip(inputs, input_buffer_types):
         torch_input_tensor = random_torch_tensor(dtype, shape)
         input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
-        input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_config(shard_shape))
+        input_tensor = ttnn.to_memory_config(input_tensor, shard_config(shard_shape, buffer_type))
         input_tensors.append((torch_input_tensor, input_tensor))
 
     torch_output_tensor = torch.concat([t for t, _ in input_tensors], dim=dim)
 
     if output_is_sharded:
-        output_memory_config = dram_shard_config(output_shard_shape)
+        output_memory_config = shard_config(output_shard_shape, ttnn.BufferType.DRAM)
     else:
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
@@ -460,6 +484,33 @@ def test_dram_sharded_concat(
     assert output.memory_config().is_sharded() == output_is_sharded
     output = ttnn.to_torch(output)
     assert_equal(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize("groups", [2, 4])
+@pytest.mark.parametrize(
+    "shape, shard_shape, memory_layout, layout",
+    (
+        ((1, 1, 64, 64), (32, 64), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TILE_LAYOUT),
+        ((1, 1, 32, 64), (32, 32), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    ids=["tile_height_sharded", "rm_width_sharded"],
+)
+def test_dram_sharded_concat_groups_rejected(device, expect_error, groups, shape, shard_shape, memory_layout, layout):
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    dram_config = ttnn.MemoryConfig(
+        memory_layout,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    input_tensors = []
+    for _ in range(2):
+        torch_input_tensor = random_torch_tensor(ttnn.bfloat16, shape)
+        input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=ttnn.bfloat16)
+        input_tensors.append(ttnn.to_memory_config(input_tensor, dram_config))
+
+    with expect_error(RuntimeError, "Groups > 1 is not supported for DRAM-sharded concat"):
+        ttnn.concat(input_tensors, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, groups=groups)
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
