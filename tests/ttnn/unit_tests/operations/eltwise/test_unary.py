@@ -2803,3 +2803,60 @@ def test_unary_preallocated_output_shape_match(device):
 
     assert list(result.shape) == shape
     assert_with_pcc(torch.exp(torch_input.float()), ttnn.to_torch(output_tensor).float(), 0.999)
+
+
+def test_unary_preallocated_output_shape_mismatch_program_cache_hit(device, expect_error):
+    """The same mismatch must be rejected on the program-cache-hit path.
+
+    compute_program_hash does not hash the output shape, so the mismatched call below hits the
+    cache entry the matching calls created. The check lives in compute_output_specs, which every
+    dispatch reaches, rather than only in the cache-miss validation.
+    """
+    device.enable_program_cache()
+
+    input_tensor = ttnn.from_torch(
+        torch.full([1, 1, 32, 32], 2.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    matching_output = ttnn.from_torch(
+        torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    mismatched_output = ttnn.from_torch(
+        torch.zeros([1, 1, 64, 64], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    ttnn.exp(input_tensor, output_tensor=matching_output)
+    entries = device.num_program_cache_entries()
+    assert entries > 0, "the matching call should have populated the program cache"
+    ttnn.exp(input_tensor, output_tensor=matching_output)
+    assert device.num_program_cache_entries() == entries, "the second matching call should be a cache hit"
+
+    with expect_error(RuntimeError, "Preallocated output shape must match computed shape"):
+        ttnn.exp(input_tensor, output_tensor=mismatched_output)
+    assert device.num_program_cache_entries() == entries, "the mismatched call must not compile a new program"
+
+
+def test_unary_preallocated_output_shape_mismatch_program_cache_disabled(device, expect_error):
+    """With the program cache off, compute_program_hash is never called, so validation is the
+    only thing left that can reach the check."""
+    device.disable_and_clear_program_cache()
+    try:
+        input_tensor = ttnn.from_torch(
+            torch.full([1, 1, 32, 32], 2.0, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        output_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 64, 64], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        with expect_error(RuntimeError, "Preallocated output shape must match computed shape"):
+            ttnn.exp(input_tensor, output_tensor=output_tensor)
+    finally:
+        device.enable_program_cache()

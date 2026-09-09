@@ -99,18 +99,10 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (output_tensor.has_value()) {
-        // Not compute_output_specs(): that returns the preallocated tensor's own spec whenever one
-        // is supplied, so taking the expected shape from it compares the tensor against itself and
-        // the TT_FATAL below can never fire. Unary ops are elementwise, so the shape the op would
-        // have produced is the input's logical shape -- which is exactly what compute_output_specs
-        // computes when no output tensor is preallocated.
-        const auto computed_output_shape = input_tensor.logical_shape();
-        const auto preallocated_output_shape = output_tensor->logical_shape();
-        TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
-            computed_output_shape,
-            preallocated_output_shape);
+        // The preallocated output's shape is checked inside compute_output_specs (binary_ng
+        // pattern), which also covers the program-cache-hit path. Call it here so the check still
+        // runs when the program cache is disabled and compute_program_hash is never reached.
+        compute_output_specs(args, tensor_args);
 
         TT_FATAL(
             output_tensor->layout() == input_tensor.layout(),
@@ -122,11 +114,20 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
 tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Unary is elementwise, so the shape the op produces is the input's logical shape.
+    const auto output_shape = tensor_args.input.logical_shape();
+
     if (tensor_args.output_tensor.has_value()) {
+        // Check before returning the preallocated spec: taking the expected shape from the return
+        // value instead would compare the preallocated tensor against itself.
+        const auto preallocated_output_shape = tensor_args.output_tensor->logical_shape();
+        TT_FATAL(
+            preallocated_output_shape == output_shape,
+            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
+            output_shape,
+            preallocated_output_shape);
         return tensor_args.output_tensor->tensor_spec();
     }
-
-    const auto output_shape = tensor_args.input.logical_shape();
 
     if (args.memory_config.is_sharded()) {
         const auto output_layout = tensor_args.input.layout();
