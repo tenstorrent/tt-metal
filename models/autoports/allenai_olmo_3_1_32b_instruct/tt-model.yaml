@@ -45,11 +45,11 @@ serve:
 
 serve_profiles:
   - name: p150
-    description: Single Blackhole chip (TP1), bfp4 MLP; 32k context. Widest compatibility.
+    description: Single Blackhole chip (TP1), bfp4 MLP; 16k context. Widest compatibility.
     hardware: p150
     mesh_device: P150
     max_num_seqs: 8
-    max_model_len: 32768                                          # VALIDATED by stage 04 (16384 fallback)
+    max_model_len: 16384                                          # VALIDATED by stage 04 (32k does not fit one 32 GB chip)
     env: {TT_METAL_VISIBLE_DEVICES: "0"}
   - name: p300
     description: One p300 board, both chips (TP2); 64k context. Needs a P300 host (2 chips); on a QuietBox-2 use p300x2.
@@ -78,7 +78,7 @@ card:
   description: >
     AI2's Olmo 3.1 32B Instruct (Apache-2.0), a fully open 32B dense decoder with sliding-window/full hybrid
     attention and 65k context, served on Tenstorrent Blackhole via vLLM with an OpenAI-compatible API including
-    native tool calling. Profiles: p150 (one chip, bfp4 MLP, 32k context), p300 (TP2, 64k), p300x2 (TP4, 64k).
+    native tool calling. Profiles: p150 (one chip, bfp4 MLP, 16k context), p300 (TP2, 64k), p300x2 (TP4, 64k).
   quickstart: |
     ### Use with your client
     ```bash
