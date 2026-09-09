@@ -901,7 +901,10 @@ class MultichipDecoder(OptimizedDecoder):
         if state_dtype == ttnn.float32:
             ttnn.copy(recurrent, self.caches["recurrent"])
         else:
-            ttnn.copy(ttnn.typecast(recurrent, state_dtype), self.caches["recurrent"])
+            # Typecast straight into the persistent cache.  The previous
+            # copy(typecast(...)) materialized the whole [batch, heads, 128, 128]
+            # state a second time for the copy to read; checked bit identical.
+            ttnn.typecast(recurrent, state_dtype, output_tensor=self.caches["recurrent"])
 
         output = ttnn.rms_norm(
             output, epsilon=self.eps, weight=self.weights["gated_norm"], memory_config=ttnn.DRAM_MEMORY_CONFIG

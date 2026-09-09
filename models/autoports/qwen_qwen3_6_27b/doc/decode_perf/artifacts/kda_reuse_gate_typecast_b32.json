@@ -1,0 +1,20 @@
+{
+  "label": "kda_reuse_gate_typecast",
+  "batch": 32,
+  "prefill_iters": 2,
+  "linear_prefill_chunk_size": 32,
+  "prompt_tokens": 128,
+  "ttft_ms_all": [
+    17845.395266078413,
+    17652.184640057385
+  ],
+  "ttft_ms_cold": 17845.395266078413,
+  "ttft_ms_warm_median": 17652.184640057385,
+  "cold_overhead_ms": 193.21062602102757,
+  "measured_decode_replays": 128,
+  "trace_capture_seconds": 0.6914197970181704,
+  "token_out_seconds": 11.361615284811705,
+  "ms_per_token": 88.76261941259145,
+  "token_out_t_s_u": 11.266003714376017,
+  "token_out_total_t_s": 360.51211886003256
+}

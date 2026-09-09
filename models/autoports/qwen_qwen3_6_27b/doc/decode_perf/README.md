@@ -13,8 +13,9 @@ the server runs (`readiness_vllm/server.log` line 18: `max_num_seqs: 32`).
 | | ms/step | t/s/u | total t/s |
 | --- | ---: | ---: | ---: |
 | baseline (`38153c48c8a`) | 237.88 | 4.20 | 134.5 |
-| **this branch** | **90.66** | **11.03** | **353.0** |
-| | **2.62x** | | |
+| `44e1aefadcc` (conv + matmul + mask gate) | 90.66 | 11.03 | 353.0 |
+| **this branch** (+ typecast into the cache) | **88.76** | **11.27** | **360.5** |
+| | **2.68x** | | |
 | target (`perf_targets.tput_user`, unvalidated — see below) | 24.4 | 41.0 | — |
 
 TTFT is unchanged: 17856 ms cold / 17644 ms warm against 17860 ms cold on the
@@ -22,6 +23,9 @@ baseline, same harness, same prompt. Nothing here touches prefill.
 
 Three things were wrong, in descending size, and none of them was a precision
 or algorithm question:
+
+0. (and a fourth, small one: the state was materialised twice on write, once
+   for a typecast and once for a copy.)
 
 1. **The four-tap causal convolution stores its tap axis on the tile
    dimension**, so every decode step shifts the window with a non-tile-aligned
@@ -249,9 +253,23 @@ inactive slots x 6 layers x 4 ranks, zero moved).
 
 Adding to the handoff's list, from the profile:
 
-- **The projections are healthy.** All 40 decode projections plus the two LM-head
-  chunks are 42 ops and 3.02 ms of the 8-layer step, at 48-77% of the FLOP
-  roofline. The DRAM-sharded 8-core program is not the bottleneck.
+- **The projections are healthy, and already optimal.** All 40 decode projections
+  plus the two LM-head chunks are 42 ops and 3.02 ms of the 8-layer step, at
+  48-77% of the FLOP roofline. Swept against the alternatives at the three shapes
+  that matter (`doc/decode_perf/`, one device, BFP4 weights, 32 rows):
+
+  | | 32x5120x4352 | 32x5120x4160 | 32x4352x5120 |
+  | --- | ---: | ---: | ---: |
+  | DRAM-sharded, 8 cores (shipped) | **47.8 us / 262 GB/s** | **45.1 / 265** | **46.9 / 267** |
+  | 1D multicast 11x8 (88 cores), interleaved | 47.7 / 263 | 45.4 / 264 | 48.7 / 257 |
+  | 1D multicast 11x10 (110 cores) | 49.8 / 252 | 47.5 / 252 | 50.9 / 246 |
+  | 1D multicast 8x8 (64 cores) | 50.2 / 250 | 48.9 / 245 | 50.7 / 247 |
+  | auto (no program config) | 98.6 / 127 | 96.2 / 125 | 92.6 / 135 |
+
+  Nothing beats 8 DRAM-sharded cores, and ~265 GB/s (52% of peak) is what a
+  32-row matmul reaches here. Unlike the two matmuls above, this one was tuned
+  correctly. It is worth recording as a negative result: the obvious "only 8 of
+  110 cores" reading of the decode projections is wrong.
 - **The collectives are minor.** 16 reduce-scatters at 21.7 us and 16
   all-gathers at 33.7 us is 0.89 ms of 31.17 ms, i.e. 2.9%; across 64 layers
   ~7 ms. The `Fabric packet size 4352 B is suboptimal` warning the server logs
@@ -278,7 +296,8 @@ given (237.9 -> 140.4 ms) and applying the other two to what remains:
 
 - 140.4 ms - 35 ms (matmul) - 13.5 ms (mask) = **~92 ms, 10.9 t/s/u**, 2.6x.
 
-Measured: **90.66 ms, 11.03 t/s/u**.
+Measured: **90.66 ms, 11.03 t/s/u** at `44e1aefadcc`, and 88.76 ms / 11.27 t/s/u
+once the state stopped being materialised twice on write.
 
 The floor without touching state traffic is roughly 48 x (0.52 projections +
 ~0.1 conv + ~0.35 remaining recurrent) + 16 x 0.721 + 1.7 = **~60 ms**. Getting
@@ -286,23 +305,37 @@ below that needs the state traffic itself cut, which is the next section.
 
 ## What is left, and what the target is worth
 
-Still on the table, unimplemented, in descending size:
+Still on the table, unimplemented, in descending size. These are measured from
+the post-change profile, not guessed.
 
-1. **State traffic.** The recurrence currently moves the `[32, 12, 128, 128]`
-   state about 240 MB per layer per device — typecast BFP8->BF16, broadcast
-   multiply by decay, two matmul reads, an outer-product write, a full add, a
-   typecast back and a copy. Read-once/write-once is 13.4 MB. In-place BFP8
-   arithmetic (no typecast round trip, no separate copy) gets to ~47 MB, 5x less.
-2. **One matmul instead of two.** `q @ (D + kᵀδ) = q@D + (q·kᵀ)δ` where
-   `q·kᵀ` is a scalar per (slot, head), so both projections read the *same*
-   matrix `D = S·decay` and can share one matmul, with a `[32,12,1,128]` dot
-   product as the only addition. Exact, and halves both the matmul cost and the
-   state reads it drives.
-3. **The M-tile padding.** Every state matmul has one logical M row padded to a
+1. **Head-space tile padding, ~17 ms.** After the conv, query/key/value are
+   reshaped to `[32, 12, 1, 128]` so the state matmul can see one matrix per
+   (slot, head). In TILE layout that pads M from 1 to 32, so every elementwise op
+   in head space — two L2 norms, the beta multiply, the gate multiply, the gated
+   RMS norm, the transposes, the repeat-interleaves — runs on 1.57 M elements to
+   touch 49 K. Those ops total ~560 us per GDN layer, ~17 ms of the step.
+   `[1, 1, 384, 128]` (slot-major, head-minor) is tile aligned with no padding
+   and keeps per-(slot, head) reductions on the last axis, so the same arithmetic
+   fits. The catch is that the reshape between that and `[32, 12, 1, 128]` is
+   real data movement in tile layout, so the win depends on doing *all* the
+   head-space work in the packed form and reshaping once, around the matmul and
+   the outer product only.
+2. **State traffic, ~10 ms.** What is left of the recurrence moves the
+   `[32, 12, 128, 128]` state about 90 MB per layer per device: a broadcast
+   multiply by decay, one matmul read, an outer-product write, a full add, and a
+   typecast into the cache. Read-once/write-once is 13.4 MB. Doing the arithmetic
+   in BFP8 rather than BF16 halves every one of those transfers, but it is a
+   precision change — measured here, multiplying straight off the BFP8 cache is
+   *not* bit identical to typecasting first (max 0.03 on unit-scale values), so
+   it needs its own validated cycle rather than being bundled in.
+3. **One matmul instead of two, ~3 ms.** `q @ (D + kᵀδ) = q@D + (q·kᵀ)δ` where
+   `q·kᵀ` is a scalar per (slot, head), so both projections read the same matrix
+   `D = S·decay` and can share one matmul. Algebraically exact, not bit exact.
+4. **The M-tile padding in the state matmul.** One logical M row padded to a
    32-row tile, so 31/32 of its arithmetic is waste. Only a batched mat-vec
-   primitive fixes this; nothing in ttnn offers one today.
-4. **Batch 1 gets none of the KDA win.** The fused decode path needs `K*B`
-   tile-aligned, so `B` must be a multiple of 8; batch 1 keeps the composite
+   primitive fixes that; nothing in ttnn offers one.
+5. **Batch 1 gets none of the conv win.** The fused decode path needs `K*B`
+   tile aligned, so `B` must be a multiple of 8; batch 1 keeps the composite
    conv. Batch-1 decode is already 50.1 ms/step (19.96 t/s/u) because the same
    layout thrash is 32x smaller there, but the composite is still what runs.
    `device_model_spec.max_num_seqs` in `doc/tti_release/autoport_release_spec.json`
@@ -314,24 +347,29 @@ On the 41 t/s/u target itself: it is not derived from this hardware.
 `model_performance_reference.json`'s entry for this model carries
 `ttft_ms 62.0` and `tput_user 41.0` flagged **"ASSUMED, NOT VALIDATED"**,
 extrapolated from Qwen3-32B on a **t3k (8 devices)** while this model runs on 4.
-41 t/s/u is a 24.4 ms step. The weight-read floor on 4 devices is ~7.4 ms at
-100% of DRAM peak, so the target is not physically excluded — but it needs the
-whole step within ~3.3x of peak bandwidth, and the honest reachable range from
-the items above is 60-90 ms, i.e. **11-17 t/s/u**. Saying so is more useful than
-carrying an unvalidated 10x gap.
+41 t/s/u is a 24.4 ms step. One decode step reads about 3.8 GB per device with
+every projection at BFP4, which is 7.4 ms at 100% of DRAM peak — so the target is
+not physically excluded. But the projections, the one part of the step that is
+purely a weight read, already run at their measured ceiling of ~265 GB/s (52% of
+peak) and contribute ~15 ms of the 88.76 ms on their own. Taking items 1-3 above
+at face value lands around **60 ms, ~17 t/s/u**, and getting under that needs
+either a batched mat-vec primitive or a fused gated-delta decode op. Quoting
+11-17 t/s/u as the reachable range on 4 devices is more useful than carrying an
+unvalidated 10x gap against a t3k extrapolation.
 
 ## Result
 
 `tests/full_model_perf_batch.py`, batch 32, all 32 rows carrying a real
 128-token prompt, 128 decode tokens over a captured token-out trace:
 
-| | baseline | this branch | |
+| | baseline | `44e1aefadcc` | this branch |
 | --- | ---: | ---: | ---: |
-| decode, ms/token | 237.88 | **90.66** | **2.62x** |
-| t/s/u | 4.20 | **11.03** | |
-| total throughput, t/s | 134.5 | **353.0** | |
-| TTFT cold, ms | 17860 | 17856 | 1.000x |
-| TTFT warm, ms | — | 17644 | |
+| decode, ms/token | 237.88 | 90.66 | **88.76** |
+| t/s/u | 4.20 | 11.03 | **11.27** |
+| total throughput, t/s | 134.5 | 353.0 | **360.5** |
+| speedup | 1.00x | 2.62x | **2.68x** |
+| TTFT cold, ms | 17860 | 17856 | 17849 |
+| TTFT warm, ms | — | 17644 | 17652 |
 
 Against the expectations above: predicted ~92 ms and 10.9 t/s/u, measured
 90.66 ms and 11.03 t/s/u. The per-layer decomposition also closes —
@@ -421,4 +459,36 @@ tt-perf-report tr8/reports/*/ops_perf_results_*.csv --arch blackhole \
 # A/B either change back off
 QWEN36_DECODE_STATE_MASK=blend ...        # mask blend instead of the gate
 QWEN36_PRECISION_CONFIG=<json with base_policy.linear_attention=linear_final>
+
+# program-config sweeps, one device, no model
+python models/autoports/qwen_qwen3_6_27b/doc/decode_perf/recurrent_matmul_sweep.py
+python models/autoports/qwen_qwen3_6_27b/doc/decode_perf/projection_matmul_sweep.py
+
+# correctness
+python models/autoports/qwen_qwen3_6_27b/tests/inactive_slot_state_b32.py --output out.json
+python models/autoports/qwen_qwen3_6_27b/tests/decode_logits_ab_b32.py \
+  --prompt PROMPT --output new.json --steps 32              # then again with the
+                                                            # other config and
+                                                            # --baseline new.json
+python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/check_conv_taps.py \
+  --multichip --active-mask --batch 32 --mode decode
+python models/autoports/qwen_qwen3_6_27b/doc/decode_perf/prefill_state_seam_probe.py \
+  --prompt PROMPT --output seam.pt                          # and --baseline seam.pt
 ```
+
+`artifacts/` holds every number quoted above: the layer sweep, both per-op
+reports (before and after), both program-config sweeps, the logits A/Bs, the
+prefill-state seam comparison and the perf points.
+
+## CI
+
+Benchmarks and evals were dispatched at `44e1aefadcc`, i.e. the 90.66 ms state,
+before the typecast change landed:
+
+| run | workflow |
+| --- | --- |
+| `34395177910` | benchmarks |
+| `34395194736` | evals |
+
+They queue behind `34360774551`, a benchmarks run dispatched earlier the same day
+from `38153c48c8a`, which is the right pre-change CI baseline to compare against.

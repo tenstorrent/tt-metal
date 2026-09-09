@@ -1,0 +1,128 @@
+[
+  {
+    "shape": "32x5120x4352",
+    "label": "mlp_gate/up",
+    "case": "dram-sharded 8 cores (shipped)",
+    "us": 47.76672770579656,
+    "gbps": 262.3951985406572
+  },
+  {
+    "shape": "32x5120x4352",
+    "label": "mlp_gate/up",
+    "case": "1D mcast 8x8 (64 cores), interleaved",
+    "us": 50.20469737549623,
+    "gbps": 249.65313317708478
+  },
+  {
+    "shape": "32x5120x4352",
+    "label": "mlp_gate/up",
+    "case": "1D mcast 11x10 (110 cores), interleaved",
+    "us": 49.78023159007231,
+    "gbps": 251.78187404213708
+  },
+  {
+    "shape": "32x5120x4352",
+    "label": "mlp_gate/up",
+    "case": "1D mcast 8x4 (32 cores), interleaved",
+    "us": 48.70986255506674,
+    "gbps": 257.3146246477399
+  },
+  {
+    "shape": "32x5120x4352",
+    "label": "mlp_gate/up",
+    "case": "1D mcast 11x8 (88 cores), interleaved",
+    "us": 47.71359575291475,
+    "gbps": 262.687391344517
+  },
+  {
+    "shape": "32x5120x4352",
+    "label": "mlp_gate/up",
+    "case": "auto, interleaved",
+    "us": 98.59763085842133,
+    "gbps": 127.12029580099671
+  },
+  {
+    "shape": "32x5120x4160",
+    "label": "gdn_packed_in",
+    "case": "dram-sharded 8 cores (shipped)",
+    "us": 45.146032546957336,
+    "gbps": 265.3788012831142
+  },
+  {
+    "shape": "32x5120x4160",
+    "label": "gdn_packed_in",
+    "case": "1D mcast 8x8 (64 cores), interleaved",
+    "us": 48.94730324546496,
+    "gbps": 244.76935817929947
+  },
+  {
+    "shape": "32x5120x4160",
+    "label": "gdn_packed_in",
+    "case": "1D mcast 11x10 (110 cores), interleaved",
+    "us": 47.54364490509033,
+    "gbps": 251.99582455061744
+  },
+  {
+    "shape": "32x5120x4160",
+    "label": "gdn_packed_in",
+    "case": "1D mcast 8x4 (32 cores), interleaved",
+    "us": 46.84895587464174,
+    "gbps": 255.73248701760141
+  },
+  {
+    "shape": "32x5120x4160",
+    "label": "gdn_packed_in",
+    "case": "1D mcast 11x8 (88 cores), interleaved",
+    "us": 45.36313936114311,
+    "gbps": 264.1087051894482
+  },
+  {
+    "shape": "32x5120x4160",
+    "label": "gdn_packed_in",
+    "case": "auto, interleaved",
+    "us": 96.2394755333662,
+    "gbps": 124.48945646889213
+  },
+  {
+    "shape": "32x4352x5120",
+    "label": "mlp_down",
+    "case": "dram-sharded 8 cores (shipped)",
+    "us": 46.93043107787768,
+    "gbps": 267.07106054920155
+  },
+  {
+    "shape": "32x4352x5120",
+    "label": "mlp_down",
+    "case": "1D mcast 8x8 (64 cores), interleaved",
+    "us": 50.668930634856224,
+    "gbps": 247.36578891557983
+  },
+  {
+    "shape": "32x4352x5120",
+    "label": "mlp_down",
+    "case": "1D mcast 11x10 (110 cores), interleaved",
+    "us": 50.86463255186876,
+    "gbps": 246.4140478596559
+  },
+  {
+    "shape": "32x4352x5120",
+    "label": "mlp_down",
+    "case": "1D mcast 8x4 (32 cores), interleaved",
+    "us": 51.31317302584648,
+    "gbps": 244.26008490425522
+  },
+  {
+    "shape": "32x4352x5120",
+    "label": "mlp_down",
+    "case": "1D mcast 11x8 (88 cores), interleaved",
+    "us": 48.744569843014084,
+    "gbps": 257.13141054205647
+  },
+  {
+    "shape": "32x4352x5120",
+    "label": "mlp_down",
+    "case": "auto, interleaved",
+    "us": 92.62522992988427,
+    "gbps": 135.31691105639192
+  }
+]
