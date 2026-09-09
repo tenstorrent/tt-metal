@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from tracy import perf_metrics_common as mc
 from tracy.perf_counter_analysis import COUNTER_TYPE_NAMES, PERF_COUNTER_CSV_HEADERS
 
@@ -42,6 +43,7 @@ def test_empty_view_yields_none_not_zero():
 
 
 def test_full_view_percentages_stay_bounded():
+    # Every counter present and equal: no _pct may leave 0..100 (cross-bank clamps are tested separately).
     names = set(COUNTER_TYPE_NAMES.values()) - {"UNDEF"}
     out = mc.compute_metrics(_View({n: 1000.0 for n in names}))
     for key, value in out.items():
@@ -55,7 +57,6 @@ def test_cross_bank_stalls_gate_on_missing_pack_counters():
     # complement would report a bogus 100% stall instead of N/A.
     out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE": 1500.0}))
     assert out["math_scoreboard_stall_pct"] is None
-    assert out["math_dest_wr_port_stall_pct"] is None
 
 
 def test_per_engine_packers_gate_on_wormhole_only_counters():
@@ -97,7 +98,7 @@ def test_formulas_with_distinct_values():
             "UNPACK0_BUSY_THREAD0": 600.0,
             "UNPACK1_BUSY_THREAD0": 400.0,
             "PACKER_BUSY": 1000.0,
-            "PACKER_DEST_READ_AVAILABLE": 250.0,
+            "PACKER0_DEST_READ_REQ": 250.0,
             "MATH_INSTRN_AVAILABLE_1": 1000.0,
         },
         cycles=2000.0,
@@ -119,7 +120,7 @@ def test_partial_captures_read_none_not_zero():
     out = mc.compute_metrics(_View({"UNPACK0_BUSY_THREAD0": 500.0, "UNPACK1_BUSY_THREAD0": 500.0}))
     assert out["compute_to_unpack_ratio"] is None
     # L1_1-only capture: the L1_0 composites have no inputs.
-    out = mc.compute_metrics(_View({"L1_1_EXT_UNPACKER_1": 100.0}))
+    out = mc.compute_metrics(_View({"L1_1_UNPACKER1_EXT_IF_1": 100.0}))
     assert out["l1_total_bw_pct"] is None
     assert out["risc_core_l1_util_pct"] is None
     assert out["noc_vs_compute_balance_pct"] is None
@@ -134,11 +135,33 @@ def test_idle_packer_engine_is_full_imbalance():
     assert out["packer_load_imbalance_pct"] is None
 
 
-def test_dest_write_port_stall_needs_a_ticking_counter():
-    out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE": 1000.0, "MATH_NOT_STALLED_DEST_WR_PORT": 0.0}))
-    assert out["math_dest_wr_port_stall_pct"] is None
-    out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE": 1000.0, "MATH_NOT_STALLED_DEST_WR_PORT": 750.0}))
-    assert out["math_dest_wr_port_stall_pct"] == 25.0
+def test_scoreboard_stall_is_gated_and_clamped():
+    # Cross-bank: the not-stalled count can exceed the unpack-bank denominator, which must read 0, not negative.
+    out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE": 1000.0}))
+    assert out["math_scoreboard_stall_pct"] is None
+    out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE": 1000.0, "MATH_NOT_SCOREBOARD_STALLED": 750.0}))
+    assert out["math_scoreboard_stall_pct"] == 25.0
+    out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE": 1000.0, "MATH_NOT_SCOREBOARD_STALLED": 1100.0}))
+    assert out["math_scoreboard_stall_pct"] == 0.0
+
+
+def test_instrn_wait_rates_need_their_counter():
+    # A capture without the WAITING_FOR_* counters (tt-2xx) must read None, not 0%.
+    out = mc.compute_metrics(_View({"THREAD_STALLS_0": 100.0, "THREAD_INSTRUCTIONS_0": 900.0}))
+    for key in ("math_wait_srca_pct", "any_thread_stall_pct", "move_instrn_avail_t0_pct", "stall_overlap_t0_ratio"):
+        assert out[key] is None, key
+    assert out["unpack0_thread1_share_pct"] is None
+    out = mc.compute_metrics(_View({"THREAD_STALLS_0": 100.0, "WAITING_FOR_SRCA_VALID": 50.0}, cycles=1000.0))
+    assert out["math_wait_srca_pct"] == 5.0
+
+
+def test_per_arch_port_names_feed_one_metric():
+    for name in ("L1_0_UNPACKER_1_ECC_PACK1", "L1_0_UNPACKER_1_ECC"):
+        out = mc.compute_metrics(_View({name: 250.0, mc.L1_PORT1_GRANT[name]: 200.0}, cycles=1000.0))
+        assert out["l1_port1_util_pct"] == 25.0
+        assert out["l1_port1_backpressure_pct"] == pytest.approx(20.0)
+    for name in ("L1_1_TDMA_PACKER_2", "L1_1_PACKER_IF_0"):
+        assert mc.compute_metrics(_View({name: 100.0}, cycles=1000.0))["l1_packer_port8_util_pct"] == 10.0
 
 
 def test_port1_side_of_the_read_write_split_follows_the_arch():
