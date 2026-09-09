@@ -97,21 +97,37 @@ class TokenAccuracy:
         return top1 / n, top5 / n, n
 
 
-def floors_for(model_args, seq_len):
-    """The pass marks: centralised targets when the model has them, the defaults otherwise.
+class PassMarks:
+    """The pass rule: centralised targets when the model has them, the default floors otherwise.
 
-    model_targets.yaml stores whole percentages (85 means 0.85) and the demo subtracts half a
-    point for rounding; the same is done here so the two agree on what passes.
+    Two rules, kept distinct because they round differently. model_targets.yaml stores whole
+    percentages (87 means 87%), and simple_text_demo.py compares against them the way CI does:
+    the measured fraction is rounded *up* to a whole percent, then must reach the target less
+    half a point -- so a measured 0.8612 passes a target of 87. This gate applies exactly that
+    rule where an entry exists, so a model that passes CI passes here. Without an entry the
+    default floors are fractions and compared directly.
     """
-    targets = resolve_accuracy_targets(
-        model_name=model_args.base_model_name, sku=model_args.device_name, batch_size=1, seq_len=seq_len
-    )
-    if targets and "top1" in targets and "top5" in targets:
-        return {
-            "top1": (float(targets["top1"]) - 0.5) / 100.0,
-            "top5": (float(targets["top5"]) - 0.5) / 100.0,
-        }, "models/model_targets.yaml"
-    return dict(DEFAULT_FLOORS), "default floors (no entry in models/model_targets.yaml)"
+
+    def __init__(self, model_args, seq_len):
+        targets = resolve_accuracy_targets(
+            model_name=model_args.base_model_name, sku=model_args.device_name, batch_size=1, seq_len=seq_len
+        )
+        if targets and "top1" in targets and "top5" in targets:
+            self.source = "models/model_targets.yaml"
+            self.percent_targets = {"top1": float(targets["top1"]), "top5": float(targets["top5"])}
+        else:
+            self.source = "default floors (no entry in models/model_targets.yaml)"
+            self.percent_targets = None
+
+    def describe(self, name):
+        if self.percent_targets is not None:
+            return f"{self.percent_targets[name]:.0f}% after rounding up to a whole percent"
+        return f"{DEFAULT_FLOORS[name]:.4f}"
+
+    def passes(self, name, value):
+        if self.percent_targets is not None:
+            return math.ceil(value * 100) >= self.percent_targets[name] - 0.5
+        return value >= DEFAULT_FLOORS[name]
 
 
 @pytest.mark.timeout(1800)
@@ -203,19 +219,18 @@ def test_token_accuracy(mesh_device, reset_seeds):
     logger.info(f"Decode took {time.perf_counter() - t_decode:.1f}s")
 
     top1, top5, n = token_acc.compute_accuracy()
-    floors, source = floors_for(model_args, seq_len=token_acc.input_prompt.shape[-1] + scored)
-    # Printed once each, as a fraction, before any mention of the floors: the loop reads the
+    marks = PassMarks(model_args, seq_len=token_acc.input_prompt.shape[-1] + scored)
+    # Printed once each, as a fraction, before any mention of the pass marks: the loop reads the
     # first `top-1 ... <number>` and `top-5 ... <number>` it sees as the measurement.
     logger.info(f"top-1 accuracy: {top1:.4f} over {n} teacher-forced predictions")
     logger.info(f"top-5 accuracy: {top5:.4f} over {n} teacher-forced predictions")
-    logger.info(f"pass marks from {source}: {floors['top1']:.4f} and {floors['top5']:.4f}")
+    logger.info(f"pass marks from {marks.source}: {marks.describe('top1')} and {marks.describe('top5')}")
 
-    flips = math.ceil((floors["top1"] - top1) * n) if top1 < floors["top1"] else 0
-    assert top1 >= floors["top1"], (
+    assert marks.passes("top1", top1), (
         f"{model_args.model_name} agreed with the reference's first choice on {top1:.4f} of {n} "
-        f"predictions, {flips} short of the {floors['top1']:.4f} mark ({source})"
+        f"predictions, under the {marks.describe('top1')} mark ({marks.source})"
     )
-    assert top5 >= floors["top5"], (
+    assert marks.passes("top5", top5), (
         f"{model_args.model_name} landed in the reference's top five on {top5:.4f} of {n} "
-        f"predictions, under the {floors['top5']:.4f} mark ({source})"
+        f"predictions, under the {marks.describe('top5')} mark ({marks.source})"
     )
