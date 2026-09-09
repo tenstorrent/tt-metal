@@ -123,6 +123,7 @@ private:
 
     // Storage for trace ids that are currently being recorded
     std::unordered_set<uint32_t> traces_being_recorded;
+    std::unordered_set<uint32_t> named_lane_threads;
 
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
