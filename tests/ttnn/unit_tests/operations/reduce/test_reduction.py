@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -468,25 +468,12 @@ skip_routed_topk_on_sim = pytest.mark.skipif(
     ),
 )
 
-# 128256 is neither a power of two nor below multi_core_max_width_exclusive, so it fails both
-# gates in topk_multicore_structurally_eligible and runs the single-core factory. That factory
-# splits work over tile ROWS only, and dim1=1 pads to a single tile row, so one core walks all
-# 4008 tiles serially. Wt is only the trip count of the incremental-insertion loop in
-# kernels/compute/topk.cpp -- there is no width-keyed branch -- so ttsim re-runs one code path
-# 4008 times and observes nothing a narrow cell does not already show. Measured 1391 s on
-# sim_wh_n150, ~20% of the whole reduce group's simulator budget.
-#
-# The rest of this directory's topk coverage is already deselected on ttsim for exactly this
-# reason (ttsim-skip-list.yaml: all of test_topk.py, plus test_2d_topk here, both under #54860);
-# this cell was missed in that pass. Hardware behaviour is unchanged, and HW coverage of this
-# shape is stricter elsewhere: test_topk.py::test_topk_large_2d_shapes runs
-# (1, 1, 32, 128256, dim=3, k=50) across sorted x largest x pass_indices_tensor and adds an
-# exact assert_equal on the values that this test does not make.
+
 skip_wide_topk_on_sim = pytest.mark.skipif(
     bool(os.environ.get("TT_METAL_SIMULATOR")),
     reason=(
         "128256-wide single-core topk costs ~23 min on ttsim and exercises no width-specific "
-        "code path; HW coverage lives in test_topk.py::test_topk_large_2d_shapes (#54791)"
+        "code path"
     ),
 )
 
