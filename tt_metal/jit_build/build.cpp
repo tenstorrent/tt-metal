@@ -841,6 +841,13 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     TTZoneScopedD(JIT);
+    // End-to-end JIT build wall time, recorded exactly once. The function-local static is the
+    // once-only timestamp: it is constructed (taking t0) on the first call to build() from any
+    // thread, and its destructor records the single delta at process exit. Because it is
+    // constructed after BuildCacheTelemetry::inst(), it is destroyed before the singleton, so the
+    // value lands before dump_metrics() runs.
+    static ScopedTelemetryTimer jit_build_e2e_timer(
+        BuildCacheTelemetry::inst().register_metric("JitBuildState::build_end_to_end"));
     auto t0_build = std::chrono::steady_clock::now();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);

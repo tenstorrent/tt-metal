@@ -5,12 +5,14 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -109,6 +111,37 @@ private:
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
     std::mutex owned_tokens_mutex_;
 };
+
+// Times the scope it lives in: takes a steady_clock timestamp on construction and records the
+// elapsed milliseconds in `token` on destruction. The token must outlive the timer -- references
+// from BuildCacheTelemetry::register_metric() are valid for the life of the inst() singleton.
+// The delta is recorded even when the scope is left by an exception.
+class ScopedTelemetryTimer {
+public:
+    explicit ScopedTelemetryTimer(TelemetryToken& token) :
+        token_(token), start_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedTelemetryTimer() {
+        token_.record(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_).count());
+    }
+
+    ScopedTelemetryTimer(const ScopedTelemetryTimer&) = delete;
+    ScopedTelemetryTimer& operator=(const ScopedTelemetryTimer&) = delete;
+    ScopedTelemetryTimer(ScopedTelemetryTimer&&) = delete;
+    ScopedTelemetryTimer& operator=(ScopedTelemetryTimer&&) = delete;
+
+private:
+    TelemetryToken& token_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+// Invokes `fn(args...)` and records how long it took (in ms) in `token`, forwarding both the
+// arguments and the return value through unchanged. The timing is recorded even if `fn` throws.
+template <typename Fn, typename... Args>
+decltype(auto) record_elapsed(TelemetryToken& token, Fn&& fn, Args&&... args) {
+    ScopedTelemetryTimer timer(token);
+    return std::forward<Fn>(fn)(std::forward<Args>(args)...);
+}
 
 TelemetryToken& per_target_telemetry_token(
     std::string_view metric_name, std::string_view target_name, std::string_view unit);
