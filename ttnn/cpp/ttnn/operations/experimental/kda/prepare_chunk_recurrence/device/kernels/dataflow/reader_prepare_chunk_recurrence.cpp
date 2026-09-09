@@ -22,8 +22,9 @@ inline void fill_constant_tiles(
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t faces_per_tile_row = tile_width / face_width;
     constexpr uint32_t faces_per_tile = tile_elements / face_elements;
-    constexpr uint32_t inverse_block_size = 8;
-    constexpr uint32_t mask_tile_count = 2;
+    constexpr uint32_t inverse_block_size = 4;
+    constexpr uint32_t inverse_pair_size = 2 * inverse_block_size;
+    constexpr uint32_t mask_tile_count = 3;
     constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
     constexpr uint32_t face_bytes = face_elements * sizeof(uint32_t);
 
@@ -58,16 +59,22 @@ inline void fill_constant_tiles(
         noc.async_read(self, ones, face_bytes, ones_face, {.offset_bytes = face * face_bytes});
     }
     noc.async_read(self, tril, face_bytes, ones_face, {.offset_bytes = faces_per_tile_row * face_bytes});
-    // Diagonal inverse blocks and their strict block-lower complement.
+    // The nested inverse consumes one mask per level: the 4-row diagonal blocks it inverts
+    // directly, the strict block-lower part that pairs those blocks into 8-row blocks, and the
+    // strict block-lower part that joins the 8-row blocks.
     volatile tt_l1_ptr uint32_t* masks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(block_masks.get_write_ptr());
     for (uint32_t row = 0; row < tile_height; ++row) {
         for (uint32_t column = 0; column < tile_width; ++column) {
             const uint32_t face = (row / face_height) * faces_per_tile_row + column / face_width;
             const uint32_t index = face * face_elements + (row % face_height) * face_width + column % face_width;
-            if (row / inverse_block_size == column / inverse_block_size) {
+            const bool same_block = row / inverse_block_size == column / inverse_block_size;
+            const bool same_pair = row / inverse_pair_size == column / inverse_pair_size;
+            if (same_block) {
                 masks[index] = fp32_one_bits;
-            } else if (row / inverse_block_size > column / inverse_block_size) {
+            } else if (same_pair) {
                 masks[tile_elements + index] = fp32_one_bits;
+            } else if (row / inverse_pair_size > column / inverse_pair_size) {
+                masks[2 * tile_elements + index] = fp32_one_bits;
             }
         }
     }

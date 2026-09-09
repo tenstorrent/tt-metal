@@ -121,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
-        make_dfb(block_masks_dfb, 2, fp32),
+        make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(scan_decay_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
@@ -140,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
         make_dfb(tile_workspace_0_dfb, 1, fp32),
-        // Horner keeps its current and replacement totals live together.
+        // The nested inverse reads its current level while packing the next one.
         make_dfb(tile_workspace_1_dfb, 2, fp32),
         make_dfb(tile_workspace_2_dfb, 1, fp32),
 

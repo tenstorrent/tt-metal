@@ -259,11 +259,14 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
     o.push_back(Mt * Nt);
 }
 
-// Invert four 8-row diagonal blocks without the large cancelling powers of PS4. Use
-// S <- I + N*S (six shared matmuls). For D=blockdiag(I-N), L=N_off,
-// M=D^-1 L is strictly block-lower with M^4=0. Thus
-// (I-N)^-1 = (I+M)(I+M^2)D^-1, requiring four more matmuls.
-inline void invert_block_horner8(
+// Invert (I-N) for the strictly lower N by nesting three block levels, so every matmul keeps
+// one strictly-lower factor and no large cancelling power of PS4 is ever formed.
+//   level 1: 4-row diagonal blocks. N1^4=0, so A = (I-N1)^-1 = I+N1(I+N1(I+N1)) in two matmuls.
+//   level 2: pair those blocks. M2 = A L2 satisfies M2^2=0, so B = (I+M2)A = A + M2 A.
+//   level 3: join the 8-row blocks. M3 = B L3 satisfies M3^4=0, so
+//            (I-N)^-1 = (I+M3)(I+M3^2)B.
+// Eight matmuls in total, two fewer than a single 8-row Horner series over the same input.
+inline void invert_block_nested(
     DataflowBuffer& negative_strict_lower_akk,
     DataflowBuffer& inverse,
     DataflowBuffer& identity,
@@ -271,11 +274,11 @@ inline void invert_block_horner8(
     DataflowBuffer& matrix,
     DataflowBuffer& total,
     DataflowBuffer& product) {
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);
+    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);  // N1
     matrix.wait_front(1);
     elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, total, 1);
     total.wait_front(1);
-    for (uint32_t step = 0; step < 6; ++step) {
+    for (uint32_t step = 0; step < 2; ++step) {
         matmul_blocks<1, 1, 1, false>(matrix, total, product);
         product.wait_front(1);
         // The two-entry total DFB holds the old and new Horner values together.
@@ -285,17 +288,30 @@ inline void invert_block_horner8(
         total.pop_front(1);
         product.pop_front(1);
     }
-    matrix.pop_front(1);
+    matrix.pop_front(1);  // total holds A
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, product);
+    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, matrix);  // L2
+    matrix.wait_front(1);
+    matmul_blocks<1, 1, 1, false>(total, matrix, product);  // M2 = A L2
     product.wait_front(1);
-    // -strict_lower(Akk) is dead after extracting L. Reuse its one-tile DFB
-    // below for I+M; all transactions remain one tile wide.
-    negative_strict_lower_akk.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(total, product, matrix);  // M = D^-1 L
+    matrix.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(product, total, matrix);  // M2 A
     matrix.wait_front(1);
     product.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(matrix, matrix, product);  // M^2
+    elementwise_binary<ElementwiseBinaryOp::Add>(total, matrix, total, 1);  // B = A + M2 A
+    total.wait_front(2);
+    total.pop_front(1);
+    matrix.pop_front(1);
+
+    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 2, product);  // L3
+    product.wait_front(1);
+    // -strict_lower(Akk) is dead after extracting L3. Reuse its one-tile DFB
+    // below for I+M3; all transactions remain one tile wide.
+    negative_strict_lower_akk.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(total, product, matrix);  // M3 = B L3
+    matrix.wait_front(1);
+    product.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(matrix, matrix, product);  // M3^2
     product.wait_front(1);
     elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, negative_strict_lower_akk, 1);
     negative_strict_lower_akk.wait_front(1);
@@ -303,7 +319,7 @@ inline void invert_block_horner8(
     elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, matrix, 1);
     matrix.wait_front(1);
     product.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(negative_strict_lower_akk, matrix, product);  // (I+M)(I+M^2)
+    matmul_blocks<1, 1, 1, false>(negative_strict_lower_akk, matrix, product);  // (I+M3)(I+M3^2)
     product.wait_front(1);
     negative_strict_lower_akk.pop_front(1);
     matrix.pop_front(1);
@@ -557,7 +573,7 @@ inline void prepare_t_inv(
         lower_akk.pop_front(chunk_matrix_tiles);
     }
 
-    invert_block_horner8(
+    invert_block_nested(
         akk,
         t_inv,
         identity,
@@ -701,9 +717,9 @@ TT_KERNEL void compute(uint32_t work_item_count) {
 
         prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
 
-        // All inverse scratch transactions are one tile. tile_workspace_1 has two entries
-        // so each Horner update can enqueue its replacement before popping the old total;
-        // its eight transactions per work item also return both cursors to their starting slot.
+        // All inverse scratch transactions are one tile. tile_workspace_1 has two entries so each
+        // level can enqueue its replacement before popping the old value; its four transactions
+        // per work item also return both cursors to their starting slot.
         prepare_t_inv<Ct>(
             akk,
             tril,
