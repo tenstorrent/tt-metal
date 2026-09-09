@@ -246,6 +246,7 @@ class ARGenerator:
         teacher_frame0_codes: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         collect_end_token_stats: bool = False,
+        generator: Optional[torch.Generator] = None,
     ) -> dict:
         """Run the AR stage.
 
@@ -260,6 +261,8 @@ class ARGenerator:
                 every later state); when ``None`` under teacher forcing they are sampled with ``seed``.
             text_ids: pre-built ``[2, L]`` token ids (skips the tokenizer).
             collect_end_token_stats: also return per-frame ``end_token_stats`` (diagnostics, host cost).
+            generator: an existing CPU ``torch.Generator`` to draw from instead of a fresh one seeded with
+                ``seed`` (the pipeline threads one generator through the AR draws and the DiT noise, as diffusers does).
         Returns:
             ``frame_hiddens`` ``[1, F, 32768]`` fp32, ``codes`` ``[F, 8]`` (semantic + 7 residual codes of
             each emitted frame), ``frames`` = F, ``frame0_codes`` ``[8]``, ``stopped_by`` (``"end_token"``,
@@ -277,7 +280,8 @@ class ARGenerator:
             teacher_codes = torch.as_tensor(teacher_codes, dtype=torch.int64)
             assert teacher_codes.dim() == 2 and teacher_codes.shape[1] == NUM_CODEBOOKS, tuple(teacher_codes.shape)
             max_frames = min(max_frames, teacher_codes.shape[0])
-        generator = torch.Generator().manual_seed(int(seed))
+        if generator is None:
+            generator = torch.Generator().manual_seed(int(seed))
         timings = {"prefill": 0.0, "llm_step": 0.0, "llm_steps": 0, "depth": 0.0, "host": 0.0, "per_frame": []}
 
         t0 = time.perf_counter()

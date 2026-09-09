@@ -1,0 +1,176 @@
+{
+  "_meta": {
+    "bf16_decode_seconds": 6.09464693069458,
+    "fp32_decode_seconds": 11.808468341827393,
+    "recorded_at": "2026-09-09 21:54:15",
+    "threads": 8,
+    "torch": "2.11.0+cpu"
+  },
+  "bf16": {
+    "frames": 862,
+    "length_mismatch_samples": 0,
+    "max_abs_db": 15.84498405456543,
+    "mean_abs_db": 0.5056469440460205,
+    "note": "vendored vocoder in bf16 on the golden latents (torch-vs-torch bf16 control)",
+    "rms_db": 1.1148786544799805,
+    "wav_pcc_vs_fp32": 0.9999734688499933,
+    "wav_pcc_vs_golden": 0.9999734665904751
+  },
+  "fp32": {
+    "frames": 862,
+    "length_mismatch_samples": 0,
+    "max_abs_db": 0.39318084716796875,
+    "max_abs_sample_err": 3.0517170671373606e-05,
+    "mean_abs_db": 0.004175154957920313,
+    "note": "vendored fp32 vocoder on the golden latents vs golden audio.wav (16-bit PCM)",
+    "rms_db": 0.010665010660886765,
+    "wav_pcc_vs_golden": 0.9999999971251708
+  },
+  "golden_stats": {
+    "adjacent_window_logmel_corr_max": 0.846140999233017,
+    "adjacent_window_logmel_corr_mean": 0.7437971875195224,
+    "band_energy_mean": [
+      0.35959522178656866,
+      0.5195179457533501,
+      0.0877503375293728,
+      0.03313649299450979
+    ],
+    "band_energy_per_window": [
+      [
+        0.0262,
+        0.1498,
+        0.6436,
+        0.1804
+      ],
+      [
+        0.7345,
+        0.2233,
+        0.0218,
+        0.0203
+      ],
+      [
+        0.3107,
+        0.6614,
+        0.0166,
+        0.0114
+      ],
+      [
+        0.0006,
+        0.9604,
+        0.0263,
+        0.0127
+      ],
+      [
+        0.3418,
+        0.6357,
+        0.0138,
+        0.0087
+      ],
+      [
+        0.4537,
+        0.4928,
+        0.0234,
+        0.03
+      ],
+      [
+        0.8233,
+        0.1432,
+        0.0171,
+        0.0165
+      ],
+      [
+        0.0083,
+        0.9545,
+        0.0215,
+        0.0158
+      ],
+      [
+        0.5374,
+        0.4547,
+        0.0056,
+        0.0023
+      ]
+    ],
+    "band_hz": [
+      [
+        0,
+        250
+      ],
+      [
+        250,
+        2000
+      ],
+      [
+        2000,
+        8000
+      ],
+      [
+        8000,
+        22050
+      ]
+    ],
+    "clipped_fraction": 5.557672764227642e-05,
+    "nan_count": 0,
+    "peak": 0.99993896484375,
+    "rms": 0.11605440718436658,
+    "rms_dbfs": -18.706767249798077,
+    "samples": 440832,
+    "seconds": 9.996190476190476,
+    "silence_fraction_1s": 0.0,
+    "spectral_flatness_mean": 0.02313471056615459,
+    "stereo_correlation": 0.500011745090085,
+    "window_rms_dbfs": [
+      -34.60964735873987,
+      -13.933140909787966,
+      -17.427353638283446,
+      -21.565512593098983,
+      -18.024603166955256,
+      -17.133077419800347,
+      -18.515634953502843,
+      -30.893444574046107,
+      -23.076390021238975
+    ]
+  },
+  "perturbed_0.98": {
+    "frames": 862,
+    "latent_pcc": 0.9799999996481136,
+    "length_mismatch_samples": 0,
+    "max_abs_db": 29.189775466918945,
+    "mean_abs_db": 2.4702444076538086,
+    "noise_scale": 0.4678425043821335,
+    "note": "fp32 vocoder on golden latents + white noise (scale 0.4678) at latent PCC 0.98000",
+    "rms_db": 3.8385934829711914,
+    "wav_pcc_vs_golden": 0.9748188867733707
+  },
+  "perturbed_0.99": {
+    "frames": 862,
+    "latent_pcc": 0.990000001541695,
+    "length_mismatch_samples": 0,
+    "max_abs_db": 25.573392868041992,
+    "mean_abs_db": 1.7187764644622803,
+    "noise_scale": 0.3271271735429764,
+    "note": "fp32 vocoder on golden latents + white noise (scale 0.3271) at latent PCC 0.99000",
+    "rms_db": 2.739349365234375,
+    "wav_pcc_vs_golden": 0.9858154956215138
+  },
+  "perturbed_0.9996": {
+    "frames": 862,
+    "latent_pcc": 0.9996000000404969,
+    "length_mismatch_samples": 0,
+    "max_abs_db": 9.851982116699219,
+    "mean_abs_db": 0.3457587659358978,
+    "noise_scale": 0.06496987119317055,
+    "note": "fp32 vocoder on golden latents + white noise (scale 0.0650) at latent PCC 0.99960",
+    "rms_db": 0.5780710577964783,
+    "wav_pcc_vs_golden": 0.9992448066264278
+  },
+  "unrelated_noise_latents": {
+    "frames": 862,
+    "length_mismatch_samples": 0,
+    "max_abs_db": 59.08515167236328,
+    "mean_abs_db": 19.82523536682129,
+    "note": "fp32 vocoder on pure noise latents (unrelated audio; scale of the metric)",
+    "rms_db": 23.77973175048828,
+    "wav_pcc_vs_golden": -0.006750581175242311
+  }
+}

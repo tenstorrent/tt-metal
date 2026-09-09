@@ -498,10 +498,17 @@ class FlowTransformer(LightweightModule):
         ttnn.deallocate(x)
         return out
 
-    def release(self) -> None:
-        self.weights.deallocate_weights()
+    def clear_caches(self) -> None:
+        """Free the per-shape RoPE / mask / timestep-selector tensors (they are re-created on demand).
+
+        The pipeline calls this after every song: these tensors are allocated lazily while the AR traces already
+        exist, so they must not stay alive across the next AR run (a trace replay may reuse their addresses)."""
         for cache in (self._rope_cache, self._mask_cache, self._time_selector_cache):
             for v in cache.values():
                 for tt in v if isinstance(v, tuple) else (v,):
                     ttnn.deallocate(tt)
             cache.clear()
+
+    def release(self) -> None:
+        self.weights.deallocate_weights()
+        self.clear_caches()
