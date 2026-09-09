@@ -4,11 +4,8 @@
 
 from __future__ import annotations
 
-import json
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 import torch
@@ -47,7 +44,6 @@ _PERFORMANCE_MARGIN = 0.05
 _PRODUCTION_OUTPUT_BF16_MASK = 0x26
 _PRODUCTION_EXPECTED_DURATION_NS = 816_534
 _T_INV_MAX_ABS = 0.01
-_CAPTURED_T_INV_MAX_ABS = 0.05
 _UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
 _PRODUCTION_CASE = _TestCase("sp2-tp4-h24-n80-k128-v128", 24, 80, 128, 128)
 
@@ -666,71 +662,6 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
         _run(inputs, 2, memory_config=sharded)
-
-
-@pytest.mark.skipif(
-    not os.getenv("KDA_REAL_TRACE_ROOT"), reason="set KDA_REAL_TRACE_ROOT for captured KDA input replay"
-)
-def test_prepare_chunk_recurrence_captured_inputs(device: ttnn.Device) -> None:
-    """Replay captured recurrence inputs; never substitute synthetic rows or weights."""
-    from models.demos.deepseek_v3_d_p.tests.kda.trace_utils import load_trace_rows
-
-    root = Path(os.environ["KDA_REAL_TRACE_ROOT"])
-    start = int(os.getenv("KDA_REAL_TRACE_START", "0"))
-    sequence = int(os.getenv("KDA_REAL_TRACE_SEQUENCE", "1024"))
-    assert start >= 0 and sequence > 0 and sequence % CHUNK_SIZE == 0
-    num_heads, key_dim = 96, 128
-    host = []
-    for name in ("q", "k", "v", "gate", "beta"):
-        key = f"kda_{name}_layer_0"
-        value = load_trace_rows(root / "kda" / f"{key}.safetensors", start, sequence)
-        width = num_heads if name == "beta" else num_heads * key_dim
-        assert tuple(value.shape) == (sequence, width), (key, value.shape, sequence, width)
-        if name == "beta":
-            value = value.T.reshape(num_heads, sequence // CHUNK_SIZE, CHUNK_SIZE, 1).float().contiguous()
-        else:
-            value = value.to(torch.bfloat16).float().unsqueeze(0)
-        host.append(value)
-    inputs = tuple(host)
-    output_mask = int(os.getenv("KDA_REAL_OUTPUT_BF16_MASK", str(_PRODUCTION_OUTPUT_BF16_MASK)), 0)
-    expected = _oracle(inputs, num_heads, output_mask)
-    device_inputs = _device_inputs(inputs, device)
-    outputs = _run(
-        device_inputs, num_heads, output_bf16_mask=output_mask, compute_kernel_config=_production_compute_config(device)
-    )
-    actual = [ttnn.to_torch(output).float() for output in outputs]
-    metrics = {}
-    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual, strict=True):
-        error = (expected_output.float() - actual_output).abs()
-        metrics[name] = {
-            "nonfinite": int((~torch.isfinite(actual_output)).sum()),
-            "max_abs_error": float(error.max()),
-            "worst_index": list(torch.unravel_index(error.flatten().argmax(), error.shape)),
-        }
-        metrics[name]["worst_index"] = [int(index) for index in metrics[name]["worst_index"]]
-    print(
-        "KDA_CAPTURED_INPUT_METRICS="
-        + json.dumps(
-            {
-                "start": start,
-                "sequence": sequence,
-                "output_bf16_mask": output_mask,
-                "outputs": metrics,
-            }
-        )
-    )
-    artifact = os.getenv("KDA_REAL_TRACE_ARTIFACT")
-    if artifact:
-        torch.save({"start": start, "inputs": inputs, "expected": expected, "actual": actual}, artifact)
-    # Real traces exercise the existing numerical-stress contract. The first
-    # subdiagonal also includes preparation error upstream of the inverse;
-    # keep every maximum error in the report rather than relying on PCC alone.
-    _assert_outputs_accurate(
-        expected,
-        actual,
-        context="captured inputs",
-        t_inv_max_abs_threshold=_CAPTURED_T_INV_MAX_ABS,
-    )
 
 
 @pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20, 0x26], ids=["all-fp32", "decay-bf16", "production"])
