@@ -162,10 +162,10 @@ COUNTER_TYPE_NAMES = {
     129: "DEST_READ_GRANTED_2",
     130: "DEST_READ_GRANTED_3",
     131: "MATH_NOT_STALLED_DEST_WR_PORT",
-    # L1 bank 4 (BH only): ext packers 6-7, tag search, unpacker 0's extended read interfaces 1-5
+    # L1 bank 4 (BH only): ext packers 6-7, packer interface 1 (+ tag search), unpacker 0's extended read interfaces 1-5
     132: "L1_4_EXT_PACKER_6",
     133: "L1_4_EXT_PACKER_7",
-    134: "L1_4_TAG_SEARCH_PACKER_1",
+    134: "L1_4_PACKER_IF_1_TAG_SEARCH",
     135: "L1_4_UNPACKER0_EXT_IF_1",
     136: "L1_4_UNPACKER0_EXT_IF_2",
     137: "L1_4_UNPACKER0_EXT_IF_3",
@@ -174,7 +174,7 @@ COUNTER_TYPE_NAMES = {
     # L1 Bank 4 grant counters
     140: "L1_4_EXT_PACKER_6_GRANT",
     141: "L1_4_EXT_PACKER_7_GRANT",
-    142: "L1_4_TAG_SEARCH_PACKER_1_GRANT",
+    142: "L1_4_PACKER_IF_1_TAG_SEARCH_GRANT",
     143: "L1_4_UNPACKER0_EXT_IF_1_GRANT",
     144: "L1_4_UNPACKER0_EXT_IF_2_GRANT",
     145: "L1_4_UNPACKER0_EXT_IF_3_GRANT",

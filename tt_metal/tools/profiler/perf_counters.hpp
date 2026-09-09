@@ -150,11 +150,11 @@ enum PerfCounterType : std::uint16_t {
     DEST_READ_GRANTED_2,
     DEST_READ_GRANTED_3,
     MATH_NOT_STALLED_DEST_WR_PORT,
-    // L1 Bank 4 (BH only, mux=4, ports 32-39): extended packers 6-7, tag search, unpacker 0's extended read
-    // interfaces 1-5 (ports 35-39).
+    // L1 Bank 4 (BH only, mux=4, ports 32-39): extended packers 6-7, packer L1 interface 1 (port 34, shared with the
+    // tag-search accelerator, debug L1 RAM and timestamp), unpacker 0's extended read interfaces 1-5 (ports 35-39).
     L1_4_EXT_PACKER_6,
     L1_4_EXT_PACKER_7,
-    L1_4_TAG_SEARCH_PACKER_1,
+    L1_4_PACKER_IF_1_TAG_SEARCH,
     L1_4_UNPACKER0_EXT_IF_1,
     L1_4_UNPACKER0_EXT_IF_2,
     L1_4_UNPACKER0_EXT_IF_3,
@@ -162,7 +162,7 @@ enum PerfCounterType : std::uint16_t {
     L1_4_UNPACKER0_EXT_IF_5,
     L1_4_EXT_PACKER_6_GRANT,
     L1_4_EXT_PACKER_7_GRANT,
-    L1_4_TAG_SEARCH_PACKER_1_GRANT,
+    L1_4_PACKER_IF_1_TAG_SEARCH_GRANT,
     L1_4_UNPACKER0_EXT_IF_1_GRANT,
     L1_4_UNPACKER0_EXT_IF_2_GRANT,
     L1_4_UNPACKER0_EXT_IF_3_GRANT,
