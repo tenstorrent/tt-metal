@@ -152,14 +152,14 @@ template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
-    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED);
 ```
 
 **Parameters**:
 - **`target_graph`**: The subgraph pattern to find (logical mesh).
 - **`global_graph`**: The larger host graph to search in (physical machine/cluster).
-- **`constraints`**: The set of required and preferred constraints.
+- **`constraints`**: Required and preferred constraints. **Not const** — in RELAXED mode the solver adds highest-degree global nodes as preferred (unioned with any already set), so later solves on the same object reuse that bias.
 - **`connection_validation_mode`**: (Optional) Validation strictness for channel counts.
 
 ## Usage Examples
