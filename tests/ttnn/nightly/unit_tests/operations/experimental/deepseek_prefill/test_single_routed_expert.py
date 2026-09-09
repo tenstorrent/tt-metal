@@ -149,40 +149,41 @@ def run_single_routed_expert(
     logger.debug("Running torch reference...")
     with torch.no_grad():
         torch_output_active = torch_expert(torch_active)
-        if torch_activation == ACTIVATION_SITU and min_cap_frac is not None:
-            # How far into each tanh cap the inputs actually reach, so a saturation case can't
+        if min_cap_frac is not None:
+            # How far into each cap the inputs actually reach, so a saturation case can't
             # silently degrade into a near-linear run. Only the cases that assert it pay for the
             # two extra host matmuls (~225 GFLOP at the 5120-token shape, and the perf harness
             # calls this body once per iteration).
             gate_out = torch.nn.functional.linear(torch_active, weights["gate_proj"])
             up_out = torch.nn.functional.linear(torch_active, weights["up_proj"])
-            gate_frac = (gate_out.abs() > _SITU_BETA_GATE).float().mean().item()
-            up_frac = (up_out.abs() > _SITU_BETA_UP).float().mean().item()
-            logger.info(
-                f"SiTU-GLU cap coverage: |gate|>{_SITU_BETA_GATE}: {gate_frac:.1%}, "
-                f"|up|>{_SITU_BETA_UP}: {up_frac:.1%}"
-            )
             gate_min, up_min = min_cap_frac
-            assert gate_frac >= gate_min, f"gate cap coverage {gate_frac:.1%} below {gate_min:.1%}"
-            assert up_frac >= up_min, f"up cap coverage {up_frac:.1%} below {up_min:.1%}"
-        elif torch_activation == ACTIVATION_CLAMPED_SILU_GLU and min_cap_frac is not None:
-            # Each tail on its own count, never an |x| aggregate: a clamp applied to one side
-            # only would otherwise pass on the other side's coverage. gate<-L is included even
-            # though the kernel does not clamp there, so the stimulus keeps reaching the region
-            # where a two-sided gate clamp would differ.
-            gate_out = torch.nn.functional.linear(torch_active, weights["gate_proj"])
-            up_out = torch.nn.functional.linear(torch_active, weights["up_proj"])
-            lim = CLAMPED_SILU_GLU_LIMIT
-            gate_min, up_min = min_cap_frac
-            tails = [
-                (f"gate>{lim}", (gate_out > lim).float().mean().item(), gate_min),
-                (f"gate<-{lim}", (gate_out < -lim).float().mean().item(), gate_min),
-                (f"up>{lim}", (up_out > lim).float().mean().item(), up_min),
-                (f"up<-{lim}", (up_out < -lim).float().mean().item(), up_min),
-            ]
-            logger.info("clamped SiLU-GLU cap coverage: " + ", ".join(f"{name}: {frac:.1%}" for name, frac, _ in tails))
-            for name, frac, floor in tails:
-                assert frac >= floor, f"{name} coverage {frac:.1%} below {floor:.1%}"
+
+            if torch_activation == ACTIVATION_SITU:
+                gate_frac = (gate_out.abs() > _SITU_BETA_GATE).float().mean().item()
+                up_frac = (up_out.abs() > _SITU_BETA_UP).float().mean().item()
+                logger.info(
+                    f"SiTU-GLU cap coverage: |gate|>{_SITU_BETA_GATE}: {gate_frac:.1%}, "
+                    f"|up|>{_SITU_BETA_UP}: {up_frac:.1%}"
+                )
+                assert gate_frac >= gate_min, f"gate cap coverage {gate_frac:.1%} below {gate_min:.1%}"
+                assert up_frac >= up_min, f"up cap coverage {up_frac:.1%} below {up_min:.1%}"
+            elif torch_activation == ACTIVATION_CLAMPED_SILU_GLU:
+                # Each tail counted on its own, never an |x| aggregate: a one-sided clamp would
+                # otherwise pass on the other side's coverage. gate<-L is included even though the
+                # kernel does not clamp there, so the stimulus keeps reaching the region where a
+                # two-sided gate clamp would differ.
+                lim = CLAMPED_SILU_GLU_LIMIT
+                tails = [
+                    (f"gate>{lim}", (gate_out > lim).float().mean().item(), gate_min),
+                    (f"gate<-{lim}", (gate_out < -lim).float().mean().item(), gate_min),
+                    (f"up>{lim}", (up_out > lim).float().mean().item(), up_min),
+                    (f"up<-{lim}", (up_out < -lim).float().mean().item(), up_min),
+                ]
+                logger.info(
+                    "clamped SiLU-GLU cap coverage: " + ", ".join(f"{name}: {frac:.1%}" for name, frac, _ in tails)
+                )
+                for name, frac, floor in tails:
+                    assert frac >= floor, f"{name} coverage {frac:.1%} below {floor:.1%}"
     logger.debug(f"Torch output shape: {torch_output_active.shape}")
 
     # Create TTNN input: 2D (allocated_tokens, emb_dim), replicated across the 1-device mesh.

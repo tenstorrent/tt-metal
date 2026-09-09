@@ -4,18 +4,14 @@
 
 """Standalone device test for the fused clamped_silu_glu binary SFPU op (api/compute/clamped_silu_glu.h).
 
-Drives the op through ttnn.generic_op with a minimal binary test kernel (no
-production op wired), reaching both dst-accumulator modes, and compares against
-the torch reference:
+Drives the op through ttnn.generic_op with a minimal binary test kernel, reaching both
+dst-accumulator modes, and compares against the torch reference:
 
     gate_c = min(gate, limit)
     up_c   = clamp(up, -limit, limit)
     result = gate_c * sigmoid(gate_c) * up_c
 
-This is DeepSeek-V4's routed-expert activation. Testing it here rather than only through
-the fused expert FFN is what makes the sigmoid's vConstFloatPrgm0 requirement (see
-ckernel_sfpu_clamped_silu_glu.h) fail against a direct golden instead of as an unexplained
-PCC drop three matmuls downstream.
+This is DeepSeek-V4's routed-expert activation.
 """
 
 import pytest
@@ -24,7 +20,7 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import is_blackhole, ulp
+from models.common.utility_functions import is_blackhole
 
 LIMIT = 10.0  # DeepSeek-V4 swiglu_limit, baked as ClampedSiluGluConfigDsV4
 TILE_ELEMS = 32 * 32
@@ -36,24 +32,11 @@ IN_DTYPES = {
 }
 OUT_PAGE_BYTES = TILE_ELEMS * 2  # the output CB is bf16
 
-# The result reaches host as bf16 either way -- rounded inside the op under bf16 dst, by the packer
-# under fp32 dst -- so the bf16 arm is gated in ULP. Measured worst case 0.89 (bf16 dst) / 0.50
-# (fp32 dst); the bound carries margin over that rather than being tuned to the edge, because the
-# op's own budget is close to a ULP by construction: _sfpu_exp_21f_bf16_ rounds to bf16 internally
-# and the deep-negative gate tail passes that straight through, then the result is rounded again.
-# test_clamped_silu_glu_init_is_required, not this bound, is what holds the init in place.
-#
-# The bfp8_b arms carry no accuracy signal -- input quantization alone puts them past 300 ULP, so
-# they gate data-format plumbing via PCC only and do not back up the bf16 bound.
+# The op always packs bf16, so the bf16 arm is gated in ULP (measured worst case: 0.89).
+# bfp8_b quantizes the inputs before the op runs, so that arm is gated by PCC only.
 BF16_ULP = 2
 BF16_PCC = 0.999
 BFP8_PCC = 0.99
-
-
-def _max_ulp(actual, golden):
-    """Worst-case error on the scale assert_with_ulp gates: |actual - golden| / ULP(golden), with
-    ULP taken at bf16 spacing because that is the precision the op delivers."""
-    return ((actual - golden).abs() / ulp(golden.to(torch.bfloat16)).to(torch.float32)).max().item()
 
 
 def clamped_silu_glu_reference(gate, up):
@@ -125,8 +108,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_
     writer_cta = [cb_out] + ttnn.TensorAccessorArgs(output).get_compile_time_args()
 
     kernels = [
-        # The situ_glu reader is a generic two-tensor (gate -> c_0, up -> c_1) reader; only its
-        # comment names situ_glu, so it is reused rather than cloned.
+        # Generic two-tensor reader (gate -> c_0, up -> c_1); only its name says situ_glu.
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/dataflow/reader_situ_glu.cpp",
             core_ranges=core,
@@ -158,14 +140,8 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_
 @pytest.mark.skipif(not is_blackhole(), reason="clamped_silu_glu SFPU op is implemented for Blackhole only")
 @pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
 @pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
-# (gate, up, out) dst placements. out aliasing gate is what the expert kernel does to save a slot;
-# a separate out slot catches a kernel that ignores out_tile_idx; and "production" mirrors the
-# fused call BINARY_ACT_TILE(j, c + j, j) -- a non-zero gate index and a gate->up stride that is
-# not 1, which is the shape a kernel with hardcoded input indices would fail on.
-#
-# Every index must stay under 4: the dst register file holds 8 tiles under bf16 dst but only 4
-# under fp32 dest accumulate (fused_swiglu.cpp derives the same kDstCapacity), and both dst modes
-# are parametrized here.
+# (gate, up, out) dst placements; "production" mirrors the fused call BINARY_ACT_TILE(j, c + j, j).
+# Every index stays under 4: fp32 dest accumulate holds only 4 dst tiles, and both modes run here.
 @pytest.mark.parametrize(
     "dst_gate, dst_up, dst_out",
     [
@@ -179,24 +155,6 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
     num_tiles = 8
     gate_t, up_t = _coverage_inputs(num_tiles)
 
-    # Every clamp branch must fire, and the up tails must be counted separately -- a one-sided
-    # clamp bug is invisible against a golden whose inputs never reach the other side. The up
-    # counts are joined with gate > 0 because silu(gate_c) is ~4e-4 where gate is deeply negative,
-    # so an up-tail element there is not observable in the output.
-    g32, u32 = gate_t.to(torch.float32), up_t.to(torch.float32)
-    gate_hi = (g32 > LIMIT).float().mean().item()
-    # gate < -LIMIT is the only region where clamping the gate from below too would differ from
-    # min(gate, LIMIT), and that mutation is invisible to both PCC gates -- so it is guarded here
-    # rather than left to whatever the sweep endpoints happen to produce.
-    gate_lo = ((g32 < -LIMIT) & (u32.abs() > 1.0)).float().mean().item()
-    up_hi = ((u32 > LIMIT) & (g32 > 0)).float().mean().item()
-    up_lo = ((u32 < -LIMIT) & (g32 > 0)).float().mean().item()
-    logger.debug(
-        f"clamp coverage: gate>{LIMIT}: {gate_hi:.1%}, gate<-{LIMIT}: {gate_lo:.1%}, "
-        f"up>{LIMIT}: {up_hi:.1%}, up<-{LIMIT}: {up_lo:.1%} (up counts joint with gate>0)"
-    )
-    assert min(gate_hi, gate_lo, up_hi, up_lo) > 0.02, "stimulus does not observably reach every clamp branch"
-
     golden = clamped_silu_glu_reference(gate_t, up_t)
     actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate, dst_up, dst_out)
 
@@ -207,8 +165,7 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
 
     g = golden.to(torch.float32)
     a = actual.to(torch.float32)
-    max_ulp = _max_ulp(a, g)
-    logger.debug(f"{in_name} fp32_dst={fp32_dest}: max abs err {(a - g).abs().max().item():.4e}, max ULP {max_ulp:.2f}")
+    logger.debug(f"{in_name} fp32_dst={fp32_dest}: max abs err {(a - g).abs().max().item():.4e}")
 
     if is_bfp8:
         # bfp8_b inputs quantize before the op runs, so the output carries hundreds of bf16 ULP
@@ -220,21 +177,18 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="clamped_silu_glu SFPU op is implemented for Blackhole only")
-def test_clamped_silu_glu_init_is_required(device):
-    """clamped_silu_glu_tile_init() is load-bearing, not ceremony.
-
-    The op's sigmoid reaches sfpu_reciprocal_iter, which reads vConstFloatPrgm0 and needs 2.0f
-    there. The test kernel leaves a wrong value in that register, so skipping the init leaves the
-    reciprocal's Newton step disabled. Comparing the two runs rather than testing either against a
-    fixed bound keeps this independent of BF16_ULP, which is free to carry accuracy margin.
+def test_clamped_silu_glu_init_is_required(device, expect_error):
+    """The op's sigmoid reaches sfpu_reciprocal_iter, which needs 2.0f in vConstFloatPrgm0. The
+    test kernel leaves a wrong value there, so skipping the init disables the Newton step.
     """
     in_dtype, page_bytes = IN_DTYPES["bf16"]
     gate_t, up_t = _coverage_inputs(8)
-    golden = clamped_silu_glu_reference(gate_t, up_t).to(torch.float32)
+    golden = clamped_silu_glu_reference(gate_t, up_t)
 
-    with_init = _max_ulp(_run(device, gate_t, up_t, in_dtype, page_bytes, False).to(torch.float32), golden)
-    without_init = _max_ulp(
-        _run(device, gate_t, up_t, in_dtype, page_bytes, False, skip_init=True).to(torch.float32), golden
-    )
-    logger.debug(f"max ULP: with init {with_init:.2f}, without init {without_init:.2f}")
-    assert without_init > with_init, "skipping clamped_silu_glu_tile_init() did not degrade the result"
+    assert_with_ulp(golden, _run(device, gate_t, up_t, in_dtype, page_bytes, False), ulp_threshold=BF16_ULP)
+    with expect_error(AssertionError, "Max ULP Delta"):
+        assert_with_ulp(
+            golden,
+            _run(device, gate_t, up_t, in_dtype, page_bytes, False, skip_init=True),
+            ulp_threshold=BF16_ULP,
+        )

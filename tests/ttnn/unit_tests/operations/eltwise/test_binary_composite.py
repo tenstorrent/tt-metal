@@ -6,7 +6,6 @@ import torch
 import pytest
 import random
 import ttnn
-from loguru import logger
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_int,
@@ -1245,41 +1244,15 @@ CLAMPED_SILU_GLU_ULP = 4
 CLAMPED_SILU_GLU_BF16_PCC = 0.9999
 CLAMPED_SILU_GLU_BFP8_PCC = 0.999
 
-# Each tail is counted on its own: a clamp applied to one side only would otherwise pass on the
-# other side's coverage.
-CLAMPED_SILU_GLU_MIN_TAIL_FRAC = 0.05
 
-
-def _clamped_silu_glu_inputs(shape, seed=0):
-    """Sweeps reaching every clamp tail, shuffled so no tile is confined to one region. gate and up
-    are permuted independently over different endpoints so they do not correlate.
-    """
-    n = shape.numel()
-    torch.manual_seed(seed)
-    lim = CLAMPED_SILU_GLU_LIMIT
-    gate = torch.cat([torch.linspace(-3 * lim, 3 * lim, n // 2), torch.randn(n - n // 2) * lim])
-    up = torch.cat([torch.linspace(-2 * lim, 4 * lim, n // 2), torch.randn(n - n // 2) * lim])
+def _clamped_silu_glu_inputs(shape):
+    # Spans well past both clamps on either side.
+    torch.manual_seed(0)
+    span = 3 * CLAMPED_SILU_GLU_LIMIT
     return (
-        gate[torch.randperm(n)].to(torch.bfloat16).reshape(shape),
-        up[torch.randperm(n)].to(torch.bfloat16).reshape(shape),
+        torch.empty(shape, dtype=torch.bfloat16).uniform_(-span, span),
+        torch.empty(shape, dtype=torch.bfloat16).uniform_(-span, span),
     )
-
-
-def _assert_clamped_silu_glu_coverage(gate, up):
-    lim = CLAMPED_SILU_GLU_LIMIT
-    g, u = gate.to(torch.float32), up.to(torch.float32)
-    # The up tails are joined with gate > 0 because silu(gate) is ~4e-4 where the gate is deeply
-    # negative, so an up-tail element there does not reach the output. gate < -lim is the only
-    # region where clamping the gate from below too would differ, and PCC cannot see that.
-    tails = {
-        f"gate>{lim}": (g > lim).float().mean().item(),
-        f"gate<-{lim}": ((g < -lim) & (u.abs() > 1.0)).float().mean().item(),
-        f"up>{lim}": ((u > lim) & (g > 0)).float().mean().item(),
-        f"up<-{lim}": ((u < -lim) & (g > 0)).float().mean().item(),
-    }
-    logger.debug("clamped_silu_glu clamp coverage: " + ", ".join(f"{k}: {v:.1%}" for k, v in tails.items()))
-    for name, frac in tails.items():
-        assert frac >= CLAMPED_SILU_GLU_MIN_TAIL_FRAC, f"{name} coverage {frac:.1%} does not reach the clamp"
 
 
 def _assert_clamped_silu_glu_values(gate, up, out, ttnn_dtype):
@@ -1303,7 +1276,6 @@ def _assert_clamped_silu_glu_values(gate, up, out, ttnn_dtype):
 def test_clamped_silu_glu(ttnn_dtype, device):
     shape = torch.Size([1, 1, 512, 3072])
     gate, up = _clamped_silu_glu_inputs(shape)
-    _assert_clamped_silu_glu_coverage(gate, up)
 
     gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)

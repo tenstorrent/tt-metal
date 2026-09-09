@@ -1288,7 +1288,7 @@ Tensor clamped_silu_glu(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     using namespace operations::unary;
 
-    // At limit <= 0 the gate half is the constant silu(limit).
+    // At limit == 0 the up half clamps to zero; at limit < 0 the clamp bounds invert.
     TT_FATAL(limit > 0.0f, "clamped_silu_glu: limit must be positive, got {}", limit);
 
     auto cores = sub_core_grids;
