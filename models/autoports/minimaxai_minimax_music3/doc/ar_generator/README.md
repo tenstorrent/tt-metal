@@ -75,7 +75,7 @@ full-file run (`generated/ar_full.log`, idle host, 1500-frame end-token cap, fai
 occupied 10 cores and measured 9.3 frames/s; the perf and teacher-forced timings were then re-recorded from
 single-test reruns on an idle host (`generated/ar_free_running_clean.log`, `generated/ar_teacher_forced_clean.log`,
 control process SIGSTOPped); the final `results.json` is from the final gate run `generated/gate04_final.log` on an idle host
-(the second control process SIGSTOPped for its duration; `_meta.log_hint` / timestamps 19:10-19:14). PCC values and code sequences are identical across all runs
+(the second control process SIGSTOPped for its duration; `_meta.log_hint` / timestamps 19:10-19:14). Two caveats on the `_meta` blocks: the two host-only boolean entries (`text_ids`, `prompt_edge_cases`) were re-written by a later host-only pytest run (20:56, empty `log_hint`) - their content is deterministic and identical; and `_meta.commit` names the commit that was checked out while recording (`02974adfdb6`), i.e. the parent of the commit that contains the file. `loadavg_1m` of 7.6-8.2 during the final gate is the pytest/ttnn process itself (the teacher-forced wall, 17.7 s, equals the earlier idle runs and not the contended 25.8 s); do not read the load figure alone as the idle criterion. PCC values and code sequences are identical across all runs
 (deterministic device execution); only host-wall timings differ.
 
 ### Prompt contract (host only)
@@ -216,7 +216,7 @@ multi-seed table below for the spread of song lengths on device and in the refer
 
 **Song length per seed, device vs reference** (same short-lyric prompt, `scripts/end_token_probe.py` with
 `--max-frames 9000` on device, `scripts/end_token_control_cpu.py --max-frames 4000` for the fp32 CPU reference;
-"median end-token rank" excludes the last three frames of each run):
+"median end-token rank" excludes the last three frames of each run; `.5` medians rounded down):
 
 | stack | seed | frames | audio s | stop | distinct semantic codes | most common code | median end-token rank before the ending | frames with end-token sampling prob > 0 | file |
 |---|---|---|---|---|---|---|---|---|---|
@@ -291,6 +291,18 @@ $MM3_REF_PY $MM3_MODEL_DIR/scripts/end_token_control_cpu.py --max-frames 4000 --
    failed: the model had not ended. Rather than weaken the assertion, a 9000-frame probe with per-frame end-token
    statistics was run (it ended at 2782 frames, cleanly) and the gate test now uses a 4500-frame (3 min) cap; it
    adds about 3.5 min to the gate. Generation is deterministic per seed on device, so the count is reproducible.
+
+## Stage review
+
+An independent `stage-review` subagent (fresh context, read-only) reviewed commits `71e037e25f2`..`02974adfdb6` and
+returned `more-work-needed` with three P2 findings, all work-log integrity (an unfilled placeholder + dangling link
+for the then-unfinished fp32 control, misattributed provenance of the recorded numbers, and the allocator warning
+being denied rather than classified) plus four "other concerns"; no implementation bug was found (the loop
+transcription, prompt contract, logits-window arithmetic and trace-lifetime order were checked line by line
+against `encoders.py` and the code). After the fixes in `d14adecff49` (multi-seed device + fp32 controls,
+`_meta` provenance, final idle-host gate, classified warning, integrity test) the follow-up review returned
+**`clean-pass`** with no required work; its remaining cosmetic notes are folded into this document (the `_meta`
+caveats above, `.5` medians). The review transcript lives in the Claude session log, not in the repo.
 
 ## Open risks / hand-off
 
