@@ -4,6 +4,8 @@
 
 #include "matmul_wo_program_factory.hpp"
 #include "matmul_wo_device_operation_types.hpp"
+#include "kernels/matmul_wo_ring_common.h"  // ring K-split config (host validates the bank count and sizes
+                                            // the collector CB from these)
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
@@ -52,6 +54,14 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             tt::tt_metal::NOC::RISCV_0_default);
 
     const uint32_t num_cores = dram_bank2core_coords.size();
+    TT_FATAL(
+        num_cores == matmul_wo_ring::NUM_CORES,
+        "matmul_wo requires exactly {} DRAM-aligned cores (Wormhole); got {}. This op's ring K-split table "
+        "matmul_wo_ring::K_TILES_PER_CORE_A is hardcoded for Wormhole's {} DRAM views and does not support other "
+        "architectures.",
+        matmul_wo_ring::NUM_CORES,
+        num_cores,
+        matmul_wo_ring::NUM_CORES);
     auto dram_cores = CoreRangeSet(dram_bank2core_coords);
 
     // Let us find 7 cores that are not taken by the DRAM reader/writer kernels
@@ -91,11 +101,16 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         ------------------------------------------------------------------------------------
     */
 
+    // The collector accumulates one partial per DRAM core for every N-dimension iteration, so cb_s2c_in2 holds
+    // num_cores * num_iters tiles; dm1 strides it by num_cores * out_tile_size.
+    constexpr uint32_t num_iters = matmul_wo_ring::NUM_W_TILES_W / matmul_wo_ring::N_TILES_PER_ITER;
+    const uint32_t collector_partial_tiles = num_cores * num_iters;
+
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, CoreRangeSet>> cb_specs0 = {
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2, dram_cores},
         {"cb_c2w_out", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 28, dram_cores},
-        {"cb_s2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 48, all_cores},
+        {"cb_s2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, collector_partial_tiles, all_cores},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
