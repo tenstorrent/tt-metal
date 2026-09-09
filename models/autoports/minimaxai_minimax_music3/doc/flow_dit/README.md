@@ -237,3 +237,9 @@ timing taken from a quiet-host run, the raw Tracy dumps explicitly gitignored, a
 replaced by a real consecutive-step check, explicit `deallocate` calls where `embed_inputs` / `_attention` rebound
 tensors, and a three-window synthetic chunk test for the short-tail carry case. The reviewer's anomaly ledger
 (per-forward 0.9998 vs per-block 0.99997 PCC = bf16 residual stream; unfused silu) matches the risks listed above.
+
+The fixes landed in commit `6035b073ec5`; the same reviewer re-verified every item against the artifacts
+(`git show 6035b073ec5`, `generated/gate05_check.log`, `pcc/results.json`) and returned **clean-pass** with no
+required work. Its remaining notes: the pre-existing modified `doc/ar_generator/pcc/results.json` in the worktree is
+stage-04 dirty state that this stage did not touch and did not commit; multi-window PCC beyond two windows is
+unmeasured (only the carry mechanics are tested at three windows); stage 07 must establish its own traced baseline.
