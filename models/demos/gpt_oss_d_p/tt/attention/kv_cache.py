@@ -35,6 +35,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 
 # Must match the DRAM NdShard in allocate_kv_cache and the address-table bank walk.
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -61,46 +62,30 @@ def build_layer_map(layer_types) -> List[Tuple[bool, int, int]]:
     return layer_map
 
 
-def sliding_capacity_tokens(max_seq_len, chunk_size, sp, sliding_window=128) -> int:
-    """Global token capacity of one bounded sliding-layer cache slot.
+def sliding_capacity_tokens(max_seq_len, chunk_sizes, sliding_window=128) -> int:
+    """Global token capacity of one bounded sliding-layer cache slot: two slabs of the largest served
+    chunk size (the chunk being written plus the previous one, which always holds the whole window +
+    halo), capped at ``max_seq_len`` so a bounded slot is never larger than a full-length one.
 
-    Chunked configs (``max_seq_len > chunk_size``): 2 chunk slabs — the chunk being written plus the
-    previous one, which always holds the whole window+halo a sliding read needs (``sliding_window <=
-    chunk_size`` is asserted). ``capacity % chunk_global == 0`` by construction, which is what lets
-    :func:`write_kv_chunk`'s host-side modulo land each chunk exactly on a slab.
-
-    One-shot (``max_seq_len == chunk_size``) would take ``capacity = sp * align32(window + 128)``
-    slack with ``cap_local`` dividing ``chunk_local`` — but ``update_padded_kv_cache`` cannot wrap
-    WITHIN a single chunk (needs the C++ ``wrap_seq`` change in ``update_padded_kv_cache``), so one-shot + bounded
-    is rejected here.
+    Every served chunk size must divide the capacity (the circular write lands each chunk on a whole
+    slab) and the window must fit the smallest chunk (the previous slab holds the whole window).
+    Pure host math — unit-tested in tests/unit/test_bounded_kv_math.py.
     """
-    assert chunk_size is not None and chunk_size > 0, "bounded_sliding_kv_cache needs a chunk_size"
-    assert max_seq_len % chunk_size == 0, f"max_seq_len ({max_seq_len}) must be a multiple of chunk_size ({chunk_size})"
-    if max_seq_len == chunk_size:
-        raise NotImplementedError(
-            "bounded_sliding_kv_cache is unsupported for one-shot prefill (max_seq_len == chunk_size): "
-            "the circular write would have to wrap WITHIN the single chunk, which needs the C++ "
-            "update_padded_kv_cache wrap_seq change. Run chunked (max_seq_len > "
-            "chunk_size) or leave bounded_sliding_kv_cache off."
-        )
-    assert sliding_window <= chunk_size, (
-        f"sliding_window ({sliding_window}) must fit one chunk slab ({chunk_size}) so the previous "
+    sizes = tuple(int(cs) for cs in chunk_sizes)
+    assert sizes and all(cs > 0 for cs in sizes), f"bounded_sliding_kv_cache needs chunk sizes, got {chunk_sizes}"
+    bad = [cs for cs in sizes if max_seq_len % cs]
+    assert not bad, f"max_seq_len ({max_seq_len}) must be a multiple of every chunk size; offending: {bad}"
+    assert sliding_window <= min(sizes), (
+        f"sliding_window ({sliding_window}) must fit the smallest chunk ({min(sizes)}) so the previous "
         f"slab always holds the whole window"
     )
-    del sp  # kept for the one-shot capacity formula when wrap_seq lands
-    return 2 * chunk_size
-
-
-def validate_bounded_chunk_sizes(chunk_sizes, max_chunk_size) -> None:
-    """Every served chunk size must divide the sliding capacity (2 * the largest size), or the
-    circular write would land a chunk across a slab boundary. Pure host math — unit-tested in
-    tests/unit/test_bounded_kv_math.py."""
-    capacity = 2 * max_chunk_size
-    bad = [cs for cs in chunk_sizes if capacity % cs]
+    capacity = min(2 * max(sizes), max_seq_len)
+    bad = [cs for cs in sizes if capacity % cs]
     assert not bad, (
-        f"bounded_sliding_kv_cache: every chunk size must divide the sliding capacity "
-        f"(2*max_chunk_size={capacity}); offending sizes: {bad}"
+        f"bounded_sliding_kv_cache: every chunk size must divide the sliding capacity ({capacity}); "
+        f"offending sizes: {bad}"
     )
+    return capacity
 
 
 def bounded_blockcyclic_positions(sp, chunk_size_global, capacity_global, written_tokens) -> torch.Tensor:
@@ -120,15 +105,13 @@ def bounded_blockcyclic_positions(sp, chunk_size_global, capacity_global, writte
         capacity_global % chunk_size_global == 0
     ), f"capacity ({capacity_global}) must be a multiple of chunk_global ({chunk_size_global})"
     assert chunk_size_global % sp == 0 and capacity_global % sp == 0, "chunk/capacity must SP-shard evenly"
-    chunk_local = chunk_size_global // sp
-    cap_local = capacity_global // sp
     m = capacity_global // chunk_size_global
     num_groups = -(-int(written_tokens) // chunk_size_global)  # whole (padded) chunks written
-    c = torch.arange(sp).repeat_interleave(cap_local)
-    lr = torch.arange(cap_local).repeat(sp)
-    slab, off = lr // chunk_local, lr % chunk_local
+    # Unbounded shard layout of the capacity, then substitute each slab by the last group it holds.
+    base = blockcyclic_positions(sp, chunk_size_global, capacity_global)
+    slab = base // chunk_size_global
     g = slab + m * torch.div(num_groups - 1 - slab, m, rounding_mode="floor")
-    pos = g * chunk_size_global + c * chunk_local + off
+    pos = base + (g - slab) * chunk_size_global
     pos[slab >= num_groups] = -1  # this slab has never been written
     return pos
 
@@ -158,7 +141,7 @@ class GptOssKVCache(KvCaches):
     # --- bounded sliding-window split; None/False when the flag is off ---
     k_sliding: Optional[ttnn.Tensor] = None
     v_sliding: Optional[ttnn.Tensor] = None
-    sliding_capacity: Optional[int] = None  # global tokens per sliding slot (m slabs of chunk_size)
+    sliding_capacity: Optional[int] = None  # global tokens per sliding slot (whole chunk slabs)
     layer_map: Optional[List[Tuple[bool, int, int]]] = None  # per-layer (is_sliding, ordinal, n_type)
     bounded_sliding: bool = False
 
@@ -191,7 +174,7 @@ def allocate_kv_cache(
     cache_dtype=ttnn.bfloat8_b,
     layer_types=None,
     bounded_sliding_kv_cache=False,
-    chunk_size=None,
+    chunk_sizes=None,
     sliding_window=128,
 ) -> GptOssKVCache:
     """Allocate the two external prefill KV caches (K, V). See :class:`GptOssKVCache`.
@@ -214,7 +197,8 @@ def allocate_kv_cache(
         bounded_sliding_kv_cache: split sliding layers into a small circular cache. Off =>
             byte-identical to the legacy single packed cache.
         sliding_window: the sliding layers' window size (``hf_config.sliding_window``, 128 for gpt-oss).
-        chunk_size: prefill chunk size in tokens (required when bounded — sizes the circular slabs).
+        chunk_sizes: every prefill chunk size (tokens) this cache will be written with (required when
+            bounded — the largest sizes the circular slabs, all must divide the capacity).
     """
     sp = mesh_device.shape[sp_axis]
     # seq_local must be tile-aligned: the cache is TILE_LAYOUT and the DRAM NdShard is 32-token; also
@@ -250,7 +234,7 @@ def allocate_kv_cache(
         )
 
     if not bounded_sliding_kv_cache:
-        # Legacy layout: ONE packed all-layers cache pair. layer_types / chunk_size / sliding_window
+        # Legacy layout: ONE packed all-layers cache pair. layer_types / chunk_sizes / sliding_window
         # are deliberately ignored so the flag-off allocation stays byte-identical to before.
         return GptOssKVCache(
             k=_alloc(num_users * num_layers, seq_local),
@@ -263,17 +247,16 @@ def allocate_kv_cache(
 
     # --- bounded sliding split ---
     assert layer_types is not None, "bounded_sliding_kv_cache=True needs hf_config.layer_types"
-    assert len(layer_types) >= num_layers, (
-        f"layer_types has {len(layer_types)} entries but num_layers={num_layers}; pass this rank's "
-        f"slice (layer_types[first_layer_idx : first_layer_idx + num_layers])"
+    assert len(layer_types) == num_layers, (
+        f"layer_types has {len(layer_types)} entries but num_layers={num_layers}; pass exactly this "
+        f"rank's slice (layer_types[first_layer_idx : first_layer_idx + num_layers])"
     )
-    layer_map = build_layer_map(list(layer_types)[:num_layers])
+    layer_map = build_layer_map(list(layer_types))
     n_slide = sum(1 for is_sliding, _, _ in layer_map if is_sliding)
     n_full = num_layers - n_slide
     capacity = cap_local = None
     if n_slide > 0:
-        # Raises NotImplementedError on one-shot configs (needs the C++ wrap_seq change).
-        capacity = sliding_capacity_tokens(max_seq_len, chunk_size, sp, sliding_window)
+        capacity = sliding_capacity_tokens(max_seq_len, chunk_sizes, sliding_window)
         assert (
             capacity % (ttnn.TILE_SIZE * sp) == 0
         ), f"sliding capacity ({capacity}) must be a multiple of TILE_SIZE*sp ({ttnn.TILE_SIZE * sp})"
@@ -281,7 +264,7 @@ def allocate_kv_cache(
     logger.info(
         f"bounded_sliding_kv_cache: {n_full} full layers @ {max_seq_len} tok + {n_slide} sliding "
         f"layers @ {capacity} tok (window {sliding_window}, "
-        f"{capacity // chunk_size if capacity else 0} slabs of {chunk_size}); num_users={num_users}"
+        f"{capacity // max(chunk_sizes) if capacity else 0} slabs of {max(chunk_sizes)}); num_users={num_users}"
     )
     return GptOssKVCache(
         k=_alloc(num_users * n_full, seq_local) if n_full > 0 else None,
@@ -334,8 +317,7 @@ def write_kv_chunk(kv_cache: GptOssKVCache, tt_k, tt_v, *, slot_idx, layer_idx, 
     """
     # One user per call: update_padded_kv_cache writes a single (slot_idx, layer_idx) and ignores the
     # leading/batch dim, so a batched (batch>1) tt_k/tt_v would silently write only slot_idx and drop the
-    # rest. Require batch==1 and fail loud; batched multi-user prefill must loop this per user (slot_idx+b)
-    # at the call site. The scatter-to-slots write lands with the runtime multi-user path (P4).
+    # rest. Require batch==1 and fail loud; multi-user prefill loops this per user (slot_idx+b).
     assert tt_k.shape[0] == 1 and tt_v.shape[0] == 1, (
         f"write_kv_chunk writes one user per call, but got leading (batch) dim "
         f"k={tt_k.shape[0]}, v={tt_v.shape[0]}; loop over users (slot_idx + b) at the call site"
@@ -347,37 +329,12 @@ def write_kv_chunk(kv_cache: GptOssKVCache, tt_k, tt_v, *, slot_idx, layer_idx, 
     assert (
         kv_actual % ttnn.TILE_SIZE == 0
     ), f"kv_actual ({kv_actual}) must be tile-aligned (multiple of {ttnn.TILE_SIZE})"
-    if not kv_cache.bounded_sliding:
-        # Legacy packed cache: identical op arguments to before the bounded split existed.
-        for cache, tensor in ((kv_cache.k, tt_k), (kv_cache.v, tt_v)):
-            _write_one(
-                cache,
-                tensor,
-                slot_idx=slot_idx,
-                layer_idx=layer_idx,
-                num_layers=kv_cache.num_layers,
-                kv_actual=kv_actual,
-                sp_axis=sp_axis,
-            )
-        return
-    # Bounded split: route through layer_view (single source of truth) and drive the op with the flat
-    # batch slot (slot_idx=batch_idx, layer_idx=0, num_layers=1 — the kernel just linearizes
-    # slot*num_layers + layer, and validates slot against cache_batch/num_layers).
+    # layer_view resolves both layouts: the legacy packed cache at slot user*num_layers+layer, or the
+    # per-type split (the kernel just linearizes slot*num_layers + layer, so slot=batch_idx, layer 0).
     k_cache, v_cache, batch_idx, capacity_tokens, bounded = kv_cache.layer_view(slot_idx, layer_idx)
     if bounded:
-        chunk_global = tt_k.shape[-2] * kv_cache.sp
-        # Both MUST hold or the modulo write is not slab-exact: the writer's offset math would step
-        # past this slot's cap_local rows and corrupt the NEXT batch slot's rows. (When variable
-        # chunk sizes / extra_chunk_sizes land, guard each non-default size cs here the same way:
-        # capacity % (cs_global) == 0 — this assert already enforces it per write.)
-        assert capacity_tokens % chunk_global == 0, (
-            f"bounded sliding write needs capacity ({capacity_tokens}) to be a multiple of this "
-            f"chunk's global size ({chunk_global})"
-        )
-        assert kv_actual % chunk_global == 0, (
-            f"bounded sliding write needs a chunk-aligned kv_actual ({kv_actual}); " f"chunk_global={chunk_global}"
-        )
-        kv_actual = kv_actual % capacity_tokens
+        # Circular slab write: chunk-aligned kv_actual lands on slab (kv_actual / chunk) mod n_slabs.
+        kv_actual %= capacity_tokens
     for cache, tensor in ((k_cache, tt_k), (v_cache, tt_v)):
         _write_one(
             cache,

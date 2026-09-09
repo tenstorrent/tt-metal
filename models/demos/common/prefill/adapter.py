@@ -85,10 +85,6 @@ class PrefillRunParams:
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
-    # Sliding-attention layers use a small circular KV cache instead of full max_seq_len slots
-    # (adapters that support it pass this to their cache allocation and runtime). Resolved once by
-    # the runner from PREFILL_BOUNDED_SLIDING_KV; part of the cross-rank config fingerprint.
-    bounded_sliding_kv_cache: bool = False
 
     @property
     def sp_factor(self) -> int:

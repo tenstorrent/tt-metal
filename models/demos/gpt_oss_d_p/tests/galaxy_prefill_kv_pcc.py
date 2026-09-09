@@ -19,7 +19,7 @@ Env:
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
   PREFILL_NUM_USERS   cache slots; EVERY slot prefills the same prompt and is PCC-checked
                       independently (exercises the packed multi-user slot math)              [default 1]
-  PREFILL_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (circular write +
+  GPT_OSS_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (circular write +
                       host-readback PCC; the on-device ring cache-read of a bounded layer is not
                       supported in this build, and the ring path serves EVERY chunk, so chunked
                       mode rejects the flag)                                                [default 0]
@@ -102,7 +102,7 @@ def main():
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "8192"))
     tps_iters = int(os.getenv("PREFILL_TPS_ITERS", "1"))
 
-    bounded_kv = os.getenv("PREFILL_BOUNDED_SLIDING_KV", "0") == "1"
+    bounded_kv = os.getenv("GPT_OSS_BOUNDED_SLIDING_KV", "0") == "1"
     num_users = int(os.getenv("PREFILL_NUM_USERS", "1"))
 
     n_chunks, chunk, total = plan(n_tokens, chunk_size, chunked, ROWS)

@@ -245,7 +245,7 @@ def test_bounded_kv_cache_device_write_vs_ref(mesh_device, num_users, reset_seed
         head_dim=HEAD_DIM,
         layer_types=layer_types,
         bounded_sliding_kv_cache=True,
-        chunk_size=chunk,
+        chunk_sizes=(chunk,),
         sliding_window=128,
     )
     capacity = kv_cache.sliding_capacity

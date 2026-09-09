@@ -31,7 +31,6 @@ from models.demos.gpt_oss_d_p.tt.attention.kv_cache import (
     bounded_blockcyclic_positions,
     build_layer_map,
     sliding_capacity_tokens,
-    validate_bounded_chunk_sizes,
 )
 
 
@@ -198,16 +197,18 @@ def test_layer_view_legacy_when_flag_off():
             assert kv.layer_view(user, L) == ("K_FULL", "V_FULL", user * kv.num_layers + L, kv.max_seq_len, False)
 
 
-def test_sliding_capacity_chunked_and_oneshot(expect_error):
-    """Chunked => 2 chunk slabs; one-shot => rejected until the C++ wrap_seq change lands."""
-    assert sliding_capacity_tokens(5120, 1024, sp=4, sliding_window=128) == 2048
-    with expect_error(NotImplementedError, "wrap_seq"):
-        sliding_capacity_tokens(1024, 1024, sp=4, sliding_window=128)
-
-
-def test_validate_bounded_chunk_sizes(expect_error):
-    """Sizes dividing 2*max pass; a non-divisor is rejected before any allocation happens."""
-    validate_bounded_chunk_sizes((8192, 1024), 8192)  # 16384 % 1024 == 0
-    validate_bounded_chunk_sizes((4096,), 4096)
+def test_sliding_capacity_tokens(expect_error):
+    """Two slabs of the largest chunk, capped at max_seq_len; every served size must divide it and the
+    window must fit the smallest chunk."""
+    assert sliding_capacity_tokens(5120, (1024,), sliding_window=128) == 2048
+    assert sliding_capacity_tokens(131072, (8192,), sliding_window=128) == 16384
+    assert sliding_capacity_tokens(131072, (8192, 1024), sliding_window=128) == 16384  # 16384 % 1024 == 0
+    # max_seq_len == largest chunk: a bounded slot is never bigger than a full-length one.
+    assert sliding_capacity_tokens(8192, (8192, 1024), sliding_window=128) == 8192
+    assert sliding_capacity_tokens(1024, (1024,), sliding_window=128) == 1024
     with expect_error(AssertionError, "divide the sliding capacity"):
-        validate_bounded_chunk_sizes((8192, 2560), 8192)  # 16384 % 2560 != 0
+        sliding_capacity_tokens(163840, (8192, 2560), sliding_window=128)  # 16384 % 2560 != 0
+    with expect_error(AssertionError, "fit the smallest chunk"):
+        sliding_capacity_tokens(8192, (8192, 64), sliding_window=128)
+    with expect_error(AssertionError, "multiple of every chunk size"):
+        sliding_capacity_tokens(5000, (1024,), sliding_window=128)
