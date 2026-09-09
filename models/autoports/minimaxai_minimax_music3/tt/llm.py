@@ -204,6 +204,11 @@ class MusicLLM:
         block_size: paged KV-cache block size in tokens.
         hf_model_dir: the Qwen3 backbone directory; defaults to ``$HF_MODEL``. ``ModelArgs`` reads
             ``HF_MODEL`` from the environment, so it is set here when a directory is passed.
+        logits_window: optional logical vocabulary range ``[start, end)``. When set, the decode trace
+            slices that (tile-aligned) column window out of the logits on device and untilizes only
+            it, so :meth:`decode_windowed` reads back ``B x (end - start)`` values instead of the whole
+            200k vocabulary (the AR loop only needs the end token and the 16384 semantic codes).
+            Can also be set later with :meth:`set_logits_window`, before the first decode.
     """
 
     def __init__(
@@ -216,6 +221,7 @@ class MusicLLM:
         block_size: int = 32,
         hf_model_dir: Optional[str] = None,
         weight_cache_root: Optional[str] = None,
+        logits_window: Optional[Tuple[int, int]] = None,
     ):
         if dtype_policy not in DTYPE_POLICIES:
             raise ValueError(f"unknown dtype_policy {dtype_policy!r}; supported: {sorted(DTYPE_POLICIES)}")
@@ -307,7 +313,11 @@ class MusicLLM:
         self._dec_rot: Optional[ttnn.Tensor] = None
         self._dec_pos_shadow: Optional[torch.Tensor] = None  # what the device position tensor holds now
         self._trace_id = None
-        self._trace_out: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None
+        self._trace_out: Optional[Tuple[ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]] = None
+        self.logits_window: Optional[Tuple[int, int]] = None
+        self._win_tiles: Optional[Tuple[int, int]] = None  # tile-aligned [start, end) actually sliced
+        if logits_window is not None:
+            self.set_logits_window(*logits_window)
         self.decode_stats = {"trace_captures": 0, "trace_replays": 0, "input_refreshes": 0, "position_refreshes": 0}
         # Optional host callback run after every prefill forward (one row, or one chunk of a row).
         # The perf harness uses it to drain the device profiler between ~1000-op chunks; None = off.
@@ -600,6 +610,25 @@ class MusicLLM:
                 ttnn.copy(x, self._dec_x)
         self.decode_stats["input_refreshes"] += 1
 
+    def set_logits_window(self, start: int, end: int):
+        """Restrict the untilized logits read-back to the logical columns ``[start, end)`` (before the first decode)."""
+        assert self._trace_id is None, "the decode trace is already captured; set the window before the first decode"
+        assert 0 <= start < end <= self.vocab_size, (start, end, self.vocab_size)
+        self.logits_window = (int(start), int(end))
+        self._win_tiles = ((start // TILE) * TILE, -(-end // TILE) * TILE)
+
+    def prepare_decode_inputs(self):
+        """Allocate the persistent decode input tensors now (position 0) instead of on the first decode.
+
+        Call this before other components capture their own traces (stage 04: the depth decoder's
+        step traces): every device buffer that lives across a trace replay has to exist before that
+        trace is captured, otherwise it may be placed where the trace's intermediates were and be
+        overwritten by a replay. The trace itself is still captured lazily on the first decode.
+        """
+        if self._dec_x is None:
+            pos = torch.zeros(self.max_batch_size, dtype=torch.int64)
+            self._alloc_decode_inputs(self._decode_input_host(torch.zeros(self.max_batch_size, self.hidden_size)), pos)
+
     def _decode_graph(self):
         """Device-only decode step over the persistent inputs; this is what gets traced."""
         rot_mats = self.model.rope_setup.get_rot_mats(self._dec_rot)
@@ -610,17 +639,27 @@ class MusicLLM:
             mode=Mode.DECODE,
             page_table=self.page_table_tt,
         )
-        logits = ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self._win_tiles is None:
+            logits = ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            window = None
+        else:
+            # Only the window is untilized and read back; the full logits stay tiled on device (still
+            # readable through decode(read_back=True), just slower on the host side).
+            ws, we = self._win_tiles
+            window = ttnn.slice(logits, [0, 0, 0, ws], [1, 1, TILE, we], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            window = ttnn.untilize(window, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Advance the device-owned positions so consecutive steps need no host refresh.
         ttnn.plus_one(self._dec_pos, skip_negative_entries=True)
         ttnn.plus_one(self._dec_rot)
-        return hidden, logits
+        return hidden, logits, window
 
     def _capture_decode_trace(self, pos: torch.Tensor):
         # Compile run with the exact shapes/args of the capture; it also mutates the positions.
-        h, l = self._decode_graph()
+        h, l, w = self._decode_graph()
         ttnn.deallocate(h)
         ttnn.deallocate(l)
+        if w is not None:
+            ttnn.deallocate(w)
         ttnn.synchronize_device(self.mesh_device)
         assert self._dec_x.is_allocated(), "the persistent decode input was deallocated by the graph"
         # Restore the intended capture state (the compile run advanced the positions by one).
@@ -660,12 +699,29 @@ class MusicLLM:
         ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
         self.decode_stats["trace_replays"] += 1
         self._dec_pos_shadow = pos + 1  # the graph advanced the device positions
-        hidden, logits = self._trace_out
+        hidden, logits, _ = self._trace_out
         if not read_back:
             return hidden, logits
         h = ttnn.to_torch(hidden).float()[0, 0, : self.max_batch_size, : self.hidden_size]
         l = ttnn.to_torch(logits).float()[0, 0, : self.max_batch_size, : self.vocab_size]
         return h, l
+
+    def decode_windowed(self, inputs_embeds, current_pos):
+        """One traced decode step that reads back only the logits window set by :meth:`set_logits_window`.
+
+        Returns ``(hidden_device, hidden, window)``: the persistent device hidden tensor
+        (``[1, 1, 32, 4096]`` bf16 tile, overwritten by the next step; the depth decoder seeds from
+        it without a host round-trip), the host fp32 hidden ``[B, 4096]`` and the host fp32 logits
+        ``[B, end - start]`` of the window (column ``i`` = vocabulary id ``start + i``).
+        """
+        assert self.logits_window is not None, "set_logits_window() first"
+        hidden, _ = self.decode(inputs_embeds, current_pos, read_back=False)
+        window = self._trace_out[2]
+        start, end = self.logits_window
+        off = start - self._win_tiles[0]
+        h = ttnn.to_torch(hidden).float()[0, 0, : self.max_batch_size, : self.hidden_size]
+        w = ttnn.to_torch(window).float()[0, 0, : self.max_batch_size, off : off + (end - start)]
+        return hidden, h, w
 
     def decode_replay_only(self):
         """Replay the captured decode trace once more without touching any input (perf harness)."""
