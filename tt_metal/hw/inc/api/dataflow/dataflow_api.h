@@ -12,7 +12,6 @@
 
 #include <stdint.h>
 #include <tuple>
-#include <utility>
 #include <type_traits>
 
 #include "internal/dataflow/dataflow_api_addrgen.h"
