@@ -55,8 +55,11 @@
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_DM_GLOBAL_SIZE (1024 * 2)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
+// Per-DM stride of the local region, so these also place each stack top (base + n * size). The DM
+// data cache is 2-way with 32 sets of 64 B, so it indexes on addr[10:6]: a size that is not a
+// multiple of 2 kB re-maps every stack slot onto different sets.
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
-#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 9)
+#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 10)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_TRISC_LOCAL_OFFSET (0x2000)
