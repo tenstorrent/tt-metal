@@ -43,13 +43,22 @@ GUARD_SHAPES = [
 
 
 def _plan_line(label, shape, plan, grid):
+    tail = plan.tail_group
+    tail_txt = (
+        ""
+        if tail is None
+        else (
+            f" | tail bw={tail.block_width_tiles} blocks={tail.num_blocks} "
+            f"cores={len(tail.assignment)} col_off={tail.col_tile_offset}"
+        )
+    )
     return (
         f"\n[perf {label}] {shape}: R={plan.tensor_row_blocks} C={plan.tensor_col_tiles} "
         f"bw={plan.block_width_tiles} chunks={plan.num_w_chunks} groups={plan.num_row_groups} "
-        f"blocks={plan.num_blocks_total} cores={len(plan.assignment)}/{grid.x * grid.y} "
-        f"read={plan.block_row_bytes}B "
-        f"in_cb={plan.input_cb_pages}p out_cb={plan.output_cb_pages}p "
-        f"L1/core={plan.l1_per_core_bytes // 1024}KiB"
+        f"blocks={plan.num_blocks_total} cores={plan.num_cores_used}/{grid.x * grid.y} "
+        f"read={plan.block_row_bytes}B split={plan.split_reader} "
+        f"in_cb={plan.input_cb_pages}p split_cb={plan.split_cb_pages}p out_cb={plan.output_cb_pages}p "
+        f"L1/core={plan.l1_per_core_bytes // 1024}KiB" + tail_txt
     )
 
 
@@ -81,14 +90,14 @@ def test_perf_tall_narrow(device):
     """Item 1 — the transposed perf-focus shape. 64 B reads, 512 tiles."""
     plan = _run_identity(device, TALL_NARROW, "tall_narrow")
     assert plan.tensor_row_blocks == 512 and plan.tensor_col_tiles == 1
-    assert len(plan.assignment) == 64, "the number is only meaningful at 64/64 cores"
+    assert plan.num_cores_used == 64, "the number is only meaningful at 64/64 cores"
 
 
 def test_perf_rough_c(device):
     """Item 2 — the rough-`C` production form. C = 1572 = 2^2 * 3 * 131."""
     plan = _run_identity(device, ROUGH_C, "rough_c", pad=True)
     assert plan.tensor_col_tiles == 1572
-    assert len(plan.assignment) == 64, "the number is only meaningful at 64/64 cores"
+    assert plan.num_cores_used == 64, "the number is only meaningful at 64/64 cores"
 
 
 @pytest.mark.parametrize("shape,label", GUARD_SHAPES, ids=[g[1] for g in GUARD_SHAPES])

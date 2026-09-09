@@ -95,6 +95,17 @@ void kernel_main() {
     // `needs_srcb_alu_format_repair` in the program descriptor for the exact
     // mechanism (a 4-bit config field the LLK's combined write spills into).
     constexpr bool repair_srcb_alu_format = get_compile_time_arg_val(9) != 0;
+    // --- split reader (Refinement 6). Inert (and the second call compiles out)
+    // at 0. When on, each block arrives as TWO sub-blocks: the leading
+    // `block_row_extent - rows_writer` tile-rows in cb_input_rows (produced by
+    // the reader kernel) and the trailing `rows_writer` in cb_input_rows_split
+    // (produced by the writer kernel). Tilizing them back to back in that order
+    // reproduces exactly the block's tile-row order, so nothing downstream
+    // changes. The host guarantees every block is at least two tile-rows tall,
+    // so both sub-blocks are non-empty.
+    constexpr uint32_t split_reader_rows = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_input_rows_split = get_compile_time_arg_val(11);
+    constexpr uint32_t split_writer_share_pct = get_compile_time_arg_val(12);
 
     const uint32_t start_block_id = get_arg_val<uint32_t>(0);
     const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(1);
@@ -134,6 +145,18 @@ void kernel_main() {
         const uint32_t row_end = ((row_group + 1) * tensor_row_blocks) / num_row_groups;
         const uint32_t block_row_extent = row_end - row_start;
 
+        // The block's row extent, split between the two input CBs when the
+        // reader is split. `rows_split` is >= 1 for every block because the host
+        // only turns the split on when the SMALLEST block is two tile-rows tall.
+        uint32_t rows_split = 0;
+        if constexpr (split_reader_rows > 0) {
+            rows_split = (block_row_extent * split_writer_share_pct) / 100;
+            if (rows_split >= block_row_extent) {
+                rows_split = block_row_extent - 1;
+            }
+        }
+        const uint32_t rows_main = block_row_extent - rows_split;
+
         // tilize_block: block_width_tiles (CT) x block_row_extent (RT) tiles.
         // The init/uninit pair is paid once for the whole loop, not once per block.
         if constexpr (!amortize_init) {
@@ -143,7 +166,23 @@ void kernel_main() {
                 cb_output_tiles,
                 skip_format_reconfig,
                 lossless_fp32,
-                InitUninitMode::InitAndUninit>(block_row_extent);
+                InitUninitMode::InitAndUninit>(rows_main);
+            if constexpr (split_reader_rows > 0) {
+                if (rows_split > 0) {
+                    // The trailing sub-block, out of the WRITER's input CB.
+                    // `InitAndUninit` (never the amortized modes) because the
+                    // two calls program the tilize LLK from DIFFERENT input CB
+                    // indices; the host turns `amortize_init` off whenever the
+                    // split is on, for exactly that reason.
+                    tilize_block_op<
+                        block_width_tiles,
+                        cb_input_rows_split,
+                        cb_output_tiles,
+                        skip_format_reconfig,
+                        lossless_fp32,
+                        InitUninitMode::InitAndUninit>(rows_split);
+                }
+            }
             continue;
         }
         const bool first = (b == 0);
@@ -155,7 +194,7 @@ void kernel_main() {
                 cb_output_tiles,
                 skip_format_reconfig,
                 lossless_fp32,
-                InitUninitMode::InitAndUninit>(block_row_extent);
+                InitUninitMode::InitAndUninit>(rows_main);
         } else if (first) {
             tilize_block_op<
                 block_width_tiles,
@@ -163,7 +202,7 @@ void kernel_main() {
                 cb_output_tiles,
                 skip_format_reconfig,
                 lossless_fp32,
-                InitUninitMode::InitOnly>(block_row_extent);
+                InitUninitMode::InitOnly>(rows_main);
         } else if (last) {
             tilize_block_op<
                 block_width_tiles,
@@ -171,7 +210,7 @@ void kernel_main() {
                 cb_output_tiles,
                 skip_format_reconfig,
                 lossless_fp32,
-                InitUninitMode::UninitOnly>(block_row_extent);
+                InitUninitMode::UninitOnly>(rows_main);
         } else {
             tilize_block_op<
                 block_width_tiles,
@@ -179,7 +218,7 @@ void kernel_main() {
                 cb_output_tiles,
                 skip_format_reconfig,
                 lossless_fp32,
-                InitUninitMode::Neither>(block_row_extent);
+                InitUninitMode::Neither>(rows_main);
         }
     }
 }

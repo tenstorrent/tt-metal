@@ -128,7 +128,23 @@ void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(21);
     constexpr uint32_t tensor_col_tiles = get_compile_time_arg_val(22);  // C
     constexpr uint32_t out_tile_bytes = get_compile_time_arg_val(23);
-    constexpr auto in_args = TensorAccessorArgs<24>();
+    // --- ragged column tail (Refinement 6). The FIRST tile column this core
+    // range's blocks cover. 0 for the full-width range and for every plan with
+    // no tail, which is what keeps this arg inert on the smooth-`C` geometries.
+    // The tail range is a SECOND core range running this same kernel with its
+    // own `block_width_tiles`, so within one core the CB push/pop quantum is
+    // still a single constant and neither endpoint can wrap mid-transfer.
+    constexpr uint32_t col_tile_offset = get_compile_time_arg_val(24);
+    constexpr uint32_t col_byte_offset = col_tile_offset * kTileWidth * elem_size;
+    // --- split reader (Refinement 6). Inert at 0, which is every plan whose
+    // read transaction is large enough not to be RISC-V-issue-bound. When it is
+    // on, this kernel reads the LEADING `block_row_extent - rows_writer`
+    // tile-rows of each block and the WRITER kernel reads the rest into its own
+    // input CB (see tilize_writer.cpp). The block operation is unchanged — one
+    // `read_sticks_for_tilize` call per block, over a shorter row range.
+    constexpr uint32_t split_reader_rows = get_compile_time_arg_val(25);
+    constexpr uint32_t split_writer_share_pct = get_compile_time_arg_val(26);
+    constexpr auto in_args = TensorAccessorArgs<27>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block_id = get_arg_val<uint32_t>(1);
@@ -191,7 +207,7 @@ void kernel_main() {
             constexpr uint32_t unit_rows_per_tile = tile_h / unit_rows;
             constexpr uint32_t unit_cols_per_tile = kTileWidth / unit_cols;
 
-            const uint32_t col_base = w_chunk * block_width_tiles;
+            const uint32_t col_base = col_tile_offset + w_chunk * block_width_tiles;
             for (uint32_t tr = 0; tr < block_row_extent; ++tr) {
                 const uint32_t out_tile_row = row_start + tr;
                 // Per-IMAGE split, for the same reason the padded branch needs
@@ -243,7 +259,7 @@ void kernel_main() {
             //                 row actually reaches (0 for an all-pad column)
             //   pad_bytes   = the rest, < TILE_WIDTH * elem_size whenever
             //                 valid_bytes > 0 (C = ceil(W / TILE_WIDTH))
-            const uint32_t col_bytes = w_chunk * block_row_bytes;
+            const uint32_t col_bytes = col_byte_offset + w_chunk * block_row_bytes;
             const uint32_t valid_bytes =
                 (in_row_bytes > col_bytes)
                     ? ((in_row_bytes - col_bytes < block_row_bytes) ? in_row_bytes - col_bytes : block_row_bytes)
@@ -317,7 +333,7 @@ void kernel_main() {
             // The host guarantees `block_row_bytes` divides `in_page_width_bytes`
             // (block_width_tiles is a common divisor of C and the page width in
             // tiles), so a block's row segment always sits inside ONE page.
-            const uint32_t col_bytes = w_chunk * block_row_bytes;
+            const uint32_t col_bytes = col_byte_offset + w_chunk * block_row_bytes;
             const uint32_t page_col = col_bytes / in_page_width_bytes;
             const uint32_t byte_in_page = col_bytes - page_col * in_page_width_bytes;
             for (uint32_t tr = 0; tr < block_row_extent; ++tr) {
@@ -347,12 +363,20 @@ void kernel_main() {
             // load_block. Valid as one contiguous stick run because H % tile_h == 0
             // on the tile-aligned path, so tile-row r starts at stick r * tile_h
             // exactly, even where R comes from the leading-dim fold.
+            uint32_t rows_reader = block_row_extent;
+            if constexpr (split_reader_rows > 0) {
+                uint32_t rows_writer = (block_row_extent * split_writer_share_pct) / 100;
+                if (rows_writer >= block_row_extent) {
+                    rows_writer = block_row_extent - 1;
+                }
+                rows_reader = block_row_extent - rows_writer;
+            }
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rows, dataflow_kernel_lib::TilizeGranularity::TILE>(
                 in_acc,
-                /* total_num_rows          */ block_row_extent * tile_h,
+                /* total_num_rows          */ rows_reader * tile_h,
                 /* row_bytes               */ block_row_bytes,
                 /* start_page              */ row_start * tile_h,
-                /* byte_offset_within_page */ w_chunk * block_row_bytes);
+                /* byte_offset_within_page */ col_byte_offset + w_chunk * block_row_bytes);
         }
     }
 }

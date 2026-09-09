@@ -51,6 +51,6 @@ def test_ablation(device, shape, pad, label):
     plan = pd.derive_plan(tt_input, tt_output, low_l1=False, grid=grid, pad_value=pad_value)
     print(
         f"\n[ablate {label}] {shape}: bw={plan.block_width_tiles} chunks={plan.num_w_chunks} "
-        f"blocks={plan.num_blocks_total} cores={len(plan.assignment)}/{grid.x * grid.y}"
+        f"blocks={plan.num_blocks_total} cores={plan.num_cores_used}/{grid.x * grid.y}"
     )
     ttnn.synchronize_device(device)

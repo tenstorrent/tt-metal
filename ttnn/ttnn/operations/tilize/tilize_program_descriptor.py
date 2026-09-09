@@ -25,27 +25,34 @@ legacy 2-D one). The sharded side's CB is then **zero-copy over the shard buffer
 through a ``TensorAccessor``. The accessor keeps the interleaved leg and the
 genuinely non-local cross-spec leg.
 
-Deviation from op_design.md (recorded here and in l1_ledger.md), one item:
+RAGGED COLUMN TAIL (Refinement 6). ``block_width_tiles`` is
+``ceil(C / num_w_chunks_target)`` — the design's own extent — and the leftover
+``C % block_width_tiles`` columns become ONE tail chunk of their own width.
 
-  * ``block_width_tiles`` is constrained to be a DIVISOR of ``C`` instead of
-    ``ceil(C / num_w_chunks_target)``, which removes ``block_width_tail_tiles``
-    (every w-chunk is exactly ``block_width_tiles`` wide).
-    Reason — a HARD mechanism cap the design's ragged tail violates: both CB
-    endpoints refuse to wrap mid-transfer. ``llk_push_tiles``
-    ``LLK_ASSERT(remaining >= num_words)`` (``llk_io_pack.h``) and
-    ``cb_pop_front``'s ``ASSERT(fifo_rd_ptr <= fifo_limit)``
-    (``dataflow_api.h:269``, commented "consumer always reads from contiguous
-    memory, it cannot wrap") both require the CB's page count to be an exact
-    multiple of every push/pop quantum used on that core. A core CAN be handed
-    one full-width block and one tail block (``split_work_to_cores`` ranges are
-    contiguous over a linearization that crosses w-chunk boundaries), so a
-    per-core mix of two quanta is reachable and would need the capacity to be a
-    multiple of ``lcm(block_width_tiles, tail)``. Making the extent a divisor of
-    ``C`` costs at most a coarser chunk count and reproduces the design's whole
-    worked table (``[1,1,32,16384]`` -> 8, ``[1,1,1024,1024]`` -> 16,
-    ``[1,1,2048,2048]`` -> 64, ...) except ``[1,1,1,50304]`` (12 x 131 chunks
-    rather than 25 x 63). The knob stays a live tunable at its coarsest correct
-    value; only the tail vanishes.
+The mechanism cap that used to force a divisor is real and unchanged: neither CB
+endpoint may wrap mid-transfer (``llk_push_tiles``'s
+``LLK_ASSERT(remaining >= num_words)`` in ``llk_io_pack.h``, and
+``cb_pop_front``'s ``ASSERT(fifo_rd_ptr <= fifo_limit)`` at
+``dataflow_api.h:269``, commented "consumer always reads from contiguous memory,
+it cannot wrap"), so a CB's page count must be an exact multiple of every
+push/pop quantum used ON THAT CORE. The escape is that the mix was only ever a
+problem *within* one core: the plan carries TWO DISJOINT CORE RANGES — the
+full-width cores and the tail cores — each with its own ``block_width_tiles``
+compile-time arg, its own ``col_tile_offset`` and its own CB sizing. Every core
+still sees exactly one quantum, so the invariant holds by construction while the
+column extent goes back to the design's value.
+
+Smooth ``C`` is byte-identical to the divisor rule (``C % bw == 0`` -> no tail
+group, one core range, the same numbers: ``[1,1,32,16384]`` -> 8,
+``[1,1,1024,1024]`` -> 16, ``[1,1,2048,2048]`` -> 64). Rough ``C`` is where it
+pays: ``[1,1,1,50304]`` (``C = 1572 = 2^2*3*131``) went from 131 chunks of 12
+(768 B reads, and 3 blocks on the busiest core against a 2.05 average) to 62
+chunks of 25 plus one of 22 (1600 B reads, one block per core).
+
+The one place the divisor rule survives is a SUB-ROW-PAGED source
+(``input_pages_per_row > 1``): there the block's row segment must additionally
+sit inside a single source page, which is a constraint on the width itself and
+not on the per-core mix.
 """
 
 from __future__ import annotations
@@ -65,6 +72,11 @@ CB_OUTPUT_TILES = 1  # compute -> writer: whole output tile pages
 # pad row costs one DM-engine transfer instead of a RISC store loop. Allocated
 # only on the padded path (`plan.pad_active`).
 CB_PAD_ROW = 2
+# writer -> compute: the TRAILING half of each block's row-major sub-block, on
+# the split-reader path (Refinement 6). A CB of its own rather than a second
+# producer on CB_INPUT_ROWS — one producer and one consumer per CB is a hard CB
+# invariant, and two producers on one CB is silent UB.
+CB_INPUT_ROWS_SPLIT = 3
 # Length of the per-CB `unpack_to_dest_mode` vector. NOT the number of slots this
 # op allocates: `get_unpack_dst_formats` (jit_build/data_format.cpp) indexes it
 # against the FULL per-core CB table and TT_FATALs on anything shorter
@@ -177,6 +189,51 @@ COMPUTE_SKIP_FORMAT_RECONFIG = True
 # a core actually owning more than one block — see the compute kernel's
 # `amortize_init` comment for why the dead instantiations are not free.
 COMPUTE_AMORTIZE_INIT = True
+
+# --- split reader (Refinement 6) -------------------------------------------
+# Read transaction size (BYTES) at or below which the block's stick reads are
+# SPLIT across both data-movement RISC-Vs: the reader (NoC0) takes the leading
+# tile-rows of every block, the writer (NoC1) takes the trailing ones into its
+# own input CB, and compute consumes the block as two back-to-back sub-blocks.
+#
+# MEASURED gate, not a guess. The `split_reader` catalog entry
+# (ttnn/ttnn/operations/examples/master.md) is explicit that this does nothing
+# unless a data-movement RISC-V is itself the bottleneck, so the whole-op
+# ablation came first — `[1,1,16384,32]`, 64/64 cores, device kernel ns:
+#     all payloads stubbed  6221   (NCRISC 5921, BRISC  598)
+#     + read payload       14362   (NCRISC 14054, BRISC 630)
+#     + write payload       9220   (NCRISC 5937, BRISC 8909)
+#     + compute payload     6479
+#     full op              20993   (NCRISC 17448, BRISC 20688)
+# The reader RISC-V is on the critical path for the WHOLE kernel and 6221 ns of
+# the 20993 is its per-stick loop with NO NoC payload at all (256 sticks/core at
+# 64 B), while the writer's own payload is 2999 ns. That is the catalog's
+# signature exactly. A 512 B read (the `attention` twin) is 8x fewer commands
+# for the same bytes and is NOT issue-bound, which is why this is a byte
+# threshold and not "always on": 256 B is one tile-row of 4 bf16 tiles, the
+# widest block whose reads were measured issue-dominated.
+SPLIT_READER_MAX_ROW_BYTES = 256
+# Share of each block's tile-rows the WRITER reads, in percent. NOT 50: the two
+# data-movement RISC-Vs are not interchangeable — the writer also carries the
+# block's stores, and its reads share NoC1 with them — so the balance point is a
+# measurement. On `[1,1,16384,32]` (8 tile-rows per block, so the reachable
+# splits are 0..6 writer rows), device kernel ns at 64/64 cores:
+#     writer rows  0      1      2      3      4      6
+#     device ns  20770  19923  18864  17945  20797  24716
+#     NCRISC     17278  15751  14721  10402   8417   4262
+# 3 of 8 (38%) is the floor of the curve and 1.16x over the unsplit baseline.
+# Past it the writer becomes the wall faster than the reader is relieved: at an
+# even split NCRISC is down to 8417 but BRISC is still ~20500, i.e. BRISC costs
+# roughly 2.3x per stick what NCRISC does once its stores are counted.
+SPLIT_READER_WRITER_SHARE_PCT = 38
+
+# Let the column cut leave a RAGGED TAIL chunk (`C % block_width_tiles` columns)
+# carried by its own core range, instead of forcing `block_width_tiles` to be a
+# divisor of `C`. See the module docstring for the CB-wrap mechanism this
+# respects and how two core ranges respect it. A live knob: at False the plan
+# falls back to the divisor rule and is byte-identical to Refinement 5.
+# Inert on smooth `C` either way (`C % bw == 0` emits no tail group).
+RAGGED_COLUMN_TAIL = True
 
 # Legal output tile heights (power-of-two fractions of 32).
 LEGAL_TILE_HEIGHTS = (1, 2, 4, 8, 16, 32)
@@ -386,6 +443,151 @@ def _largest_divisor_at_most(n: int, limit: int) -> int:
     return 1
 
 
+def _cores_to_range_set(cores) -> "ttnn.CoreRangeSet":
+    """A CoreRangeSet over `cores` (a row-wise-ordered list), merging runs."""
+    ranges = set()
+    start = prev = None
+    for c in cores:
+        if start is not None and int(c.y) == int(prev.y) and int(c.x) == int(prev.x) + 1:
+            prev = c
+            continue
+        if start is not None:
+            ranges.add(ttnn.CoreRange(start, prev))
+        start = prev = c
+    if start is not None:
+        ranges.add(ttnn.CoreRange(start, prev))
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _contiguous_assignment(cores, num_blocks: int, first_block_id: int = 0):
+    """`num_blocks` split into contiguous per-core ranges over `cores`.
+
+    The same balanced rule `split_work_to_cores` uses (the first `n % k` cores
+    take one extra), written out because the two column families are handed
+    DISJOINT SUBSETS of the grid rather than a whole `CoreCoord` grid.
+    Returns `[(core, start_block_id, num_blocks, block_stride=1), ...]` for the
+    cores that actually got work, and the CoreRangeSet over exactly those.
+    """
+    used = min(len(cores), num_blocks)
+    if used == 0:
+        return [], _cores_to_range_set([])
+    base, rem = divmod(num_blocks, used)
+    assignment = []
+    start = first_block_id
+    for i in range(used):
+        per_core = base + (1 if i < rem else 0)
+        assignment.append((cores[i], start, per_core, 1))
+        start += per_core
+    assert start == first_block_id + num_blocks
+    return assignment, _cores_to_range_set(cores[:used])
+
+
+class ColumnGroup:
+    """One core range's view of the column axis — the ragged tail's carrier.
+
+    A plan has ONE of these when `C % block_width_tiles == 0` (the full-width
+    group, `col_tile_offset == 0`) and TWO when it does not: the full-width
+    cores and the tail cores. Every field is exactly the per-core-range slice of
+    what used to be a single global value, which is what lets one core see one
+    CB push/pop quantum (see the module docstring's wrap invariant).
+    """
+
+    __slots__ = (
+        "block_width_tiles",
+        "num_w_chunks",
+        "col_tile_offset",
+        "block_row_bytes",
+        "write_rows_per_barrier",
+        "num_blocks",
+        "cores",
+        "assignment",
+        "input_depth_rows",
+        "output_depth_batches",
+        "is_retile",
+        "pad_active",
+        "split_reader",
+    )
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+    @property
+    def input_cb_pages(self) -> int:
+        if self.is_retile:
+            return 1
+        return self.input_depth_rows * self.block_width_tiles
+
+    @property
+    def split_cb_pages(self) -> int:
+        """cb_input_rows_split: the writer-side half-block, whole (Refinement 6)."""
+        return self.split_reader * self.block_width_tiles
+
+    @property
+    def output_cb_pages(self) -> int:
+        return self.output_depth_batches * self.write_rows_per_barrier * self.block_width_tiles
+
+    @property
+    def pad_row_bytes(self) -> int:
+        return self.block_row_bytes if self.pad_active else 0
+
+
+def _split_reader_rows(
+    *,
+    block_width_tiles: int,
+    block_row_bytes: int,
+    tensor_row_blocks: int,
+    num_row_groups: int,
+    num_blocks_total: int,
+    is_retile: bool,
+    pad_active: bool,
+    input_native: bool,
+    input_pages_per_row: int,
+    in_page_bytes: int,
+    out_page_bytes: int,
+    output_depth_batches: int,
+    write_rows_per_barrier: int,
+    input_depth_rows: int,
+    budget: int,
+) -> int:
+    """Tile-rows of the block the WRITER reads, or 0 for "do not split".
+
+    The return value IS `cb_input_rows_split`'s depth in tile-rows, and it is
+    the writer's WHOLE half-block on purpose: a shallower split CB would let the
+    writer block in `cb_reserve_back` while compute blocks in the output CB's
+    `cb_reserve_back`, which is a cycle. Sized to the whole half, the writer
+    never waits for compute before it starts storing, so there is no cycle to
+    close.
+
+    Every condition below is a correctness or a payoff precondition:
+      * only the plain stick path — the padded, retile, native-shard and
+        sub-row-paged legs are different block operations, and duplicating one
+        of them into the writer would be a second implementation, not a knob;
+      * every block at least two tile-rows tall, so the split point (a runtime
+        `(extent * pct) / 100`) always leaves both halves non-empty and the
+        writer's half is bounded by `floor(max_extent * pct / 100)`;
+      * a read transaction small enough to be ISSUE-dominated (see the constant);
+      * the extra CB fits the same L1 budget the column extent was solved against.
+    """
+    if SPLIT_READER_MAX_ROW_BYTES <= 0 or num_blocks_total == 0:
+        return 0
+    if is_retile or pad_active or input_native or input_pages_per_row > 1:
+        return 0
+    if block_row_bytes > SPLIT_READER_MAX_ROW_BYTES:
+        return 0
+    max_extent = math.ceil(tensor_row_blocks / num_row_groups)
+    if max_extent < 2:
+        return 0
+    rows = min(max_extent - 1, (max_extent * SPLIT_READER_WRITER_SHARE_PCT) // 100)
+    if rows < 1:
+        return 0
+    footprint = (
+        (input_depth_rows + rows) * block_width_tiles * in_page_bytes
+        + output_depth_batches * write_rows_per_barrier * block_width_tiles * out_page_bytes
+    )
+    return rows if footprint <= budget else 0
+
+
 class TilizePlan:
     """The derived block plan: every knob, plus the per-core block assignment.
 
@@ -409,6 +611,18 @@ class TilizePlan:
         "in_page_bytes",
         "out_page_bytes",
         "block_row_bytes",
+        # --- ragged column tail (Refinement 6). `tail_group` is None on every
+        # plan whose `C` divides by `block_width_tiles` (which is every smooth
+        # geometry, and every sharded / sub-row-paged one by construction), so
+        # the single-core-range program is unchanged. When it is present the
+        # program carries a SECOND core range, running the same three kernels at
+        # the tail's own `block_width_tiles` / `col_tile_offset` / CB sizes.
+        "tail_group",
+        # --- split reader (Refinement 6). The number of the block's tile-rows
+        # whose sticks the WRITER kernel reads (into cb_input_rows_split) so the
+        # two data-movement RISC-Vs share the NoC issue cost. 0 = off, and every
+        # split-related CB, CT arg and kernel branch compiles out.
+        "split_reader",
         "all_cores",
         # [(core, start_block_id, num_blocks, block_stride), ...]. `block_stride`
         # is 1 for the solved plan (contiguous ranges) and `num_cores` for the
@@ -453,6 +667,34 @@ class TilizePlan:
 
     # --- derived L1 footprint, in pages and bytes --------------------------
     @property
+    def full_group(self) -> "ColumnGroup":
+        """The full-width core range, as the same object shape the tail uses."""
+        return ColumnGroup(
+            block_width_tiles=self.block_width_tiles,
+            num_w_chunks=self.num_w_chunks,
+            col_tile_offset=0,
+            block_row_bytes=self.block_row_bytes,
+            write_rows_per_barrier=self.write_rows_per_barrier,
+            num_blocks=self.num_blocks_total,
+            cores=self.all_cores,
+            assignment=self.assignment,
+            input_depth_rows=self.input_depth_rows,
+            output_depth_batches=self.output_depth_batches,
+            is_retile=self.is_retile,
+            pad_active=self.pad_active,
+            split_reader=self.split_reader,
+        )
+
+    @property
+    def groups(self) -> list:
+        """Every core range this program covers — one, or two with a ragged tail."""
+        return [self.full_group] + ([self.tail_group] if self.tail_group is not None else [])
+
+    @property
+    def num_cores_used(self) -> int:
+        return sum(len(g.assignment) for g in self.groups)
+
+    @property
     def input_cb_pages(self) -> int:
         # The retile path never reads through cb_input_rows (the reader
         # assembles output tiles straight into cb_output_tiles), so the CB
@@ -461,6 +703,10 @@ class TilizePlan:
         if self.is_retile:
             return 1
         return self.input_depth_rows * self.block_width_tiles
+
+    @property
+    def split_cb_pages(self) -> int:
+        return self.split_reader * self.block_width_tiles
 
     @property
     def output_cb_pages(self) -> int:
@@ -473,8 +719,12 @@ class TilizePlan:
 
     @property
     def l1_per_core_bytes(self) -> int:
+        """Worst per-core footprint over the plan's core ranges (the tail's is
+        never larger — it is the same depths at a narrower block)."""
         return (
-            self.input_cb_pages * self.in_page_bytes + self.output_cb_pages * self.out_page_bytes + self.pad_row_bytes
+            (self.input_cb_pages + self.split_cb_pages) * self.in_page_bytes
+            + self.output_cb_pages * self.out_page_bytes
+            + self.pad_row_bytes
         )
 
 
@@ -874,6 +1124,13 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
 
     input_depth_rows = INPUT_DEPTH_ROWS
     output_depth_batches = OUTPUT_DEPTH_BATCHES
+    # Ragged column tail (Refinement 6): only the solved branch can produce one.
+    # A shard IS the block grid (its chunks are uniform by construction) and the
+    # empty grid has no columns at all.
+    tail_width_tiles = 0
+    num_tail_blocks = 0
+    tail_assignment: list = []
+    tail_cores = None
 
     if tensor_row_blocks == 0 or tensor_col_tiles == 0:
         # --- the empty tensor: a grid with NO output tiles -----------------
@@ -982,14 +1239,25 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         page_width_tiles = in_page_width_elems // TILE_WIDTH if input_pages_per_row > 1 else tensor_col_tiles
         width_source = math.gcd(tensor_col_tiles, page_width_tiles)
 
-        def _width_at(waves: int) -> int:
-            """Coarsest DIVISOR of C that fits L1 and yields >= the target chunks.
+        # A RAGGED TAIL is only legal where the width faces no constraint of its
+        # own: a sub-row-paged source additionally needs the block's row segment
+        # inside ONE page, which is a property of the width and not of the
+        # per-core mix, so that leg keeps the divisor rule.
+        ragged_tail_ok = RAGGED_COLUMN_TAIL and input_pages_per_row == 1
 
-            A divisor (rather than a ceil) is what removes the ragged column tail —
-            see this module's docstring for the mechanism cap that forces it.
+        def _width_at(waves: int) -> int:
+            """Coarsest column extent that fits L1 and yields >= the target chunks.
+
+            `ceil(C / target)` is the design's own extent. Where the tail it
+            leaves cannot be carried (a sub-row-paged source, or the knob off)
+            this falls back to the coarsest DIVISOR of `C` — see this module's
+            docstring for the CB-wrap mechanism and how two core ranges satisfy
+            it without weakening it.
             """
             w_chunks_for_waves = min(tensor_col_tiles, math.ceil(num_cores * waves / tensor_row_blocks))
             target = max(w_chunks_for_l1, w_chunks_for_waves)
+            if ragged_tail_ok:
+                return max(1, min(w_cap, tensor_col_tiles, math.ceil(tensor_col_tiles / target)))
             return _largest_divisor_at_most(width_source, min(w_cap, tensor_col_tiles // target))
 
         # The wave count is bought FROM the column axis, so each doubling halves
@@ -1002,10 +1270,17 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
             if candidate * TILE_WIDTH * elem_size >= MIN_BLOCK_ROW_BYTES:
                 block_width_tiles = candidate
                 break
-        num_w_chunks = tensor_col_tiles // block_width_tiles  # exact, no tail
+        # The column cut, now in two families. `tail_width_tiles == 0` is the
+        # smooth case and is byte-identical to the divisor rule.
+        num_w_chunks = tensor_col_tiles // block_width_tiles
+        tail_width_tiles = tensor_col_tiles - num_w_chunks * block_width_tiles
 
-        num_row_groups = min(tensor_row_blocks, max(1, math.ceil(num_cores / num_w_chunks)))
+        # Occupancy counts BOTH families' chunks — the tail chunk is a column of
+        # the grid like any other, it is only carried by different cores.
+        total_w_chunks = num_w_chunks + (1 if tail_width_tiles else 0)
+        num_row_groups = min(tensor_row_blocks, max(1, math.ceil(num_cores / total_w_chunks)))
         num_blocks_total = num_row_groups * num_w_chunks
+        num_tail_blocks = num_row_groups if tail_width_tiles else 0
 
         # Transactions-in-flight knob for the writer. Inert (1) once the block is
         # at least WRITE_BATCH_MIN_TILES wide; the whole knob on a C == 1 tensor.
@@ -1015,24 +1290,111 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         # row_wise=True explicitly: a column line of cores measured 2.91x worse
         # than a row line on an interleaved DRAM->DRAM copy, and row_wise=False is
         # the default that hands you the column.
-        (
-            _num_cores_used,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            blocks_per_core_g1,
-            blocks_per_core_g2,
-        ) = ttnn.split_work_to_cores(grid, num_blocks_total, row_wise=True)
+        if num_tail_blocks == 0:
+            (
+                _num_cores_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                blocks_per_core_g1,
+                blocks_per_core_g2,
+            ) = ttnn.split_work_to_cores(grid, num_blocks_total, row_wise=True)
 
-        assignment = []
-        start = 0
-        for group, per_core in ((core_group_1, blocks_per_core_g1), (core_group_2, blocks_per_core_g2)):
-            if per_core == 0:
-                continue
-            for core in ttnn.corerange_to_cores(group, None, True):
-                assignment.append((core, start, per_core, 1))
-                start += per_core
-        assert start == num_blocks_total, f"tilize: block assignment covered {start} of {num_blocks_total} blocks"
+            assignment = []
+            start = 0
+            for group, per_core in ((core_group_1, blocks_per_core_g1), (core_group_2, blocks_per_core_g2)):
+                if per_core == 0:
+                    continue
+                for core in ttnn.corerange_to_cores(group, None, True):
+                    assignment.append((core, start, per_core, 1))
+                    start += per_core
+            assert start == num_blocks_total, f"tilize: block assignment covered {start} of {num_blocks_total} blocks"
+        else:
+            # TWO DISJOINT CORE RANGES. The grid's row-wise core order is split
+            # at one point: a prefix carries the full-width blocks, the suffix
+            # carries the tail blocks. The cut is chosen to minimize the busiest
+            # core's TILE count — the two families' blocks are different sizes,
+            # so an even split of the BLOCK count would not balance the work.
+            all_grid_cores = ttnn.corerange_to_cores(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
+                num_cores,
+                True,
+            )
+
+            def _busiest_tiles(cores_for_tail: int) -> int:
+                cores_for_full = num_cores - cores_for_tail
+                full = math.ceil(num_blocks_total / min(cores_for_full, num_blocks_total)) * block_width_tiles
+                tail = math.ceil(num_tail_blocks / min(cores_for_tail, num_tail_blocks)) * tail_width_tiles
+                return max(full, tail)
+
+            tail_cores_count = min(
+                range(1, min(num_tail_blocks, num_cores - 1) + 1),
+                key=lambda k: (_busiest_tiles(k), k),
+            )
+            full_cores_list = all_grid_cores[: num_cores - tail_cores_count]
+            tail_cores_list = all_grid_cores[num_cores - tail_cores_count :]
+
+            assignment, all_cores = _contiguous_assignment(full_cores_list, num_blocks_total)
+            tail_assignment, tail_cores = _contiguous_assignment(tail_cores_list, num_tail_blocks)
+
+    # --- split reader (Refinement 6) --------------------------------------
+    # Both data-movement RISC-Vs issue the block's stick reads instead of one.
+    # MEASURED gate, not a guess: it is worth it exactly where ONE reader RISC-V
+    # is issue-bound, which for this op means a read transaction small enough
+    # that the per-stick issue cost dominates the bytes. See the constant.
+    split_reader = _split_reader_rows(
+        block_width_tiles=block_width_tiles,
+        block_row_bytes=block_width_tiles * TILE_WIDTH * elem_size,
+        tensor_row_blocks=tensor_row_blocks,
+        num_row_groups=num_row_groups,
+        num_blocks_total=num_blocks_total,
+        is_retile=is_retile,
+        pad_active=pad_active,
+        input_native=input_native,
+        input_pages_per_row=input_pages_per_row,
+        in_page_bytes=in_page_bytes,
+        out_page_bytes=out_page_bytes,
+        output_depth_batches=output_depth_batches,
+        write_rows_per_barrier=write_rows_per_barrier,
+        input_depth_rows=input_depth_rows,
+        budget=budget,
+    )
+
+    tail_group = None
+    if num_tail_blocks:
+        tail_group = ColumnGroup(
+            block_width_tiles=tail_width_tiles,
+            num_w_chunks=1,
+            col_tile_offset=num_w_chunks * block_width_tiles,
+            block_row_bytes=tail_width_tiles * TILE_WIDTH * elem_size,
+            write_rows_per_barrier=max(1, math.ceil(WRITE_BATCH_MIN_TILES / tail_width_tiles)),
+            num_blocks=num_tail_blocks,
+            cores=tail_cores,
+            assignment=tail_assignment,
+            input_depth_rows=input_depth_rows,
+            output_depth_batches=output_depth_batches,
+            is_retile=is_retile,
+            pad_active=pad_active,
+            # The split is a per-core-range decision like every other column
+            # knob; the tail's block is narrower, so it re-runs the same gate.
+            split_reader=_split_reader_rows(
+                block_width_tiles=tail_width_tiles,
+                block_row_bytes=tail_width_tiles * TILE_WIDTH * elem_size,
+                tensor_row_blocks=tensor_row_blocks,
+                num_row_groups=num_row_groups,
+                num_blocks_total=num_tail_blocks,
+                is_retile=is_retile,
+                pad_active=pad_active,
+                input_native=input_native,
+                input_pages_per_row=input_pages_per_row,
+                in_page_bytes=in_page_bytes,
+                out_page_bytes=out_page_bytes,
+                output_depth_batches=output_depth_batches,
+                write_rows_per_barrier=max(1, math.ceil(WRITE_BATCH_MIN_TILES / tail_width_tiles)),
+                input_depth_rows=input_depth_rows,
+                budget=budget,
+            ),
+        )
 
     plan = TilizePlan(
         tile_h=tile_h,
@@ -1048,6 +1410,8 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         in_page_bytes=in_page_bytes,
         out_page_bytes=out_page_bytes,
         block_row_bytes=block_width_tiles * TILE_WIDTH * input_tensor.element_size(),
+        tail_group=tail_group,
+        split_reader=split_reader,
         all_cores=all_cores,
         assignment=assignment,
         fp32_dest_acc_en=requires_fp32_dest_acc(input_tensor.dtype, output_tensor.dtype),
@@ -1107,6 +1471,13 @@ def create_program_descriptor(
     tile_desc = ttnn.TileDescriptor(plan.tile_h, TILE_WIDTH)
 
     # ========== Circular buffers ==========
+    # Emitted PER COLUMN GROUP. A plan has one group unless the column cut left
+    # a ragged tail, in which case the tail's cores get their own CB sizes at
+    # their own `block_width_tiles` — which is what keeps the per-core CB
+    # push/pop quantum a single constant and the FIFO wrap legal (see the module
+    # docstring). On the single-group plan this loop emits exactly the same
+    # descriptors as before.
+    #
     # cb_input_rows: live set is ONE tile-row of the block (the tilize helper
     # waits/pops exactly block_width_tiles pages per iteration), so
     # block_row_extent does not enter the size. Capacity = depth * live set.
@@ -1118,22 +1489,7 @@ def create_program_descriptor(
     # one ROW_MAJOR stick, and `block_width_tiles` sticks-worth of contiguous
     # bytes IS one tile-row page group, because the shard's row width is exactly
     # the block's row width (`block_width_tiles == shard_cols_tiles`).
-    if plan.input_native:
-        cb_input_rows = _cb_on_shard(CB_INPUT_ROWS, input_tensor, plan.all_cores, plan.in_page_bytes, tile_desc)
-    else:
-        cb_input_rows = ttnn.CBDescriptor(
-            total_size=plan.input_cb_pages * plan.in_page_bytes,
-            core_ranges=plan.all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=CB_INPUT_ROWS,
-                    data_format=input_tensor.dtype,
-                    page_size=plan.in_page_bytes,
-                    tile=tile_desc,
-                )
-            ],
-        )
-
+    #
     # cb_output_tiles: live set is one write batch; capacity is
     # OUTPUT_DEPTH_BATCHES of them. Its data_format is where the
     # value-preserving `dtype=` cast happens, at pack time.
@@ -1142,22 +1498,7 @@ def create_program_descriptor(
     # output shard in place and there is no writer kernel at all. The tile order
     # matches because compute emits tile-rows left to right across the whole
     # shard width, which is the order a TILE shard stores its pages in.
-    if plan.output_native:
-        cb_output_tiles = _cb_on_shard(CB_OUTPUT_TILES, output_tensor, plan.all_cores, plan.out_page_bytes, tile_desc)
-    else:
-        cb_output_tiles = ttnn.CBDescriptor(
-            total_size=plan.output_cb_pages * plan.out_page_bytes,
-            core_ranges=plan.all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=CB_OUTPUT_TILES,
-                    data_format=output_tensor.dtype,
-                    page_size=plan.out_page_bytes,
-                    tile=tile_desc,
-                )
-            ],
-        )
-
+    #
     # cb_pad_row: reader-local scratch holding ONE block row pre-filled with the
     # fill value. Allocated only on the padded path. Its point is that a whole
     # pad ROW then costs one DM-engine transfer from L1 to L1 instead of a RISC
@@ -1166,21 +1507,61 @@ def create_program_descriptor(
     # every fully-padded row of every block. It has no producer/consumer pair:
     # nothing is ever pushed or popped, so its `total_size` is exactly its one
     # page and the reader only ever takes `get_write_ptr` of it.
-    cbs = [cb_input_rows, cb_output_tiles]
-    if plan.pad_active:
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=plan.pad_row_bytes,
-                core_ranges=plan.all_cores,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_PAD_ROW,
-                        data_format=input_tensor.dtype,
-                        page_size=plan.pad_row_bytes,
-                    )
-                ],
-            )
+    #
+    # cb_input_rows_split: the WRITER's half of the block on the split-reader
+    # path. Sized to the whole half so the writer never waits on compute before
+    # its store — see tilize_writer.cpp's SPLIT READER note for why a shallower
+    # buffer would close a deadlock cycle.
+    def _scratch_cb(index, dtype, page_bytes, pages, cores, tile=None):
+        return ttnn.CBDescriptor(
+            total_size=pages * page_bytes,
+            core_ranges=cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=index,
+                    data_format=dtype,
+                    page_size=page_bytes,
+                    **({"tile": tile} if tile is not None else {}),
+                )
+            ],
         )
+
+    cbs = []
+    for group in plan.groups:
+        if plan.input_native:
+            cbs.append(_cb_on_shard(CB_INPUT_ROWS, input_tensor, group.cores, plan.in_page_bytes, tile_desc))
+        else:
+            cbs.append(
+                _scratch_cb(
+                    CB_INPUT_ROWS, input_tensor.dtype, plan.in_page_bytes, group.input_cb_pages, group.cores, tile_desc
+                )
+            )
+        if plan.output_native:
+            cbs.append(_cb_on_shard(CB_OUTPUT_TILES, output_tensor, group.cores, plan.out_page_bytes, tile_desc))
+        else:
+            cbs.append(
+                _scratch_cb(
+                    CB_OUTPUT_TILES,
+                    output_tensor.dtype,
+                    plan.out_page_bytes,
+                    group.output_cb_pages,
+                    group.cores,
+                    tile_desc,
+                )
+            )
+        if group.pad_active:
+            cbs.append(_scratch_cb(CB_PAD_ROW, input_tensor.dtype, group.pad_row_bytes, 1, group.cores))
+        if group.split_reader:
+            cbs.append(
+                _scratch_cb(
+                    CB_INPUT_ROWS_SPLIT,
+                    input_tensor.dtype,
+                    plan.in_page_bytes,
+                    group.split_cb_pages,
+                    group.cores,
+                    tile_desc,
+                )
+            )
 
     # ========== Compute config ==========
     # The user-facing `compute_kernel_config` maps 1:1 onto the descriptor for
@@ -1219,119 +1600,151 @@ def create_program_descriptor(
     # The CT "plan" block is identical in all three kernels: each derives its
     # own view of a block from the same numbers, which is why there is no
     # cross-kernel handshake and no coordinator core.
-    reader_ct_args = [
-        CB_INPUT_ROWS,
-        plan.block_width_tiles,
-        plan.tile_h,
-        plan.tensor_row_blocks,
-        plan.num_row_groups,
-        plan.num_w_chunks,
-        plan.block_row_bytes,
-        int(plan.input_native),
-        plan.input_pages_per_row,
-        plan.in_page_width_bytes,
-        # --- padding (inert, and the branch compiles out, when pad_active is 0)
-        int(plan.pad_active),
-        CB_PAD_ROW,
-        plan.elem_size,
-        plan.pad_word,
-        plan.in_num_images,
-        plan.in_rows_per_image,
-        plan.in_row_bytes,
-        plan.rows_per_image_out,
-        # --- retile (inert, and the branch compiles out, when is_retile is 0)
-        int(plan.is_retile),
-        plan.in_tile_h,
-        plan.in_tile_rows_per_image,
-        CB_OUTPUT_TILES,
-        plan.tensor_col_tiles,
-        plan.out_page_bytes,
-    ]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-
-    writer_ct_args = [
-        CB_OUTPUT_TILES,
-        plan.block_width_tiles,
-        plan.tensor_row_blocks,
-        plan.tensor_col_tiles,
-        plan.num_row_groups,
-        plan.num_w_chunks,
-        plan.write_rows_per_barrier,
-        plan.out_page_bytes,
-    ]
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
-    compute_ct_args = [
-        CB_INPUT_ROWS,
-        CB_OUTPUT_TILES,
-        plan.block_width_tiles,
-        plan.tensor_row_blocks,
-        plan.num_row_groups,
-        plan.num_w_chunks,
-        int(COMPUTE_SKIP_FORMAT_RECONFIG),
-        # The init/uninit amortization is only emitted where a core can actually
-        # own more than one block; at one block per core its three extra
-        # instantiations are dead code that still costs binary-dispatch time.
-        int(COMPUTE_AMORTIZE_INIT and max(a[2] for a in plan.assignment) > 1),
-        # --- numerical policy (Refinement 5), both derived, both inert (and
-        # compiled out) at every dtype pair that does not need them.
-        int(plan.lossless_fp32),
-        int(plan.repair_srcb_alu_format),
-    ]
-
-    reader_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args = ttnn.RuntimeArgs()
-    compute_rt_args = ttnn.RuntimeArgs()
+    #
+    # Emitted PER COLUMN GROUP, exactly like the CBs: the tail's cores run the
+    # same three kernel sources with their own `block_width_tiles`,
+    # `num_w_chunks` and `col_tile_offset`. On a single-group plan this is one
+    # descriptor per kernel, unchanged.
+    in_accessor_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    out_accessor_args = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     in_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
-    for core, start_block_id, num_blocks, block_stride in plan.assignment:
-        reader_rt_args[core.x][core.y] = [in_addr, start_block_id, num_blocks, block_stride]
-        writer_rt_args[core.x][core.y] = [out_addr, start_block_id, num_blocks, block_stride]
-        compute_rt_args[core.x][core.y] = [start_block_id, num_blocks, block_stride]
 
-    reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
-        core_ranges=plan.all_cores,
-        compile_time_args=reader_ct_args,
-        runtime_args=reader_rt_args,
-        config=ttnn.ReaderConfigDescriptor(),  # reads on NoC0
-    )
-    # No writer at all on the native output path: the packer has already placed
-    # every tile in the output shard, so there is nothing left to move. A writer
-    # that re-wrote a core's own shard over the NoC would be the interleaved path
-    # wearing a sharded hat.
-    writer_kernel = (
-        None
-        if plan.output_native
-        else ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
-            core_ranges=plan.all_cores,
-            compile_time_args=writer_ct_args,
-            runtime_args=writer_rt_args,
-            config=ttnn.WriterConfigDescriptor(),  # writes on NoC1
-        )
-    )
-    # No compute kernel at all on the RETILE path. A re-tile is a pure byte
-    # re-lay between two tiled layouts, so `retile_copy_unit`'s runs go from the
-    # source tile's faces straight into the destination tile's faces over the
-    # NoC — there is no row-major intermediate for a tilize LLK to consume and
-    # nothing for the FPU to do. cb_output_tiles then has the READER as its
-    # single producer and the writer as its single consumer, which is the same
-    # one-producer/one-consumer contract as every other CB in this op.
-    compute_kernel = (
-        None
-        if plan.is_retile
-        else ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
-            core_ranges=plan.all_cores,
-            compile_time_args=compute_ct_args,
-            runtime_args=compute_rt_args,
-            config=compute_config,
-        )
-    )
+    kernels = []
+    for group in plan.groups:
+        reader_ct_args = [
+            CB_INPUT_ROWS,
+            group.block_width_tiles,
+            plan.tile_h,
+            plan.tensor_row_blocks,
+            plan.num_row_groups,
+            group.num_w_chunks,
+            group.block_row_bytes,
+            int(plan.input_native),
+            plan.input_pages_per_row,
+            plan.in_page_width_bytes,
+            # --- padding (inert, and the branch compiles out, when pad_active is 0)
+            int(group.pad_active),
+            CB_PAD_ROW,
+            plan.elem_size,
+            plan.pad_word,
+            plan.in_num_images,
+            plan.in_rows_per_image,
+            plan.in_row_bytes,
+            plan.rows_per_image_out,
+            # --- retile (inert, and the branch compiles out, when is_retile is 0)
+            int(group.is_retile),
+            plan.in_tile_h,
+            plan.in_tile_rows_per_image,
+            CB_OUTPUT_TILES,
+            plan.tensor_col_tiles,
+            plan.out_page_bytes,
+            # --- ragged column tail / split reader (both inert at 0)
+            group.col_tile_offset,
+            group.split_reader,
+            SPLIT_READER_WRITER_SHARE_PCT,
+        ]
+        reader_ct_args.extend(in_accessor_args)
 
-    return ttnn.ProgramDescriptor(
-        kernels=[k for k in (reader_kernel, writer_kernel, compute_kernel) if k is not None],
-        semaphores=[],
-        cbs=cbs,
-    )
+        writer_ct_args = [
+            CB_OUTPUT_TILES,
+            group.block_width_tiles,
+            plan.tensor_row_blocks,
+            plan.tensor_col_tiles,
+            plan.num_row_groups,
+            group.num_w_chunks,
+            group.write_rows_per_barrier,
+            plan.out_page_bytes,
+            group.col_tile_offset,
+            group.split_reader,
+            CB_INPUT_ROWS_SPLIT,
+            plan.tile_h,
+            group.block_row_bytes,
+            SPLIT_READER_WRITER_SHARE_PCT,
+        ]
+        writer_ct_args.extend(out_accessor_args)
+        # The writer reads the block's trailing tile-rows on the split path, so
+        # it carries the INPUT's accessor too — declared unconditionally and
+        # chained off the output accessor's offset so the indices never move.
+        writer_ct_args.extend(in_accessor_args)
+
+        compute_ct_args = [
+            CB_INPUT_ROWS,
+            CB_OUTPUT_TILES,
+            group.block_width_tiles,
+            plan.tensor_row_blocks,
+            plan.num_row_groups,
+            group.num_w_chunks,
+            int(COMPUTE_SKIP_FORMAT_RECONFIG),
+            # The init/uninit amortization is only emitted where a core can
+            # actually own more than one block; at one block per core its three
+            # extra instantiations are dead code that still costs binary-dispatch
+            # time. It is also OFF whenever the reader is split, because the two
+            # sub-block calls program the tilize LLK from different input CB
+            # indices and the amortized modes would carry one CB's init into the
+            # other's call.
+            int(
+                COMPUTE_AMORTIZE_INIT
+                and not group.split_reader
+                and max((a[2] for a in group.assignment), default=0) > 1
+            ),
+            # --- numerical policy (Refinement 5), both derived, both inert (and
+            # compiled out) at every dtype pair that does not need them.
+            int(plan.lossless_fp32),
+            int(plan.repair_srcb_alu_format),
+            # --- split reader (inert, and the second tilize call compiles out, at 0)
+            group.split_reader,
+            CB_INPUT_ROWS_SPLIT,
+            SPLIT_READER_WRITER_SHARE_PCT,
+        ]
+
+        reader_rt_args = ttnn.RuntimeArgs()
+        writer_rt_args = ttnn.RuntimeArgs()
+        compute_rt_args = ttnn.RuntimeArgs()
+        for core, start_block_id, num_blocks, block_stride in group.assignment:
+            reader_rt_args[core.x][core.y] = [in_addr, start_block_id, num_blocks, block_stride]
+            writer_rt_args[core.x][core.y] = [out_addr, start_block_id, num_blocks, block_stride, in_addr]
+            compute_rt_args[core.x][core.y] = [start_block_id, num_blocks, block_stride]
+
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+                core_ranges=group.cores,
+                compile_time_args=reader_ct_args,
+                runtime_args=reader_rt_args,
+                config=ttnn.ReaderConfigDescriptor(),  # reads on NoC0
+            )
+        )
+        # No writer at all on the native output path: the packer has already
+        # placed every tile in the output shard, so there is nothing left to
+        # move. A writer that re-wrote a core's own shard over the NoC would be
+        # the interleaved path wearing a sharded hat.
+        if not plan.output_native:
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+                    core_ranges=group.cores,
+                    compile_time_args=writer_ct_args,
+                    runtime_args=writer_rt_args,
+                    config=ttnn.WriterConfigDescriptor(),  # writes on NoC1
+                )
+            )
+        # No compute kernel at all on the RETILE path. A re-tile is a pure byte
+        # re-lay between two tiled layouts, so `retile_copy_unit`'s runs go from
+        # the source tile's faces straight into the destination tile's faces over
+        # the NoC — there is no row-major intermediate for a tilize LLK to
+        # consume and nothing for the FPU to do. cb_output_tiles then has the
+        # READER as its single producer and the writer as its single consumer,
+        # which is the same one-producer/one-consumer contract as every other CB.
+        if not plan.is_retile:
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+                    core_ranges=group.cores,
+                    compile_time_args=compute_ct_args,
+                    runtime_args=compute_rt_args,
+                    config=compute_config,
+                )
+            )
+
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
