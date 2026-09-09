@@ -258,13 +258,6 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(!use_mla, "PagedCacheGeometryOverride is not supported with multi-latent attention");
         }
 
-        // Geometry overrides + MLA not yet exercised; reject until needed. Also closes the
-        // asymmetry where num_kv_heads could be applied to V under MLA with no elems/block check.
-        const auto& geo = operation_attributes.paged_cache_geometry;
-        if (geo.active()) {
-            TT_FATAL(!use_mla, "PagedCacheGeometryOverride is not supported with multi-latent attention");
-        }
-
         if (use_mla) {
             TT_FATAL(
                 k_shape[3] == q_shape[3], "Q and K must have same hidden size, got {} and {}", k_shape[3], q_shape[3]);
@@ -308,7 +301,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             const uint64_t cache_elems_per_block =
                 static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
             const uint64_t view_elems_per_block =
-                static_cast<uint64_t>(cache_num_kv_heads) * effective_block_size * q_head_dim;
+                static_cast<uint64_t>(view_num_kv_heads) * effective_block_size * q_head_dim;
             TT_FATAL(
                 view_elems_per_block == cache_elems_per_block,
                 "paged_scaled_dot_product_attention_decode geometry mismatch: cache has {} elems/block "
@@ -319,7 +312,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 cache_block_size,
                 cache_head_dim,
                 view_elems_per_block,
-                cache_num_kv_heads,
+                view_num_kv_heads,
                 effective_block_size,
                 q_head_dim);
             TT_FATAL(
