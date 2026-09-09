@@ -282,8 +282,11 @@ runtime:
     wh_galaxy: 50
     wh_n150_civ2: 52
     wh_n300_civ2: 52
-    bh_p100a_civ2_viommu: 52
-    bh_p150b_civ2_viommu: 52
+    # +5 over the wh SKUs for the Blackhole-only "Streaming profiler sanity" job: the streaming
+    # profiler's relay needs programmable DRAM (DRISC) cores, so it has nothing to run on Wormhole.
+    # Measured ~35 s on bh-07; the 5 min timeout covers CI's cold JIT compile.
+    bh_p100a_civ2_viommu: 57
+    bh_p150b_civ2_viommu: 57
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
