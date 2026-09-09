@@ -317,6 +317,9 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+    # The budget workflow measures the gate on the SKU the gate runs on. Two
+    # rows at 30 minutes; the perf nightly does not use this SKU.
+    bh_p150b_civ2_viommu: 60
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180

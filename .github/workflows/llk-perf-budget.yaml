@@ -36,6 +36,10 @@ name: "LLK perf time budget"
 # A count alone does not start a run unless it is a [budget-shards...] one:
 # pair [budget-producer=15] with [budget-run] to change the worker count of an
 # otherwise ordinary run.
+#   [budget-gate]   the merge gate as it would actually run: L1_TO_L1 alone,
+#                   unsharded, one card per architecture, on the SKUs the gate
+#                   pipelines use -- which for Blackhole is bh_p150b_civ2_viommu
+#                   and not the perf pipeline's bh_p150b_civ2
 #   [budget-smoke]  one job: one Blackhole card, L1_TO_L1 alone. Use this first
 #                   after touching the workflow or the runner script.
 #
@@ -110,6 +114,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch'
       || contains(github.event.head_commit.message, '[budget-run]')
       || contains(github.event.head_commit.message, '[budget-shards')
+      || contains(github.event.head_commit.message, '[budget-gate]')
       || contains(github.event.head_commit.message, '[budget-smoke]') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
@@ -118,6 +123,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch'
       || contains(github.event.head_commit.message, '[budget-run]')
       || contains(github.event.head_commit.message, '[budget-shards')
+      || contains(github.event.head_commit.message, '[budget-gate]')
       || contains(github.event.head_commit.message, '[budget-smoke]') }}
     runs-on: ubuntu-slim
     needs: [build-images]
@@ -153,16 +159,27 @@ jobs:
           ARCHITECTURE: ${{ inputs.architecture
             || (contains(github.event.head_commit.message, '[budget-smoke]')
             && 'blackhole' || 'all') }}
+          # A gate run measures the SKUs the gate pipelines use. Blackhole
+          # differs there; Wormhole does not.
+          GATE: ${{ contains(github.event.head_commit.message, '[budget-gate]') }}
         run: |
+          if [[ "$GATE" == "true" ]]; then
+            BH_SKU="bh_p150b_civ2_viommu"
+          else
+            BH_SKU="bh_p150b_civ2"
+          fi
+          # Named rather than ALL_SKUS_IN_TESTS: the matrix now declares both
+          # Blackhole SKUs, and a run must measure one of them, not both.
           case "$ARCHITECTURE" in
-            all)       ENABLED_SKUS="ALL_SKUS_IN_TESTS" ;;
+            all)       ENABLED_SKUS="wh_n150_civ2,$BH_SKU" ;;
             wormhole)  ENABLED_SKUS="wh_n150_civ2" ;;
-            blackhole) ENABLED_SKUS="bh_p150b_civ2" ;;
+            blackhole) ENABLED_SKUS="$BH_SKU" ;;
             *)
               echo "::error::Unsupported architecture '$ARCHITECTURE'"
               exit 1
               ;;
           esac
+          echo "SKUs: $ENABLED_SKUS"
 
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
@@ -173,10 +190,12 @@ jobs:
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
           CONFIGS: ${{ inputs.configs
-            || (contains(github.event.head_commit.message, '[budget-smoke]')
+            || ((contains(github.event.head_commit.message, '[budget-smoke]')
+            || contains(github.event.head_commit.message, '[budget-gate]'))
             && 'l1' || 'full,isolates,l1,isolates_l1') }}
           CARDS: ${{ inputs.cards
-            || (contains(github.event.head_commit.message, '[budget-smoke]')
+            || ((contains(github.event.head_commit.message, '[budget-smoke]')
+            || contains(github.event.head_commit.message, '[budget-gate]'))
             && '1' || '1,2') }}
           # Shard and worker counts come from the dispatch inputs when there
           # are any, else from the commit message, which can carry
@@ -354,6 +373,7 @@ jobs:
     if: ${{ always() && (github.event_name == 'workflow_dispatch'
       || contains(github.event.head_commit.message, '[budget-run]')
       || contains(github.event.head_commit.message, '[budget-shards')
+      || contains(github.event.head_commit.message, '[budget-gate]')
       || contains(github.event.head_commit.message, '[budget-smoke]')) }}
     runs-on: ubuntu-latest
     steps:

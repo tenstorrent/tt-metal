@@ -25,6 +25,13 @@
 # configurations: about 105 min on Wormhole and 127 min on Blackhole. The cap is
 # 240, and the per-SKU sum has to stay inside the llk/perf allocation in
 # .github/time_budget.yaml -- which is what limits the slots to five.
+#
+# The last two rows exist to measure the gate as the gate will actually run:
+# the merge-gate and pr-gate pipelines put Blackhole on bh_p150b_civ2_viommu,
+# not on the bh_p150b_civ2 the perf pipeline uses, and IOMMU virtualisation
+# sits in the host-to-device path that dominates the measure phase. Wormhole
+# needs no extra row -- its gate SKU is wh_n150_civ2 either way. Two slots
+# only, enough for one card plus a second for the spread.
 
 - name: llk_perf_budget wormhole worker 1
   slot: 1
@@ -125,4 +132,24 @@
   skus:
     bh_p150b_civ2:
       timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget merge_gate blackhole worker 1
+  slot: 1
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 30
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget merge_gate blackhole worker 2
+  slot: 2
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 30
   owner_id: U09UC143684 # Nemanja Divnic
