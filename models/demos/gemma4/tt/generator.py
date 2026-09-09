@@ -53,8 +53,13 @@ def _align_page_table_blocks(n: int) -> int:
     return ((n + _PAGE_TABLE_WIDTH_ALIGN - 1) // _PAGE_TABLE_WIDTH_ALIGN) * _PAGE_TABLE_WIDTH_ALIGN
 
 
-def ensure_page_table_width(table: torch.Tensor | None, target_blocks: int, *, fill: int = 0) -> torch.Tensor:
-    """Return an aligned page table at least ``target_blocks`` columns wide."""
+def ensure_page_table_width(table: torch.Tensor | None, target_blocks: int, *, fill: int = -1) -> torch.Tensor:
+    """Host page table with width ``>= target_blocks`` (8-aligned), padded with ``fill``.
+
+    Pad with -1 (skip), never 0. Metal has no null page: 0 is physical block 0,
+    so zero-padding lets pad KV clobber the prompt prefix (loudbox #51186
+    ~9k/16k garbage cliff).
+    """
     aligned = _align_page_table_blocks(target_blocks)
     if table is None:
         return torch.full((1, aligned), fill, dtype=torch.int32)
@@ -150,6 +155,30 @@ def resolve_batched_prefill_chunk_users(padded_batch: int, prefill_seq_len: int)
     # Prefer a supported padded batch size so each chunk stays on the fast path.
     supported = [b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= chunk]
     return supported[-1] if supported else 1
+
+
+def _gemma4_stop_tokens(tokenizer, model_path):
+    """Every id in the checkpoint's ``generation_config.eos_token_id``.
+
+    Gemma-4 lists three (``[1, 106, 50]`` on 12B-it): ``<eos>`` plus the turn
+    terminators an instruct checkpoint actually emits. ``tokenizer.eos_token_id``
+    is only the first, so stopping on it alone never fires -- the demo runs to
+    max_generated_tokens and the tail fills with ``<end_of_turn>`` and the start
+    of a fresh turn, which reads as garbage at the end of an otherwise correct
+    long-context answer.
+    """
+    stop = []
+    try:
+        from transformers import GenerationConfig
+
+        eos = GenerationConfig.from_pretrained(model_path).eos_token_id
+        stop = [eos] if isinstance(eos, int) else list(eos or [])
+    except Exception as e:  # offline / no generation_config.json / unreadable
+        logger.warning("Gemma4 could not read generation_config eos_token_id ({}); using tokenizer eos", e)
+    if tokenizer.eos_token_id is not None and tokenizer.eos_token_id not in stop:
+        stop.append(tokenizer.eos_token_id)
+    logger.info("Gemma4 stop tokens: {}", stop)
+    return stop
 
 
 def _load_text_tokenizer(model_path):
@@ -422,8 +451,9 @@ class ChunkedPrefillPageTableGuardMixin:
         """True last-token index; lm_head tile-aligns separately in the model.
 
         Always pass the real index so unbounded ``paged_fill_cache`` can cap at
-        ``valid_seq_len = last+1`` and skip power-of-2 pad rows. Extra page-table
-        columns pad with 0 (vLLM null block). Decode skip is position -1.
+        ``valid_seq_len = last+1`` and skip power-of-2 pad rows (eager / vLLM
+        extra columns pad with -1 — 0 is physical block 0). Decode skip is
+        position -1.
         """
         return int(last_token_idx)
 
@@ -940,8 +970,6 @@ class ChunkedPrefillPageTableGuardMixin:
         needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
         if page_table_user.shape[1] > needed_blocks:
             page_table_user = page_table_user[:, :needed_blocks]
-        # Extra columns pad with 0 (vLLM null block). Fill skip is valid_seq_len,
-        # not page-table -1.
         page_table_user_padded = ensure_page_table_width(page_table_user, needed_blocks)
         CHUNK_USER_ID = 0
 
@@ -1040,8 +1068,6 @@ class ChunkedPrefillPageTableGuardMixin:
             page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
             # Cap page-table width to the *real* (unpadded) sequence so pad
             # tokens in the last power-of-2 chunk cannot address real blocks.
-            # Extra columns required by the padded chunk grid use 0 (vLLM null
-            # block). Fill skip is valid_seq_len, not page-table -1.
             real_seq_len = int(last_token_idx) + 1
             needed_blocks = num_blocks_in_seq(real_seq_len, block_size)
             chunk_grid_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
@@ -1080,16 +1106,22 @@ class ChunkedPrefillPageTableGuardMixin:
                 if chunk_tokens.shape[-1] < chunk_size:
                     chunk_tokens = torch.nn.functional.pad(chunk_tokens, (0, chunk_size - chunk_tokens.shape[-1]))
 
-                chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
-                # Continuation chunks must see real block IDs (>0). All 0 / empty
+                chunk_start_block = chunk_start // block_size
+                chunk_end_block = chunk_end // block_size
+                chunk_blocks = num_blocks_in_seq(chunk_size, block_size)
+                chunk_page_table = ensure_page_table_width(
+                    page_table_user_padded[:, chunk_start_block:chunk_end_block],
+                    chunk_blocks,
+                )
+                # Continuation chunks must see real block IDs (>=0). All -1
                 # means the source table was truncated to the first scheduler
-                # chunk width (vLLM APC / #51186) — fill would only touch the
-                # null block and full-attn KV past that point would be empty.
+                # chunk width (vLLM APC / #51186) — fill would skip and
+                # full-attn KV past that point would be empty.
                 if chunk_start > 0 and chunk_page_table.numel() > 0:
-                    n_valid = int((chunk_page_table > 0).sum().item())
+                    n_valid = int((chunk_page_table >= 0).sum().item())
                     if n_valid == 0:
                         logger.warning(
-                            "Gemma4 APC chunk_page_table has no real block ids "
+                            "Gemma4 APC chunk_page_table all -1 "
                             "at chunk_start={} (page_table_cols={} needed≈{} "
                             "block_size={}). Continuation KV will not be written "
                             "— check _get_prefill_user_page_table full-prompt width.",
@@ -1868,7 +1900,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     ):
         tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            tokenizer.stop_tokens = _gemma4_stop_tokens(tokenizer, model_path)
 
         model_args, model, tt_kv_cache, _ = create_tt_model(
             mesh_device=mesh_device,
