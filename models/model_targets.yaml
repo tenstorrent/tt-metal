@@ -685,6 +685,7 @@ targets:
           # 34079232201, 34183001770; three different qb2 tiles): 207.6-208.5 t/s, 51.9-52.1 t/s/u.
           # Consistent step up from 149/37, so the old center tripped the "much better than
           # expected" upper bound (171.8 / 42.9) on every run. TTFT unchanged (still in band).
+          # Validated on run 34255364518 (job 102168738297).
           - status: active
             perf:
               prefill_time_to_first_token: 14.4
@@ -1126,11 +1127,8 @@ targets:
             status: active
             # Re-seeded from run 27036772693 (ci eval-32); the earlier 7.63/189
             # were the token-matching teacher-forcing artifacts, not eval perf.
-            # Re-seeded again 2026-09-08: the last 3 scheduled runs (34008626074, 34079232201,
-            # 34183001770) measured 29.9-30.1 t/s/u on three different qb2 tiles, tripping the
-            # old 22.1 center's upper bound (25.4) every run. TTFT unchanged (still in band).
             perf:
-              decode_t/s/u: 30.0
+              decode_t/s/u: 22.1
               prefill_time_to_first_token: 82
             accuracy: {}
   qwen2.5-72b:
@@ -1163,12 +1161,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              # TTFT re-centered 2026-09-08: scheduled runs since 2026-08-20 measured 233-348 ms
-              # (233 / 293 on 09-06 / 09-07, ~330-348 in late August), all below the old 419
-              # center's tol-0.15 floor (356) -> "much better than expected" on every reading.
-              # 300 ms with tol 0.35 gives [195, 405], spanning the observed range.
-              prefill_time_to_first_token: 300
-              prefill_time_to_first_token_tolerance: 0.35
+              prefill_time_to_first_token: 419
               # b1 decode is run-to-run unstable: measured ~10.9-13.2 t/s across
               # recent scheduled runs + 3 targeted reruns. The old 13.77 center
               # sat at the top of the range, so its tol-0.15 floor (11.70) tripped
@@ -1287,7 +1280,8 @@ targets:
               # tripping ("much better than expected"). Center on the observed mean so
               # the [178, 414] band spans both clusters and still gates gross regressions.
               # 2026-09-08: a 167 ms reading (run 34013235507) fell under the 178 floor; recenter
-              # on 260 so the tol-0.4 band [156, 364] still covers both clusters.
+              # on 260 so the tol-0.4 band [156, 364] still covers both clusters. Validated on run
+              # 34255378909 (job 102166690435).
               prefill_time_to_first_token: 260
               prefill_time_to_first_token_tolerance: 0.4
               # decode_t/s/u is run-to-run unstable (see #48510). The earlier 18.0 center
@@ -1362,17 +1356,11 @@ targets:
             # 6/6 recent scheduled runs measured decode_t/s ~680-703, t/s/u ~21.8,
             # TTFT ~86-88ms (old targets 278 / 18.7 / 207 were stale). decode_t/s
             # = batch_size * decode_t/s/u (32 * 21.6 ~= 691).
-            # 2026-09-08: decode swings tile to tile on qb2 (929 t/s on qb2-120-p02t09 on 09-07,
-            # 561 t/s on qb2-120-p06t03 on 09-08, in-band on other days), so both tol-0.15 bounds
-            # tripped within two days. Widen decode tolerance to 0.35 ([449, 933] / [14.0, 29.2])
-            # until the tile variance is understood; TTFT keeps its own 0.2.
             perf:
               prefill_time_to_first_token: 87
               prefill_time_to_first_token_tolerance: 0.2
               decode_t/s/u: 21.6
-              decode_t_s_u_tolerance: 0.35
               decode_t/s: 691
-              decode_t_s_tolerance: 0.35
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1436,9 +1424,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              # 2026-09-08: TTFT measured 136 ms (run 34006475344) under the old 174 center's
-              # tol-0.2 floor (139); recenter on 160 -> [128, 192].
-              prefill_time_to_first_token: 160.0
+              prefill_time_to_first_token: 174.0
               decode_t/s: 26.0
               decode_t/s/u: 26.0
               tolerance: 0.2
