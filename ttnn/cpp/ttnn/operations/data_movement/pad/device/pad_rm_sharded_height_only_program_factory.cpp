@@ -137,16 +137,30 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
             }
         }
 
-        // figure out the stick id in a shard, and the core id for the stick.
-        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(unpadded_cores.front());
-        std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
+        // Gather plan for this output core: the source cores in the order their sticks appear in the
+        // output shard, each with the stick ids to read from it. The reader copies the chunks
+        // sequentially in this order, so it has to be the traversal order of the sticks and not a
+        // sorted order of the source cores' coordinates: on a multi-range grid the shard-order
+        // successor of a core can sit at smaller physical coordinates than the core itself.
+        using NocXY = std::pair<uint32_t, uint32_t>;
+        const auto noc_xy_of = [&](const CoreCoord& logical_core) -> NocXY {
+            const auto physical = device->worker_core_from_logical_core(logical_core);
+            return row_major ? std::make_pair(physical.y, physical.x) : std::make_pair(physical.x, physical.y);
+        };
+        std::vector<std::pair<NocXY, std::vector<uint32_t>>> core_sticks_in_order;
+        const auto push_stick = [&](const NocXY& xy, uint32_t value) {
+            if (core_sticks_in_order.empty() || core_sticks_in_order.back().first != xy) {
+                core_sticks_in_order.emplace_back(xy, std::vector<uint32_t>{});
+            }
+            core_sticks_in_order.back().second.push_back(value);
+        };
+        NocXY prev_xy_pair = noc_xy_of(unpadded_cores.front());
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
 
             // if it is pad stick, we need to leave a gap between the previous non-pad stick and next non-pad stick.
             if (stick_id == -2 || stick_id == -1) {  // front or end padding
-                core_stick_map[prev_xy_pair].push_back(stick_id);
+                push_stick(prev_xy_pair, static_cast<uint32_t>(stick_id));
             } else {
                 uint32_t shard_id = stick_id / num_sticks_per_core_unpadded;
                 uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_unpadded);
@@ -156,23 +170,19 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
                 // a sharded tensor may live on a non-contiguous grid (e.g. {[1-0 - 3-7],
                 // [5-0 - 6-7]}), whose bounding box also covers cores that hold no shard.
                 if (shard_id < unpadded_cores.size()) {
-                    auto core_physical = device->worker_core_from_logical_core(unpadded_cores[shard_id]);
-                    // save stick id in a shard, and core coord into a map
-                    std::pair<uint32_t, uint32_t> xy_pair = row_major
-                                                                ? std::make_pair(core_physical.y, core_physical.x)
-                                                                : std::make_pair(core_physical.x, core_physical.y);
-                    core_stick_map[xy_pair].push_back(stick_id_in_shard);
+                    const NocXY xy_pair = noc_xy_of(unpadded_cores[shard_id]);
+                    push_stick(xy_pair, stick_id_in_shard);
                     prev_xy_pair = xy_pair;
                 }
             }
         }
 
         // reader varargs: the whole gather plan except num_cores, which is a named arg.
-        core_args.num_cores_read = core_stick_map.size();
+        core_args.num_cores_read = core_sticks_in_order.size();
         std::vector<uint32_t>& reader_varargs = core_args.reader_varargs;
-        reader_varargs.reserve(3 * core_stick_map.size() + 2 * num_sticks_per_core_padded);
+        reader_varargs.reserve(3 * core_sticks_in_order.size() + 2 * num_sticks_per_core_padded);
 
-        for (const auto& core_stick_pair : core_stick_map) {
+        for (const auto& core_stick_pair : core_sticks_in_order) {
             auto xy_pair = core_stick_pair.first;
             if (row_major) {
                 reader_varargs.push_back((std::uint32_t)xy_pair.second);  // noc x
@@ -185,8 +195,8 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
-        stick_chunks_per_core.reserve(core_stick_map.size());
-        for (auto core_stick_pair : core_stick_map) {
+        stick_chunks_per_core.reserve(core_sticks_in_order.size());
+        for (auto& core_stick_pair : core_sticks_in_order) {
             auto stick_chunks = group_contiguous_and_repeated_values(core_stick_pair.second);
             reader_varargs.push_back(stick_chunks.size());  // num_chunks for current core
             stick_chunks_per_core.push_back(std::move(stick_chunks));
