@@ -296,6 +296,15 @@ class MiniMaxH3Attention(Module):
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
+            if measured is None:
+                # The table is keyed by the perf test's 512-token shards (4768 / 9216 / 13632); a served
+                # 39-token prompt lands one or two tiles away (4736 / 9152 / 13664) and fell through to
+                # the generic rule -- at 5 s that is the k=256 family the docstring above measured as
+                # clearly worse than (320, 384). The optimum moves with length on a scale of thousands
+                # of rows, not a tile, so take the nearest measured length within a few tiles.
+                nearest = min(self.measured_sdpa_chunk_sizes, key=lambda length: abs(length - seq_local))
+                if abs(nearest - seq_local) <= 4 * ttnn.TILE_SIZE:
+                    measured = self.measured_sdpa_chunk_sizes[nearest]
             if measured is not None:
                 q_chunk, k_chunk = measured
             else:

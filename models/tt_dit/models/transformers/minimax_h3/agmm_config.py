@@ -32,9 +32,14 @@ from __future__ import annotations
 # The op derives its worker grid from the device, reserving the mux axis: M parallelizes over 12
 # cores when transposed (narrow output, M > N) and 10 otherwise. per_core_M -- the M-tiles each core
 # walks -- follows.
+import os
+
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
 _M_CORES_NON_TRANSPOSED = 10
+# MINIMAX_H3_AGMM_EXACT_ONLY=1: use a table entry only for a per_core_M that was itself swept, else defer
+# to the v3 rule engine (`utils/agmm_rules.py`). A screening switch for `agmm_block_size`'s divisor rule.
+_EXACT_ONLY = os.environ.get("MINIMAX_H3_AGMM_EXACT_ONLY", "0") == "1"
 
 
 def _per_core_m(m: int, n: int) -> int:
@@ -107,6 +112,12 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
+    if _EXACT_ONLY:
+        # Screening mode: only a per_core_M that was itself swept uses the table; everything else
+        # falls to the v3 rule engine. The divisor rule below can land a 13-tile-per-core operating
+        # point on the entry swept at 1 tile per core (5 s to_out on a 4x8: 148 tiles / 12 cores = 13,
+        # prime), or reuse an entry swept in the other core-grid orientation.
+        return AGMM_BLOCK_SIZES.get((k, n, per_core_m))
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
         return None
