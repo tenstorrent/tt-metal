@@ -84,7 +84,7 @@ Every derived metric is computed by one shared module, [tools/tracy/perf_metrics
 
 Metrics come in two families, told apart by the key suffix:
 
-- `*_pct`: bounded percentages (0-100%). The numerator is a subset of its denominator.
+- `*_pct`: percentages bounded to 0-100 by construction: the numerator counts a subset of the cycles or events the denominator counts (a 1-bit counter over its bank's `ref_cnt`, an RTL-proven subset such as an arbiter accept over its request, or a share of a sum). Where a row says "clamped", the value is additionally clamped to 0..100 and the row states why.
 - `*_ratio`: unbounded raw ratios that can exceed 1.0 by design, because the numerator and denominator come from different measurement domains or because overlapping events are summed. Reported with a `(ratio)` unit and never clamped; the excess over 1.0 is the signal.
 
 A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics are N/A on Blackhole, and the Blackhole-only extended L1 groups are N/A on Wormhole. Cross-bank metrics are likewise N/A when one of their counter groups was not captured in the run.
@@ -98,7 +98,7 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | FPU Util (%) | `fpu_utilization_pct` | `FPU_COUNTER / fpu cycles` | Fraction of cycles the FPU executed an instruction. |
 | MATH Util (%) | `compute_utilization_pct` | `MATH_COUNTER / fpu cycles` | FPU or SFPU active (the counter is the OR of both). |
 | SFPU Util (%) | `sfpu_utilization_pct` | `SFPU_COUNTER / fpu cycles` | Fraction of cycles the SFPU was active. |
-| FPU Execution Efficiency (%) | `fpu_exec_eff_pct` | `FPU_COUNTER / MATH_INSTRN_AVAILABLE_1` | Of the cycles a math instruction was available, how many the FPU executed. |
+| FPU Execution Efficiency (ratio) | `fpu_exec_eff_ratio` | `FPU_COUNTER / MATH_INSTRN_AVAILABLE_1` | UNBOUNDED ratio: FPU busy cycles (dequeues from every thread) per cycle thread 1 had a math instruction ready; near or above 1 = compute-efficient, low = stall-bound. |
 | Math Pipeline Utilization (%) | `math_pipeline_util_pct` | `MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE` | Available math instructions that actually started. |
 
 ### Math pipeline stalls
@@ -106,20 +106,17 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
 | Data Hazard Stall Rate (%) | `data_hazard_stall_pct` | `1 - MATH_NOT_D2S_STALLED / MATH_INSTRN_AVAILABLE` | MOVD2A data-hazard stall rate (counter counts not-stalled cycles). |
-| Math Scoreboard Stall Rate (%) | `math_scoreboard_stall_pct` | `1 - MATH_NOT_SCOREBOARD_STALLED / MATH_INSTRN_AVAILABLE` | Scoreboard stalls. N/A when the pack group was not captured. |
+| Math Scoreboard Stall Rate (%) | `math_scoreboard_stall_pct` | `1 - MATH_NOT_SCOREBOARD_STALLED / MATH_INSTRN_AVAILABLE` | Scoreboard stalls. N/A when the pack group was not captured; clamped to 0..100 because the two counters come from separately started groups. |
 
 ### Unpacker
 
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
-| Unpacker0 Write Efficiency (%) | `unpack0_write_eff_pct` | `SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0` | Unpacker-0 busy cycles that completed a srcA write. |
-| Unpacker1 Write Efficiency (%) | `unpack1_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / UNPACK1_BUSY_THREAD0` | Unpacker-1 busy cycles that completed a srcB write. |
-| Unpacker Write Efficiency (%) | `unpack_write_eff_pct` | `mean of the two write efficiencies` | Combined unpacker write efficiency. |
-| Unpacker-to-Math Data Flow (%) | `unpack_to_math_flow_pct` | `mean of the srcA and srcB flows` | Combined unpacker-to-math data flow. |
-| Unpacker-to-Math Data Flow (srcA) (%) | `unpack_to_math_flow0_pct` | `SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0` | srcA buffer availability while unpacker 0 is busy. |
-| Unpacker-to-Math Data Flow (srcB) (%) | `unpack_to_math_flow1_pct` | `SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0` | srcB buffer availability while unpacker 1 is busy. |
-| SrcA Write Actual Efficiency (%) | `srca_write_eff_pct` | `SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ` | Write-available cycles on which the srcA write port was not blocked. |
-| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_REQ` | Write-available cycles on which the srcB overwrite was not blocked. |
+| Unpacker-to-Math Data Flow (ratio) | `unpack_to_math_flow_ratio` | `mean of the srcA and srcB flows` | UNBOUNDED ratio; combined unpacker-to-math data flow. |
+| Unpacker-to-Math Data Flow (srcA) (ratio) | `unpack_to_math_flow0_ratio` | `SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0` | UNBOUNDED ratio: srcA write requests per unpacker-0 busy cycle. THCON and other-thread writes also count, so it can exceed 1. |
+| Unpacker-to-Math Data Flow (srcB) (ratio) | `unpack_to_math_flow1_ratio` | `SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0` | UNBOUNDED ratio: srcB write requests per unpacker-1 busy cycle. |
+| SrcA Write Actual Efficiency (%) | `srca_write_eff_pct` | `SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ` | srcA write requests that the write port accepted. |
+| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_REQ` | srcB write requests not blocked by overwrite protection. |
 | SrcA Write Overwrite Blocked Rate (%) | `srca_write_ovr_blocked_pct` | `1 - SRCA_WRITE_NOT_BLOCKED_OVR / SRCA_WRITE_REQ` | srcA writes blocked by overwrite protection. |
 | SrcB Write Port Blocked Rate (%) | `srcb_write_port_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ` | srcB writes blocked on the write port. |
 | Unpacker0 T1 Share (%) | `unpack0_thread1_share_pct` | `UNPACK0_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-0 busy cycles driven by the math thread. |
@@ -132,7 +129,7 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
 | Packer Utilization (%) | `pack_utilization_pct` | `PACKER_BUSY / pack cycles` | Fraction of cycles any packer engine was busy. |
-| Packer Efficiency (%) | `pack_dest_eff_pct` | `PACKER0_DEST_READ_REQ / PACKER_BUSY` | Packer busy cycles with dest data available to read. N/A when the packer is idle. |
+| Packer Efficiency (%) | `pack_dest_eff_pct` | `PACKER0_DEST_READ_REQ / PACKER_BUSY` | Packer busy cycles that issued a dest read request. A dest read request implies a non-empty packer request FIFO, which is the busy condition, so this is a true fraction. N/A when the packer is idle. |
 | Pack Dest Grant Efficiency (%) | `pack_dest_grant_eff_pct` | `DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ` | Dest read requests that were granted. |
 | Packer Engine 0 Util (%) | `packer0_util_pct` | `PACKER_BUSY_0 / pack cycles` | Per-engine packer 0. Wormhole only; N/A on Blackhole. |
 | Packer Engine 1 Util (%) | `packer1_util_pct` | `PACKER_BUSY_1 / pack cycles` | Per-engine packer 1. Wormhole only; N/A on Blackhole. |
@@ -182,13 +179,13 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
-| CFG Instrn Avail Rate T0 (%) | `cfg_instrn_avail_t0_pct` | `CFG_INSTRN_AVAILABLE_0 / instrn cycles` | CFG instructions pending on thread 0. |
-| SYNC Instrn Avail Rate T0 (%) | `sync_instrn_avail_t0_pct` | `SYNC_INSTRN_AVAILABLE_0 / instrn cycles` | SYNC instructions pending on thread 0. |
-| THCON Instrn Avail Rate T0 (%) | `thcon_instrn_avail_t0_pct` | `THCON_INSTRN_AVAILABLE_0 / instrn cycles` | THCON instructions pending on thread 0. |
-| MOVE Instrn Avail Rate T0 (%) | `move_instrn_avail_t0_pct` | `MOVE_INSTRN_AVAILABLE_0 / instrn cycles` | MOVE instructions pending on thread 0. |
-| MATH Instrn Avail Rate T1 (%) | `math_instrn_avail_t1_pct` | `MATH_INSTRN_AVAILABLE_1 / instrn cycles` | Math instructions pending on thread 1. |
-| UNPACK Instrn Avail Rate T0 (%) | `unpack_instrn_avail_t0_pct` | `UNPACK_INSTRN_AVAILABLE_0 / instrn cycles` | Unpack instructions pending on thread 0. |
-| PACK Instrn Avail Rate T2 (%) | `pack_instrn_avail_t2_pct` | `PACK_INSTRN_AVAILABLE_2 / instrn cycles` | Pack instructions pending on thread 2. |
+| CFG Instrn Avail Rate T0 (%) | `cfg_instrn_avail_t0_pct` | `CFG_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a CFG instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| SYNC Instrn Avail Rate T0 (%) | `sync_instrn_avail_t0_pct` | `SYNC_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a SYNC instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| THCON Instrn Avail Rate T0 (%) | `thcon_instrn_avail_t0_pct` | `THCON_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a THCON instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| MOVE Instrn Avail Rate T0 (%) | `move_instrn_avail_t0_pct` | `MOVE_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a MOVE instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| MATH Instrn Avail Rate T1 (%) | `math_instrn_avail_t1_pct` | `MATH_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is a MATH instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). |
+| UNPACK Instrn Avail Rate T0 (%) | `unpack_instrn_avail_t0_pct` | `UNPACK_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a UNPACK instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| PACK Instrn Avail Rate T2 (%) | `pack_instrn_avail_t2_pct` | `PACK_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is a PACK instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). |
 | T0 Instrn Issue Rate (%) | `thread0_ipc_pct` | `THREAD_INSTRUCTIONS_0 / instrn cycles` | Thread 0 issue rate; single-issue, so at most 100%. |
 | T1 Instrn Issue Rate (%) | `thread1_ipc_pct` | `THREAD_INSTRUCTIONS_1 / instrn cycles` | Thread 1 issue rate. |
 | T2 Instrn Issue Rate (%) | `thread2_ipc_pct` | `THREAD_INSTRUCTIONS_2 / instrn cycles` | Thread 2 issue rate. |
@@ -203,30 +200,28 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | L1 TDMA Bundle Util (%) | `l1_tdma_bundle_util_pct` | `mean over the two L1_0_TDMA_BUNDLE ports / l1 cycles` | RISC and TRISC TDMA bundle traffic. |
 | L1 Unpacker1 Ext Util (%) | `l1_unpacker1_ext_util_pct` | `mean over unpacker 1's extended read ports (L1_1 ports 9-11; plus L1_2 ports 16-19 on Blackhole)` | On Blackhole these ports also carry the packer L1-to-L1 read. |
 | L1 Unpacker0 Ext Util (%) | `l1_unpacker0_ext_util_pct` | `mean over unpacker 0's extended read ports (L1_4 ports 35-39, L1_5 ports 40-41)` | Blackhole only; N/A on Wormhole. |
-| L1 Ext Packer Util (%) | `l1_ext_pack_util_pct` | `mean over L1_3_EXT_PACKER_2-5 and L1_4_EXT_PACKER_6-7` | Blackhole only; N/A on Wormhole. |
-| L1 Tag Search Util (%) | `l1_tag_search_util_pct` | `L1_4_TAG_SEARCH_PACKER_1 / l1 cycles` | Blackhole only; N/A on Wormhole. |
+| L1 Packer Interfaces Util (%) | `l1_ext_pack_util_pct` | `mean over L1_3_EXT_PACKER_2-5, L1_4_EXT_PACKER_6-7 and L1_4_PACKER_IF_1_TAG_SEARCH` | Blackhole only; N/A on Wormhole. Port 34 is packer interface 1, shared with the tag-search accelerator that tt-metal never enables. |
 | L1 Mean Client Util (%) | `l1_mean_client_util_pct` | `mean busy/ref over every present L1 client port` | One number for overall L1 client pressure. |
-| RISC Core L1 Util (%) | `risc_core_l1_util_pct` | `L1_0_TDMA_BUNDLE_0_RISC / l1 cycles` | The bundle-0 (RISC) port on its own. |
+| L1 Port 2 Util (%) | `l1_port2_util_pct` | `L1_0_TDMA_BUNDLE_0_RISC / l1 cycles` | Port 2 carries TDMA bundle 0 (mover, packer read, THCON) together with BRISC, TRISC0 and NCRISC. |
 | NOC Ring 0 Util (%) | `noc_ring0_util_pct` | `mean over the ring-0 ports (4 on Wormhole, 8 on Blackhole) / l1 cycles` | NoC ring 0 utilization. |
 | NOC Ring 1 Util (%) | `noc_ring1_util_pct` | `mean over the ring-1 ports (4 on Wormhole, 8 on Blackhole) / l1 cycles` | NoC ring 1 utilization. |
 | NOC Ring 0 Outgoing Util (%) | `noc_ring0_out_util_pct` | `mean over L1_0_NOC_RING0_OUTGOING_0/1 / l1 cycles` | Primary ring-0 outgoing channels only. |
 | NOC Ring 0 Incoming Util (%) | `noc_ring0_in_util_pct` | `mean over L1_0_NOC_RING0_INCOMING_0/1 / l1 cycles` | Primary ring-0 incoming channels only. |
 | NOC Ring 1 Outgoing Util (%) | `noc_ring1_out_util_pct` | `mean over L1_1_NOC_RING1_OUTGOING_0/1 / l1 cycles` | Primary ring-1 outgoing channels only. |
 | NOC Ring 1 Incoming Util (%) | `noc_ring1_in_util_pct` | `mean over L1_1_NOC_RING1_INCOMING_0/1 / l1 cycles` | Primary ring-1 incoming channels only. |
-| NOC Ring 0 Grant Efficiency (%) | `noc_ring0_grant_eff_pct` | `sum of ring-0 grant counters / sum of ring-0 request counters` | Ring-0 requests that were granted. |
+| NOC Ring 0 Grant Efficiency (%) | `noc_ring0_grant_eff_pct` | `sum of grants / sum of requests over the ring-0 ports with both counters captured` | Ring-0 requests that were granted. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
 | Unpacker L1 Efficiency (ratio) | `unpacker_l1_eff_ratio` | `L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0` | UNBOUNDED ratio (cross-domain); above 1 = ample L1 bandwidth for the unpacker. |
 | Packer L1 Efficiency (ratio) | `packer_l1_eff_ratio` | `L1_0_PORT1_GRANT / PACKER_BUSY` | UNBOUNDED ratio; Wormhole only, where port 1 carries pack1 traffic. N/A on Blackhole (port 1 is an unpacker there). |
-| L1 Unpacker Backpressure (%) | `l1_unpacker_backpressure_pct` | `1 - L1_0_UNPACKER_0_GRANT / L1_0_UNPACKER_0` | Unpacker-0 requests waiting on the L1 arbiter. |
-| L1 Port 1 Backpressure (%) | `l1_port1_backpressure_pct` | `1 - port 1 grants / port 1 requests` | Port-1 requests waiting on the L1 arbiter; the request and grant counters are the per-architecture pair named under L1 Port 1 Util. |
-| NOC Ring 0 Outgoing Backpressure (%) | `noc_ring0_out_backpressure_pct` | `1 - grants / requests over the primary ring-0 outgoing pair` | L1 not ready for outgoing ring-0 traffic. |
-| NOC Ring 0 Incoming Backpressure (%) | `noc_ring0_in_backpressure_pct` | `1 - grants / requests over the primary ring-0 incoming pair` | L1 not ready for incoming ring-0 traffic. |
-| NOC Ring 1 Outgoing Backpressure (%) | `noc_ring1_out_backpressure_pct` | `1 - grants / requests over the primary ring-1 outgoing pair` | L1 not ready for outgoing ring-1 traffic. |
-| NOC Ring 1 Incoming Backpressure (%) | `noc_ring1_in_backpressure_pct` | `1 - grants / requests over the primary ring-1 incoming pair` | L1 not ready for incoming ring-1 traffic. |
-| NOC Ring 1 Grant Efficiency (%) | `noc_ring1_grant_eff_pct` | `sum of ring-1 grant counters / sum of ring-1 request counters` | Ring-1 requests that were granted. |
-| L1 Unpacker1 Ext Backpressure (%) | `l1_unpacker1_ext_backpressure_pct` | `1 - grants / requests over unpacker 1's extended read ports` | Contention on unpacker 1's extended interfaces. |
-| L1 Unpacker0 Ext Backpressure (%) | `l1_unpacker0_ext_backpressure_pct` | `1 - grants / requests over unpacker 0's extended read ports` | Blackhole only; N/A on Wormhole. |
-| L1 Ext Packer Backpressure (%) | `l1_ext_pack_backpressure_pct` | `1 - grants / requests over the extended packer ports` | Blackhole only; N/A on Wormhole. |
-| L1 Tag Search Backpressure (%) | `l1_tag_search_backpressure_pct` | `1 - L1_4_TAG_SEARCH_PACKER_1_GRANT / L1_4_TAG_SEARCH_PACKER_1` | Blackhole only; N/A on Wormhole. |
+| L1 Unpacker Backpressure (%) | `l1_unpacker_backpressure_pct` | `1 - L1_0_UNPACKER_0_GRANT / L1_0_UNPACKER_0` | Unpacker-0 requests not accepted by the L1 arbiter. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| L1 Port 1 Backpressure (%) | `l1_port1_backpressure_pct` | `1 - port 1 grants / port 1 requests` | Port-1 requests not accepted by the L1 arbiter; the request and grant counters are the per-architecture pair named under L1 Port 1 Util. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| NOC Ring 0 Outgoing Backpressure (%) | `noc_ring0_out_backpressure_pct` | `1 - grants / requests over the primary ring-0 outgoing pair` | Outgoing ring-0 requests not accepted by the L1 arbiter. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| NOC Ring 0 Incoming Backpressure (%) | `noc_ring0_in_backpressure_pct` | `1 - grants / requests over the primary ring-0 incoming pair` | Incoming ring-0 requests not accepted by the L1 arbiter. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| NOC Ring 1 Outgoing Backpressure (%) | `noc_ring1_out_backpressure_pct` | `1 - grants / requests over the primary ring-1 outgoing pair` | Outgoing ring-1 requests not accepted by the L1 arbiter. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| NOC Ring 1 Incoming Backpressure (%) | `noc_ring1_in_backpressure_pct` | `1 - grants / requests over the primary ring-1 incoming pair` | Incoming ring-1 requests not accepted by the L1 arbiter. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| NOC Ring 1 Grant Efficiency (%) | `noc_ring1_grant_eff_pct` | `sum of grants / sum of requests over the ring-1 ports with both counters captured` | Ring-1 requests that were granted. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| L1 Unpacker1 Ext Backpressure (%) | `l1_unpacker1_ext_backpressure_pct` | `1 - grants / requests over unpacker 1's extended read ports` | Contention on unpacker 1's extended interfaces. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| L1 Unpacker0 Ext Backpressure (%) | `l1_unpacker0_ext_backpressure_pct` | `1 - grants / requests over unpacker 0's extended read ports` | Blackhole only; N/A on Wormhole. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
+| L1 Packer Interfaces Backpressure (%) | `l1_ext_pack_backpressure_pct` | `1 - grants / requests over the packer interface ports (26-34)` | Blackhole only; N/A on Wormhole. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
 
 ### L1 and NoC composites
 
@@ -236,7 +231,7 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | L1 Read vs Write Ratio (%) | `l1_read_write_ratio_pct` | `reads / (reads + writes), reads = unpacker0 + ring0 out, writes = ring0 in; port 1 counts as a read on Blackhole (unpacker 1) and a write on Wormhole (pack1)` | Above 50% = read-dominated. |
 | NOC Ring 0 Asymmetry (%) | `noc_ring0_asymmetry_pct` | `ring0 outgoing / (outgoing + incoming)` | Direction balance of ring-0 traffic. |
 | TDMA vs NOC L1 Share (%) | `tdma_vs_noc_l1_share_pct` | `TDMA bundle / (bundle + ring0 traffic)` | Firmware traffic as a share of L1 bank-0 activity. |
-| L1 Contention Index (%) | `l1_contention_index_pct` | `mean of (1 - grant/request) over the five primary request/grant pairs` | One number for L1 bank-0 contention. |
+| L1 Contention Index (%) | `l1_contention_index_pct` | `mean of (1 - grant/request) over the five primary request/grant pairs` | One number for L1 bank-0 contention. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
 | NOC vs Compute Balance (%) | `noc_vs_compute_balance_pct` | `ring0 traffic / (ring0 traffic + FPU_COUNTER)` | Above 50% = NoC-bound, below = compute-bound. |
 
 ## Hardware Register Reference
@@ -249,7 +244,7 @@ Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD
 |---|---|---|
 | `RISCV_DEBUG_REG_PERF_CNT_<X>0` | — | Reference period in cycles. |
 | `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bits [7:0] | Mode: `0` = continuous, `1` = count until refclk cycles hit, `2` = continuous (no refclk maintenance). |
-| `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bits [12:8] | Bank select — selects which counter within the bank to read out. |
+| `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bits [8+:N], N = 1 (FPU), 3 (L1), 5 (TDMA), 6 (INSTRN) | Counter select within the bank. |
 | `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bit [16] | Output format: `0` = req count on `_OUT_H_<X>`, `1` = grant count. |
 | `RISCV_DEBUG_REG_PERF_CNT_<X>2` | Bit [0] | Start (rising edge only; 0→1 transition also clears the counters). |
 | `RISCV_DEBUG_REG_PERF_CNT_<X>2` | Bit [1] | Stop (rising edge only). |

@@ -107,7 +107,7 @@ The semaphore is used rather than L1 because its release is symmetric, detection
 
 Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). This:
 
-- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (114 slots on WH, 105 on BH, since only one L1 mux group is emitted) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory, see [Counter inventory single source](#counter-inventory-single-source).
+- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory, see [Counter inventory single source](#counter-inventory-single-source).
 - Clears every per-zone data area and sync word.
 - Clears `DBG_FEATURE_DISABLE` to `0`, see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - Programs each bank's reference-period and mode registers, sets `PERF_CNT_MUX_CTRL` for L1, and does an initial global arm (later overridden by the first `MEASURE_PERF_COUNTERS` zone).
@@ -180,16 +180,16 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 |---|---|---|
 | INSTRN_THREAD slots in inventory | 59 | 59 |
 | FPU slots | 3 | 3 |
-| TDMA_UNPACK slots | 22 | 22 |
+| TDMA_UNPACK slots | 18 | 18 |
 | TDMA_PACK slots | 14 | 5 |
-| L1 mux positions (Tensix) | 2 | 6 (the harness captures 0 to 4) |
-| L1 slots in inventory | 32 (16 × 2 mux) | 80 (16 × 5 mux) |
-| Total slots in `BUILTIN_COUNTER_CONFIG` (one L1 mux group) | 114 | 105 |
+| L1 mux positions (Tensix) | 2 | 6 (one group per build, `LLK_PERF_L1_MUX_GROUP` 0 to 5) |
+| L1 slots in inventory | 32 (16 × 2 mux) | 84 (16 × 5 mux + 4 on position 5) |
+| Total slots in `BUILTIN_COUNTER_CONFIG` (one L1 mux group) | 110 | 101 |
 | Total config words in L1 | 200 (rest are zero-padded) | 200 |
 
 **Wormhole** has `PACK_COUNT = 4` (per-engine packer busy signals are live in RTL), so `TDMA_PACK` exposes counters 11–14 for dest-read availability, 15–18 for per-engine plus aggregate packer busy, and 267–272 for per-engine dest-read grants plus `MATH_NOT_STALLED_DEST_WR_PORT` and `AVAILABLE_MATH`. The L1 mux is 1-bit wide: position 0 covers NoC Ring 0 plus L1 arbitration, position 1 covers NoC Ring 1 plus TDMA-extended signals.
 
-**Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (3 extra) which expose additional NoC rings and miscellaneous L1 ports.
+**Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (4 extra) which expose additional NoC rings and miscellaneous L1 ports.
 
 **INSTRN_THREAD bank.** Counters 0–8 and 12–23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each, 21 slots; the XSEARCH sels 9–11 are tied off in RTL and are not in the inventory). Counters 24–26 are per-thread total stall cycles. The stall-reason layout differs:
 
@@ -200,7 +200,7 @@ Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one pe
 
 ### Counter inventory single source
 
-The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h`, as grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..4_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
+The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h`, as grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..5_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
 
 - **Device (`counters.h`)** `#include`s `hw_counters.h` (with the `PerfCounterType` enum from `perf_counters.hpp`) and builds `BUILTIN_COUNTER_CONFIG[]` from those arrays at compile time, a `constexpr` concatenation in the fixed bank order the readout expects (INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group).
 
@@ -281,18 +281,18 @@ Rising-edge triggered. Bit 0 = start (0→1 also clears the counter), bit 1 = st
 
 ### L1 mux (`PERF_CNT_MUX_CTRL`)
 
-Each L1 mux group exposes 8 client interfaces x 2 counters (request sels 0–7 and grant sels 256–263), so 16 `counter_sel` values per group, giving the 32 (WH, 2 groups) and 80 (BH, 5 groups) inventory totals above. The mux field selects the group: bit 4 on Wormhole, bits 6:4 on Blackhole (5 of 8 encodings populated):
+Each L1 mux group exposes 8 client interfaces x 2 counters (request sels 0–7 and grant sels 256–263), so 16 `counter_sel` values per group, giving the 32 (WH, 2 groups) and 84 (BH, 6 groups) inventory totals above. The mux field selects the group: bit 4 on Wormhole, bits 6:4 on Blackhole (6 of 8 encodings populated):
 
 | Mux | WH meaning | BH meaning |
 |-----|------------|------------|
 | 0 | unpacker 0, packer port 1 (+ECC), TDMA bundles 0/1, NoC Ring 0 | unpacker 0, port 1 (unpacker 1 + ECC), TDMA bundles 0/1, NoC Ring 0 |
-| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 |
-| 2 | not present | ext unpackers 4–7, NoC Ring 0 secondary channels |
+| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | packer interface 0 (port 8), unpacker 1 extended interfaces 1-3, NoC Ring 1 |
+| 2 | not present | unpacker 1 extended interfaces 4-7, NoC Ring 0 secondary channels |
 | 3 | not present | NoC Ring 1 secondary channels, ext packers 2–5 |
-| 4 | not present | ext packers 6–7, tag search / packer 1, ext unpackers 8–12 |
-| 5 | not present | ext unpackers 13–14 (only slots 0 and 1 are wired; slots 2–7 read 0) |
+| 4 | not present | ext packers 6-7, packer interface 1 (with the tag-search accelerator), unpacker 0 extended interfaces 1-5 |
+| 5 | not present | unpacker 0 extended interfaces 6-7 (only slots 0 and 1 are wired; slots 2-7 read 0) |
 
-The Blackhole column is taken from the A0 tapeout RTL (ws-tensix `BH_A0_RC6`, `tt_tensix.sv`) and was confirmed on silicon by reading every selector under real workloads; positions 6 and 7 have no decode case and fall back to position 0. The labels in `hw_counters.h` and in the harness `counters.py` predate that check and are being brought in line by PR #55162 (the old `NOC_RING2/3` and `MISC_PORT` names describe a 4-NOC build that never shipped).
+The Blackhole column is taken from the A0 tapeout RTL (ws-tensix `BH_A0_RC6`, `tt_tensix.sv`) and was confirmed on silicon by reading every selector under real workloads; positions 6 and 7 have no decode case and fall back to position 0.
 
 The mux routes interfaces into the counters while they count and is written once by BRISC before arming, so the freeze path cannot re-aim it. A zone snapshot therefore contains exactly one mux position: the group that was selected while the counters ran. Sweep it by exporting `LLK_PERF_L1_MUX_GROUP` before the producer phase (it is an environment variable, not a CLI flag, and is baked in at compile time, so each value needs its own `--compile-producer`). Sweep across runs to cover the other groups.
 
