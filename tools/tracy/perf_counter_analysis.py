@@ -27,6 +27,30 @@ class _TracyCounterView:
         "TDMA_UNPACK": ("MATH_INSTRN_AVAILABLE", "SRCA_WRITE_REQ", "UNPACK0_BUSY_THREAD0"),
     }
 
+    @staticmethod
+    def _bank_of(name: str) -> str:
+        """Bank a counter name belongs to, for captures that hold none of the _BANK_REF anchors (a
+        partial group, or Quasar's thread-3 / stall-reason INSTRN counters)."""
+        if name.startswith(_mc.L1_CLIENT_PREFIX):
+            return "L1_CLIENT"
+        if name.startswith("L1_"):
+            return "L1"
+        if name in ("FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"):
+            return "FPU"
+        if (
+            "_INSTRN_AVAILABLE_" in name
+            or name.startswith(("THREAD_STALLS_", "THREAD_INSTRUCTIONS_", "WAITING_FOR_"))
+            or name == "ANY_THREAD_STALL"
+            or name in _mc.STALL_REASON_COUNTERS.values()
+        ):
+            return "INSTRN_THREAD"
+        if name.startswith(("PACKER_", "DEST_READ_GRANTED_")) or name in (
+            "MATH_NOT_STALLED_DEST_WR_PORT",
+            "MATH_NOT_SCOREBOARD_STALLED",
+        ):
+            return "TDMA_PACK"
+        return "TDMA_UNPACK"
+
     def __init__(self, values: dict, refs: dict, is_blackhole: bool = False):
         self._v = values
         self._r = refs
@@ -39,10 +63,11 @@ class _TracyCounterView:
         for cand in self._BANK_REF.get(bank, ()):
             if cand in self._r:
                 return float(self._r[cand])
-        if bank == "L1":  # any L1 client shares the bank ref count
-            for name, rc in self._r.items():
-                if name.startswith("L1_"):
-                    return float(rc)
+        # Every counter of a bank shares its ref cnt (for L1_CLIENT it is the wall-clock span of the
+        # capture window), so any present member of the bank will do.
+        for name, rc in self._r.items():
+            if self._bank_of(str(name)) == bank:
+                return float(rc)
         return 0.0
 
     def has(self, counter_name: str) -> bool:
@@ -56,19 +81,34 @@ def _is_blackhole(device_arch) -> bool:
     return "blackhole" in str(device_arch).lower()
 
 
+def _is_quasar(device_arch) -> bool:
+    return "quasar" in str(device_arch).lower()
+
+
+# Quasar l1_client selection -> counter name, re-exported from the engine for the decode path and its tests.
+quasar_l1_client_label = _mc.quasar_l1_client_label
+
+
 def compute_metrics_per_op(perf_counter_df, device_arch=""):
-    """Per-op metrics: compute_metrics per core, then min/median/max/avg per key (None/NaN excluded)."""
+    """Per-op metrics per reader (one BRISC per core on tt-1xx, one NEO each on Quasar), then min/median/max/avg
+    per key; Quasar's l1_client rates come from compute_l1_client_metrics."""
     import math
 
     result = {}
     for op, op_df in perf_counter_df.groupby(["run_host_id", "trace_id_count"]):
         per_core = []
-        for _, core_df in op_df.groupby(["core_x", "core_y"]):
+        for _, core_df in op_df.groupby(["core_x", "core_y", "risc_type"]):
             values = dict(zip(core_df["counter type"], core_df["value"]))
             refs = dict(zip(core_df["counter type"], core_df["ref cnt"]))
-            per_core.append(_mc.compute_metrics(_TracyCounterView(values, refs, _is_blackhole(device_arch))))
+            view = _TracyCounterView(values, refs, _is_blackhole(device_arch))
+            metrics = _mc.compute_metrics(view)
+            metrics.update(_mc.compute_l1_client_metrics(view, values.keys()))
+            per_core.append(metrics)
         agg = {}
-        for key in per_core[0].keys() if per_core else []:
+        keys = []
+        for d in per_core:
+            keys += [k for k in d if k not in keys]
+        for key in keys:
             vals = [
                 d[key]
                 for d in per_core
@@ -101,11 +141,12 @@ _LEGACY_AVG_GRID_COLUMNS = {
 }
 # Re-exported for other consumers (process_ops_logs) so the classification stays single-sourced.
 RATIO_LABELS = _mc.RATIO_LABELS
+is_ratio_label = _mc.is_ratio_label
 
 
 def _metric_suffix(label):
     """Display unit for a metric's columns: ' (ratio)' for the unbounded ratio family, else ' (%)'."""
-    return " (ratio)" if label in RATIO_LABELS else " (%)"
+    return " (ratio)" if _mc.is_ratio_label(label) else " (%)"
 
 
 def _build_perf_counter_csv_headers():
@@ -153,7 +194,16 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                     counter_type_name = counter_type_raw
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
+                # Quasar's l1_client records name the run's selection, not an enum value.
+                counter_sel = meta_dict.get("counter sel")
+                if counter_type_name == "QUASAR_L1_CLIENT_EVENT" and counter_sel is not None:
+                    counter_type_name = quasar_l1_client_label(counter_sel)
 
+                risc_type = event[EVENT_RISC_TYPE_IDX]
+                neo = meta_dict.get("neo")
+                if neo is not None and str(risc_type).startswith("QUASAR_"):
+                    # Quasar's DM0 reads all four NEOs; keep each NEO its own reader row.
+                    risc_type = f"QUASAR_NEO{neo}"
                 perf_counter_events.append(
                     {
                         "run_host_id": metadata["run_host_id"],
@@ -161,7 +211,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                         "record time": event[EVENT_TIMESTAMP_IDX],
                         "core_x": event[EVENT_CORE_COORDS_IDX][0],
                         "core_y": event[EVENT_CORE_COORDS_IDX][1],
-                        "risc_type": event[EVENT_RISC_TYPE_IDX],
+                        "risc_type": risc_type,
                         "counter type": counter_type_name,  # Use human-readable name
                         "value": meta_dict.get("value", 0),
                         "ref cnt": meta_dict.get("ref cnt", 0),
@@ -234,10 +284,19 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
     ratio_metrics = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     pct_metrics = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
+    # Quasar l1_client metrics are named after the run's selection; pick them up from the frame.
+    for _suffix, _family in ((" Avg (%)", pct_metrics), (" Avg (ratio)", ratio_metrics)):
+        _family.extend(
+            sorted(
+                col[: -len(_suffix)]
+                for col in metrics_df.columns
+                if str(col).startswith(_mc.L1_CLIENT_PREFIX) and str(col).endswith(_suffix)
+            )
+        )
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
     for base_metric in pct_metrics + ratio_metrics:
-        is_ratio = base_metric in RATIO_LABELS
+        is_ratio = _mc.is_ratio_label(base_metric)
         suffix = " (ratio)" if is_ratio else " (%)"
         unit = "" if is_ratio else "%"
 
@@ -280,7 +339,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     per_op_stats = {}
     for op, metrics in per_op.items():
         for key, stats in metrics.items():
-            label = _mc.METRIC_LABELS.get(key, key)
+            label = _mc.metric_label(key)
             # A metric with no value anywhere gets no column: the two-pass merge finds the second
             # pass's metrics by their absence from the first pass's CSV.
             for stat in ("min", "median", "max", "avg"):
@@ -297,9 +356,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     ):
         mask = perf_counter_df["counter type"] == cname
         if mask.any():
-            per_op_counts[out_key] = (
-                perf_counter_df[mask].groupby(["run_host_id", "trace_id_count"])["value"].sum() / total_compute_cores
-            ).to_dict()
+            grouped = perf_counter_df[mask].groupby(["run_host_id", "trace_id_count"])["value"]
+            if _is_quasar(device_arch):
+                # Four NEO readers per core: a per-core divisor would overstate the average ~4x.
+                per_op_counts[out_key] = grouped.mean().to_dict()
+            else:
+                per_op_counts[out_key] = (grouped.sum() / total_compute_cores).to_dict()
 
     return {"per_op_stats": per_op_stats, "per_op_counts": per_op_counts}
 
@@ -313,15 +375,18 @@ def compute_device_only_metrics(
     agg_metrics: Dict[str, Dict] = {}
     for op, metrics in per_op.items():
         for key, stats in metrics.items():
-            label = _mc.METRIC_LABELS.get(key, key)
+            label = _mc.metric_label(key)
             for stat in ("min", "median", "max", "avg"):
                 if stats[stat] is not None:
                     agg_metrics.setdefault(label, {"min": {}, "median": {}, "max": {}, "avg": {}})[stat][op] = stats[
                         stat
                     ]
 
+    # Quasar's l1_client metrics are named after the run's selection, so they are appended from the data.
     _ratio_metric_names = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     _pct_metric_names = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
+    for label in sorted(label for label in agg_metrics if str(label).startswith(_mc.L1_CLIENT_PREFIX)):
+        (_ratio_metric_names if _mc.is_ratio_label(label) else _pct_metric_names).append(label)
 
     eff_summary_rows: List[Dict] = []
     first_stat = next(iter(agg_metrics.values()), {}).get("min", {})

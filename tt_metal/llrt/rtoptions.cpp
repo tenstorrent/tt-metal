@@ -133,6 +133,10 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
+
+    // Quasar l1_client counter selection
+    TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL,  // Quasar l1_client event counter selection
+
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -1001,6 +1005,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 }
                 this->profiler_enabled = true;
             }
+            break;
+
+        // Quasar only: routes the l1_client event counter to subport*8 + event (0..295, -1 = off).
+        case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL:
+            sscanf(value, "%d", &this->profiler_perf_counter_l1_sel);
             break;
 
         // TT_METAL_TRACE_PROFILER

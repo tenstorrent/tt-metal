@@ -150,6 +150,27 @@ L1_ALL = (
 )
 
 
+# ── Quasar (A0): four threads, the INSTISSUE class, backend stall reasons OR-reduced across threads ──
+# Metric key stem -> INSTRN counter, one per thread-ORed stall reason.
+STALL_REASON_COUNTERS = {
+    "tile_counter_stall_pack": "TILE_COUNTER_STALL_PACK",
+    "tile_counter_stall_unpack": "TILE_COUNTER_STALL_UNPACK",
+    "srcs_stall_pack": "SRCS_STALL_PACK",
+    "srcs_stall_sfpu": "SRCS_STALL_SFPU",
+    "srcs_stall_unpack": "SRCS_STALL_UNPACK",
+    "dest_stall_pack": "DEST_STALL_PACK",
+    "dest_stall_sfpu": "DEST_STALL_SFPU",
+    "dest_stall_math": "DEST_STALL_MATH",
+    "dest_stall_unpack": "DEST_STALL_UNPACK",
+    "sfpu_data_hazard_stall": "SFPU_DATA_HAZARD_STALL",
+    "fpu_data_hazard_stall": "FPU_DATA_HAZARD_STALL",
+    "srcb_stall_unpack": "SRCB_STALL_UNPACK",
+    "srca_stall_unpack": "SRCA_STALL_UNPACK",
+    "dvalid_stall_math": "DVALID_STALL_MATH",
+    "srca_stall_math": "SRCA_STALL_MATH",
+}
+
+
 def compute_metrics(v: CounterView) -> dict:
     """Every metric for one counter view; None wherever an input counter is absent."""
     fpu_cycles = v.cycles("FPU")
@@ -464,6 +485,60 @@ def compute_metrics(v: CounterView) -> dict:
         safe_div(_sb_even, _sb_even + _sb_odd) if strict(v, "SRCB_WRITE_TID_EVEN", "SRCB_WRITE_TID_ODD") else None
     )
 
+    # ── Quasar (A0), all has()-gated so a tt-1xx capture reads None ──
+    unpack_cycles = v.cycles("TDMA_UNPACK")
+
+    def _gated_rate(bank, name, cycles):
+        return safe_div(v.count(bank, name), cycles) if v.has(name) else None
+
+    thread3_stall = _gated_rate("INSTRN_THREAD", "THREAD_STALLS_3", instrn_cycles)
+    thread3_ipc = _gated_rate("INSTRN_THREAD", "THREAD_INSTRUCTIONS_3", instrn_cycles)
+
+    def _avail(cls, t):
+        return _gated_rate("INSTRN_THREAD", f"{cls}_INSTRN_AVAILABLE_{t}", instrn_cycles)
+
+    # A stall reason's rate is over the INSTRN bank's cycles; its share is its part of every reason
+    # captured, so it needs at least two of them to mean anything. DVALID_STALL_MATH is srcA-or-srcB not
+    # valid and contains SRCA_STALL_MATH, so the share basis carries the derived srcB part instead of it.
+    _reason_counts = {c: v.count("INSTRN_THREAD", c) for c in STALL_REASON_COUNTERS.values() if v.has(c)}
+    _srcb_stall_math = (
+        max(0.0, _reason_counts["DVALID_STALL_MATH"] - _reason_counts["SRCA_STALL_MATH"])
+        if strict(v, "DVALID_STALL_MATH", "SRCA_STALL_MATH")
+        else None
+    )
+    _share_basis = {c: n for c, n in _reason_counts.items() if c != "DVALID_STALL_MATH"}
+    if _srcb_stall_math is not None:
+        _share_basis["SRCB_STALL_MATH"] = _srcb_stall_math
+    _reason_total = sum(_share_basis.values())
+
+    def _reason_rate(c):
+        return _gated_rate("INSTRN_THREAD", c, instrn_cycles)
+
+    def _reason_share(c):
+        if c not in _share_basis or len(_share_basis) < 2:
+            return None
+        return safe_div(_share_basis[c], _reason_total)
+
+    srcb_stall_math = safe_div(_srcb_stall_math, instrn_cycles) if _srcb_stall_math is not None else None
+
+    def _unpack_busy(u, t):
+        return _gated_rate("TDMA_UNPACK", f"UNPACK{u}_BUSY_THREAD{t}", unpack_cycles)
+
+    math_src_data_ready = _gated_rate("TDMA_UNPACK", "MATH_SRC_DATA_READY", unpack_cycles)
+    # MATH_COUNTER counts fpu-or-sfpu cycles, so the cycles both units were busy are FPU + SFPU - MATH.
+    fpu_sfpu_overlap = (
+        safe_div(max(0.0, fpu_instruction + v.count("FPU", "SFPU_COUNTER") - fpu_or_sfpu), fpu_cycles)
+        if all(v.has(n) for n in ("FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"))
+        else None
+    )
+
+    # UNBOUNDED ratio: instructions issued per cycle the thread was not stalled.
+    def _per_ready_cycle(t):
+        instr, stall = f"THREAD_INSTRUCTIONS_{t}", f"THREAD_STALLS_{t}"
+        if not (v.has(instr) and v.has(stall)) or instrn_cycles <= 0:
+            return None
+        return safe_div(v.count("INSTRN_THREAD", instr), max(1.0, instrn_cycles - v.count("INSTRN_THREAD", stall)))
+
     return {
         # Compute utilization
         "fpu_utilization_pct": pct(fpu_utilization),
@@ -584,6 +659,79 @@ def compute_metrics(v: CounterView) -> dict:
         "unpack1_thread1_share_pct": pct(unpack1_thread1_share),
         "srca_write_even_tid_share_pct": pct(srca_write_even_share),
         "srcb_write_even_tid_share_pct": pct(srcb_write_even_share),
+        # ── Quasar (A0) ──
+        # Thread 3
+        "thread3_stall_pct": pct(thread3_stall),
+        "thread3_ipc_pct": pct(thread3_ipc),
+        # Per-class instruction availability, the (class, thread) pairs not covered above
+        "cfg_instrn_avail_t1_pct": pct(_avail("CFG", 1)),
+        "cfg_instrn_avail_t2_pct": pct(_avail("CFG", 2)),
+        "cfg_instrn_avail_t3_pct": pct(_avail("CFG", 3)),
+        "sync_instrn_avail_t1_pct": pct(_avail("SYNC", 1)),
+        "sync_instrn_avail_t2_pct": pct(_avail("SYNC", 2)),
+        "sync_instrn_avail_t3_pct": pct(_avail("SYNC", 3)),
+        "thcon_instrn_avail_t1_pct": pct(_avail("THCON", 1)),
+        "thcon_instrn_avail_t2_pct": pct(_avail("THCON", 2)),
+        "thcon_instrn_avail_t3_pct": pct(_avail("THCON", 3)),
+        "instissue_instrn_avail_t0_pct": pct(_avail("INSTISSUE", 0)),
+        "instissue_instrn_avail_t1_pct": pct(_avail("INSTISSUE", 1)),
+        "instissue_instrn_avail_t2_pct": pct(_avail("INSTISSUE", 2)),
+        "instissue_instrn_avail_t3_pct": pct(_avail("INSTISSUE", 3)),
+        "math_instrn_avail_t0_pct": pct(_avail("MATH", 0)),
+        "math_instrn_avail_t2_pct": pct(_avail("MATH", 2)),
+        "math_instrn_avail_t3_pct": pct(_avail("MATH", 3)),
+        "unpack_instrn_avail_t1_pct": pct(_avail("UNPACK", 1)),
+        "unpack_instrn_avail_t2_pct": pct(_avail("UNPACK", 2)),
+        "unpack_instrn_avail_t3_pct": pct(_avail("UNPACK", 3)),
+        "pack_instrn_avail_t0_pct": pct(_avail("PACK", 0)),
+        "pack_instrn_avail_t1_pct": pct(_avail("PACK", 1)),
+        "pack_instrn_avail_t3_pct": pct(_avail("PACK", 3)),
+        # Thread-ORed stall reasons: rate over cycles, then share of all captured reasons
+        "tile_counter_stall_pack_pct": pct(_reason_rate("TILE_COUNTER_STALL_PACK")),
+        "tile_counter_stall_unpack_pct": pct(_reason_rate("TILE_COUNTER_STALL_UNPACK")),
+        "srcs_stall_pack_pct": pct(_reason_rate("SRCS_STALL_PACK")),
+        "srcs_stall_sfpu_pct": pct(_reason_rate("SRCS_STALL_SFPU")),
+        "srcs_stall_unpack_pct": pct(_reason_rate("SRCS_STALL_UNPACK")),
+        "dest_stall_pack_pct": pct(_reason_rate("DEST_STALL_PACK")),
+        "dest_stall_sfpu_pct": pct(_reason_rate("DEST_STALL_SFPU")),
+        "dest_stall_math_pct": pct(_reason_rate("DEST_STALL_MATH")),
+        "dest_stall_unpack_pct": pct(_reason_rate("DEST_STALL_UNPACK")),
+        "sfpu_data_hazard_stall_pct": pct(_reason_rate("SFPU_DATA_HAZARD_STALL")),
+        "fpu_data_hazard_stall_pct": pct(_reason_rate("FPU_DATA_HAZARD_STALL")),
+        "srcb_stall_unpack_pct": pct(_reason_rate("SRCB_STALL_UNPACK")),
+        "srca_stall_unpack_pct": pct(_reason_rate("SRCA_STALL_UNPACK")),
+        "dvalid_stall_math_pct": pct(_reason_rate("DVALID_STALL_MATH")),
+        "srca_stall_math_pct": pct(_reason_rate("SRCA_STALL_MATH")),
+        "srcb_stall_math_pct": pct(srcb_stall_math),
+        "tile_counter_stall_pack_share_pct": pct(_reason_share("TILE_COUNTER_STALL_PACK")),
+        "tile_counter_stall_unpack_share_pct": pct(_reason_share("TILE_COUNTER_STALL_UNPACK")),
+        "srcs_stall_pack_share_pct": pct(_reason_share("SRCS_STALL_PACK")),
+        "srcs_stall_sfpu_share_pct": pct(_reason_share("SRCS_STALL_SFPU")),
+        "srcs_stall_unpack_share_pct": pct(_reason_share("SRCS_STALL_UNPACK")),
+        "dest_stall_pack_share_pct": pct(_reason_share("DEST_STALL_PACK")),
+        "dest_stall_sfpu_share_pct": pct(_reason_share("DEST_STALL_SFPU")),
+        "dest_stall_math_share_pct": pct(_reason_share("DEST_STALL_MATH")),
+        "dest_stall_unpack_share_pct": pct(_reason_share("DEST_STALL_UNPACK")),
+        "sfpu_data_hazard_stall_share_pct": pct(_reason_share("SFPU_DATA_HAZARD_STALL")),
+        "fpu_data_hazard_stall_share_pct": pct(_reason_share("FPU_DATA_HAZARD_STALL")),
+        "srcb_stall_unpack_share_pct": pct(_reason_share("SRCB_STALL_UNPACK")),
+        "srca_stall_unpack_share_pct": pct(_reason_share("SRCA_STALL_UNPACK")),
+        "srca_stall_math_share_pct": pct(_reason_share("SRCA_STALL_MATH")),
+        "srcb_stall_math_share_pct": pct(_reason_share("SRCB_STALL_MATH")),
+        # Unpacker busy per unpacker and thread
+        "unpack0_busy_t0_pct": pct(_unpack_busy(0, 0)),
+        "unpack1_busy_t0_pct": pct(_unpack_busy(1, 0)),
+        "unpack2_busy_t0_pct": pct(_unpack_busy(2, 0)),
+        "unpack0_busy_t1_pct": pct(_unpack_busy(0, 1)),
+        "unpack1_busy_t1_pct": pct(_unpack_busy(1, 1)),
+        # Math source readiness, FPU/SFPU overlap
+        "math_src_data_ready_pct": pct(math_src_data_ready),
+        "fpu_sfpu_overlap_pct": pct(fpu_sfpu_overlap),
+        # Instructions per issue-ready cycle, per thread
+        "thread0_instrn_per_ready_cycle_ratio": _per_ready_cycle(0),
+        "thread1_instrn_per_ready_cycle_ratio": _per_ready_cycle(1),
+        "thread2_instrn_per_ready_cycle_ratio": _per_ready_cycle(2),
+        "thread3_instrn_per_ready_cycle_ratio": _per_ready_cycle(3),
     }
 
 
@@ -688,9 +836,188 @@ METRIC_LABELS = {
     "unpack1_thread1_share_pct": "Unpacker1 T1 Share",
     "srca_write_even_tid_share_pct": "SrcA Write Even-TID Share",
     "srcb_write_even_tid_share_pct": "SrcB Write Even-TID Share",
+    # ── Quasar (A0) ──
+    "thread3_stall_pct": "Thread 3 Stall Rate",
+    "thread3_ipc_pct": "T3 Instrn Issue Rate",
+    "cfg_instrn_avail_t1_pct": "CFG Instrn Avail Rate T1",
+    "cfg_instrn_avail_t2_pct": "CFG Instrn Avail Rate T2",
+    "cfg_instrn_avail_t3_pct": "CFG Instrn Avail Rate T3",
+    "sync_instrn_avail_t1_pct": "SYNC Instrn Avail Rate T1",
+    "sync_instrn_avail_t2_pct": "SYNC Instrn Avail Rate T2",
+    "sync_instrn_avail_t3_pct": "SYNC Instrn Avail Rate T3",
+    "thcon_instrn_avail_t1_pct": "THCON Instrn Avail Rate T1",
+    "thcon_instrn_avail_t2_pct": "THCON Instrn Avail Rate T2",
+    "thcon_instrn_avail_t3_pct": "THCON Instrn Avail Rate T3",
+    "instissue_instrn_avail_t0_pct": "INSTISSUE Instrn Avail Rate T0",
+    "instissue_instrn_avail_t1_pct": "INSTISSUE Instrn Avail Rate T1",
+    "instissue_instrn_avail_t2_pct": "INSTISSUE Instrn Avail Rate T2",
+    "instissue_instrn_avail_t3_pct": "INSTISSUE Instrn Avail Rate T3",
+    "math_instrn_avail_t0_pct": "MATH Instrn Avail Rate T0",
+    "math_instrn_avail_t2_pct": "MATH Instrn Avail Rate T2",
+    "math_instrn_avail_t3_pct": "MATH Instrn Avail Rate T3",
+    "unpack_instrn_avail_t1_pct": "UNPACK Instrn Avail Rate T1",
+    "unpack_instrn_avail_t2_pct": "UNPACK Instrn Avail Rate T2",
+    "unpack_instrn_avail_t3_pct": "UNPACK Instrn Avail Rate T3",
+    "pack_instrn_avail_t0_pct": "PACK Instrn Avail Rate T0",
+    "pack_instrn_avail_t1_pct": "PACK Instrn Avail Rate T1",
+    "pack_instrn_avail_t3_pct": "PACK Instrn Avail Rate T3",
+    "tile_counter_stall_pack_pct": "Tile Counter Stall Pack Rate",
+    "tile_counter_stall_unpack_pct": "Tile Counter Stall Unpack Rate",
+    "srcs_stall_pack_pct": "Srcs Stall Pack Rate",
+    "srcs_stall_sfpu_pct": "Srcs Stall SFPU Rate",
+    "srcs_stall_unpack_pct": "Srcs Stall Unpack Rate",
+    "dest_stall_pack_pct": "Dest Stall Pack Rate",
+    "dest_stall_sfpu_pct": "Dest Stall SFPU Rate",
+    "dest_stall_math_pct": "Dest Stall Math Rate",
+    "dest_stall_unpack_pct": "Dest Stall Unpack Rate",
+    "sfpu_data_hazard_stall_pct": "SFPU Data Hazard Stall Rate",
+    "fpu_data_hazard_stall_pct": "FPU Data Hazard Stall Rate",
+    "srcb_stall_unpack_pct": "SrcB Stall Unpack Rate",
+    "srca_stall_unpack_pct": "SrcA Stall Unpack Rate",
+    "dvalid_stall_math_pct": "Src Valid Stall Math Rate",
+    "srca_stall_math_pct": "SrcA Stall Math Rate",
+    "srcb_stall_math_pct": "SrcB Stall Math Rate",
+    "tile_counter_stall_pack_share_pct": "Tile Counter Stall Pack Share",
+    "tile_counter_stall_unpack_share_pct": "Tile Counter Stall Unpack Share",
+    "srcs_stall_pack_share_pct": "Srcs Stall Pack Share",
+    "srcs_stall_sfpu_share_pct": "Srcs Stall SFPU Share",
+    "srcs_stall_unpack_share_pct": "Srcs Stall Unpack Share",
+    "dest_stall_pack_share_pct": "Dest Stall Pack Share",
+    "dest_stall_sfpu_share_pct": "Dest Stall SFPU Share",
+    "dest_stall_math_share_pct": "Dest Stall Math Share",
+    "dest_stall_unpack_share_pct": "Dest Stall Unpack Share",
+    "sfpu_data_hazard_stall_share_pct": "SFPU Data Hazard Stall Share",
+    "fpu_data_hazard_stall_share_pct": "FPU Data Hazard Stall Share",
+    "srcb_stall_unpack_share_pct": "SrcB Stall Unpack Share",
+    "srca_stall_unpack_share_pct": "SrcA Stall Unpack Share",
+    "srca_stall_math_share_pct": "SrcA Stall Math Share",
+    "srcb_stall_math_share_pct": "SrcB Stall Math Share",
+    "unpack0_busy_t0_pct": "Unpacker0 Busy T0 Util",
+    "unpack1_busy_t0_pct": "Unpacker1 Busy T0 Util",
+    "unpack2_busy_t0_pct": "Unpacker2 Busy T0 Util",
+    "unpack0_busy_t1_pct": "Unpacker0 Busy T1 Util",
+    "unpack1_busy_t1_pct": "Unpacker1 Busy T1 Util",
+    "math_src_data_ready_pct": "Math Src Data Ready Rate",
+    "fpu_sfpu_overlap_pct": "FPU SFPU Overlap",
+    "thread0_instrn_per_ready_cycle_ratio": "T0 Instrn Per Issue-Ready Cycle",
+    "thread1_instrn_per_ready_cycle_ratio": "T1 Instrn Per Issue-Ready Cycle",
+    "thread2_instrn_per_ready_cycle_ratio": "T2 Instrn Per Issue-Ready Cycle",
+    "thread3_instrn_per_ready_cycle_ratio": "T3 Instrn Per Issue-Ready Cycle",
 }
 
 
 # The two display families of the module docstring, for consumers that key by metric key or by label.
 RATIO_KEYS = {k for k in METRIC_LABELS if k.endswith("_ratio")}
 RATIO_LABELS = {METRIC_LABELS[k] for k in RATIO_KEYS}
+
+
+# ── Quasar l1_client event counter: one clear-on-read CSR behind a subport*8 + event mux, selected per run ──
+# Records are named after the selection, so this metric family is dynamic (compute_l1_client_metrics, metric_label).
+L1_CLIENT_PREFIX = "L1_CLIENT_"
+QUASAR_L1_CLIENT_NUM_SUBPORTS = 37
+# Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or order
+# depth), events 1 and 7 are per-cycle indicators.
+QUASAR_L1_CLIENT_EVENT_NAMES = (
+    "UNUSED",
+    "SBANK_POP",
+    "ISSUE_STALL_CARRY",
+    "ISSUE_WORK_CARRY",
+    "FLEX_STALL_CARRY",
+    "FLEX_WORK_CARRY",
+    "PENDING_REQS_CARRY",
+    "ORDER_FIFO_ACTIVE",
+)
+
+
+# Events 1-3 are per SBank of the whole port (the RTL indexes them with the sub-port number modulo the SBank count).
+QUASAR_L1_CLIENT_SBANK_EVENTS = (1, 2, 3)
+
+
+def quasar_l1_client_selection_is_valid(sel) -> bool:
+    """False for selections that cannot carry data: out of range, event 0 (unused, reads 0 in the RTL), and the THCON
+    sub-port's events 1-3 (the TRISC port's SBank 0 counters, which sub-port 0 already exposes)."""
+    sel = int(sel)
+    if not 0 <= sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * 8:
+        return False
+    subport, event = divmod(sel, 8)
+    return event != 0 and not (subport == 4 and event in QUASAR_L1_CLIENT_SBANK_EVENTS)
+
+
+def quasar_l1_client_label(sel) -> str:
+    """Counter name for an l1_client selection (subport*8 + event). Subports (t6_l1_client_map.sv): 0-3 TRISC, 4 THCON,
+    5-24 unpacker reads (3 unpackers x 2 interfaces x 4 lanes, unpacker 2 has interface 0 only), 25-36 packer writes
+    (packer 0 interfaces 0-1, packer 1 interface 0). Events 1-3 name the SBank of the port instead of the sub-port.
+    """
+    sel = int(sel)
+    if not quasar_l1_client_selection_is_valid(sel):
+        return f"{L1_CLIENT_PREFIX}INVALID_{sel}"
+    subport, event = divmod(sel, 8)
+    per_sbank = event in QUASAR_L1_CLIENT_SBANK_EVENTS
+    if subport < 4:
+        port = f"TRISC_SBANK{subport}" if per_sbank else f"TRISC{subport}"
+    elif subport == 4:
+        port = "THCON"
+    else:
+        unit_name, base = ("UNPACK", 5) if subport < 25 else ("PACK", 25)
+        unit, rest = divmod(subport - base, 8)
+        interface, lane = divmod(rest, 4)
+        port = f"{unit_name}{unit}_IF{interface}_" + (f"SBANK{lane}" if per_sbank else f"LANE{lane}")
+    return f"{L1_CLIENT_PREFIX}{port}_{QUASAR_L1_CLIENT_EVENT_NAMES[event]}"
+
+
+def l1_client_pending_reqs_divisor(counter_name: str) -> float:
+    """Outstanding-request cycles per PENDING_REQS_CARRY pulse: 2^clog2(3 * RSP_BUF_D), 128 on packer 0's two
+    interfaces (24-deep response buffer) and 64 on every other sub-port."""
+    port = str(counter_name)[len(L1_CLIENT_PREFIX) :].split("_")
+    return 128.0 if port[0] == "PACK0" and port[1] in ("IF0", "IF1") else 64.0
+
+
+def l1_client_is_ratio(counter_name_or_label: str) -> bool:
+    """The pending-request carry reports mean outstanding requests, an unbounded ratio; every other event is a rate."""
+    return "PENDING_REQS_CARRY" in str(counter_name_or_label).upper()
+
+
+def l1_client_metric_key(counter_name: str) -> str:
+    """Metric key of an l1_client counter: lower-case name plus the family suffix (_ratio for the pending carry)."""
+    return f"{counter_name.lower()}_ratio" if l1_client_is_ratio(counter_name) else f"{counter_name.lower()}_pct"
+
+
+def l1_client_metric_label(counter_name: str) -> str:
+    """Display name of an l1_client metric: the counter name plus ' Rate', or ' Mean Outstanding' for the pending carry."""
+    return f"{counter_name} Mean Outstanding" if l1_client_is_ratio(counter_name) else f"{counter_name} Rate"
+
+
+def is_ratio_label(label: str) -> bool:
+    """Whether a display label belongs to the unbounded ratio family (static RATIO_LABELS or the pending-request carry)."""
+    return label in RATIO_LABELS or (str(label).startswith(L1_CLIENT_PREFIX) and l1_client_is_ratio(label))
+
+
+def metric_label(key: str) -> str:
+    """Display name for a metric key: METRIC_LABELS, or the dynamic l1_client family, else the key itself."""
+    if key in METRIC_LABELS:
+        return METRIC_LABELS[key]
+    if key.startswith(L1_CLIENT_PREFIX.lower()):
+        for suffix in ("_pct", "_ratio"):
+            if key.endswith(suffix):
+                return l1_client_metric_label(key[: -len(suffix)].upper())
+    return key
+
+
+def compute_l1_client_metrics(v: CounterView, counter_names) -> dict:
+    """Per-run value of every l1_client counter present over the capture's wall-clock span (the CSR has no reference
+    counter). SBANK_POP and ORDER_FIFO_ACTIVE are cycle indicators; the ISSUE/FLEX carries fire once per four lane
+    events, so carry / cycles is the mean per-lane fraction (bounded); the pending-request carry times its divisor
+    over cycles is the mean number of outstanding requests (a ratio)."""
+    cycles = v.cycles("L1_CLIENT")
+    out = {}
+    for name in sorted(set(counter_names)):
+        if not str(name).startswith(L1_CLIENT_PREFIX) or not v.has(name):
+            continue
+        rate = safe_div(v.count("L1_CLIENT", name), cycles)
+        if rate is None:
+            out[l1_client_metric_key(name)] = None
+        elif l1_client_is_ratio(name):
+            out[l1_client_metric_key(name)] = rate * l1_client_pending_reqs_divisor(name)
+        else:
+            out[l1_client_metric_key(name)] = pct(rate)
+    return out

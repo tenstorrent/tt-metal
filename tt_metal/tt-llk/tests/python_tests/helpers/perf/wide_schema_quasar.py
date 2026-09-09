@@ -17,7 +17,7 @@ dtype/nullability/origin are the contract the Parquet writer enforces.
 Imports no device libraries, so it loads without hardware.
 """
 
-from .schema import MEAN, STD, stat_column
+from .schema import MEAN, METRIC_BASES, RUN_TYPE_NAMES, STD, metric_column, stat_column
 from .wide_schema import Column
 
 # Same PerfRunType timing grid as WH/BH, plus the 4-TRISC parallel FPU/SFPU
@@ -136,4 +136,9 @@ DROPPED_COLUMNS = {
     "TEXT_SIZE(PACK_ISOLATE)",
     "TEXT_SIZE(UNPACK_ISOLATE)",
     "TEXT_SIZE(SFPU_ISOLATE)",
+} | {
+    metric_column(run_type, base)
+    for run_type in RUN_TYPE_NAMES
+    for metric in METRIC_BASES
+    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
 }

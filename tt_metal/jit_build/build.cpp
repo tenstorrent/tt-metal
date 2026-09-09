@@ -121,6 +121,47 @@ std::string get_default_root_path() {
 
 JitBuildEnv::JitBuildEnv() = default;
 
+// Quasar has no L1 counter unit, so the valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy
+// frontend's "all" is the tt-1xx mask (47), so map it to the Quasar mask (39) instead of rejecting it.
+static uint32_t quasar_perf_counter_mode(uint32_t mode) {
+    constexpr uint32_t quasar_groups = 0x27;
+    constexpr uint32_t tt1xx_all_groups = 0x2F;
+    if (mode == tt1xx_all_groups) {
+        mode = quasar_groups;
+    }
+    TT_FATAL(
+        (mode & ~quasar_groups) == 0,
+        "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
+        "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
+        mode);
+    return mode;
+}
+
+// The l1_client event counter is a single CSR behind a subport*8 + event mux (37 subports, 8 events),
+// selected per run with TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL.
+static std::string quasar_l1_client_defines(const tt::llrt::RunTimeOptions& rtoptions) {
+    const int sel = rtoptions.get_profiler_perf_counter_l1_sel();
+    if (sel < 0) {
+        return "";
+    }
+    constexpr int num_selections = 37 * 8;
+    TT_FATAL(
+        sel < num_selections,
+        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} out of range; it encodes subport*8 + event with 37 subports and 8 "
+        "events",
+        sel);
+    const int subport = sel / 8;
+    const int event = sel % 8;
+    TT_FATAL(event != 0, "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={}: event 0 is unused in the L1 RTL and reads 0", sel);
+    TT_FATAL(
+        !(subport == 4 && event <= 3),
+        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={}: THCON events 1-3 are the TRISC port's SBank 0 counters, already "
+        "exposed by selections 1-3",
+        sel);
+    std::string defines = "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(sel) + " ";
+    return defines;
+}
+
 void JitBuildEnv::init(
     uint64_t build_key,
     const JitDeviceConfig& config,
@@ -250,7 +291,12 @@ void JitBuildEnv::init(
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());
-        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+        uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            perf_counter_mode = quasar_perf_counter_mode(perf_counter_mode);
+            this->defines_ += quasar_l1_client_defines(rtoptions);
+        }
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
 
     if (rtoptions.get_watcher_enabled()) {
