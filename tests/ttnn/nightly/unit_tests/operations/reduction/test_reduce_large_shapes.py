@@ -112,12 +112,7 @@ def test_fast_reduce_nc_large(input_shape, dims, compute_kernel_options, datafor
     _fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, device)
 
 
-# 128256 is the Llama-3 vocab. It is not a power of two and is above
-# multi_core_max_width_exclusive, so it fails both gates in topk_multicore_structurally_eligible
-# and runs the single-core factory -- which splits over tile ROWS, and dim1=1 is one tile row.
-# One core therefore walks all 4008 tiles serially: cheap on hardware, ~23 min under ttsim, which
-# is why it is here rather than in the sanity group. Delegating to test_2d_topk keeps the
-# assertions shared; its bfloat16 branch selects the same thresholds this shape was asserted on.
+# 128256 is the Llama-3 vocab.
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [128256])
 @pytest.mark.parametrize("dim", [1])
