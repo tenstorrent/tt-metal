@@ -16,11 +16,14 @@ namespace ttnn::operations::data_movement::indexed_fill {
 // Returns true if the program factory should pick the native CB-aliased fast path:
 //   * input_a, batch_id and output are all L1
 //   * input_a and output are HEIGHT_SHARDED with matching grid + matching shard shape
+//   * input_a and output shard orientation is ROW_MAJOR (matches the row-major worker
+//     enumeration the program factory uses to assign `my_batch_id = i` to each core)
 //   * the shard grid covers exactly B = input_a.padded_shape()[0] cores (one batch per core)
 //   * input_a sharding is even (no leftover row/col)
 //
 // `input_b` is allowed to be in DRAM or interleaved; it does not need to match the shard
-// geometry of input_a. Applies to both ROW_MAJOR and TILE layouts.
+// geometry of input_a. Applies to both ROW_MAJOR and TILE layouts (of the tensor data itself;
+// unrelated to the shard orientation requirement above).
 bool is_native_indexed_fill_sharding(
     const tt::tt_metal::TensorSpec& input_a_spec,
     const tt::tt_metal::TensorSpec& input_b_spec,
@@ -44,6 +47,9 @@ CoreRangeSet get_indexed_fill_worker_grid(
 //   * input_a and output shard orientation is ROW_MAJOR (matches the row-major core
 //     enumeration the program factory uses to derive per-core shard/column indices)
 //   * input_a sharding is even (no leftover row/col)
+//   * for BLOCK_SHARDED: the shard grid is a full rectangle (matches corerange_to_cores'
+//     row-major enumeration) and B (input_a.padded_shape()[0]) is divisible by the grid's
+//     row count n_y
 //   * input_b is either (a) WIDTH_SHARDED with the same grid, shard width, and ROW_MAJOR
 //     orientation as input_a (shard height may differ, since input_b has `b` batches, not
 //     `B`), or (b) INTERLEAVED
