@@ -19,6 +19,7 @@
 #endif
 #include <utility>
 #include <cstdlib>
+#include <string>
 
 namespace {
 // TT_METAL_SD_COEXIST_PERSISTENT=1 (Blaze, DS4F-0129 step 3): this process co-resides with a PERSISTENT program that
@@ -31,6 +32,7 @@ bool sd_coexist_persistent() {
     const char* v = std::getenv("TT_METAL_SD_COEXIST_PERSISTENT");
     return v != nullptr && v[0] == '1';
 }
+
 }  // namespace
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
@@ -41,6 +43,72 @@ bool sd_coexist_persistent() {
 #endif
 
 namespace {
+
+// v2 (dd5, 2026-09-09 14:26): skipping the wait ENTIRELY was wrong. Blaze enables asynchronous slow dispatch, so a
+// non-blocking launch is serialized against the next launch / host read ONLY by the "previous workload" wait -- with
+// the wait skipped, the worker read a program's output before the program finished (device drafts 0/5 vs the CPU).
+// TT_METAL_SD_COEXIST_PERSISTENT_CORES="12-8,12-7" names the persistent program's logical cores: the wait now runs on
+// the recorded cores MINUS these (which never go idle). Unset: the pre-v2 skip (kept for A/B; racy).
+const std::vector<tt::tt_metal::CoreCoord>& sd_coexist_persistent_cores() {
+    static const std::vector<tt::tt_metal::CoreCoord> cores = [] {
+        std::vector<tt::tt_metal::CoreCoord> out;
+        const char* v = std::getenv("TT_METAL_SD_COEXIST_PERSISTENT_CORES");
+        if (v == nullptr) {
+            return out;
+        }
+        std::string spec(v);
+        size_t start = 0;
+        while (start < spec.size()) {
+            size_t end = spec.find(',', start);
+            if (end == std::string::npos) {
+                end = spec.size();
+            }
+            std::string tok = spec.substr(start, end - start);
+            size_t dash = tok.find('-');
+            if (dash != std::string::npos) {
+                out.emplace_back(std::stoul(tok.substr(0, dash)), std::stoul(tok.substr(dash + 1)));
+            }
+            start = end + 1;
+        }
+        return out;
+    }();
+    return cores;
+}
+
+// The recorded cores without the persistent program's; empty inner vectors are kept (wait_for_idle tolerates them).
+std::vector<std::vector<tt::tt_metal::CoreCoord>> sd_without_persistent_cores(
+    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& cores) {
+    const auto& skip = sd_coexist_persistent_cores();
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> out;
+    out.reserve(cores.size());
+    for (const auto& group : cores) {
+        std::vector<tt::tt_metal::CoreCoord> kept;
+        kept.reserve(group.size());
+        for (const auto& c : group) {
+            bool is_persistent = false;
+            for (const auto& s : skip) {
+                if (s.x == c.x && s.y == c.y) {
+                    is_persistent = true;
+                    break;
+                }
+            }
+            if (!is_persistent) {
+                kept.push_back(c);
+            }
+        }
+        out.push_back(std::move(kept));
+    }
+    return out;
+}
+
+bool sd_any_core(const std::vector<std::vector<tt::tt_metal::CoreCoord>>& cores) {
+    for (const auto& group : cores) {
+        if (!group.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
 
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
@@ -188,14 +256,21 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    if (sd_coexist_persistent()) {
-        return;  // the recorded cores belong to a persistent program; this process's own launches are blocking
+    if (sd_coexist_persistent() && sd_coexist_persistent_cores().empty()) {
+        return;  // pre-v2 behaviour (no core list): skip -- racy for non-blocking launches, kept for A/B only
     }
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
-            tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
+            if (sd_coexist_persistent()) {
+                auto own = sd_without_persistent_cores(logical_cores);  // never wait on the forwarder's cores
+                if (sd_any_core(own)) {
+                    tt::llrt::internal_::wait_for_idle(device_id, own);
+                }
+            } else {
+                tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
+            }
         }
         logical_cores_for_previous_workload_.clear();
     }
@@ -233,8 +308,17 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
             }
         }
 
-        if (need_wait && !sd_coexist_persistent()) {
-            tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
+        if (need_wait) {
+            if (sd_coexist_persistent()) {
+                if (!sd_coexist_persistent_cores().empty()) {
+                    auto own = sd_without_persistent_cores(cores_to_wait);
+                    if (sd_any_core(own)) {
+                        tt::llrt::internal_::wait_for_idle(device_id, own);
+                    }
+                }
+            } else {
+                tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
+            }
         }
 
         local_devices.push_back(device);
