@@ -129,6 +129,13 @@ _KERNEL_SIZE_SUFFIX = " MAX KERNEL SIZE [B]"
 _KERNEL_SIZE_CLASS_ORDER = ["TENSIX DM", "TENSIX COMPUTE", "ACTIVE ETH DM", "IDLE ETH DM"]
 
 
+def _csv_cell(value) -> str:
+    """CSV text for one cell: N/A (None or NaN) is blank, commas become semicolons."""
+    if value is None or (isinstance(value, float) and isnan(value)):
+        return ""
+    return str(value).replace(",", ";")
+
+
 def _kernel_size_sort_key(column):
     group, _, index = column[: -len(_KERNEL_SIZE_SUFFIX)].rpartition(" ")
     rank = _KERNEL_SIZE_CLASS_ORDER.index(group) if group in _KERNEL_SIZE_CLASS_ORDER else len(_KERNEL_SIZE_CLASS_ORDER)
@@ -905,20 +912,14 @@ def _enrich_ops_from_device_logs(
                 device_op["avg_math_count"] = per_op_counts.get("avg_math_count", {}).get(lookup_key, nan)
 
                 # One loop over per_op_stats, keyed by METRIC_LABELS, so the CSV cannot drift from the engine;
-                # RATIO_LABELS get a "(ratio)" unit and the three primary utilizations keep their legacy Avg name.
-                _legacy_avg = {
-                    "SFPU Util": "Avg SFPU util on full grid (%)",
-                    "FPU Util": "Avg FPU util on full grid (%)",
-                    "MATH Util": "Avg Math util on full grid (%)",
-                }
+                # RATIO_LABELS get a "(ratio)" unit. The "Avg ... util on full grid" columns are filled separately
+                # from the grid-wide counts over the kernel duration.
                 for base_name, mstat in per_op_stats.items():
                     suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
                     device_op[f"{base_name} Min{suffix}"] = mstat["min"].get(lookup_key, nan)
                     device_op[f"{base_name} Median{suffix}"] = mstat["median"].get(lookup_key, nan)
                     device_op[f"{base_name} Max{suffix}"] = mstat["max"].get(lookup_key, nan)
-                    device_op[_legacy_avg.get(base_name, f"{base_name} Avg{suffix}")] = mstat["avg"].get(
-                        lookup_key, nan
-                    )
+                    device_op[f"{base_name} Avg{suffix}"] = mstat["avg"].get(lookup_key, nan)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1174,17 +1175,10 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        # The ratio family gets "(ratio)", everything else "(%)".
+                        # The ratio family gets "(ratio)", everything else "(%)". The grid-wide "Avg ... util on
+                        # full grid" columns need the kernel duration, which a device-only run does not have.
                         suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
-                        # Legacy "Avg on full grid" column names.
-                        if base_name == "SFPU Util":
-                            rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
-                        elif base_name == "FPU Util":
-                            rowDict["Avg FPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
-                        elif base_name == "MATH Util":
-                            rowDict["Avg Math util on full grid (%)"] = m["avg"].get(lookup_key, nan)
-                        else:
-                            rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
+                        rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
                         rowDict[f"{base_name} Min{suffix}"] = m["min"].get(lookup_key, nan)
                         rowDict[f"{base_name} Median{suffix}"] = m["median"].get(lookup_key, nan)
                         rowDict[f"{base_name} Max{suffix}"] = m["max"].get(lookup_key, nan)
@@ -1252,7 +1246,7 @@ def get_device_data_generate_report(
                 writer.writeheader()
                 for rowDict in rowDicts:
                     for field, fieldData in rowDict.items():
-                        rowDict[field] = str(fieldData).replace(",", ";")
+                        rowDict[field] = _csv_cell(fieldData)
                     writer.writerow(rowDict)
             logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
             with open(perCoreCSVPath, "w") as perCoreCSV:
@@ -1767,7 +1761,7 @@ def generate_reports(
         writer.writeheader()
         for csv_row in csv_rows:
             for field, fieldData in csv_row.items():
-                csv_row[field] = str(fieldData).replace(",", ";")
+                csv_row[field] = _csv_cell(fieldData)
             writer.writerow(csv_row)
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 

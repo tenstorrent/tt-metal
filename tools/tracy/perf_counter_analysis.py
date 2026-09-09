@@ -115,7 +115,9 @@ def _build_perf_counter_csv_headers():
         headers.append(f"{label} Min{suffix}")
         headers.append(f"{label} Median{suffix}")
         headers.append(f"{label} Max{suffix}")
-        headers.append(_LEGACY_AVG_GRID_COLUMNS.get(label, f"{label} Avg{suffix}"))
+        headers.append(f"{label} Avg{suffix}")
+    # Grid-wide averages over the kernel duration (all cores, idle ones included); only a host+device run can fill them.
+    headers.extend(_LEGACY_AVG_GRID_COLUMNS.values())
     return headers
 
 

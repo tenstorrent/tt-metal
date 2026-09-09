@@ -82,9 +82,44 @@ def test_enum_parser_matches_the_compiled_ordinals():
 
 
 def test_csv_headers_cover_every_label_with_four_stats():
-    assert len(PERF_COUNTER_CSV_HEADERS) == 4 * len(mc.METRIC_LABELS)
+    # Four statistics per metric, plus the three grid-wide averages that only a host+device run can fill.
+    assert len(PERF_COUNTER_CSV_HEADERS) == 4 * len(mc.METRIC_LABELS) + 3
+    assert "FPU Util Avg (%)" in PERF_COUNTER_CSV_HEADERS
     assert "Avg FPU util on full grid (%)" in PERF_COUNTER_CSV_HEADERS
     assert "Stall Overlap T0 Min (ratio)" in PERF_COUNTER_CSV_HEADERS
+
+
+def test_every_metric_is_none_when_any_of_its_inputs_is_missing():
+    # Remove one counter at a time from a full capture: a metric may lose its value (None) or change because
+    # a port dropped out of a mean, but it must never collapse to a fake 0 or 100.
+    import random
+
+    names = [n for n in COUNTER_TYPE_NAMES.values() if n not in ("UNDEF", "QUASAR_L1_CLIENT_EVENT")]
+    random.seed(7)
+    for _ in range(5):
+        # grant <= request keeps the clamped L1 metrics away from their saturation points
+        full = {n: random.uniform(200.0, 900.0) for n in names}
+        for n in names:
+            if n.endswith("_GRANT") and n[: -len("_GRANT")] in full:
+                full[n] = full[n[: -len("_GRANT")]] * random.uniform(0.5, 1.0)
+        base = mc.compute_metrics(_View(full, cycles=1000.0))
+        for gone in names:
+            reduced = dict(full)
+            del reduced[gone]
+            out = mc.compute_metrics(_View(reduced, cycles=1000.0))
+            for key, value in out.items():
+                if base[key] is not None and value is not None and value != base[key]:
+                    assert value not in (0.0, 100.0), (key, gone)
+
+
+def test_ratio_family_is_unbounded_and_raw():
+    # Flow above 1: THCON srcA writes land while the unpacker is idle.
+    out = mc.compute_metrics(_View({"SRCA_WRITE_REQ": 1500.0, "UNPACK0_BUSY_THREAD0": 1000.0}, cycles=2000.0))
+    assert out["unpack_to_math_flow0_ratio"] == 1.5
+    assert out["unpack_to_math_flow_ratio"] == 1.5
+    assert out["unpack_to_math_flow1_ratio"] is None
+    for key in mc.METRIC_LABELS:
+        assert key.endswith("_pct") or key.endswith("_ratio"), key
 
 
 def test_formulas_with_distinct_values():
@@ -104,23 +139,22 @@ def test_formulas_with_distinct_values():
     out = mc.compute_metrics(v)
     assert out["fpu_utilization_pct"] == 25.0
     assert out["compute_utilization_pct"] == 40.0
-    assert out["unpack0_write_eff_pct"] == 50.0
     assert out["pack_dest_eff_pct"] == 25.0
-    assert out["fpu_exec_eff_pct"] == 50.0
+    assert out["fpu_exec_eff_ratio"] == 0.5  # a ratio: raw value, not a percentage
     assert out["compute_to_unpack_ratio"] == 0.8
 
 
 def test_partial_captures_read_none_not_zero():
     # INSTRN-only capture: the FPU numerator was never captured.
     out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE_1": 900.0, "THREAD_STALLS_0": 10.0}))
-    assert out["fpu_exec_eff_pct"] is None
+    assert out["fpu_exec_eff_ratio"] is None
     # UNPACK-only capture: no FPU bank behind the compute-to-unpack ratio.
     out = mc.compute_metrics(_View({"UNPACK0_BUSY_THREAD0": 500.0, "UNPACK1_BUSY_THREAD0": 500.0}))
     assert out["compute_to_unpack_ratio"] is None
     # L1_1-only capture: the L1_0 composites have no inputs.
     out = mc.compute_metrics(_View({"L1_1_UNPACKER1_EXT_IF_1": 100.0}))
     assert out["l1_total_bw_pct"] is None
-    assert out["risc_core_l1_util_pct"] is None
+    assert out["l1_port2_util_pct"] is None
     assert out["noc_vs_compute_balance_pct"] is None
 
 
