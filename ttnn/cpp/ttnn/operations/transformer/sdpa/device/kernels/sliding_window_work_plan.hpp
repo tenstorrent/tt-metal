@@ -26,7 +26,6 @@ struct SlidingKChunkRef {
     uint32_t source_ring_id = 0;
     uint32_t source_k_chunk = 0;
     uint32_t compact_k_chunk = 0;
-    uint32_t global_k_chunk = 0;
 };
 
 // Bounded circular sliding KV cache (bounded_kv_slab_count = n_slabs): each device keeps only
@@ -90,7 +89,6 @@ struct SlidingQWorkPlan {
                     .source_ring_id = range.source_ring_id,
                     .source_k_chunk = range.first_k_chunk + work_index,
                     .compact_k_chunk = range.first_compact_k_chunk + work_index,
-                    .global_k_chunk = range.first_global_k_chunk + work_index,
                 };
             }
             work_index -= range.k_chunk_count();
