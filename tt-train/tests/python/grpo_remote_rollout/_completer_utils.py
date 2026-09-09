@@ -8,7 +8,6 @@ from __future__ import annotations
 import contextlib
 import functools
 import gc
-import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,6 @@ from typing import Any
 import torch
 import ttml
 import ttnn
-from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, load_config
 from grpo_remote_rollout.utils.llama_ttt_presets import (
@@ -114,13 +112,6 @@ def build_completer(
         stop_token_ids: Any = ()
         pad_token_id = 0
     else:
-        if not os.path.isdir(model_source):
-            logging.info("Downloading model from HuggingFace: %s", model_source)
-            snapshot_download(
-                repo_id=model_source,
-                allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
-                ignore_patterns=["original/*"],
-            )
         stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
 
     worker = TttGenerationWorker(
