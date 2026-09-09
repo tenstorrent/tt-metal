@@ -376,18 +376,21 @@ class TTBEVFormerEncoder:
         self.bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
 
         # The grid itself is batch-independent: batch size only broadcasts the leading
-        # dimension. Build it once for bs=1 and derive every other batch size from it.
-        self._reference_points_3d_unbatched = generate_reference_points(
+        # dimension. Keep the bs=1 grid and widen it per forward instead of caching a
+        # tensor per observed batch size
+        self._reference_points_3d = generate_reference_points(
             bev_h=bev_h,
             bev_w=bev_w,
             z_cfg=z_cfg,
             batch_size=1,
             dtype=torch.float32,
         )
-        # Keyed by batch size so a steady-state batch size pays the broadcast and the
-        # host-to-device transfer once, not per frame.
-        self._reference_points_cache = {}
-        self._cache_reference_points(1)
+        self._bev_reference_points = ttnn.from_torch(
+            self._reference_points_3d[:, :, 0, :2].unsqueeze(2),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
         # Build transformer layers
         self.layers = []
@@ -413,32 +416,6 @@ class TTBEVFormerEncoder:
                 **kwargs,
             )
             self.layers.append(layer)
-
-    def _cache_reference_points(self, batch_size: int):
-        """Build and cache the reference-point tensors for one batch size."""
-        # expand() is a stride-0 view, but from_torch needs contiguous memory, so the
-        # copy happens either way; contiguous() keeps it explicit and to one place.
-        reference_points_3d = (
-            self._reference_points_3d_unbatched
-            if batch_size == 1
-            else self._reference_points_3d_unbatched.expand(batch_size, -1, -1, -1).contiguous()
-        )
-        bev_reference_points = ttnn.from_torch(
-            reference_points_3d[:, :, 0, :2].unsqueeze(2),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        entry = (reference_points_3d, bev_reference_points)
-        self._reference_points_cache[batch_size] = entry
-        return entry
-
-    def _reference_points_for(self, batch_size: int):
-        """Reference points for a batch size, building them on first use."""
-        entry = self._reference_points_cache.get(batch_size)
-        if entry is None:
-            entry = self._cache_reference_points(batch_size)
-        return entry
 
     def forward(
         self,
@@ -481,7 +458,15 @@ class TTBEVFormerEncoder:
             num_queries == self.bev_h * self.bev_w
         ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
 
-        reference_points_3d, bev_reference_points = self._reference_points_for(bs)
+        # Batch is a pure broadcast of the stored grid. Widen the host tensor as a
+        # stride-0 view -- from_torch copies it during upload either way -- and widen the
+        # device tensor on device, freeing the copy once the layers are done with it.
+        reference_points_3d = self._reference_points_3d if bs == 1 else self._reference_points_3d.expand(bs, -1, -1, -1)
+        bev_reference_points = (
+            self._bev_reference_points
+            if bs == 1
+            else ttnn.repeat(self._bev_reference_points, ttnn.Shape((bs, 1, 1, 1)))
+        )
 
         shapes = self.spatial_shapes
         if key is not None:
@@ -571,6 +556,9 @@ class TTBEVFormerEncoder:
 
             if self.return_intermediate:
                 intermediate.append(output)
+
+        if bev_reference_points is not self._bev_reference_points:
+            ttnn.deallocate(bev_reference_points)
 
         if use_signpost:
             signpost(header="TTNN BEVFormerEncoder Forward End")

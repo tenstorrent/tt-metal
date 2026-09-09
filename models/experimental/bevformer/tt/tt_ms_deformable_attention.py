@@ -250,12 +250,16 @@ class TTMSDeformableAttention:
             value = ttnn.permute(value, (1, 0, 2))
             identity = ttnn.permute(identity, (1, 0, 2))
 
-        bs, num_queries, _ = query.shape
-        bs, num_keys, _ = value.shape
-        bs, num_queries, D, _ = reference_points.shape
-
-        # Validate required inputs
         assert reference_points is not None, "reference_points is required"
+
+        # query is the authority on batch and query count; reference_points only supplies
+        # the pillar depth. Reading bs from it would silently mis-shape a broadcast grid.
+        bs, num_queries, _ = query.shape
+        num_keys = value.shape[1]
+        D = reference_points.shape[2]
+        assert reference_points.shape[0] == bs and reference_points.shape[1] == num_queries, (
+            f"reference_points {list(reference_points.shape)} does not match " f"query [{bs}, {num_queries}, ...]"
+        )
 
         # Verify spatial shapes consistency
         assert self.total_keys == num_keys, f"Inconsistent keys: {self.total_keys} != {num_keys}"
@@ -308,9 +312,6 @@ class TTMSDeformableAttention:
 
         # Handle different reference point formats
         if reference_points.shape[-1] == 2:
-            # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
-            D = reference_points.shape[2]
-
             sampling_offsets = ttnn.div(sampling_offsets, self._offset_normalizer)
 
             # reference_points: [bs, num_queries, D, 2] -> [bs, num_queries, 1, 1, 1, D, 2]
