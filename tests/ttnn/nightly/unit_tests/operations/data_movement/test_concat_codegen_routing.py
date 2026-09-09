@@ -455,6 +455,49 @@ def test_concat_routes_two_input_mixed_placement_staged_copy_to_codegen(device):
     assert device.num_program_cache_entries() == entries_before, msg
 
 
+def test_concat_demotes_two_input_unaligned_staged_copy_to_native(device):
+    # The staged copy assembles an output row two bytes at a time on RISC, so past enough volume
+    # per core it loses to the four programs native's unaligned-last-dim massage dispatches. A
+    # 1026 B stick is not a multiple of any target's DRAM alignment, so its page carries pad and
+    # input 0 stages; 1024 rows over the grid keep the per-core volume above the demotion
+    # threshold on every grid size, which is what makes this a demotion rather than a win.
+    # Both implementations answer correctly here -- native reaches the massage, not concat_impl's
+    # alignment TT_FATAL -- so the assertion is about which one runs, not about the values.
+    def make(width):
+        host = (torch.arange(1024 * width, dtype=torch.float32).reshape(1, 1024, width) / 4096.0).to(torch.bfloat16)
+        return host, ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    h0, x0 = make(513)
+    h1, x1 = make(16)
+    xs = [x0, x1]
+    want = torch.cat([h0, h1], dim=2)
+    # Caches the codegen program for this spec, so a route back to codegen below would be a hit.
+    assert_equal(want, ttnn.to_torch(_force_codegen(xs, dim=2)))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.concat(xs, dim=2)
+    assert_equal(want, ttnn.to_torch(out))
+    msg = "reused the cached codegen program for a case the staged-copy volume demotes to native"
+    assert device.num_program_cache_entries() > entries_before, msg
+
+
+def test_concat_demotes_nway_width_staged_copy_to_native(device):
+    # The N-way width reader batches its reads only when every input's stick fills its page and
+    # lands at an offset the shared transport can address; otherwise each input goes through the
+    # same per-byte scratch copy, which is the regression this demotion exists for. A 16 B stick
+    # is under every target's DRAM alignment, so no input takes the direct path and the demotion
+    # holds regardless of grid -- unlike the two-input case there is no volume threshold to clear.
+    host = (torch.arange(3 * 256 * 8, dtype=torch.float32).reshape(3, 1, 256, 8) / 4096.0).to(torch.bfloat16)
+    hs = [host[i] for i in range(3)]
+    xs = [ttnn.from_torch(h, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for h in hs]
+    want = torch.cat(hs, dim=2)
+    assert_equal(want, ttnn.to_torch(_force_codegen(xs, dim=2)))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.concat(xs, dim=2)
+    assert_equal(want, ttnn.to_torch(out))
+    msg = "reused the cached codegen program for an N-way width case whose staged copy is demoted"
+    assert device.num_program_cache_entries() > entries_before, msg
+
+
 def test_concat_codegen_declines_mismatched_dtype(device, expect_error):
     xs = [
         ttnn.from_torch(
@@ -498,8 +541,12 @@ def test_concat_codegen_declines_execution_controls(device):
     # Shapes no other case here uses: codegen carries no core-grid field, so a route that dropped
     # sub_core_grids would land on the plain (shapes, dim) codegen key. Were that key already
     # resident from another test, the dropped control would produce the same values against an
-    # unchanged count and pass.
-    shapes, dim = [[1, 32, 48], [1, 32, 80]], 2
+    # unchanged count and pass. Those shapes also have to clear the widest last-dim alignment any
+    # target imposes (64B), because sub_core_grids is exactly the argument that sends native down
+    # concat_impl directly (concat.cpp's interleaved shortcut) instead of through the massage that
+    # transposes an unaligned last dim away -- so the reference here is the one native call in this
+    # file that meets concat_impl's alignment TT_FATAL unguarded.
+    shapes, dim = [[1, 32, 96], [1, 32, 160]], 2
     xs = _inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     golden = ttnn.to_torch(_force_native(xs, dim=dim, sub_core_grids=grid))
