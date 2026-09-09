@@ -304,16 +304,15 @@ def test_fpu_sfpu_overlap_and_thread1_write_shares():
     out = mc.compute_metrics(
         _View(
             {
-                "SRCA_WRITE_THREAD0": 300.0,
-                "SRCA_WRITE_THREAD1": 100.0,
-                "SRCB_WRITE_THREAD0": 0.0,
-                "SRCB_WRITE_THREAD1": 50.0,
+                "SRCA_WRITE_TID_EVEN": 300.0,
+                "SRCA_WRITE_TID_ODD": 100.0,
+                "SRCB_WRITE_TID_EVEN": 0.0,
+                "SRCB_WRITE_TID_ODD": 50.0,
             }
         )
     )
-    assert out["srca_write_thread0_share_pct"] == 75.0
-    assert out["srca_write_thread1_share_pct"] == 25.0
-    assert out["srcb_write_thread1_share_pct"] == 100.0
+    assert out["srca_write_even_tid_share_pct"] == 75.0
+    assert out["srcb_write_even_tid_share_pct"] == 0.0
 
 
 def test_l1_client_rates_are_dynamic_and_round_trip_their_labels():
@@ -339,3 +338,4 @@ def test_l1_client_labels_cover_every_subport_range():
     assert mc.quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP"
     assert mc.quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK2_IF0_LANE3_ISSUE_WORK_CARRY"
     assert mc.quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK1_IF0_LANE3_PENDING_REQS_CARRY"
+    assert mc.quasar_l1_client_label(37 * 8) == "L1_CLIENT_INVALID_296"

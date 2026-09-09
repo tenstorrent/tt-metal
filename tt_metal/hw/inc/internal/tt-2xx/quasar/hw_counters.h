@@ -51,8 +51,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters P
      {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
-     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
-     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
+     {PerfCounterType::SRCB_WRITE_REQ, 5},
+     {PerfCounterType::SRCA_WRITE_REQ, 6},
      {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK2_BUSY_THREAD0, 9},
@@ -61,25 +61,26 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters P
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_PORT, 262},
-     {PerfCounterType::SRCA_WRITE_THREAD0, 263},
-     {PerfCounterType::SRCB_WRITE_THREAD0, 264},
-     {PerfCounterType::SRCA_WRITE_THREAD1, 265},
-     {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
+     {PerfCounterType::SRCA_WRITE_TID_EVEN, 263},
+     {PerfCounterType::SRCB_WRITE_TID_EVEN, 264},
+     {PerfCounterType::SRCA_WRITE_TID_ODD, 265},
+     {PerfCounterType::SRCB_WRITE_TID_ODD, 266}}};
 constexpr std::size_t NUM_UNPACK_COUNTERS = 18;
 
 // TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18, 12-14 and 17 tied on A0.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters PERF_COUNTER_TABLE = {
-    {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
+    {{PerfCounterType::PACKER0_DEST_READ_REQ, 11},
      {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
-// INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack; the xsearch slots 12-15
-// are tied to 0 in the RTL and are not exposed), 32-35
-// per-thread any-stall, 36-50 thread-ORed backend-stage stall conditions (sampled downstream of the
-// ibuffer, so they can exceed the any-stall counts); grants (sel >= 256) = the thread's ibuffer dequeues.
+// INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 per-thread
+// any-stall, 36-50 thread-ORed backend stall conditions (sampled past the ibuffer, so they can exceed the
+// any-stall counts); grants (sel >= 256) are the thread's ibuffer dequeues. Xsearch requests (12-15) are tied to 0
+// and its grants alias THREAD_INSTRUCTIONS, so neither is exposed. Thread 3, the THCON class and SRCS_STALL_* are
+// live wires that current firmware never drives (0 on every op swept).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 51> instrn_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},

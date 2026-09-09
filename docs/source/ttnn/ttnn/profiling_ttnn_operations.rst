@@ -180,16 +180,15 @@ Two metric families appear in the output:
 
 A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics (Packer Engine 0/1/2 Util, Packer Load Imbalance) are N/A on Blackhole, and the Blackhole-only extended L1 metrics (L1 Packer Interfaces Util/Backpressure, L1 Unpacker0 Ext Util/Backpressure) are N/A on Wormhole. A metric is also N/A when any of its input counters was not captured in the run. The three ``Avg ... util on full grid (%)`` columns average the FPU, SFPU and MATH counters over every core of the grid and the kernel duration; a device-only run leaves them blank and reports the per-core ``Avg (%)`` columns instead.
 
-*Quasar-Only Metrics*
+*Per-class, per-unpacker and Quasar-only metrics*
 
-These come from counters that only Quasar's NEOs expose (four threads, the INSTISSUE instruction class, thread-ORed stall reasons, a third unpacker and the l1_client CSR). They are computed by the same shared engine (``tools/tracy/perf_metrics_common.py``) and read N/A on Wormhole and Blackhole rather than a fake 0%.
+The per-class instruction availability, per-unpacker busy and issue-ready metrics compute wherever their counter exists (threads 0-2 and unpackers 0-1 on Wormhole and Blackhole, all four threads on Quasar). The rest below come from counters only Quasar's NEOs expose (thread 3, the INSTISSUE class, thread-ORed stall reasons, a third unpacker and the l1_client CSR) and read N/A elsewhere rather than a fake 0%.
 
 - **Thread 3 Stall Rate (%)** and **T3 Instrn Issue Rate (%)**: ``THREAD_STALLS_3 / ref_cnt`` and ``THREAD_INSTRUCTIONS_3 / ref_cnt``, the fourth-thread counterparts of the tt-1xx thread metrics.
 - **CFG/SYNC/THCON/INSTISSUE/MATH/UNPACK/PACK Instrn Avail Rate T0..T3 (%)**: ``<CLASS>_INSTRN_AVAILABLE_<t> / ref_cnt`` for every (class, thread) pair the tt-1xx list above does not already cover. The MATH class counts math and instissue instructions (the RTL unions them).
 - **<Reason> Stall Rate (%)**: ``<REASON> / ref_cnt`` for the 15 stall reasons the INSTRN unit reports OR-reduced across the four threads: Tile Counter Stall Pack/Unpack, Srcs Stall Pack/SFPU/Unpack, Dest Stall Pack/SFPU/Math/Unpack, SFPU/FPU Data Hazard Stall, SrcB/SrcA Stall Unpack, DValid Stall Math, SrcA Stall Math. They sample a backend stage, so they can exceed the per-thread stall counts.
 - **<Reason> Stall Share (%)**: the same reason as a fraction of the sum of every stall reason captured in the run; only reported when at least two reasons were captured.
 - **Unpacker0/1/2 Busy T0/T1 Util (%)**: ``UNPACK<u>_BUSY_THREAD<t> / ref_cnt`` per unpacker and issuing thread (Quasar runs three unpackers per thread; unpacker 2 is thread 0 only).
-- **SrcA/SrcB Write T1 Share (%)**: thread 1's fraction of the source register writes, complementing the T0 shares.
 - **Math Src Data Ready Rate (%)**: ``MATH_SRC_DATA_READY / ref_cnt``, the fraction of cycles the math unit had both source registers valid.
 - **FPU SFPU Overlap (%)**: ``max(0, FPU_COUNTER + SFPU_COUNTER - MATH_COUNTER) / ref_cnt``, the cycles both units were busy at once (``MATH_COUNTER`` counts fpu-or-sfpu cycles).
 - **T0..T3 Instrn Per Issue-Ready Cycle** (ratio): ``THREAD_INSTRUCTIONS_<t> / max(1, ref_cnt - THREAD_STALLS_<t>)``, instructions issued per cycle the thread was not stalled.
@@ -199,7 +198,7 @@ These come from counters that only Quasar's NEOs expose (four threads, the INSTI
 
 - **Stall Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
 - **Compute-to-Unpack Ratio (%)**: MATH_COUNTER / unpack busy. >100% = compute-bound, <100% = memory-bound.
-- **T0/T1/T2 Instrn Issue Rate** (raw number): Instructions issued per cycle per thread (``THREAD_INSTRUCTIONS_N / ref_cnt``).
+- **T0/T1/T2 Instrn Issue Rate (%)**: Instructions issued per cycle per thread (``THREAD_INSTRUCTIONS_N / ref_cnt``).
 
 **Architecture Differences**
 

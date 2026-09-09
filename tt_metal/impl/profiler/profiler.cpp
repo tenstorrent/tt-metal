@@ -2348,7 +2348,10 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 std::optional<uint32_t> l1_client_sel;
                 if (counter_type_raw >= QUASAR_L1_CLIENT_EVENT_BASE) {
                     l1_client_sel = counter_type_raw - QUASAR_L1_CLIENT_EVENT_BASE;
-                    counter_type_raw = static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT);
+                    // Selections past the 37x8 mux are stale data; leave counter_type_raw out of range so it is skipped.
+                    if (*l1_client_sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS) {
+                        counter_type_raw = static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT);
+                    }
                 }
                 // Skip markers with out-of-range counter_type (stale/dropped data).
                 if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {

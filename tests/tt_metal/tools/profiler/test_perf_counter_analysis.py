@@ -37,8 +37,8 @@ QUASAR_CAPTURE_TYPES = (
         "MATH_NOT_D2S_STALLED",
         "MATH_INSTRN_STARTED",
         "MATH_INSTRN_AVAILABLE",
-        "SRCB_WRITE_AVAILABLE",
-        "SRCA_WRITE_AVAILABLE",
+        "SRCB_WRITE_REQ",
+        "SRCA_WRITE_REQ",
         "UNPACK0_BUSY_THREAD0",
         "UNPACK1_BUSY_THREAD0",
         "UNPACK2_BUSY_THREAD0",
@@ -47,13 +47,13 @@ QUASAR_CAPTURE_TYPES = (
         "SRCB_WRITE_NOT_BLOCKED_PORT",
         "SRCA_WRITE_NOT_BLOCKED_OVR",
         "SRCA_WRITE_NOT_BLOCKED_PORT",
-        "SRCA_WRITE_THREAD0",
-        "SRCB_WRITE_THREAD0",
-        "SRCA_WRITE_THREAD1",
-        "SRCB_WRITE_THREAD1",
+        "SRCA_WRITE_TID_EVEN",
+        "SRCB_WRITE_TID_EVEN",
+        "SRCA_WRITE_TID_ODD",
+        "SRCB_WRITE_TID_ODD",
     ]
     + [
-        "PACKER_DEST_READ_AVAILABLE",
+        "PACKER0_DEST_READ_REQ",
         "PACKER_BUSY",
         "DEST_READ_GRANTED_0",
         "MATH_NOT_STALLED_DEST_WR_PORT",
@@ -94,7 +94,7 @@ QUASAR_EXPECTED_METRICS = [
     "INSTISSUE Instrn Avail Rate T3",
     "CFG Instrn Avail Rate T3",
     "Unpacker2 Busy T0 Util",
-    "SrcA Write T1 Share",
+    "SrcA Write Even-TID Share",
     "Math Src Data Ready Rate",
     "FPU SFPU Overlap",
     "T3 Instrn Per Issue-Ready Cycle",
@@ -134,8 +134,8 @@ def test_counter_type_names_match_enum():
     for ordinal, name in COUNTER_TYPE_NAMES.items():
         assert enum_names[ordinal] == name, f"ordinal {ordinal}: table says {name}, enum says {enum_names[ordinal]}"
     # The Quasar block is appended after the Blackhole L1 bank 5 group, so no tt-1xx ordinal moved.
-    assert enum_names[enum_names.index("ANY_THREAD_STALL") + 1] == "L1_5_EXT_UNPACKER_13"
-    assert enum_names.index("L1_5_EXT_UNPACKER_14_GRANT") < enum_names.index("CFG_INSTRN_AVAILABLE_3")
+    assert enum_names[enum_names.index("ANY_THREAD_STALL") + 1] == "L1_5_UNPACKER0_EXT_IF_6"
+    assert enum_names.index("L1_5_UNPACKER0_EXT_IF_7_GRANT") < enum_names.index("CFG_INSTRN_AVAILABLE_3")
     assert enum_names[-1] == "UNPACK2_BUSY_THREAD0"
 
 

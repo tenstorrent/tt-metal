@@ -151,13 +151,8 @@ L1_ALL = (
 
 
 # ── Quasar (A0) ──
-# A NEO runs four threads and adds the INSTISSUE instruction class (its XSEARCH class is tied to 0 in the RTL
-# and is not exposed); its INSTRN unit reports
-# the backend stall reasons OR-reduced across the threads rather than per thread. The tt-1xx enumerators
-# already carry the same names for the counters both architectures share, so no aliasing is needed.
-QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "INSTISSUE", "MATH", "UNPACK", "PACK")
-# (class, thread) pairs the tt-1xx availability metrics above already report.
-INSTRN_AVAIL_COVERED = frozenset({("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)})
+# A NEO runs four threads, adds the INSTISSUE instruction class and reports the backend stall reasons
+# OR-reduced across the threads. Counters both architectures share keep their tt-1xx names.
 # Metric key stem -> INSTRN counter, one per thread-ORed stall reason.
 STALL_REASON_COUNTERS = {
     "tile_counter_stall_pack": "TILE_COUNTER_STALL_PACK",
@@ -522,11 +517,6 @@ def compute_metrics(v: CounterView) -> dict:
     def _unpack_busy(u, t):
         return _gated_rate("TDMA_UNPACK", f"UNPACK{u}_BUSY_THREAD{t}", unpack_cycles)
 
-    _src_threads_present = all(
-        v.has(n) for n in ("SRCA_WRITE_THREAD0", "SRCA_WRITE_THREAD1", "SRCB_WRITE_THREAD0", "SRCB_WRITE_THREAD1")
-    )
-    srca_write_thread1_share = safe_div(_sa_t1, _sa_t0 + _sa_t1) if _src_threads_present else None
-    srcb_write_thread1_share = safe_div(_sb_t1, _sb_t0 + _sb_t1) if _src_threads_present else None
     math_src_data_ready = _gated_rate("TDMA_UNPACK", "MATH_SRC_DATA_READY", unpack_cycles)
     # MATH_COUNTER counts fpu-or-sfpu cycles, so the cycles both units were busy are FPU + SFPU - MATH.
     fpu_sfpu_overlap = (
@@ -727,8 +717,6 @@ def compute_metrics(v: CounterView) -> dict:
         "unpack0_busy_t1_pct": pct(_unpack_busy(0, 1)),
         "unpack1_busy_t1_pct": pct(_unpack_busy(1, 1)),
         # Source-write thread shares (T1 side), math source readiness, FPU/SFPU overlap
-        "srca_write_thread1_share_pct": pct(srca_write_thread1_share),
-        "srcb_write_thread1_share_pct": pct(srcb_write_thread1_share),
         "math_src_data_ready_pct": pct(math_src_data_ready),
         "fpu_sfpu_overlap_pct": pct(fpu_sfpu_overlap),
         # Instructions per issue-ready cycle, per thread
@@ -900,8 +888,6 @@ METRIC_LABELS = {
     "unpack2_busy_t0_pct": "Unpacker2 Busy T0 Util",
     "unpack0_busy_t1_pct": "Unpacker0 Busy T1 Util",
     "unpack1_busy_t1_pct": "Unpacker1 Busy T1 Util",
-    "srca_write_thread1_share_pct": "SrcA Write T1 Share",
-    "srcb_write_thread1_share_pct": "SrcB Write T1 Share",
     "math_src_data_ready_pct": "Math Src Data Ready Rate",
     "fpu_sfpu_overlap_pct": "FPU SFPU Overlap",
     "thread0_instrn_per_ready_cycle_ratio": "T0 Instrn Per Issue-Ready Cycle",
@@ -921,6 +907,7 @@ RATIO_LABELS = {METRIC_LABELS[k] for k in RATIO_KEYS}
 # Its records are named after the run's selection, so the metric is dynamic: consumers pass the counter
 # names they saw to compute_l1_client_metrics() and map keys back through metric_label().
 L1_CLIENT_PREFIX = "L1_CLIENT_"
+QUASAR_L1_CLIENT_NUM_SUBPORTS = 37
 # Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or order
 # depth), events 1 and 7 are per-cycle indicators.
 QUASAR_L1_CLIENT_EVENT_NAMES = (
@@ -942,11 +929,13 @@ def quasar_l1_client_label(sel) -> str:
     ports, 4 is the packer THCON port, 5-24 are the unpacker read clients (three unpackers, two L1
     interfaces each, four 16-byte lanes per interface, subport = 5 + (unpacker*2 + interface)*4 + lane;
     unpacker 2 only has interface 0) and 25-36 are the packer write clients with the same layout
-    (packer 0 interfaces 0 and 1, packer 1 interface 0). Events 1-3 count per SBank (subport mod 4) for
-    the whole port rather than per subport, so a zero only means the monitored lane or SBank carried no
-    traffic.
+    (packer 0 interfaces 0 and 1, packer 1 interface 0). Events 1-3 count per SBank of the port (its
+    port-local index, so the THCON port aliases TRISC SBank 0), not per subport.
     """
-    subport, event = divmod(int(sel), 8)
+    sel = int(sel)
+    if not 0 <= sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * 8:
+        return f"{L1_CLIENT_PREFIX}INVALID_{sel}"
+    subport, event = divmod(sel, 8)
     if subport < 4:
         port = f"TRISC{subport}"
     elif subport == 4:
