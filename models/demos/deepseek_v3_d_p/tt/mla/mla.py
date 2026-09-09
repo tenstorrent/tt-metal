@@ -1171,13 +1171,15 @@ class ttMLA:
 
         NOTE ON RESIDENCY: the cache holds one [1, heads_local, chunk, width] bf16 tensor per distinct
         offset -- 3.28 MB per entry at 8x4 / chunk 5120, freed only with the model. Growth is linear in
-        context depth, since an offset is visited once per request and never repeats. TtPrefillTransformer
-        builds ONE dict and threads it down, so all 36 layers pay that once: 0.17 GB per device at
-        261,120 tokens and 0.67 GB at 1,048,576 (MAX_POSITION_EMBEDDINGS), against 6.0 / 24.1 GB when
-        every layer kept its own copies -- at 1M that left no room for weights and KV cache. Sharing is
-        sound because every input to the tensor (offset, sp_factor, seq_len_local, heads_local, width,
-        beta, orig_max) comes from the chunk, the config or the mesh; none varies by layer. Same shape as
-        what #55126 gives the traced path (TtPrefillRuntime._prepare_llama4_scale_offsets), which never
+        context depth, since an offset is visited once per request and never repeats.
+        TtPrefillTransformer builds ONE dict and threads it down, so the layers pay that once. Measured
+        at 102,400 tokens (20 offsets, L36 chunked): 20 tensors / 0.07 GB per device against 700 /
+        2.30 GB per-layer, i.e. 2.23 GB per device off allocated DRAM. 700 and not 720 because chunked
+        prefill builds the last layer kv_only and it never reaches _q_stem. Extrapolated, 1,048,576
+        (MAX_POSITION_EMBEDDINGS, 204 offsets) is 0.67 GB shared against 23.4 GB, which left no room
+        for weights and KV cache. Sharing is sound because every input to the tensor (offset, sp_factor,
+        seq_len_local, heads_local, width, beta, orig_max) comes from the chunk, the config or the mesh;
+        none varies by layer. Same shape as what #55126 gives the traced path (TtPrefillRuntime._prepare_llama4_scale_offsets), which never
         had the x36 problem -- it shares one ChunkMetadata.llama4_scale.
 
         A shared per-offset SET, not one buffer refreshed in place: an entry is never mutated, so "is
