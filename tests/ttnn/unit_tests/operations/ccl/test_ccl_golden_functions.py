@@ -10,11 +10,11 @@ import torch
 import ttnn
 
 
-def _distributed_golden(shards, *, mesh_shape=(2, 2), shard_dims=(0, 1), global_value=None):
+def _tensor_topology(*, mesh_shape=(2, 2), shard_dims=(0, 1)):
     mesh_coords = tuple(
         ttnn.MeshCoordinate(*coordinate) for coordinate in itertools.product(*(range(d) for d in mesh_shape))
     )
-    topology = ttnn.TensorTopologySnapshot(
+    return ttnn.TensorTopologySnapshot(
         distribution_shape=mesh_shape,
         placements=tuple(
             ttnn.PlacementReplicate() if shard_dim is None else ttnn.PlacementShard(shard_dim)
@@ -22,11 +22,156 @@ def _distributed_golden(shards, *, mesh_shape=(2, 2), shard_dims=(0, 1), global_
         ),
         mesh_coords=mesh_coords,
     )
+
+
+def _distributed_golden(shards, *, mesh_shape=(2, 2), shard_dims=(0, 1), global_value=None):
+    topology = _tensor_topology(mesh_shape=mesh_shape, shard_dims=shard_dims)
     return ttnn.DistributedGolden(
         topology=topology,
         global_value=global_value,
-        shards=dict(zip(mesh_coords, shards)),
+        shards=dict(zip(topology.mesh_coords, shards)),
     )
+
+
+def test_mesh_value_round_trip_with_uneven_shards():
+    topology = _tensor_topology()
+    mesh_coords = topology.mesh_coords
+    global_value = torch.arange(15, dtype=torch.float32).reshape(3, 5)
+    shard_shapes = {
+        mesh_coords[0]: (1, 2),
+        mesh_coords[1]: (1, 3),
+        mesh_coords[2]: (2, 2),
+        mesh_coords[3]: (2, 3),
+    }
+    expected_slices = {
+        mesh_coords[0]: (slice(0, 1), slice(0, 2)),
+        mesh_coords[1]: (slice(0, 1), slice(2, 5)),
+        mesh_coords[2]: (slice(1, 3), slice(0, 2)),
+        mesh_coords[3]: (slice(1, 3), slice(2, 5)),
+    }
+
+    shards = ttnn.decompose_mesh_value(
+        global_value,
+        topology=topology,
+        shard_shapes_by_mesh_coord=shard_shapes,
+    )
+
+    assert set(shards) == set(mesh_coords)
+    for mesh_coord, shard_slice in expected_slices.items():
+        assert torch.equal(shards[mesh_coord], global_value[shard_slice])
+    global_value[0, 0] = -1
+    assert shards[mesh_coords[0]][0, 0].item() == -1
+    assert torch.equal(ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology), global_value)
+
+
+def test_mesh_value_round_trip_when_mesh_axes_shard_same_dimension():
+    topology = _tensor_topology(shard_dims=(0, 0))
+    mesh_coords = topology.mesh_coords
+    global_value = torch.arange(20, dtype=torch.float32).reshape(10, 2)
+    shard_extents = (1, 3, 2, 4)
+    shard_shapes = {mesh_coord: (shard_extent, 2) for mesh_coord, shard_extent in zip(mesh_coords, shard_extents)}
+
+    shards = ttnn.decompose_mesh_value(
+        global_value,
+        topology=topology,
+        shard_shapes_by_mesh_coord=shard_shapes,
+    )
+
+    offsets = (0, 1, 4, 6, 10)
+    for index, mesh_coord in enumerate(mesh_coords):
+        assert torch.equal(shards[mesh_coord], global_value[offsets[index] : offsets[index + 1]])
+    assert torch.equal(ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology), global_value)
+
+
+def test_compose_mesh_value_validates_replicated_shards(expect_error):
+    topology = _tensor_topology(shard_dims=(0, None))
+    mesh_coords = topology.mesh_coords
+    first_partition = torch.arange(4, dtype=torch.float32).reshape(1, 4)
+    second_partition = torch.arange(8, dtype=torch.float32).reshape(2, 4) + 4
+    shards = {
+        mesh_coords[0]: first_partition,
+        mesh_coords[1]: first_partition.clone(),
+        mesh_coords[2]: second_partition,
+        mesh_coords[3]: second_partition.clone(),
+    }
+
+    composed = ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology)
+
+    assert torch.equal(composed, torch.cat((first_partition, second_partition)))
+
+    shards[mesh_coords[1]] = first_partition + 1
+    with expect_error(ValueError, "differs from its replica group"):
+        ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology)
+
+
+def test_mesh_value_helpers_support_partial_replica_coordinate_sets():
+    topology = _tensor_topology(shard_dims=(0, None))
+    mesh_coords = topology.mesh_coords
+    global_value = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    local_shapes = {
+        mesh_coords[1]: (1, 4),
+        mesh_coords[2]: (2, 4),
+    }
+
+    local_shards = ttnn.decompose_mesh_value(
+        global_value,
+        topology=topology,
+        shard_shapes_by_mesh_coord=local_shapes,
+    )
+
+    assert set(local_shards) == set(local_shapes)
+    assert torch.equal(local_shards[mesh_coords[1]], global_value[:1])
+    assert torch.equal(local_shards[mesh_coords[2]], global_value[1:])
+    assert torch.equal(
+        ttnn.compose_mesh_value(shards_by_mesh_coord=local_shards, topology=topology),
+        global_value,
+    )
+
+
+def test_mesh_value_helpers_reject_incomplete_sharded_coverage(expect_error):
+    topology = _tensor_topology()
+    mesh_coords = topology.mesh_coords
+    incomplete_shapes = {
+        mesh_coords[0]: (1, 2),
+        mesh_coords[1]: (1, 3),
+        mesh_coords[2]: (2, 2),
+    }
+
+    with expect_error(ValueError, "do not cover every sharded region"):
+        ttnn.decompose_mesh_value(
+            torch.zeros((3, 5)),
+            topology=topology,
+            shard_shapes_by_mesh_coord=incomplete_shapes,
+        )
+
+
+def test_mesh_value_helpers_validate_replicated_extents_and_global_shape(expect_error):
+    topology = _tensor_topology(shard_dims=(0, None))
+    mesh_coords = topology.mesh_coords
+    inconsistent_replica_shapes = {
+        mesh_coords[0]: (1, 4),
+        mesh_coords[1]: (1, 5),
+        mesh_coords[2]: (2, 4),
+        mesh_coords[3]: (2, 5),
+    }
+
+    with expect_error(ValueError, "Replicated tensor dimension 1 has inconsistent shard extents"):
+        ttnn.decompose_mesh_value(
+            torch.zeros((3, 4)),
+            topology=topology,
+            shard_shapes_by_mesh_coord=inconsistent_replica_shapes,
+        )
+
+    valid_local_shapes = {
+        mesh_coords[1]: (1, 4),
+        mesh_coords[2]: (2, 4),
+    }
+    with expect_error(ValueError, r"Global value has shape \(4, 4\), expected \(3, 4\)"):
+        ttnn.decompose_mesh_value(
+            torch.zeros((4, 4)),
+            topology=topology,
+            shard_shapes_by_mesh_coord=valid_local_shapes,
+        )
 
 
 def _two_group_collective_inputs():
