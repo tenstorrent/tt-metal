@@ -100,31 +100,39 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
 // Quasar's data path is Core -> L1 D$ -> L2 -> TL1, and invalidate_l1_cache() is a no-op there
 // (risc_common.h), so two gaps had to be closed (both fixed below, ARCH_QUASAR && COMPILE_FOR_DM only):
 //   (a) SOURCE read: if the source was just NoC-written into a reused CB, the RISC's cached line can be
-//       stale; invalidate_l2_cache_range(src, bytes) before the memmove forces a fresh read.
+//       stale. The memmove reads the source through the UNCACHED L1 alias (src + MEM_L1_UNCACHED_BASE) so it
+//       bypasses BOTH the private L1 D$ and L2 and reads TL1 directly -- always fresh. An L2-only invalidate
+//       would NOT suffice: invalidate_l2_cache_range touches L2 only, invalidate_l1_cache() is a no-op, and
+//       nothing invalidates the private per-core L1 D$ here (only invalidate_cache_all / invalidate_l1_dcache
+//       do), so a resident stale D$ line could be hit before reaching L2.
 //   (b) DEST publish: the CPU stores land in L1 D$/L2, not TL1. The drain below only reads back the dirty
 //       L1D line (a LOCAL ordering barrier) -- unlike WH/BH load_blocking it does NOT publish to TL1, and the
 //       copy_async=true path skips even the drain. flush_l2_cache_range(dst, bytes) after the memmove
-//       publishes to TL1 so a later NoC / other-agent read sees the copied data.
+//       publishes to TL1 (it probes the L1 D$ for dirty lines first) so a later NoC / other-agent read sees
+//       the copied data.
 // This was a PRE-EXISTING gap, unreachable until this header started compiling for Quasar DM; it is a
 // fallback path (tt_memmove only calls it on overlapping self-copy or the misaligned fallback), off the
 // resnet critical path, and does not manifest on the emulator (flat memory, no cache hierarchy modeled).
-// The two blocks below mirror the #50329 tilize-padding L2 pattern; WH/BH are unchanged (invalidate_l1_cache
-// + the load_blocking drain).
+// WH/BH are unchanged (invalidate_l1_cache + the load_blocking drain; the uncached-alias / L2-flush blocks
+// are ARCH_QUASAR && COMPILE_FOR_DM only).
 template <bool copy_async>
 FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     invalidate_l1_cache();
+    uint32_t src_read_addr = src_l1_addr;
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // (a, #51763) SOURCE coherency: invalidate_l1_cache() is a no-op on Quasar (risc_common.h). If the source
-    // is a NoC-written reused CB, the RISC's cached L1/L2 line can be stale, so invalidate the L2 range to
-    // force the memmove to read the freshly-arrived data (data path Core -> L1 D$ -> L2 -> TL1).
-    if (bytes != 0) {
-        invalidate_l2_cache_range(static_cast<uintptr_t>(src_l1_addr), static_cast<size_t>(bytes));
-    }
+    // (a, #51763) SOURCE coherency: read the source through the UNCACHED L1 alias so the memmove bypasses the
+    // RISC caches entirely and always sees freshly NoC-written data. invalidate_l1_cache() is a no-op on Quasar,
+    // and an L2-range invalidate does NOT reach the private per-core L1 D$ (data path Core -> L1 D$ -> L2 -> TL1;
+    // only invalidate_cache_all / invalidate_l1_dcache touch the D$). So a stale D$ line for a reused-CB source
+    // (e.g. a loop re-reading the same scratch buffer) could otherwise be read before it ever reaches L2. The
+    // uncached alias reads TL1 directly, so no source-side cache invalidation is needed. (The DEST side stays
+    // cached: flush_l2_cache_range() below probes the L1 D$, so dirty destination lines are still written back.)
+    src_read_addr = src_l1_addr + MEM_L1_UNCACHED_BASE;
 #endif
     // Cast the L1 address (uint32_t) to a pointer through uintptr_t: a bare (void*)(uint32_t) is an
     // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
     // is the correct width on every arch, so this is a no-op change for WH/BH.
-    memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_l1_addr), (size_t)(bytes));
+    memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_read_addr), (size_t)(bytes));
     if constexpr (!copy_async) {
         if (bytes != 0) {
             // Drain the 4B-aligned word holding the last written byte: in-bounds and aligned for any
