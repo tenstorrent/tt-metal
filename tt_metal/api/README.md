@@ -28,16 +28,23 @@ approved experimental free-function/friend pattern remain permitted.
 Run from the repository root:
 
 ```sh
-python3 scripts/validate_api/validate_header_hygiene.py
+python3 scripts/validate_api/validate_includes.py tt_metal/api
 python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
 ```
 
-The checker runs in pre-commit, which the existing `all-static-checks.yaml`
+The existing `validate-metalium-includes` pre-commit hook runs all API validation
+through this command. The `all-static-checks.yaml`
 workflow runs on PR updates and merge groups. Checker failures fail its
 `Run Pre-commit Hooks` job. The checker tests also run through pre-commit when
 files under `scripts/validate_api/` change.
 
-It checks all `.h`, `.hpp`, `.hh`, and `.hxx` files under `tt_metal/api/` for:
+The shared parser checks includes in C++ sources and headers for angle-bracket
+spelling, approved standard headers and prefixes, banned heavyweight headers,
+and the frozen UMD header allowlist. Unused allowed prefixes are also reported.
+The legacy include-style skip list remains unchanged; it does not exempt headers
+from the new guard and stability-boundary checks.
+
+For all `.h`, `.hpp`, `.hh`, and `.hxx` files under `tt_metal/api/`, it also checks:
 
 - Unconditional `#pragma once` before declarations and other directives.
 - Direct literal includes that violate the table above.
@@ -45,9 +52,10 @@ It checks all `.h`, `.hpp`, `.hh`, and `.hxx` files under `tt_metal/api/` for:
 - Nonliteral includes whose API tier cannot be checked lexically.
 
 Comments and raw string contents do not count as directives. Continued lines,
-quoted relative includes, and normalized paths are handled. Every conditional
-branch is checked, regardless of the current host architecture. The existing
-`validate_includes.py` still checks include spelling and dependency allowlists.
+quoted relative includes, and normalized paths are handled. Quoted paths are
+resolved for boundary diagnostics even though include-style validation rejects
+them. Every conditional branch is checked, regardless of the current host
+architecture.
 
 **Coverage limit:** this first checker does not invoke the C++ preprocessor or
 walk a transitive include graph. It recognizes API-root and quoted relative

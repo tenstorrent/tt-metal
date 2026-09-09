@@ -2,14 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from validate_header_hygiene import load_exceptions, source_lines, validate
+from validate_includes import (
+    ALLOWED_PREFIXES,
+    ALLOWED_UMD_HEADERS,
+    BANNED_HEADERS,
+    SKIP_FILES,
+    load_exceptions,
+    source_lines,
+    validate,
+)
 
 
-class HeaderHygieneTests(unittest.TestCase):
+class ApiValidationTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -22,7 +32,17 @@ class HeaderHygieneTests(unittest.TestCase):
         return path
 
     def errors(self, exceptions=None):
-        return validate(self.root, exceptions or set())[0]
+        # Small fixtures exercise individual rules without populating the
+        # repository-wide prefix allowlist. Test that cleanup rule separately.
+        return validate(self.root, exceptions or set(), check_unused_prefixes=False)[0]
+
+    def populate_prefixes(self):
+        includes = [
+            "umd/device/types/arch.hpp" if prefix == "umd" else f"{prefix}/example.hpp" for prefix in ALLOWED_PREFIXES
+        ]
+        return self.header(
+            "internal/allowlist.hpp", "#pragma once\n" + "".join(f"#include <{name}>\n" for name in includes)
+        )
 
     def test_dependency_matrix(self):
         paths = {
@@ -93,7 +113,9 @@ class HeaderHygieneTests(unittest.TestCase):
     def test_relative_include_uses_local_header_before_api_root(self):
         self.header("tt-metalium/local.hpp")
         self.header("tt-metalium/a.hpp", '#pragma once\n#include "local.hpp"\n')
-        self.assertEqual(self.errors(), [])
+        errors = self.errors()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Quoted includes are not allowed", errors[0])
 
     def test_missing_quoted_relative_includes_still_enforce_boundaries(self):
         cases = (
@@ -105,8 +127,9 @@ class HeaderHygieneTests(unittest.TestCase):
             with self.subTest(source=source, include=include):
                 path = self.header(source, f'#pragma once\n#include "{include}"\n')
                 errors = self.errors()
-                self.assertEqual(len(errors), 1)
-                self.assertIn(f"must not include {target_tier}", errors[0])
+                self.assertEqual(len(errors), 2)
+                self.assertTrue(any("Quoted includes are not allowed" in error for error in errors))
+                self.assertTrue(any(f"must not include {target_tier}" in error for error in errors))
                 path.unlink()
 
     def test_quoted_api_root_includes_enforce_boundaries_with_or_without_target(self):
@@ -121,8 +144,9 @@ class HeaderHygieneTests(unittest.TestCase):
                     path = self.header(source, f'#pragma once\n#include "{include}"\n')
                     target = self.header(include) if exists else None
                     errors = self.errors()
-                    self.assertEqual(len(errors), 1)
-                    self.assertIn(f"must not include {target_tier}", errors[0])
+                    self.assertEqual(len(errors), 2)
+                    self.assertTrue(any("Quoted includes are not allowed" in error for error in errors))
+                    self.assertTrue(any(f"must not include {target_tier}" in error for error in errors))
                     path.unlink()
                     if target is not None:
                         target.unlink()
@@ -167,6 +191,13 @@ class HeaderHygieneTests(unittest.TestCase):
         path.unlink()
         self.assertTrue(any("stale exception" in error for error in self.errors(exception)))
 
+    def test_migration_exception_only_exempts_the_tier_edge(self):
+        self.header("tt-metalium/a.hpp", '#include "internal/private.hpp"\n')
+        errors = self.errors({("tt-metalium/a.hpp", "internal/private.hpp")})
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(any("unconditional #pragma once" in error for error in errors))
+        self.assertTrue(any("Quoted includes are not allowed" in error for error in errors))
+
     def test_empty_or_wrong_root_fails(self):
         self.assertTrue(any("no API headers" in error for error in self.errors()))
 
@@ -207,6 +238,73 @@ class HeaderHygieneTests(unittest.TestCase):
             "#pragma once\nconstexpr int n = 1'000;\n/*\n#include <internal/a.hpp>\n*/\n// don't include internals\n",
         )
         self.assertEqual(self.errors(), [])
+
+    def test_unapproved_includes_are_rejected(self):
+        for include in ("unknown_dependency/header.hpp", "unprefixed.hpp"):
+            with self.subTest(include=include):
+                self.header("tt-metalium/a.hpp", f"#pragma once\n#include <{include}>\n")
+                self.assertTrue(any("Include is not whitelisted" in error for error in self.errors()))
+
+    def test_heavyweight_header_bans_are_preserved(self):
+        for include in BANNED_HEADERS:
+            with self.subTest(include=include):
+                self.header("tt-metalium/a.hpp", f"#pragma once\n#include <{include}>\n")
+                self.assertTrue(any("Banned include in public API" in error for error in self.errors()))
+
+    def test_umd_allowlist_is_preserved(self):
+        for include in ALLOWED_UMD_HEADERS:
+            with self.subTest(include=include):
+                self.header("tt-metalium/a.hpp", f"#pragma once\n#include <{include}>\n")
+                self.assertEqual(self.errors(), [])
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <umd/device/new_header.hpp>\n")
+        self.assertTrue(any("New UMD include not allowed" in error for error in self.errors()))
+
+    def test_legacy_skip_list_only_exempts_include_style(self):
+        for name in SKIP_FILES:
+            with self.subTest(name=name):
+                path = self.header(f"tt-metalium/{name}", '#pragma once\n#include "private.hpp"\n')
+                self.assertEqual(self.errors(), [])
+                path.write_text('#include "internal/private.hpp"\n')
+                errors = self.errors()
+                self.assertEqual(len(errors), 2)
+                self.assertTrue(any("unconditional #pragma once" in error for error in errors))
+                self.assertTrue(any("must not include internal" in error for error in errors))
+                path.unlink()
+
+    def test_cpp_sources_keep_include_checks_without_header_only_rules(self):
+        path = self.header("tt-metalium/a.cpp", "#include <internal/private.hpp>\n")
+        self.assertEqual(self.errors(), [])
+        path.write_text('#include "private.hpp"\n')
+        self.assertTrue(any("Quoted includes are not allowed" in error for error in self.errors()))
+
+    def test_unused_prefix_check_is_preserved(self):
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <vector>\n")
+        self.assertTrue(any("Unused allowed prefixes" in error for error in validate(self.root, set())[0]))
+        self.populate_prefixes()
+        self.assertEqual(validate(self.root, set())[0], [])
+
+    def test_existing_cli_runs_both_include_and_header_checks(self):
+        self.populate_prefixes()
+        exceptions = self.root / "exceptions.json"
+        exceptions.write_text("[]")
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("validate_includes.py")),
+            str(self.root),
+            "--exceptions",
+            str(exceptions),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.header("tt-metalium/a.hpp", '#include "internal/private.hpp"\n')
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        for diagnostic in (
+            "unconditional #pragma once",
+            "Quoted includes are not allowed",
+            "must not include internal",
+        ):
+            self.assertIn(diagnostic, result.stdout)
 
 
 if __name__ == "__main__":
