@@ -90,12 +90,18 @@ def _migration_attach_wait_s() -> float:
     if raw is None or raw.strip() == "":
         return _DEFAULT_MIGRATION_ATTACH_WAIT_S
     try:
-        return float(raw)
+        budget = float(raw)
     except ValueError:
+        budget = None
+    # Negatives and NaN both fall straight through `budget > 0` into an unbounded wait, so reject them
+    # here: a typo'd sign must not silently remove the only bound the operator asked for.
+    if budget is None or not budget >= 0.0:
         logger.warning(
-            f"[migration] PREFILL_MIGRATION_ATTACH_WAIT_S={raw!r} is not a number; waiting indefinitely instead"
+            f"[migration] PREFILL_MIGRATION_ATTACH_WAIT_S={raw!r} is not a non-negative number; "
+            f"waiting indefinitely instead"
         )
         return _DEFAULT_MIGRATION_ATTACH_WAIT_S
+    return budget
 
 
 def _producer_not_ready(err: BaseException) -> bool:
