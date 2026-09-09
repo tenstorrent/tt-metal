@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 mode=${1:?accuracy or perf}
-final=ed1e2ba068b2a9d298aa6de142e77981fa826822
+final=cf8684d95bd01f0f3cb3bed53163ff78690ed62c
 base=89e1256c982a5b4739d173bcc446c8c748a44b40
 evidence="$PWD/generated/test_reports/gather_55847"
 mkdir -p "$evidence"
