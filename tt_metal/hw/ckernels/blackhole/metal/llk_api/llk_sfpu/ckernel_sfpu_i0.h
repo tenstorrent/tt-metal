@@ -45,16 +45,10 @@ namespace ckernel::sfpu {
 // exceed what a longer fit would buy, which is why each region uses only
 // as many terms as its own arithmetic can resolve.
 //
-// Code shape (chosen to relieve SFPI LRA budget), mirroring i1:
-//   1. Compute the region-1 result into a local `val`, inside a nested
-//      scope; the scope's closing brace retires `t`'s LReg immediately,
-//      freeing it for the asymptotic block below. No intermediate DST
-//      store/reload is involved -- unlike the store-then-reload idiom
-//      ckernel_sfpu_erfinv.h / ckernel_sfpu_gelu.h use for the same
-//      purpose.
-//   2. v_if (|x|>6): overwrite `val` (not DST) with the asymptotic result.
-//   3. One store: `dst_reg[0] = val`, after the overflow/NaN branch and
-//      the optional BF16 downconvert below.
+// Code shape (chosen to relieve SFPI LRA budget), mirroring i1: region-1's
+// result lives in a local `val` inside a nested scope, so its LRegs are
+// freed by the scope exit -- not a DST store/reload -- before the
+// asymptotic block needs them.
 //
 // No input clamp: abs_x is never clamped to 88.5 before use. Every lane
 // a clamp would change is a lane
@@ -66,18 +60,12 @@ namespace ckernel::sfpu {
 // the store, this is safe and costs nothing.
 //
 // Overflow and +/-inf both resolve to +inf here: multiplying by infinity
-// rather than assigning it lets one predicate cover both. This branch
-// fires for any finite |x| > 88.5 -- stricter than exp() itself needs.
-// FP32 exp() doesn't saturate until 88.7228 (cf. the note on torch.sinh
-// in test_unary_fp32.py), so for x in (88.5, 88.7228] the true value is
-// still finite and representable (I0(88.6) ~= 1.28e37) and
-// torch.special.i0 returns it, but this kernel returns +inf anyway: 88.5
-// is where Q's own Remez fit ends, not where exp() saturates. The gap is
-// invisible in BF16 (test_i0_all_bfloat16_bitpatterns in test_unary_i0.py:
-// no representable BF16 value lands inside that 0.22-wide window) and
-// only costs FP32 accuracy, on a band already deep in i0's exponential
-// blow-up. +/-inf gives +inf regardless. NaN survives regardless of
-// which branch it takes:
+// rather than assigning it lets one predicate cover both. The 88.5 cutoff
+// is Q's fitted boundary, not exp()'s true saturation point (88.7228) --
+// a narrow finite, torch-matching band above 88.5 also lands on +inf here,
+// accepted rather than re-fit since it's invisible in BF16 and already
+// deep in i0's exponential blow-up. NaN survives regardless of which
+// branch it takes:
 // lanes the compare excludes propagate NaN through ordinary arithmetic in
 // region 1, lanes it includes propagate NaN through this SFPMUL the same
 // way _sfpu_exp_fp32_accurate_ relies on 0*inf = NaN -- so correctness
