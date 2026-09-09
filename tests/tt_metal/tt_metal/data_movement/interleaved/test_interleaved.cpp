@@ -175,7 +175,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     Finish(cq);
 
     if (test_config.write_kernel) {
-        distributed::EnqueueReadMeshBuffer(cq, packed_output, output_buffer, /*blocking=*/true);
+        distributed::ReadShard(
+            cq, packed_output, output_buffer, distributed::MeshCoordinate(coord_data), /*blocking=*/true);
     } else {
         detail::ReadFromDeviceL1(
             device, corerange_to_cores(test_config.cores)[0], l1_addr, total_size_bytes, packed_output);

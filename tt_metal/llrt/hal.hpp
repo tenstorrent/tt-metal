@@ -342,7 +342,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::SemVer)>;
 
 private:
     tt::ARCH arch_;
@@ -380,6 +380,9 @@ private:
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
+    // Whether this arch addresses its PCIE/DRAM non-worker cores through virtual coordinates
+    // (Blackhole, Quasar) rather than physical ones (Wormhole). ETH is virtualized on every arch.
+    bool virtualizes_non_worker_cores_{};
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
@@ -542,6 +545,7 @@ public:
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+    bool virtualizes_non_worker_cores() const { return this->virtualizes_non_worker_cores_; }
 
     bool get_supports_eth_fw_mailbox() const;
     bool get_supports_eth_debug_regs() const;

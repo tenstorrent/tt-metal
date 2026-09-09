@@ -57,7 +57,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format_srca(dfb::in0);
 #endif
-                    copy_tile_to_dst_init_short(dfb::in0);
+                    copy_init(dfb::in0);
                     copy_tile(dfb::in0, 0, dst0);
 
 #ifdef DO_MASK_H_W
@@ -65,7 +65,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                         reconfig_data_format_srca(dfb::mask_h_w);
 #endif
-                        copy_tile_to_dst_init_short(dfb::mask_h_w);
+                        copy_init(dfb::mask_h_w);
                         copy_tile(dfb::mask_h_w, 0, dst1);
                         mask_tile_init();
                         mask_tile(dst0, dst1);
@@ -75,7 +75,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                         reconfig_data_format_srca(dfb::mask_h_w);
 #endif
-                        copy_tile_to_dst_init_short(dfb::mask_h_w);
+                        copy_init(dfb::mask_h_w);
                         copy_tile(dfb::mask_h_w, 1, dst1);
                         mask_tile_init();
                         mask_tile(dst0, dst1);

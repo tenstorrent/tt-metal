@@ -994,3 +994,32 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 
     ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
     assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_tied_values_indices_are_a_permutation(descending, device):
+    """
+    Test for cross-core index duplication on tied values.
+
+    Every value is equal, so a compare-exchange network must leave the row
+    untouched and return the identity permutation.
+
+    Wt = 128 is the smallest width past the single-core threshold. On any grid
+    with >= 64 compute cores (every standard Wormhole and Blackhole part) the
+    CrossCore capacity is at least 2 * cores >= 128 tiles, so this width always
+    selects the CrossCoreDataExchange factory.
+    """
+    wt = 128
+    n = wt * TILE_WIDTH
+
+    input_tensor = torch.zeros((1, n), dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+
+    _, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    indices = ttnn.to_torch(ttnn_indices).reshape(-1).to(torch.int64)
+    assert (
+        indices.min() >= 0 and indices.max() < n
+    ), f"indices out of range [0, {n}): min={int(indices.min())}, max={int(indices.max())}"
+    unique_count = indices.unique().numel()
+    assert unique_count == n, f"{n - unique_count} duplicated indices"

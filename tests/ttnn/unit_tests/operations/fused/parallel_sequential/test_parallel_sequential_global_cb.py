@@ -58,8 +58,8 @@ void kernel_main() {
     constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    unary_op_init_common(cb_in, cb_out);
-    copy_tile_init(cb_in);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_in, 1);
         tile_regs_acquire();

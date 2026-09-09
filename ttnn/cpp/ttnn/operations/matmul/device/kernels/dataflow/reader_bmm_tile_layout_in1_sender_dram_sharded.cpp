@@ -25,11 +25,12 @@ void kernel_main() {
 #endif
     const uint32_t dram_bank_id = get_arg_val<uint32_t>(3);
     const uint32_t vc = get_arg_val<uint32_t>(4);
-    const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(5);
-    const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    const uint32_t dram_reader_index = get_arg_val<uint32_t>(5);
+    const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(6);
+    const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(7);
+    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
 
     // COMPILE TIME ARGS
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
@@ -44,10 +45,13 @@ void kernel_main() {
     constexpr uint32_t out_tensor_stride_w_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t out_reshard_tensor_stride_w_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    constexpr uint32_t workers_per_bank = get_compile_time_arg_val(9);
+    constexpr uint32_t bank_row_stride_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t reader_width_tiles = get_compile_time_arg_val(11);
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t in3_page_size = get_compile_time_arg_val(9);
-    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(10);
+    constexpr uint32_t in3_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(13);
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
 
@@ -58,6 +62,13 @@ void kernel_main() {
     // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
     // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
     constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
+#ifdef SPLIT_DRAM_BANK
+    static_assert(workers_per_bank > 1);
+    constexpr uint32_t tiles_per_k_row = reader_width_tiles;
+    constexpr uint32_t k_rows_per_block = in1_block_num_tiles / tiles_per_k_row;
+    constexpr uint32_t in1_tile_size_bytes = in1_block_size_bytes / in1_block_num_tiles;
+    const uint32_t shard_column_offset_tiles = dram_reader_index * tiles_per_k_row;
+#endif
 
     Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
@@ -113,6 +124,22 @@ void kernel_main() {
     uint32_t l1_write_addr_in1_start = dfb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
+#ifdef SPLIT_DRAM_BANK
+        for (uint32_t row = 0; row < k_rows_per_block; ++row) {
+            const uint32_t source_tile =
+                (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
+            const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
+            const uint32_t read_address = in1_tensor_addr + source_tile * in1_tile_size_bytes;
+            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                dram_bank,
+                CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                read_size,
+                {.bank_id = dram_bank_id, .addr = read_address},
+                {},
+                NocOptVals{.vc = vc, .trid = curr_block_trid});
+            l1_write_addr_in1 += read_size;
+        }
+#else
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
             noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
                 dram_bank,
@@ -124,6 +151,7 @@ void kernel_main() {
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
+#endif
 
         if (num_free_blocks_in_buffer == 2) {
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
@@ -155,7 +183,10 @@ void kernel_main() {
     dfb_in3.reserve_back(in1_block_w);
     uint32_t l1_write_addr_in3 = dfb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
-
+#ifdef SPLIT_DRAM_BANK
+    constexpr uint32_t in3_tile_size_bytes = (in3_num_pages * in3_page_size) / reader_width_tiles;
+    l1_read_addr_in3 = dram_reader_index * reader_width_tiles * in3_tile_size_bytes;
+#endif
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
         dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
 
@@ -170,7 +201,6 @@ void kernel_main() {
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
     }
-
     // Barrier! make sure the reads are done
     noc.async_read_barrier();
     dfb_in3.push_back(in1_block_w);

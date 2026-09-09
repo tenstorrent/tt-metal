@@ -98,7 +98,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
@@ -441,6 +442,11 @@ void kernel_main() {
                         // increments on a given CB are identical.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+                            // a bare wait_front->pop_front traps the Quasar unpacker
+                            // (POP_TILES can retire before the WAIT_TILES it follows). dummy_unpack() orders
+                            // the POP after the WAIT via an UNPACR_NOP (required on Quasar, no-op on WH/BH);
+                            // it reads nothing, so PACKER_L1_ACC is undisturbed.
+                            dummy_unpack(mm_partials_cb_id);
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -451,6 +457,9 @@ void kernel_main() {
                     if (block < num_blocks_inner_dim - 2) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+                            // drain mm_partials without consuming it (see the FUSE_BIAS
+                            // drain above). dummy_unpack() orders POP after WAIT via an UNPACR_NOP.
+                            dummy_unpack(mm_partials_cb_id);
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -536,7 +545,11 @@ void kernel_main() {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
+                            ActivationApplyHelper<
+                                activation_type,
+                                activation_param0,
+                                activation_param1,
+                                activation_param2>::apply(i);
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -570,7 +583,7 @@ void kernel_main() {
 #endif
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(mm_partials_cb_id);
+                    copy_init(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);

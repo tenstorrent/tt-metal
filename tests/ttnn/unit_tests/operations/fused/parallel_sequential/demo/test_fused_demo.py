@@ -38,11 +38,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 import ttnn
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
+from models.experimental.ops.descriptors.fusion import clear_build_cache
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-from models.experimental.ops.descriptors.fusion import clear_build_cache
 
 # =============================================================================
 # Helpers
@@ -77,16 +77,16 @@ TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
 DRAM_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
-    uint32_t tile_bytes = get_tile_size(cb_id);
+    std::uint32_t src_addr = get_arg_val<std::uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
+    constexpr std::uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
+    std::uint32_t tile_bytes = get_tile_size(cb_id);
     DataFormat data_format = get_dataformat(cb_id);
     const InterleavedAddrGenFast<true> s = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
+        std::uint32_t l1_write_addr = get_write_ptr(cb_id);
         noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
@@ -100,12 +100,12 @@ TILE_COPY_COMPUTE_SOURCE = """\
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
 void kernel_main() {
-    constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    unary_op_init_common(cb_in, cb_out);
-    copy_tile_init(cb_in);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    constexpr std::uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
+    constexpr std::uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_in, 1);
         tile_regs_acquire();
         copy_tile(cb_in, 0, 0);
@@ -123,16 +123,16 @@ void kernel_main() {
 DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_out");
-    uint32_t tile_bytes = get_tile_size(cb_id);
+    std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
+    constexpr std::uint32_t cb_id = get_named_compile_time_arg_val("cb_out");
+    std::uint32_t tile_bytes = get_tile_size(cb_id);
     DataFormat data_format = get_dataformat(cb_id);
     const InterleavedAddrGenFast<true> d = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
+        std::uint32_t l1_read_addr = get_read_ptr(cb_id);
         noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
@@ -339,8 +339,8 @@ class TestPerfDemos:
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_linear_chain_rms_matmul_rms_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import rms_norm
 
         core_range, mm_cfg, torch_input, torch_w, torch_b = self._linear_chain_setup(device, H)
 
@@ -542,7 +542,10 @@ class TestPerfDemos:
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_sharded_chain_rms_layernorm_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.normalization import (
+            layer_norm,
+            rms_norm,
+        )
 
         cores, sharded_mem, program_cfg, tt_input, tt_w, _, _ = self._sharded_chain_setup(device, H)
 
@@ -796,9 +799,12 @@ class TestPerfDemos:
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_parallel_chains_ln_mm_rms_mm_fused(self, device, perf_mode):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import (
+            layer_norm,
+            rms_norm,
+        )
 
         (
             cores_a,
@@ -1135,9 +1141,9 @@ class TestPerfDemos:
 
     def _sharded_tree_make_ops(self, device):
         """Create all OpDescriptors for the sharded tree."""
-        from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.data_movement.slice import slice
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import layer_norm
 
         (
             stem_cores,
@@ -1264,7 +1270,7 @@ class TestPerfDemos:
         )
 
     def _sharded_tree_container(self, ops):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
 
         ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr = ops
         return Sequential(
@@ -1752,9 +1758,12 @@ class TestPerfDemos:
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_asymmetric_branches_ln_slice_rms_ln_fused(self, device, perf_mode):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
         from models.experimental.ops.descriptors.data_movement.slice import slice
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
+        from models.experimental.ops.descriptors.normalization import (
+            layer_norm,
+            rms_norm,
+        )
 
         (
             stem_cores,
@@ -2020,22 +2029,22 @@ class TestPerfDemos:
 
 
 def test_global_circular_buffer_fused(device):
-    from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+    from models.experimental.ops.descriptors.fusion import Parallel, Sequential
 
     GLOBALCB_SENDER_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
+    constexpr std::uint32_t local_cb_id = get_named_compile_time_arg_val("cb_out");
+    constexpr std::uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
+    constexpr std::uint32_t page_size = get_named_compile_time_arg_val("page_size");
     CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
     Noc noc;
     remote_cb.set_receiver_page_size(noc, page_size);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         local_cb.wait_front(1);
         remote_cb.reserve_back(1);
         remote_cb.push_back(noc, local_cb, 1, 1, 1, page_size);
@@ -2051,17 +2060,17 @@ void kernel_main() {
 #include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
-    constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
+    constexpr std::uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
+    constexpr std::uint32_t local_cb_id = get_named_compile_time_arg_val("cb_in");
+    constexpr std::uint32_t page_size = get_named_compile_time_arg_val("page_size");
     CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
     Noc noc;
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     remote_cb.set_sender_page_size(noc, page_size);
     experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {local_cb_id});
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         local_cb.reserve_back(1);
         remote_cb.wait_front(1);
         local_cb.push_back(1);
@@ -2076,16 +2085,16 @@ void kernel_main() {
     RECEIVER_DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
-    uint32_t tile_bytes = get_tile_size(cb_id);
+    std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
+    constexpr std::uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
+    std::uint32_t tile_bytes = get_tile_size(cb_id);
     DataFormat data_format = get_dataformat(cb_id);
     const InterleavedAddrGenFast<true> d = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
+        std::uint32_t l1_read_addr = get_read_ptr(cb_id);
         noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
@@ -2299,7 +2308,7 @@ def _non_contiguous_grid_setup(device, num_tiles=4):
     "perf_mode", ["none"]
 )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
 def test_non_contiguous_core_grid_fused(device, perf_mode):
-    from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+    from models.experimental.ops.descriptors.fusion import Parallel, Sequential
 
     stem, op_a, op_b, t_in, _, _ = _non_contiguous_grid_setup(device)
 

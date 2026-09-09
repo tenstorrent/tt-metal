@@ -18,6 +18,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include "tt_metal/impl/dispatch/memcpy.hpp"
@@ -2696,7 +2697,8 @@ public:
         if (tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
-        this->device_ = tt_metal::CreateDevice(0);
+        this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
+        this->device_ = this->mesh_device_->get_devices()[0];
         if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
@@ -2735,10 +2737,8 @@ public:
     }
 
     void TearDown() override {
-        if (this->device_) {
-            tt_metal::CloseDevice(this->device_);
-            this->device_ = nullptr;
-        }
+        this->device_ = nullptr;
+        this->mesh_device_.reset();
     }
 
     // Launches cq_prefetch.cpp (combined IS_H_VARIANT+IS_D_VARIANT) + cq_dispatch.cpp under
@@ -3020,7 +3020,7 @@ public:
         }
 
         device_data.overflow_check(this->device_);
-        tt_metal::detail::LaunchProgram(this->device_, program);
+        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program), /*wait_until_cores_done=*/true);
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
         // DRAM-backed Quasar CQs need a staging-buffer readback before validation; host-backed queues are

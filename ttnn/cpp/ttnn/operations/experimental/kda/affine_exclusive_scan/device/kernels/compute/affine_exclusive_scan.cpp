@@ -46,7 +46,8 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
         for (uint32_t n = 0; n < Vt; n += subblock_cols) {
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(state_id, affine_id);
+            reconfig_data_format_srca(state_id, affine_id);
+            copy_init(affine_id);
             for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                 for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                     copy_tile(
@@ -107,7 +108,8 @@ FORCE_INLINE void matmul_affine(
         for (uint32_t n = 0; n < Nt; n += subblock_cols) {
             tile_regs_acquire();
             if (n >= At) {
-                copy_tile_to_dst_init_short_with_dt(affine_id, local_b_id);
+                reconfig_data_format_srca(affine_id, local_b_id);
+                copy_init(local_b_id);
                 for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                     for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                         copy_tile(
@@ -149,7 +151,7 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     const uint32_t out_id = out.get_id();
     out.reserve_back(tiles);
     reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     for (uint32_t first_tile = 0; first_tile < tiles; first_tile += dst_tiles) {
         const uint32_t batch_tiles = first_tile + dst_tiles <= tiles ? dst_tiles : tiles - first_tile;
         tile_regs_acquire();

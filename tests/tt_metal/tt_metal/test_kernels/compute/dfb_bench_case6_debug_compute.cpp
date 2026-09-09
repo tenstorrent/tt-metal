@@ -10,6 +10,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
@@ -18,7 +19,8 @@ void kernel_main() {
         return;
     }
 
-    unary_op_init_common(0, 0);
+    compute_kernel_hw_startup(0, 0);
+    copy_init(0);
 
     DataflowBuffer dfb(0);
     tile_regs_acquire();

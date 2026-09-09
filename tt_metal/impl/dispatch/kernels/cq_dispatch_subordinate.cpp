@@ -17,7 +17,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
@@ -344,12 +344,12 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
     volatile tt_l1_ptr uint32_t* sync_sem_addr =
-        uncached_l1_ptr<uint32_t>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
 
     WAYPOINT("DCW");
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
@@ -364,23 +364,22 @@ void process_go_signal_mcast_cmd() {
     }
     mcasts_sent++;  // Go signal sent -> update counter
 
-    // The location of the go signal embedded in the command does not meet NOC alignment requirements.
-    // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
-    // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This is safe as long as we
-    // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
-    // CQDispatchGoSignalMcastCmd).
+    // The go signal embedded in the command does not meet NOC alignment requirements, but cmd_ptr does
+    // (the prefetcher writes it over the NOC), so the go signal is copied there. storage_offset lands that
+    // copy anywhere in the 16-byte command, so every field must be read into a local before the first
+    // store below, and none may be read from cmd after it.
     // NOC source addresses must be raw L1 byte offsets (cached-alias form), so keep
     // aligned_go_signal_storage at the cached alias for the NOC sources below.
     // CPU writes go through a separate uncached pointer so the value lands in L1 SRAM directly;
     // the NOC then reads the same physical location via the cached-form source address.
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
-    uint32_t go_signal_value = cmd->mcast.go_signal;
+    uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
-    uint32_t wait_count = cmd->mcast.wait_count;
-    uint32_t wait_stream = cmd->mcast.wait_stream;
+    uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
+    uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
 
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
@@ -479,19 +478,19 @@ void process_go_signal_mcast_cmd() {
 
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     // Limited Usage of Wait CMD: dispatch_s should get a wait command only if it's not on the
     // same core as dispatch_d and is used to clear the worker count
     ASSERT(
         (cmd->wait.flags == (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM)) &&
         distributed_dispatcher);
-    uint32_t stream = cmd->wait.stream;
+    uint32_t stream = load_aligned<uint16_t>(&cmd->wait.stream);
     uint32_t index = stream - first_stream_used;
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 
     // Wait for workers to complete
-    while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
+    while (stream_wrap_gt(load_aligned<uint32_t>(&cmd->wait.count), *worker_sem)) {
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -509,22 +508,27 @@ void process_dispatch_s_wait_cmd() {
 
 FORCE_INLINE
 void set_num_worker_sems() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    num_worker_sems = cmd->set_num_worker_sems.num_worker_sems;
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
 FORCE_INLINE
 void set_go_signal_noc_data() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    uint32_t num_words = load_aligned<uint32_t>(&cmd->set_go_signal_noc_data.num_words);
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_words * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
 // When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
@@ -625,8 +629,13 @@ void kernel_main() {
         device_print_dispatcher.execute();
 #endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
-
-        volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
+        // it is read cached. CPU reads past this window carry their own invalidate; payload handed to
+        // the NIU needs none.
+        invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmd));
+#endif
+        volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         if (rt_profiler_enabled) {
             const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
@@ -662,7 +671,9 @@ void kernel_main() {
                 break;
             case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
                 DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
-                wait_for_workers(cmd->rt_profiler_flush.wait_count, cmd->rt_profiler_flush.wait_stream);
+                wait_for_workers(
+                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_count),
+                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_stream));
                 cmd_ptr += sizeof(CQDispatchCmd);
                 break;
             case CQ_DISPATCH_CMD_TERMINATE:
@@ -690,7 +701,7 @@ void kernel_main() {
             default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
-        ASSERT(cmd_ptr <= (l1_cached_addr(reinterpret_cast<uintptr_t>(cmd)) + cb_page_size));
+        ASSERT(cmd_ptr <= (reinterpret_cast<uintptr_t>(cmd) + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
         // Release a single page to prefetcher. Assumption is that all dispatch_s commands fit inside a single page for
         // now.

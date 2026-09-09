@@ -142,12 +142,16 @@ jobs:
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       # The retired galaxy-perf impl pinned the host governor around its perf jobs.
-      # Galaxy SKUs only: those runners are bare-metal with cpupower available, unlike
-      # the container SKUs this pipeline otherwise targets.
+      # Galaxy SKUs only. cpupower is absent on some of those runners, so probe for it
+      # first: a missing governor tool must not fail the job before any test runs.
       - name: Enable performance mode
         if: ${{ contains(matrix.test-group.sku, 'galaxy') }}
         run: |
-          sudo cpupower frequency-set -g performance
+          if command -v cpupower >/dev/null 2>&1; then
+            sudo cpupower frequency-set -g performance
+          else
+            echo "::notice::cpupower is not available on this runner; the CPU governor is unchanged"
+          fi
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
@@ -238,7 +242,9 @@ jobs:
       - name: Disable performance mode
         if: ${{ always() && contains(matrix.test-group.sku, 'galaxy') }}
         run: |
-          sudo cpupower frequency-set -g ondemand
+          if command -v cpupower >/dev/null 2>&1; then
+            sudo cpupower frequency-set -g ondemand
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 

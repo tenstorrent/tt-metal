@@ -585,7 +585,7 @@ void kernel_main() {
                     uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
-                        copy_tile_init(dfb_x_id);
+                        copy_init(dfb_x_id);
                     } else {
                         add_init(dfb_out_id, dfb_x_id);
                     }

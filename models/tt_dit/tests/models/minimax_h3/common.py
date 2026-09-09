@@ -113,9 +113,10 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
 # the quad's `trace_denoise`; the region is only reserved, so 4x8 pays nothing but address space.
 _L1_SMALL = 65536
 _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
+_ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 150_000_000, "l1_small_size": _L1_SMALL}
 
-MESH_4X8_RING = pytest.param((4, 8), _ring, id="4x8")
+MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8")
 MESH_4X32_RING = pytest.param((4, 32), _ring_8k_trace, id="4x32")
 
 GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING]
@@ -142,7 +143,9 @@ def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> to
 GALAXY_RING = pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((4, 8), 1, 0, 2, _ring, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"),
+        # 4x8 takes the 8 KB router payload like 4x32: sp_sim runs on it emulate the 4x32 machine,
+        # and the exp ring SDPA's fabric all-gather packs 4 tiles per packet only at 8 KB.
+        pytest.param((4, 8), 1, 0, 2, _ring_8k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"),
         pytest.param((4, 32), 1, 0, 2, _ring_8k_trace, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"),
     ],
     indirect=["mesh_device", "device_params"],
