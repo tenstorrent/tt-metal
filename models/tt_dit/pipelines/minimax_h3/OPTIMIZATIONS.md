@@ -162,7 +162,7 @@ path, and callers must branch on `MiniMaxH3Output.video_format`. **The open item
 the knob** — until a pixel-comparing gate runs against yuv420, the 24% is only available to callers
 who know to ask.
 
-### O6 — Overlap the VSA K/V all-gather
+### O6 — Overlap the VSA K/V all-gather: blocked by sub-device ownership
 
 **1.68 s of the run (8.4%). Tuning is settled — it is link-bound; only overlap is left.**
 
@@ -173,9 +173,30 @@ per gather and the best configuration moves it at **87-93 GB/s, ~90% of 2 x 50 G
 Linear; nothing else moves it, and the axis has only 2 ethernet channels so `--num-links 4` is not
 available. The serial time cannot be tuned away.
 
-Two structural options remain: **overlap it on a second command queue during the coarse stage** (~8 ms
-hidden at 15 s, the largest remaining block-level lever), or stream remote blocks inside the kernel
-over the fabric. Selective gather is dropped — a device needs 79% of the sequence on average.
+The second-command-queue overlap **does not work**, and the reason is the dispatch model, not the
+fabric. Job 908: a 4x8 ring-fabric mesh opens fine with `num_command_queues=2` on Blackhole (the
+`ACTIVE_ETH` worry was unfounded), and `all_gather` alone measures 4.53 ms against 12.54 ms of filler
+matmuls. But issuing the gather on CQ1 and compute on CQ0 aborts:
+
+    TT_FATAL: Sub device id 0 currently in use by cq 1. Can't enqueue program from cq 0.
+              Finish or wait for an event to transfer ownership.
+
+A *program* enqueued on CQ1 takes exclusive ownership of the sub-device, so CQ0 cannot enqueue any
+program until CQ1 finishes. That is why every `cq_id=1` call site in this repo is a host<->device
+transfer — transfers do not enqueue programs and so never take ownership; trace + input streaming is
+the only 2-CQ shape the dispatch model supports as-is. "Wait for an event to transfer ownership" is
+serialization, which is the opposite of the goal.
+
+Unblocking it needs **disjoint sub-devices**: CCL cores in one, compute cores in another, so the two
+queues own separate sub-devices. `CCLManager._init_subdevice` and the AGMM grid's reserved CCL core
+column mean the spatial split is half-built already. Sizing first, though: the hideable window is not
+the full 8.40 ms. The gather's result is needed by `vsa_sdpa`, and between them sit the coarse stage
+(~3.9 ms, of which ~0.5 ms is itself collective) and the independent gate branch (2.93 ms) — so ~6.3
+ms, about 1.0-1.3 s of the run. A model-wide sub-device partition for 5-6% is a poor trade until
+something else needs the same infrastructure.
+
+The other structural option is unchanged: stream remote blocks inside the kernel over the fabric.
+Selective gather stays dropped — a device needs 79% of the sequence on average.
 
 ### O7 — The six AdaLN table gathers
 
@@ -249,6 +270,21 @@ sweep — one shape at M=14400 extrapolates to ~29 min against the ~1506 s job c
 input 0 out of `DEV_0_DRAM_INTERLEAVED`. Note also that an AGMM's device time includes its
 all-gather (~116 MB/device over 2 links), so a meaningful part of these four rows is link-bound
 communication that no blocking change can touch.
+
+### S1c — Cross-request pipelining: there is no host tail to recover
+
+Retracted before it was built. The idea was that ~18% of a generation is host time (the VAE's 40.7%
+`readback` row plus audio's round trip) and could hide under the next request's denoise. It cannot,
+because that 18% was derived by treating the VAE profile's phase timers as a device-vs-host split.
+They are not: they are serial regions of the host wave loop, and `vae_minimax_h3.py`'s own schedule
+already defers wave k's readback until wave k+1 is enqueued, so the transfer runs under the next
+wave's compute. The `profile` flag that makes `device` and `readback` separable *serializes them to
+do it* and is off by default.
+
+S4 had already settled this from the other direction: 6.887 s traced against 6.934 s untraced, and
+"the ~144 ms/chunk of eager dispatch was already hidden underneath". **The decode stage is
+device-bound.** Device work is conserved across concurrent requests, so pipelining recovers only
+host time, and the host time is already hidden.
 
 ### S2 — Tracing the denoise on 4x8: dead
 
