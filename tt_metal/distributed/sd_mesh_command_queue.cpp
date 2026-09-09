@@ -18,6 +18,20 @@
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
 #endif
 #include <utility>
+#include <cstdlib>
+
+namespace {
+// TT_METAL_SD_COEXIST_PERSISTENT=1 (Blaze, DS4F-0129 step 3): this process co-resides with a PERSISTENT program that
+// was launched non-blocking on this mesh (the pipeline's passthrough forwarder on the pipelining cores) and now runs
+// its own blocking programs and host<->device copies on DISJOINT cores / private buffers. The slow-dispatch queue would
+// otherwise wait_for_idle() on the recorded "previous workload" cores before every write, read and launch -- cores that
+// never go idle (measured: a 20-minute spin in dd1, a bus error inside the mailbox read in dd2). Read per call: the
+// worker sets it after the pipeline is up, before its first tensor write.
+bool sd_coexist_persistent() {
+    const char* v = std::getenv("TT_METAL_SD_COEXIST_PERSISTENT");
+    return v != nullptr && v[0] == '1';
+}
+}  // namespace
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
@@ -174,6 +188,9 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
+    if (sd_coexist_persistent()) {
+        return;  // the recorded cores belong to a persistent program; this process's own launches are blocking
+    }
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
@@ -216,7 +233,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
             }
         }
 
-        if (need_wait) {
+        if (need_wait && !sd_coexist_persistent()) {
             tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
         }
 
