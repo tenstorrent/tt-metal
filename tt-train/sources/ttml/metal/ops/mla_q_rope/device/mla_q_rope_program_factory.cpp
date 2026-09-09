@@ -103,7 +103,9 @@ static void assign_per_core_runtime_args(
 
         const uint32_t b_start = num_blocks_written / Ts;
         const uint32_t sb_start = num_blocks_written % Ts;
+        // Packed: tile id of (b, sb, h=0) = block_index * H * Th
         const uint32_t packed_base = num_blocks_written * packed_block_stride;
+        // Head-major: tile id of (b, h=0, sb) = b * H * tiles_per_head + sb * Th
         const uint32_t head_major_base = b_start * n_heads * tiles_per_head + sb_start * Th;
 
         const uint32_t q_in_tile_base = packed_input ? packed_base : head_major_base;
@@ -138,7 +140,7 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     auto* device = q_in.device();
     tt::tt_metal::Program program{};
 
-    const auto q_shape = q_in.padded_shape();
+    const auto q_shape = q_in.logical_shape();
     const uint32_t B = q_shape[0];
     const uint32_t S = q_shape[2];
     const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;

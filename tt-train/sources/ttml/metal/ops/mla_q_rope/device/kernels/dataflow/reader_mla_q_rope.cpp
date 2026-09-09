@@ -47,12 +47,6 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_q_pe);
 
-    // Head-major end-of-batch jump (used when packed_input == 0):
-    //   from (b, sb=Ts-1, h=0) to (b+1, sb=0, h=0) = ((H-1)*Ts + 1)*Th
-    constexpr uint32_t end_of_batch_jump = ((n_heads - 1U) * Ts + 1U) * Th;
-    // Packed layout: heads are contiguous in the width dim of each (b, sb) row.
-    constexpr uint32_t packed_block_stride = n_heads * Th;
-
     // Head stride within a block: packed = Th (adjacent heads), head-major = tiles_per_head (per-head page).
     constexpr uint32_t head_stride = packed_input ? Th : tiles_per_head;
 
@@ -76,19 +70,6 @@ void kernel_main() {
             read_tiles_by_row(cb_q_pe, q_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }
 
-        ++sb;
-        if constexpr (packed_input != 0U) {
-            q_tile_base += packed_block_stride;
-            if (sb >= Ts) {
-                sb = 0U;
-            }
-        } else {
-            if (sb < Ts) {
-                q_tile_base += Th;
-            } else {
-                sb = 0U;
-                q_tile_base += end_of_batch_jump;
-            }
-        }
+        advance_q_block<packed_input != 0U, Ts, Th, n_heads>(sb, q_tile_base);
     }
 }

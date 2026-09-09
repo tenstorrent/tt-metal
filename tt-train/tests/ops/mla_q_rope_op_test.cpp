@@ -9,16 +9,18 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/mla_q_rope.hpp"
 #include "ops/rope_op.hpp"
+#include "ops/unary_ops.hpp"
+#include "test_utils/mla_layout.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
 #include "ttnn/types.hpp"
 
@@ -52,19 +54,25 @@ ttnn::Tensor slice_head_dim(
         tensor, ttsl::SmallVector<uint32_t>{0, 0, 0, start_w}, ttsl::SmallVector<uint32_t>{B, H, S, end_w}, step);
 }
 
-// Reference: packed q_pre -> head-split -> slice/rope/concat on rope suffix.
+// Reference: slice/rope/concat on the rope suffix. packed_input=true head-splits
+// packed [B,1,S,H*D] first; packed_input=false takes head-major [B,H,S,D] as-is.
+// pack_output=true packs the head-major result to [B,1,S,H*D].
 ttnn::Tensor reference_q_rope(
-    const ttnn::Tensor& q_pre,
-    const ttml::ops::RotaryEmbeddingParams& params,
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& cos_cache,
+    const ttnn::Tensor& sin_cache,
+    const ttnn::Tensor& trans_mat,
     uint32_t n_heads,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
-    const auto shape = q_pre.logical_shape();
+    uint32_t qk_rope_dim,
+    bool packed_input = true,
+    bool pack_output = false) {
+    const auto shape = q.logical_shape();
     const uint32_t B = shape[0];
     const uint32_t S = shape[2];
     const uint32_t qk_head = qk_nope_dim + qk_rope_dim;
 
-    auto q_in = ttnn::transpose(ttnn::reshape(q_pre, ttnn::Shape({B, S, n_heads, qk_head})), 1, 2);
+    auto q_in = packed_input ? ttml::test_utils::packed_to_head_major(q, n_heads, qk_head) : q;
 
     ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
     auto q_nope = ttnn::slice(
@@ -77,14 +85,15 @@ ttnn::Tensor reference_q_rope(
 
     auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
         q_pe,
-        params.cos_cache,
-        params.sin_cache,
-        params.trans_mat,
+        cos_cache,
+        sin_cache,
+        trans_mat,
         /*is_decode_mode=*/false,
         /*memory_config=*/std::nullopt,
         ttml::core::ComputeKernelConfig::precise());
 
-    return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
+    auto head_major = ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
+    return pack_output ? ttml::test_utils::head_major_to_packed(head_major) : head_major;
 }
 
 void expect_q_rope_matches_reference(
@@ -140,7 +149,14 @@ TEST_P(MLA_QRopeParamTest, FusedMatchesReference) {
         shape.qk_nope_dim,
         shape.qk_rope_dim,
         /*packed_input=*/true);
-    const auto ref = reference_q_rope(q_pre, params, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim);
+    const auto ref = reference_q_rope(
+        q_pre,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.n_heads,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim);
 
     ASSERT_EQ(fused.logical_shape(), ttnn::Shape({shape.batch, shape.n_heads, shape.seq_len, qk_head}))
         << shape.name << " output shape";
@@ -148,7 +164,8 @@ TEST_P(MLA_QRopeParamTest, FusedMatchesReference) {
 }
 
 TEST_P(MLA_QRopeParamTest, BackwardPacksGrad) {
-    // packed_input=false: head-major dL/dout -> packed dq_pre (identity on nope; used by autograd).
+    // packed_input=false: head-major dL/dout -> packed dq_pre (identity on nope;
+    // inverse RoPE on the rope suffix with negated caches).
     const MLA_QRopeShape shape = GetParam();
     ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": mla_q_rope requires qk_rope_dim <= 128";
 
@@ -168,21 +185,20 @@ TEST_P(MLA_QRopeParamTest, BackwardPacksGrad) {
     ASSERT_EQ(packed.logical_shape(), ttnn::Shape({shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head}))
         << shape.name << " packed grad shape";
 
-    // Round-trip identity on the nope slice: reverse-pack then re-split should match dL_dout[..., :nope].
-    const auto re_split = ttml::metal::mla_q_rope(
-        packed,
-        params.cos_cache,
-        params.sin_cache,
+    const auto ref = reference_q_rope(
+        dL_dout,
+        params.neg_cos_cache,
+        params.neg_sin_cache,
         params.trans_mat,
+        shape.n_heads,
         shape.qk_nope_dim,
         shape.qk_rope_dim,
-        /*packed_input=*/true);
-
-    const auto actual_nope = ttml::core::to_xtensor(
-        slice_head_dim(re_split, shape.batch, shape.n_heads, shape.seq_len, 0U, shape.qk_nope_dim));
-    const auto expected_nope = ttml::core::to_xtensor(
-        slice_head_dim(dL_dout, shape.batch, shape.n_heads, shape.seq_len, 0U, shape.qk_nope_dim));
-    EXPECT_TRUE(xt::allclose(actual_nope, expected_nope, 0.0, 0.0)) << shape.name << " bw/nope round-trip";
+        /*packed_input=*/false,
+        /*pack_output=*/true);
+    ASSERT_EQ(packed.logical_shape(), ref.logical_shape()) << shape.name << " packed grad vs packed reference";
+    const auto unpacked = ttml::test_utils::packed_to_head_major(packed, shape.n_heads, qk_head);
+    const auto ref_unpacked = ttml::test_utils::packed_to_head_major(ref, shape.n_heads, qk_head);
+    expect_q_rope_matches_reference(unpacked, ref_unpacked, shape, /*label_prefix=*/"bw: ");
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -230,6 +246,10 @@ protected:
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
+
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
 };
 
 // Buffer placement is a compile-time property: TensorAccessorArgs bake it into the
@@ -247,11 +267,24 @@ TEST_F(MLA_QRopeCacheTest, DistinctProgramPerInputPlacement) {
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     auto q_pre = make_bf16_4d(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, /*seed=*/11U);
     auto params = build_params(shape.seq_len, shape.qk_rope_dim);
-    const auto ref = reference_q_rope(q_pre, params, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim);
+    const auto ref = reference_q_rope(
+        q_pre,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.n_heads,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim);
 
     const auto entries_start = device->num_program_cache_entries();
     const auto fused_dram = ttml::metal::mla_q_rope(
-        q_pre, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+        q_pre,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        /*packed_input=*/true);
     const auto entries_after_dram = device->num_program_cache_entries();
     // Guard against a vacuous test: the first call must actually populate the cache,
     // else the delta check below would pass trivially with the cache disabled.
@@ -261,9 +294,73 @@ TEST_F(MLA_QRopeCacheTest, DistinctProgramPerInputPlacement) {
     auto q_pre_l1 = ttnn::to_memory_config(q_pre, ttnn::L1_MEMORY_CONFIG);
     const auto entries_before_l1 = device->num_program_cache_entries();
     const auto fused_l1 = ttml::metal::mla_q_rope(
-        q_pre_l1, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+        q_pre_l1,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        /*packed_input=*/true);
     const auto entries_after_l1 = device->num_program_cache_entries();
     EXPECT_GT(entries_after_l1, entries_before_l1)
         << "mla_q_rope reused the DRAM-placement program for an L1 input (stale cache key)";
     expect_q_rope_matches_reference(fused_l1, ref, shape, /*label_prefix=*/"l1: ");
+}
+
+TEST_F(MLA_QRopeCacheTest, AutogradWrapperBackwardMatchesReference) {
+    const MLA_QRopeShape shape{
+        .name = "autograd_small", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32};
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    auto params = build_params(shape.seq_len, shape.qk_rope_dim);
+
+    auto q_pre = ttml::autograd::create_tensor(
+        make_bf16_4d(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, /*seed=*/13U), /*requires_grad=*/true);
+    auto out = ttml::ops::mla_q_rope(q_pre, params, shape.qk_nope_dim, shape.qk_rope_dim);
+    auto loss = ttml::ops::mean(out);
+    loss->backward();
+
+    ASSERT_EQ(q_pre->get_grad().logical_shape(), q_pre->get_value().logical_shape()) << "autograd dq_pre shape";
+    const auto ref_packed = reference_q_rope(
+        out->get_grad(),
+        params.neg_cos_cache,
+        params.neg_sin_cache,
+        params.trans_mat,
+        shape.n_heads,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        /*packed_input=*/false,
+        /*pack_output=*/true);
+    const auto unpacked = ttml::test_utils::packed_to_head_major(q_pre->get_grad(), shape.n_heads, qk_head);
+    const auto ref_unpacked = ttml::test_utils::packed_to_head_major(ref_packed, shape.n_heads, qk_head);
+    expect_q_rope_matches_reference(unpacked, ref_unpacked, shape, /*label_prefix=*/"autograd: ");
+}
+
+TEST_F(MLA_QRopeCacheTest, PackedInputRejectsMalformedShapes) {
+    constexpr uint32_t qk_nope_dim = 64U;
+    constexpr uint32_t qk_rope_dim = 32U;
+    constexpr uint32_t qk_head = qk_nope_dim + qk_rope_dim;
+    auto params = build_params(/*seq_len=*/32U, qk_rope_dim);
+
+    // Logical packed width 128 is tile-aligned but not a multiple of qk_head=96.
+    auto bad_width = make_bf16_4d(1U, 1U, 32U, 128U, /*seed=*/3U);
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        bad_width,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true))
+        << "packed width that is not a multiple of qk_head must be rejected";
+
+    auto bad_dim1 = make_bf16_4d(1U, 2U, 32U, 2U * qk_head, /*seed=*/5U);
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        bad_dim1,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true))
+        << "packed input with dim 1 != 1 must be rejected";
 }

@@ -15,7 +15,7 @@ struct MlaQRopeParams {
     uint32_t qk_rope_dim{};
     // true:  packed [B,1,S,H*D] -> head-major [B,H,S,D]  (forward)
     // false: head-major [B,H,S,D] -> packed [B,1,S,H*D]  (backward)
-    bool packed_input = true;
+    bool packed_input{};
 };
 
 struct MlaQRopeInputs {

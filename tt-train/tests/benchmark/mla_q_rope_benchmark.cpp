@@ -26,11 +26,10 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/rope_op.hpp"
+#include "test_utils/mla_layout.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
 
 namespace {
@@ -123,7 +122,7 @@ ttnn::Tensor composite_q_rope(
     const uint32_t S = shape[2];
     const uint32_t qk_head = qk_nope_dim + qk_rope_dim;
 
-    auto q_in = ttnn::transpose(ttnn::reshape(q_pre, ttnn::Shape({B, S, n_heads, qk_head})), 1, 2);
+    auto q_in = ttml::test_utils::packed_to_head_major(q_pre, n_heads, qk_head);
 
     ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
     auto q_nope = ttnn::slice(

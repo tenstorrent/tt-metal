@@ -31,6 +31,6 @@ ttnn::Tensor mla_q_rope(
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim,
-    bool packed_input = true);
+    bool packed_input);
 
 }  // namespace ttml::metal

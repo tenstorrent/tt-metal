@@ -33,8 +33,6 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_nope);
 
-    constexpr uint32_t end_of_batch_jump = ((n_heads - 1U) * Ts + 1U) * Th;
-    constexpr uint32_t packed_block_stride = n_heads * Th;
     constexpr uint32_t head_stride = packed_output ? Th : tiles_per_head;
 
     for (uint32_t block = 0U; block < num_blocks; ++block) {
@@ -44,19 +42,6 @@ void kernel_main() {
             write_tiles_by_row(cb_rope_out, q_out_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }
 
-        ++sb;
-        if constexpr (packed_output != 0U) {
-            q_tile_base += packed_block_stride;
-            if (sb >= Ts) {
-                sb = 0U;
-            }
-        } else {
-            if (sb < Ts) {
-                q_tile_base += Th;
-            } else {
-                sb = 0U;
-                q_tile_base += end_of_batch_jump;
-            }
-        }
+        advance_q_block<packed_output != 0U, Ts, Th, n_heads>(sb, q_tile_base);
     }
 }

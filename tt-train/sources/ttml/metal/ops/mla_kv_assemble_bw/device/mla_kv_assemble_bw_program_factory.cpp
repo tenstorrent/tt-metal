@@ -161,12 +161,14 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
     const uint32_t num_blocks = B * Ts;
 
     // Compute kernel uses Tr persistent dst-register slots as the head-axis accumulator, plus 1 temp
-    // slot. With fp32 dest accumulation the DST holds 4 fp32 tiles, so the bound is Tr + 1 ≤ 4.
+    // slot. With fp32 dest accumulation the DST holds max_dst_tiles fp32 tiles, so Tr + 1 ≤ max_dst_tiles.
+    constexpr uint32_t max_dst_tiles = 4U;
     TT_FATAL(
-        Tr + 1U <= 4U,
-        "MLAKVAssembleBw: qk_rope_dim ({}) / TILE_W = {} too large for in-register accumulator (max 3).",
+        Tr + 1U <= max_dst_tiles,
+        "MLAKVAssembleBw: qk_rope_dim ({}) / TILE_W = {} too large for in-register accumulator (max {}).",
         args.qk_rope_dim,
-        Tr);
+        Tr,
+        max_dst_tiles - 1U);
 
     // ── Work split ──
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -179,6 +181,9 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dK.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
+    // dK_nope / dV are sized 2 * block_size (see block_size above). cb_dkpe_in instead holds all
+    // Tr tiles for the whole block because the writer broadcasts them to every head; Tr is small
+    // and inherent to the broadcast.
     const uint32_t io_cb_num_tiles = kCbDoubleBuffer * block_size;
     const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
 

@@ -30,10 +30,10 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/mla_layout.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace {
@@ -95,7 +95,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> composite_assemble(
     const uint32_t kv_w = shape.qk_nope_dim + shape.v_dim;
 
     // split_heads: [B, 1, S, H*W] -> [B, S, H, W] -> [B, H, S, W]
-    const auto kv = ttnn::transpose(ttnn::reshape(kv_up, ttnn::Shape({batch, seq_len, shape.n_heads, kv_w})), 1, 2);
+    const auto kv = ttml::test_utils::packed_to_head_major(kv_up, shape.n_heads, kv_w);
 
     const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
     const auto k_nope = ttnn::slice(
@@ -121,7 +121,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> composite_assemble_bw(
     const ttnn::Tensor& dK, const ttnn::Tensor& dV, uint32_t batch, uint32_t seq_len, const ModelShape& shape) {
     const uint32_t H = shape.n_heads;
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    const uint32_t kv_w = shape.qk_nope_dim + shape.v_dim;
     const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
 
     // dkv_up: concat [dK_nope | dV] per head, then reverse head-split.
@@ -131,7 +130,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> composite_assemble_bw(
         ttsl::SmallVector<uint32_t>{batch, H, seq_len, shape.qk_nope_dim},
         step);
     const auto kv_head = ttnn::concat(std::vector<ttnn::Tensor>{dk_nope, dV}, /*dim=*/3);
-    const auto dkv_up = ttnn::reshape(ttnn::transpose(kv_head, 1, 2), ttnn::Shape({batch, 1U, seq_len, H * kv_w}));
+    const auto dkv_up = ttml::test_utils::head_major_to_packed(kv_head);
 
     // dk_pe: sum dK's rope suffix over the head axis -> [B, 1, S, qk_rope].
     const auto dk_rope = ttnn::slice(

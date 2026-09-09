@@ -53,12 +53,14 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
         q_in.device() == cos.device() && cos.device() == sin.device() && sin.device() == trans.device(),
         "MlaQRope: all tensors must be on the same device.");
 
-    const auto q_shape = q_in.padded_shape();
+    // Semantic dims come from logical_shape so a TILE-padded width cannot
+    // masquerade as a multiple of qk_head. qk_head and S are required to be
+    // tile-aligned below, so accepted inputs still have the same padded geometry.
+    const auto q_shape = q_in.logical_shape();
     TT_FATAL(q_shape.rank() == 4U, "MlaQRope: q_in must be rank-4. Got {}", q_shape.rank());
 
     TT_FATAL(args.qk_rope_dim != 0U, "MlaQRope: qk_rope_dim must be non-zero.");
     const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
-    uint32_t n_heads = 0;
     if (args.packed_input) {
         TT_FATAL(q_shape[1] == 1U, "MlaQRope: packed q_in dim 1 must be 1. Got {}", q_shape[1]);
         TT_FATAL(
@@ -66,7 +68,6 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
             "MlaQRope: packed q_in dim 3 must be a positive multiple of qk_head={}. Got {}",
             qk_head,
             q_shape[3]);
-        n_heads = q_shape[3] / qk_head;
     } else {
         TT_FATAL(q_shape[1] >= 1U, "MlaQRope: head-major q_in must have at least one head.");
         TT_FATAL(
@@ -74,9 +75,7 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
             "MlaQRope: head-major q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
             qk_head,
             q_shape[3]);
-        n_heads = q_shape[1];
     }
-    TT_FATAL(n_heads >= 1U, "MlaQRope: n_heads must be >= 1.");
 
     TT_FATAL(
         args.qk_nope_dim % TILE_WIDTH == 0,
@@ -93,6 +92,16 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
         "MlaQRope: S ({}) must be a multiple of TILE_HEIGHT ({})",
         q_shape[2],
         TILE_HEIGHT);
+    // Tile-aligned logical dims 2-3 match padded, so validate / factory / compute_output_specs
+    // can all use logical_shape without disagreeing on n_heads or S.
+    const auto q_padded = q_in.padded_shape();
+    TT_FATAL(
+        q_shape[2] == q_padded[2] && q_shape[3] == q_padded[3],
+        "MlaQRope: q_in logical dims 2-3 must equal padded (tile-aligned). logical=[{}, {}], padded=[{}, {}]",
+        q_shape[2],
+        q_shape[3],
+        q_padded[2],
+        q_padded[3]);
 
     const auto cos_shape = cos.padded_shape();
     TT_FATAL(cos_shape == sin.padded_shape(), "MlaQRope: cos and sin shapes must match.");

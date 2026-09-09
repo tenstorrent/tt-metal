@@ -16,9 +16,9 @@ void kernel_main() {
     uint32_t k_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);  // k[b, 0, sb, 0]
     uint32_t v_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);  // v[b, 0, sb, 0]
 
-    constexpr uint32_t cb_knope = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v = tt::CBIndex::c_2;
-    constexpr uint32_t cb_kpe = tt::CBIndex::c_3;
+    constexpr uint32_t cb_knope = tt::CBIndex::c_0;
+    constexpr uint32_t cb_v = tt::CBIndex::c_1;
+    constexpr uint32_t cb_kpe = tt::CBIndex::c_2;
 
     constexpr uint32_t Tn = get_compile_time_arg_val(0);  // qk_nope_dim / TILE_W
     constexpr uint32_t Tr = get_compile_time_arg_val(1);  // qk_rope_dim / TILE_W

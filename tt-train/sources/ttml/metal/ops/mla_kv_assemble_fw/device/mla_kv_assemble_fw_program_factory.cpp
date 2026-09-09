@@ -33,9 +33,9 @@ constexpr uint32_t kWriterArgVAddr = 1;
 
 // CB indices. k_nope and v are demuxed into separate CBs so each output stream can be chunked and
 // double-buffered independently; the writer reinserts the broadcast k_pe between them.
-constexpr auto kKnopeCbIndex = tt::CBIndex::c_1;
-constexpr auto kVCbIndex = tt::CBIndex::c_2;
-constexpr auto kKpeCbIndex = tt::CBIndex::c_3;
+constexpr auto kKnopeCbIndex = tt::CBIndex::c_0;
+constexpr auto kVCbIndex = tt::CBIndex::c_1;
+constexpr auto kKpeCbIndex = tt::CBIndex::c_2;
 
 // Each k_nope / v CB is double-buffered (2 * block_size) so the reader can fetch the next chunk on
 // its NoC while the writer drains the current one on the other NoC.
@@ -171,6 +171,9 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
+    // knope / v are sized 2 * block_size (see block_size above). cb_kpe instead holds all
+    // Tr tiles for the whole block because the writer broadcasts them to every head; Tr is small
+    // and inherent to the broadcast.
     const uint32_t io_cb_num_tiles = kCbDoubleBuffer * block_size;
     const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
 
