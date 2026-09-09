@@ -43,24 +43,9 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
-// Channels at or below this depth tabulate every slot address. A table load is the cheapest
-// addressing mode available -- two instructions, and with a power-of-two depth the whole slot
-// advance comes out branchless -- so every channel that fits keeps its table.
-//
-// Deeper channels drop the table rather than grow it. The channels are locals of the router kernel,
-// so their tables land in its stack frame, and the Blackhole router builds against a 1912 B budget
-// (-Werror=stack-usage, bh_hal.cpp) that a 2D-torus config was already exceeding.
-//
-// The bound is 32 because that is the deepest channel the allocator's slot tables hand out (see the
-// per-VC buffer slot options in fabric_static_sized_channels_allocator.cpp -- Blackhole's depths are
-// powers of two up to 32), so every ordinary channel keeps its table and its addressing is
-// unchanged. Exactly one channel can exceed the bound: the worker-connected VC0 sender additionally
-// absorbs whatever slots the uniform channel depth strands (configure_buffer_slots_helper), so its
-// depth grows as the configured packet payload shrinks. That one channel loses its table and holds
-// a flat 16 B instead, which is what keeps the frame inside the budget.
-//
-// Which mode a channel uses is resolved from NUM_BUFFERS at compile time. Neither mode tests a slot
-// index at runtime, so lowering this bound trades stack for a multiply and never for a branch.
+// Channels at or below this depth tabulate every slot address; deeper ones compute addresses.
+// Only the worker-connected VC0 sender can exceed it. The budget is 1912 B (-Werror=stack-usage, bh_hal.cpp).
+// The mode is picked from NUM_BUFFERS at compile time
 constexpr uint8_t MAX_TABULATED_SLOTS = 32;
 
 template <uint8_t NUM_BUFFERS>
