@@ -51,36 +51,31 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Runtime arguments - first get basic parameters
-    uint32_t rt_args_idx = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tensor_rank = get_arg(args::tensor_rank);
+    uint32_t element_size = get_arg(args::element_size);
+    uint32_t num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    uint32_t start_row_for_this_core = get_arg(args::start_row_for_this_core);
 
     // Compile-time arguments
-    constexpr uint32_t dfb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr auto compile_time_element_size = get_arg(args::compile_time_element_size);
 
-    // Get dimension arrays from runtime arguments
+    // Get dimension arrays from the runtime varargs. The block is `tensor_rank` long, so its count
+    // is only known at run time and its elements are reached by index rather than by name.
     // Layout: output_dims[rank]
 
-    // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
-
-    // Calculate sizes - working with rows, not tiles
-    uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
+    // Read output dimensions, then calculate sizes - working with rows, not tiles
+    uint32_t output_bytes_per_row = get_vararg(tensor_rank - 1) * element_size;
 
     // Set up TensorAccessor for output data - use row size as page size
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::dst);
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_in(dfb_id_in);
+    DataflowBuffer dfb_in(dfb::in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position
