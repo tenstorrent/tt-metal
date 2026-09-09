@@ -336,7 +336,7 @@ At `1005cb6d975` the existing T028 selection had 25 failures and 26 passes. Afte
 the fix, the same 51 cases passed with no changes to their checks or tolerances
 (`reduce-migration-n9526jxz`). Native build passed
 (`/tmp/reduce-groupnorm-format-fix-build-20260909.log`). SM005/SM006 passed
-(`reduce-migration-n1bwzklv`). SM006 now uses the small BF8-mask/FP32-intermediate
+(`reduce-migration-n1bwzklv`). SM006 now uses the small BF8-mask/FP32-destination
 case that catches the regression; the original C++ case remains in the full
 suite. Sanity remains 75 cases, now 60 Python and 15 C++.
 
@@ -353,3 +353,10 @@ selection resolved that test setup issue; no numerical check changed. See
 Quasar mock host planning also succeeded, but the runtime explicitly bypasses JIT
 compilation on Quasar mock devices (`tt_metal/impl/program/program.cpp`); that
 mock result supplies no Quasar compilation or numerical evidence.
+
+Post-fix complete N300 sanity: **61/61 passed**, with no skips or failures
+(`reduce-migration-iy7ny4u1`, source commit `11d81c6fdea`). The JUnit results agree
+with the runner's counts. A fresh Opus 5/high review (round 4, session
+`4b52d738-f23e-4c1c-baed-6093ea8f9392`) is running; the full regression remains due.
+Clarified the SM006 description: its BF16 input uses BF16 L1 intermediates and
+FP32 destination accumulation; the BF8-mask transition is what the test guards.

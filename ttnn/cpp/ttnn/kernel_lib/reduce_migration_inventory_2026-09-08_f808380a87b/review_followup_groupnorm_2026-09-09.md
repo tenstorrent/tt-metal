@@ -20,7 +20,7 @@ format shared by the masked tensor and local statistics. Existing native calls
 retain their caller-owned format behavior; Add retains its required reconfiguration.
 
 SM006 now selects the existing four-core sharded BF16 case with a BF8 mask and
-FP32 intermediates, whose four-tile group exercises native mean reduction. The
+FP32 destination accumulation, whose four-tile group exercises native mean reduction. The
 previous one-core C++ smoke used compatible operand formats and missed this
 transition. It remains in full group T159. Sanity stays at **75 cases** (60 Python,
 15 C++), including **61 N300 cases**; the full suite remains **178 groups / 18,844
@@ -37,6 +37,8 @@ extension was refreshed atomically. The same unmodified T028 selection then
 passed **51/51**, no skips (`reduce-migration-n9526jxz`), including all 25 cases
 that failed before the fix.
 SM005 and the replacement SM006 both passed (`reduce-migration-n1bwzklv`).
+The complete N300 sanity rerun then passed **61/61, no skips or failures**
+(`reduce-migration-iy7ny4u1`, source commit `11d81c6fdea`).
 
 Review history: round 2 stopped without a verdict when its process disappeared.
 Round 3 was deliberately stopped after these independent checks found the defect;
