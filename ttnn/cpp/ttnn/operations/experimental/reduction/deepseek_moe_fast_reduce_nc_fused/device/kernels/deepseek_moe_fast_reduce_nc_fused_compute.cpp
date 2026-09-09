@@ -5,10 +5,13 @@
 // Fused compute kernel: multiply-accumulate using hardware MAC.
 //
 // For each output tile we iterate over reduction_dim_size experts and sum:
-//   dst0 += act_tile[e] * score_col[e]   (hardware MAC with col-broadcast)
+//   dst0 += act_tile[e] * score_col[row_tile][e]   (hardware MAC with col-broadcast)
 //
-// Each score tile has expert scores in column 0 (broadcast to all columns).
-// The reader pre-loads all reduction_dim_size score tiles before signalling compute_scores.
+// The reader pre-loads one score tile per (row tile, expert) before signalling compute_scores: tile
+// r * reduction_dim_size + e holds in column 0 the scores of token rows 32 * r .. 32 * r + 31 for expert e
+// (broadcast to all columns).  An output tile at row tile r is scaled with the r-th group of score tiles.
+// Before this, one tile per expert (rows 0..31) scaled every output row tile, so an input taller than one row
+// tile (tokens > 32) weighted rows 32.. with the scores of rows 0..31.
 // Score tiles are kept resident and accessed by index throughout the loop.
 //
 // Initialization:
@@ -30,15 +33,23 @@ constexpr uint32_t input_granularity = get_compile_time_arg_val(2);
 constexpr uint32_t compute_input_cb_id_0 = get_compile_time_arg_val(3);
 constexpr uint32_t compute_input_cb_id_1 = get_compile_time_arg_val(4);
 constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(5);
+// Output tile ids handled by this core: start_tile (runtime arg 0), then every num_cores-th tile.  A tile's row
+// tile within its [.., tokens, hidden] slab is (tile_id / Wt) % Ht.
+constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(6);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(7);
+constexpr uint32_t num_row_tiles = get_compile_time_arg_val(8);
 
 void kernel_main() {
     CircularBuffer cb_in0(compute_input_cb_id_0);
     CircularBuffer cb_in1(compute_input_cb_id_1);
     CircularBuffer cb_out(compute_output_cb_id);
 
+    const uint32_t start_tile = get_arg_val<uint32_t>(0);
+
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
+    constexpr uint32_t num_score_tiles = num_row_tiles * reduction_dim_size;
 
     // Full PACK + UNPACK + hw_configure init for ELWMUL + COL-broadcast
     compute_kernel_hw_startup(compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
@@ -53,8 +64,11 @@ void kernel_main() {
 
     // Wait for all score tiles — they are pre-loaded once by the reader prologue
     // and remain resident for the entire kernel invocation.
-    cb_in1.wait_front(reduction_dim_size);
+    cb_in1.wait_front(num_score_tiles);
+    uint32_t tile_id = start_tile;
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
+        const uint32_t row_tile = (tile_id / input_tensor_Wt) % num_row_tiles;
+        const uint32_t score_tile_base = row_tile * reduction_dim_size;
         tile_regs_acquire();
 
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
@@ -63,8 +77,9 @@ void kernel_main() {
             for (uint32_t k = 0; k < input_granularity; ++k) {
                 // expert_tile = linear expert index for this tile
                 const uint32_t expert_tile = j * input_granularity + k;
-                // dst0 += act_tile[k] * score_col[expert_tile]  (single MAC)
-                mul_tiles_bcast_cols(compute_input_cb_id_0, compute_input_cb_id_1, k, expert_tile, dst0);
+                // dst0 += act_tile[k] * score_col[row_tile][expert_tile]  (single MAC)
+                mul_tiles_bcast_cols(
+                    compute_input_cb_id_0, compute_input_cb_id_1, k, score_tile_base + expert_tile, dst0);
             }
             cb_in0.pop_front(input_granularity);
         }
@@ -76,8 +91,9 @@ void kernel_main() {
         pack_tile(dst0, compute_output_cb_id);
         tile_regs_release();
         cb_out.push_back(one_tile);
+        tile_id += num_cores_to_be_used;
     }
 
     // Release all score tiles
-    cb_in1.pop_front(reduction_dim_size);
+    cb_in1.pop_front(num_score_tiles);
 }

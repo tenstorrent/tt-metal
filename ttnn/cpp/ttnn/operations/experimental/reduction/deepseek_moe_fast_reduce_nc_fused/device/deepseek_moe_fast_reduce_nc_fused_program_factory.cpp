@@ -126,6 +126,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // scores shape: [tokens, 1, seq, experts_k] (ROW_MAJOR)
     const uint32_t num_tokens = scores_tensor.logical_shape()[0];  // tokens_per_device
     const uint32_t num_tokens_x32 = round_up(num_tokens, 32);
+    // One score tile per (row tile, expert): the reader builds them, the compute kernel picks the group of the
+    // output tile's row tile.  Inputs taller than one row tile used to be scaled with the first tile's scores.
+    const uint32_t num_row_tiles = num_tokens_x32 / tt::constants::TILE_HEIGHT;
 
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
@@ -190,10 +193,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         }}},
     });
 
-    // CB c_1: pre-processed score tiles (one per expert), held resident during compute
+    // CB c_1: pre-processed score tiles (one per row tile and expert), held resident during compute
     const uint32_t cb_scores_id = tt::CBIndex::c_1;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = reduction_dim_size * scores_tile_size,
+        .total_size = num_row_tiles * reduction_dim_size * scores_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_scores_id),
@@ -363,6 +366,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         cb_in_act_id,
         cb_scores_id,
         cb_out_id,
+        num_cores,
+        input_tensor_Wt,
+        num_row_tiles,
     };
     compute_desc_group_1.defines = compute_defines;
     compute_desc_group_1.config = tt::tt_metal::ComputeConfigDescriptor{
@@ -384,6 +390,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             cb_in_act_id,
             cb_scores_id,
             cb_out_id,
+            num_cores,
+            input_tensor_Wt,
+            num_row_tiles,
         };
         compute_desc_group_2->defines = compute_defines;
         compute_desc_group_2->config = tt::tt_metal::ComputeConfigDescriptor{
@@ -433,12 +442,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             continue;
         }
 
-        uint32_t num_tiles_per_core =
-            core_group_1.contains(core_group.ranges().at(0)) ? num_cols_per_core_group_1 : num_cols_per_core_group_2;
+        const bool is_group_1 = core_group_1.contains(core_group.ranges().at(0));
+        uint32_t num_tiles_per_core = is_group_1 ? num_cols_per_core_group_1 : num_cols_per_core_group_2;
         uint32_t page_id_range_length = num_tiles_per_core * num_cores;
+        tt::tt_metal::KernelDescriptor& compute_desc = is_group_1 ? compute_desc_group_1 : *compute_desc_group_2;
 
         for (const auto& core : corerange_to_cores(core_group)) {
             uint32_t start_tiles_to_read = start_tiles_read + page_id_range_length;
+
+            // Compute RT args: [0] start_tiles_read (the core's first output tile id; the kernel derives each
+            // output tile's row tile from it to pick the row tile's score tiles).
+            compute_desc.emplace_runtime_args(core, {start_tiles_read});
 
             uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
             uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;

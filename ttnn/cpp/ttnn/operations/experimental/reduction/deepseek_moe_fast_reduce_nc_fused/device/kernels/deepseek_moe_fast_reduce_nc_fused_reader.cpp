@@ -126,9 +126,15 @@ void kernel_main() {
     // scores layout (ROW_MAJOR): [tokens, 1, seq, reduction_dim_size]
     // One page = one token row of reduction_dim_size BF16 scores (= cb_scores_rm_page_size bytes)
     //
-    // Target: cb_scores holds reduction_dim_size tiles (one per expert e).
-    // Each tile[e]: column 0 contains score[t, e] for token rows t=0..num_tokens-1.
-    //               All other columns = 0 (required by BroadcastType::COL).
+    // Target: cb_scores holds num_row_tiles * reduction_dim_size tiles, one per (row tile r, expert e) at
+    // index r * reduction_dim_size + e.  Tile (r, e): column 0 row j holds score[32 * r + j, e] (zero for the
+    // padding rows past num_tokens in the last row tile).  Only column 0 is written; BroadcastType::COL reads
+    // column 0 alone.
+    //
+    // A single tile per expert (rows 0..31) used to be built for every token, so an input taller than one row
+    // tile (tokens > 32) had every output row tile weighted with the scores of rows 0..31, and rows past 31
+    // were written past the tile (into the next expert's tile and past the CB).  One tile per (row tile,
+    // expert) gives every output row its own score; the compute kernel picks the tile by the output tile's row.
     //
     // BF16 32x32 tile face layout (4 faces, each 16x16):
     //   Face 0 (rows  0-15, cols  0-15): base offset 0   (uint16 index)
@@ -136,10 +142,11 @@ void kernel_main() {
     //   Face 2 (rows 16-31, cols  0-15): base offset 512
     //   Face 3 (rows 16-31, cols 16-31): base offset 768
     // Within a face, element at (row r, col c): index = r * 16 + c
-    // So column-0 of row t:
-    //   t < 16  → face 0 → uint16 index: t * 16
-    //   t >= 16 → face 2 → uint16 index: 512 + (t-16) * 16
+    // So column-0 of row j within the tile:
+    //   j < 16  → face 0 → uint16 index: j * 16
+    //   j >= 16 → face 2 → uint16 index: 512 + (j-16) * 16
     ////////////////////////////////////////////////////////////////////////////
+    constexpr uint32_t num_row_tiles = num_tokens_x32 / 32;
 
     // Step 1: Read all token rows from DRAM into scratch staging buffer
     cb_scores_rm.reserve_back(num_tokens);
@@ -155,7 +162,7 @@ void kernel_main() {
     noc.async_read_barrier();
 
     // Step 2: Permute and to_layout scores; rm [token][expert] in uint16 units, row stride = reduction_dim_size
-    cb_scores.reserve_back(reduction_dim_size);
+    cb_scores.reserve_back(num_row_tiles * reduction_dim_size);
     uint32_t scores_write_ptr = cb_scores.get_write_ptr();
 
     volatile tt_l1_ptr uint16_t* scores_rm_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_rm_ptr);
@@ -200,56 +207,31 @@ void kernel_main() {
         }
     };
 
-    // [token][1][s=1][k] -> [k][1][t][s_padded=32]
-    for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-        volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
-        const bool is_shared_expert = (k >= num_routed_experts);
-
-        // Fill Face 0 (rows 0-15, col 0) for tokens t = 0..15
-        for (uint32_t t = 0; t < 16 && t < num_tokens; ++t) {
-            if (is_shared_expert) {
-                expert_tile[t * 16] = shared_expert_scale_bf16;
-            } else {
-                // score location in RM: t * (cb_scores_rm_page_size / 2) + k
-                const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
-                expert_tile[t * 16] = compute_on_axis(t, k) ? score : bf16_zero;
-            }
-        }
-        // Fill Face 2 (rows 16-31, col 0) for tokens t = 16..num_tokens-1
-        if (num_tokens > 16) {
-            for (uint32_t t = 16; t < num_tokens; ++t) {
-                if (is_shared_expert) {
-                    expert_tile[face2_offset + (t - 16) * 16] = shared_expert_scale_bf16;
+    // [token][1][s=1][k] -> [row tile][k][1][j][s_padded=32]
+    for (uint32_t r = 0; r < num_row_tiles; ++r) {
+        for (uint32_t k = 0; k < reduction_dim_size; ++k) {
+            volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + (r * reduction_dim_size + k) * tile_u16_stride;
+            const bool is_shared_expert = (k >= num_routed_experts);
+            for (uint32_t j = 0; j < 32; ++j) {
+                const uint32_t t = r * 32 + j;
+                // Column 0 of row j: face 0 for j < 16, face 2 for j >= 16.
+                const uint32_t col0_index = (j < 16) ? j * 16 : face2_offset + (j - 16) * 16;
+                if (t >= num_tokens) {
+                    // Padding rows past the last token: BF16 +0.0 (bit pattern 0x0000).
+                    expert_tile[col0_index] = bf16_zero;
+                } else if (is_shared_expert) {
+                    expert_tile[col0_index] = shared_expert_scale_bf16;
                 } else {
+                    // score location in RM: t * (cb_scores_rm_page_size / 2) + k
                     const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
-                    expert_tile[face2_offset + (t - 16) * 16] = compute_on_axis(t, k) ? score : bf16_zero;
+                    expert_tile[col0_index] = compute_on_axis(t, k) ? score : bf16_zero;
                 }
-            }
-        }
-    }
-    if ((num_tokens < num_tokens_x32) && (num_tokens < 16)) {
-        // Fill remaining Face 0 with BF16 +0.0 (bit pattern 0x0000).
-        for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-            volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
-            for (uint32_t t = num_tokens; t < 16; ++t) {
-                expert_tile[t * 16] = bf16_zero;
-            }
-        }
-    }
-    if (num_tokens < num_tokens_x32) {
-        // Fill remaining Face 2 with BF16 +0.0. Clamp the start to 16 so that the
-        // (t - 16) row offset cannot underflow for num_tokens < 16 cases.
-        const uint32_t face_2_start = num_tokens < 16 ? 16 : num_tokens;
-        for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-            volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
-            for (uint32_t t = face_2_start; t < 32; ++t) {
-                expert_tile[face2_offset + (t - 16) * 16] = bf16_zero;
             }
         }
     }
 
     // Step 3: Release scores to compute kernel
-    cb_scores.push_back(reduction_dim_size);
+    cb_scores.push_back(num_row_tiles * reduction_dim_size);
     cb_scores_rm.push_back(num_tokens);
 
     ////////////////////////////////////////////////////////////////////////////
