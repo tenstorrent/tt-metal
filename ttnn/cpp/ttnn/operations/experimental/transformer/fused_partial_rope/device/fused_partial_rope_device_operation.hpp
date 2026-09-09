@@ -34,31 +34,36 @@ inline tt::tt_metal::Tile input_tile_for_compute(const Tensor& input) {
 // FusedPartialRopeDeviceOperation
 //
 // Fuses the deepseek_v4_flash `_apply_rope` calc into one device op: interleaved
-// RoPE on the trailing `rope_dim` channels of a height-sharded `[1, 1, rows, D]`
-// input, with the leading (D - rope_dim) "nope" channels passed through
-// untouched. The rotation uses the `rope_dim`-wide `rotate_half` matmul form:
+// RoPE on each `head_dim`-wide block of a sharded `[1, 1, rows, D]` input
+// (`D % head_dim == 0`; `head_dim == D` is the single-block case). Within a
+// block the trailing `rope_dim` channels are rotated and the leading
+// `head_dim - rope_dim` "nope" channels pass through:
 //
-//   out[..., :D-Rd] = x[..., :D-Rd]
-//   out[..., D-Rd:] = x_rope * cos + (x_rope @ trans_mat) * sin
+//   out[..., b, :Hd-Rd] = x[..., b, :Hd-Rd]
+//   out[..., b, Hd-Rd:] = x_rope * cos + (x_rope @ trans_mat) * sin
 //
 // Two input memory layouts are supported, each with its own program factory:
 //   * height-sharded L1: TILE is one tile-row (32 rows) per core, so
 //     num_cores = ceil(rows / 32). Core i owns input tile-row i. ROW_MAJOR is
 //     many 1x32 faces: each core holds `shard_height` rows of the full D.
 //   * width-sharded L1: every core holds all rows but only a `shard_width`
-//     column slice of D, so a core's columns can land wholly in the "nope"
-//     region, wholly in the rope region, or straddle the boundary. ROW_MAJOR
-//     uses 1-high faces, so Ht = shard height (one face per input row).
+//     column slice of D. A core's columns can cover nope, rope, or both,
+//     and with multiple head blocks they can straddle several such
+//     boundaries. ROW_MAJOR uses 1-high faces, so Ht = shard height (one
+//     face per input row).
 // In both cases `cos`/`sin` are `[1, 1, rows, Rd]` (or a single broadcast row)
-// DRAM-interleaved TILE tables streamed per-core by the reader, and `trans_mat`
-// is a single [32, 32] rotate_half tile, replicated. ROW_MAJOR X requires the
-// broadcast (one logical cos/sin row). The rotation is block-diagonal per tile
-// (it pairs channels 2p / 2p+1), so each rope tile rotates independently of how
-// the columns are spread over cores. Output layout matches the input.
+// DRAM-interleaved TILE tables streamed per-core by the reader (shared across
+// every head block of a row), and `trans_mat` is a single [32, 32]
+// rotate_half tile, replicated. ROW_MAJOR X requires the broadcast (one
+// logical cos/sin row) and is computed as 1x32 faces. The rotation is
+// block-diagonal per tile (it pairs channels 2p / 2p+1), so each rope tile
+// rotates independently of how the columns are spread over cores. Output
+// layout matches the input.
 // -----------------------------------------------------------------------------
 struct FusedPartialRopeDeviceOperation {
     struct operation_attributes_t {
         uint32_t rope_dim;
+        uint32_t head_dim;  // resolved; never 0 (defaults to D at invoke)
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -106,6 +111,7 @@ ttnn::Tensor fused_partial_rope(
     const ttnn::Tensor& trans_mat,
     uint32_t rope_dim,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t head_dim);
 
 }  // namespace ttnn::prim

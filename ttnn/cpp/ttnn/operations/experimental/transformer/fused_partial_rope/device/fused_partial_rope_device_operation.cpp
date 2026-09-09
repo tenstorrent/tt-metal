@@ -96,10 +96,13 @@ void FusedPartialRopeDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t D = input_shape[-1];
     const uint32_t Rd = args.rope_dim;
-    TT_FATAL(Rd > 0 && Rd <= D, "rope_dim ({}) must be in (0, D={}]", Rd, D);
-    TT_FATAL(D % TILE_WIDTH == 0, "input head dim ({}) must be tile-aligned", D);
+    const uint32_t Hd = args.head_dim;
+    TT_FATAL(Hd > 0 && D % Hd == 0, "last dim ({}) must be a multiple of head_dim ({})", D, Hd);
+    TT_FATAL(Rd > 0 && Rd <= Hd, "rope_dim ({}) must be in (0, head_dim={}]", Rd, Hd);
+    TT_FATAL(D % TILE_WIDTH == 0, "input last dim ({}) must be tile-aligned", D);
+    TT_FATAL(Hd % TILE_WIDTH == 0, "head_dim ({}) must be tile-aligned", Hd);
     TT_FATAL(Rd % TILE_WIDTH == 0, "rope_dim ({}) must be tile-aligned", Rd);
-    TT_FATAL((D - Rd) % TILE_WIDTH == 0, "nope width (D - rope_dim = {}) must be tile-aligned", D - Rd);
+    TT_FATAL((Hd - Rd) % TILE_WIDTH == 0, "nope width (head_dim - rope_dim = {}) must be tile-aligned", Hd - Rd);
 
     TT_FATAL(cos_shape == sin_shape, "cos and sin must have the same shape");
     TT_FATAL(cos.dtype() == sin.dtype(), "cos and sin dtype must match");
@@ -144,9 +147,12 @@ void FusedPartialRopeDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Width-sharded: every core holds all rows and a `shard_width` column slice of D.
+    // "Rows" is every leading dim multiplied out, not just dim -2: a batched `[1, B, H, Dh]`
+    // activation is one contiguous run of B*H rows in the shard, so callers need not fold it
+    // onto dim -2 first.
     const uint32_t shard_height = shard_spec.shape[0];
     const uint32_t shard_width = shard_spec.shape[1];
-    const uint32_t rows = input_shape[-2];
+    const uint32_t rows = static_cast<uint32_t>(input_shape.volume() / D);
     TT_FATAL(
         shard_width * num_cores == D,
         "input shard width ({}) over {} cores must cover the head dim ({})",
@@ -210,9 +216,11 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::ShardedProgramF
     const auto& shard_spec = input.memory_config().shard_spec().value();
     const uint32_t D = input.padded_shape()[-1];
     const uint32_t Rd = args.rope_dim;
-    const uint32_t Dt = D / TILE_WIDTH;              // full head width in tiles
-    const uint32_t rope_Wt = Rd / TILE_WIDTH;        // trailing rope tiles
-    const uint32_t nope_Wt = (D - Rd) / TILE_WIDTH;  // leading pass-through tiles
+    const uint32_t Hd = args.head_dim;
+    const uint32_t Dt = D / TILE_WIDTH;               // full last-dim width in tiles
+    const uint32_t n_heads = D / Hd;                  // head_dim-wide blocks along D
+    const uint32_t rope_Wt = Rd / TILE_WIDTH;         // trailing rope tiles per block
+    const uint32_t nope_Wt = (Hd - Rd) / TILE_WIDTH;  // leading pass-through tiles per block
     const uint32_t Ht = shard_spec.shape[0] / in_tile.get_height();
     const uint32_t shard_tiles = Ht * Dt;
 
@@ -345,6 +353,7 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::ShardedProgramF
         (uint32_t)nope_Wt,
         (uint32_t)cos_bcast,
         (uint32_t)Ht,
+        (uint32_t)n_heads,
     };
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kComputeKernelPath;
@@ -394,10 +403,11 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::WidthShardedPro
         input.layout() == Layout::ROW_MAJOR ? std::optional<TileDescriptor>{TileDescriptor{in_tile}} : std::nullopt;
 
     const auto& shard_spec = input.memory_config().shard_spec().value();
-    const uint32_t D = input.padded_shape()[-1];
     const uint32_t Rd = args.rope_dim;
-    const uint32_t nope_Wt = (D - Rd) / TILE_WIDTH;  // leading pass-through tiles (global)
-    const uint32_t rope_Wt = Rd / TILE_WIDTH;        // trailing rope tiles (global), = cos/sin width
+    const uint32_t Hd = args.head_dim;
+    const uint32_t tiles_per_head = Hd / TILE_WIDTH;
+    const uint32_t nope_Wt = (Hd - Rd) / TILE_WIDTH;  // leading pass-through tiles per head block
+    const uint32_t rope_Wt = Rd / TILE_WIDTH;         // trailing rope tiles per block, = cos/sin width
     // Every core holds the full column height and a `shard_width` slice of D.
     // ROW_MAJOR faces are 1-high, so Ht is the shard height (one face per input row).
     const uint32_t Ht = shard_spec.shape[0] / in_tile.get_height();
@@ -407,11 +417,9 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::WidthShardedPro
     // A single logical cos/sin row => broadcast that row across every input row on device.
     const bool cos_bcast = cos.logical_shape()[-2] == 1;
 
-    // The rope region is the trailing `rope_Wt` tiles, so the core owning the last column slice
-    // holds the most rope tiles of any core; every CB is sized for it.
-    const uint32_t max_rope_local = std::min(Wt_local, rope_Wt);
-    const uint32_t cos_sin_cb_tiles = std::max(max_rope_local * (cos_bcast ? 1u : Ht), 1u);
-    const uint32_t interm_cb_tiles = std::max(max_rope_local, 1u);
+    // Every rope-touching core reads the full Rd-wide cos/sin row (shared across head blocks).
+    const uint32_t cos_sin_cb_tiles = std::max(rope_Wt * (cos_bcast ? 1u : Ht), 1u);
+    const uint32_t interm_cb_tiles = std::max(rope_Wt, 1u);
 
     auto* device = input.device();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -533,6 +541,9 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::WidthShardedPro
         (uint32_t)Ht,
         (uint32_t)Wt_local,
         (uint32_t)cos_bcast,
+        (uint32_t)tiles_per_head,
+        (uint32_t)nope_Wt,
+        (uint32_t)rope_Wt,
     };
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kWidthComputeKernelPath;
@@ -544,20 +555,23 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::WidthShardedPro
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
 
-    // Per-core runtime args: where this core's column slice falls relative to the global nope/rope
-    // boundary. Core i owns column tiles [i*Wt_local, (i+1)*Wt_local), of which the ones at or past
-    // `nope_Wt` are rope tiles starting at column `rope_col_start` of the cos/sin tables.
+    // Per-core runtime args: core i owns column tiles [i*Wt_local, (i+1)*Wt_local). Each tile is
+    // classified against the repeating `head_dim` nope/rope pattern. Rope-touching cores read the
+    // full Rd-wide cos/sin row (column 0); nope-only cores read nothing.
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
     reader_desc.runtime_args.reserve(cores.size());
     compute_desc.runtime_args.reserve(cores.size());
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const uint32_t g0 = i * Wt_local;
-        const uint32_t nope_local = g0 >= nope_Wt ? 0 : std::min(nope_Wt - g0, Wt_local);
-        const uint32_t rope_local = Wt_local - nope_local;
-        const uint32_t rope_col_start = rope_local > 0 ? (g0 + nope_local) - nope_Wt : 0;
-        reader_desc.emplace_runtime_args(
-            cores[i], {cos_buffer, sin_buffer, trans_mat_buffer, rope_local, rope_col_start});
-        compute_desc.emplace_runtime_args(cores[i], {nope_local, rope_local});
+        uint32_t rope_tiles_local = 0;
+        for (uint32_t j = 0; j < Wt_local; ++j) {
+            if ((g0 + j) % tiles_per_head >= nope_Wt) {
+                ++rope_tiles_local;
+            }
+        }
+        const uint32_t reader_rope = rope_tiles_local > 0 ? rope_Wt : 0;
+        reader_desc.emplace_runtime_args(cores[i], {cos_buffer, sin_buffer, trans_mat_buffer, reader_rope, 0u});
+        compute_desc.emplace_runtime_args(cores[i], {g0, rope_tiles_local});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -576,7 +590,8 @@ ttnn::Tensor fused_partial_rope(
     const ttnn::Tensor& trans_mat,
     uint32_t rope_dim,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t head_dim) {
     using OperationType =
         ttnn::operations::experimental::transformer::fused_partial_rope::FusedPartialRopeDeviceOperation;
 
@@ -589,8 +604,10 @@ ttnn::Tensor fused_partial_rope(
         out_mem_config = memory_config.value();
     }
 
+    const uint32_t D = input.padded_shape()[-1];
     auto attrs = OperationType::operation_attributes_t{
         .rope_dim = rope_dim,
+        .head_dim = head_dim == 0 ? D : head_dim,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
     };

@@ -34,18 +34,22 @@ def _interleaved_rotate_matrix(rope_dim: int) -> torch.Tensor:
     return r
 
 
-def _torch_reference(x, cos, sin, rot, rope_dim):
-    """Mirror of ``_apply_rope`` in torch float32."""
+def _torch_reference(x, cos, sin, rot, rope_dim, head_dim=None):
+    """Mirror of ``_apply_rope`` in torch float32, including packed ``head_dim`` blocks."""
     d = x.shape[-1]
-    if d == rope_dim:
-        nope, rope = None, x
-    else:
-        nope = x[..., : d - rope_dim]
-        rope = x[..., d - rope_dim :]
-    rotated = rope * cos + (rope @ rot) * sin
-    if nope is None:
-        return rotated
-    return torch.cat([nope, rotated], dim=-1)
+    hd = d if head_dim is None else head_dim
+    blocks = []
+    for h in range(d // hd):
+        block = x[..., h * hd : (h + 1) * hd]
+        if hd == rope_dim:
+            rotated = block * cos + (block @ rot) * sin
+            blocks.append(rotated)
+        else:
+            nope = block[..., : hd - rope_dim]
+            rope = block[..., hd - rope_dim :]
+            rotated = rope * cos + (rope @ rot) * sin
+            blocks.append(torch.cat([nope, rotated], dim=-1))
+    return torch.cat(blocks, dim=-1)
 
 
 def _height_sharded_cfg(width: int, num_cores: int, shard_height: int = TILE) -> ttnn.MemoryConfig:
@@ -233,3 +237,49 @@ def test_fused_partial_rope_op_row_major_width_sharded(device, reset_seeds, D, R
     logger.info(f"[fused_partial_rope rm-ws {tag}] {comp_allclose(ref, got)}")
     logger.info(f"[fused_partial_rope rm-ws {tag}] PCC: {pcc_message}")
     assert passing, f"fused_partial_rope rm-ws PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"
+
+
+def _run_fused_partial_rope(device, x, cos, sin, rot, Rd, mem_cfg, layout, head_dim=None):
+    kwargs = dict(dtype=ttnn.bfloat16, device=device)
+    x_tt = ttnn.to_memory_config(ttnn.from_torch(x, layout=layout, **kwargs), mem_cfg)
+    cos_tt, sin_tt = _cos_sin_tt(cos, sin, device)
+    out_tt = ttnn.experimental.fused_partial_rope(
+        x_tt, cos_tt, sin_tt, _trans_mat_tt(device), Rd, head_dim=0 if head_dim is None else head_dim
+    )
+    assert out_tt.layout == layout
+    ref = _torch_reference(x, cos, sin, rot, Rd, head_dim=head_dim)
+    got = ttnn.to_torch(out_tt).reshape(ref.shape).float()
+    return ref, got
+
+
+# Packed last dim: D = n_heads * head_dim (512), same cos/sin applied to every block.
+@pytest.mark.parametrize(
+    "head_dim, Rd, n_heads, rows, num_cores, layout, sharded",
+    (
+        (512, 64, 2, 32, 8, ttnn.TILE_LAYOUT, "width"),  # two packed heads, TILE width-sharded
+        (512, 64, 2, 64, 4, ttnn.TILE_LAYOUT, "width"),  # shards straddle head boundaries
+        (512, 64, 2, 32, 1, ttnn.TILE_LAYOUT, "height"),  # height-sharded, full D per core
+        (512, 64, 2, 2, 8, ttnn.ROW_MAJOR_LAYOUT, "width"),  # RM 1x32 faces, packed heads
+        (512, 64, 2, 2, 1, ttnn.ROW_MAJOR_LAYOUT, "height"),  # RM 1x32, full D on one core
+    ),
+)
+def test_fused_partial_rope_packed_heads(device, reset_seeds, head_dim, Rd, n_heads, rows, num_cores, layout, sharded):
+    D = n_heads * head_dim
+    cos_rows = 1 if layout == ttnn.ROW_MAJOR_LAYOUT else rows
+    x = torch.randn(1, 1, rows, D, dtype=torch.float32)
+    cos = torch.randn(1, 1, cos_rows, Rd, dtype=torch.float32)
+    sin = torch.randn(1, 1, cos_rows, Rd, dtype=torch.float32)
+    rot = _interleaved_rotate_matrix(Rd)
+
+    if sharded == "width":
+        mem_cfg = _width_sharded_cfg(rows, D, num_cores)
+    else:
+        shard_h = rows if layout == ttnn.ROW_MAJOR_LAYOUT else TILE
+        mem_cfg = _height_sharded_cfg(D, num_cores, shard_height=shard_h)
+
+    ref, got = _run_fused_partial_rope(device, x, cos, sin, rot, Rd, mem_cfg, layout, head_dim=head_dim)
+    passing, pcc_message = comp_pcc(ref, got, pcc=PCC_THRESHOLD)
+    tag = f"Hd={head_dim} Rd={Rd} heads={n_heads} rows={rows} cores={num_cores} {layout} {sharded}"
+    logger.info(f"[fused_partial_rope packed {tag}] {comp_allclose(ref, got)}")
+    logger.info(f"[fused_partial_rope packed {tag}] PCC: {pcc_message}")
+    assert passing, f"fused_partial_rope packed-heads PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"
