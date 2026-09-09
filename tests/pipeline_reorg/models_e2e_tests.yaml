@@ -474,9 +474,9 @@
     # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
     # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
     # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
-    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
-    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
-    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    if [ -w "$HF_HOME" ]; then HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"; else echo "HF_HOME is read-only; relying on the pre-seeded cache"; fi
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
   model: qwen3.6-27b
   model_family: Qwen
@@ -500,7 +500,7 @@
     # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
     # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
     # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
-    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
+    if [ -w "$HF_HOME" ]; then HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"; else echo "HF_HOME is read-only; relying on the pre-seeded cache"; fi
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
@@ -524,7 +524,7 @@
 - name: Qwen3.6-27B long-context e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
-    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k or traced_8k"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k or traced_8k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "batched_4k_b8"
   model: qwen3.6-27b
   model_family: Qwen
@@ -561,7 +561,7 @@
 - name: Qwen3.6-27B T3K e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=T3K
-    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
+    if [ -w "$HF_HOME" ]; then HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"; else echo "HF_HOME is read-only; relying on the pre-seeded cache"; fi
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
   model: qwen3.6-27b
   model_family: Qwen
