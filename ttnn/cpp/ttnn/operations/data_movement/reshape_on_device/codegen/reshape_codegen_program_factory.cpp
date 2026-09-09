@@ -280,6 +280,22 @@ ProgramDescriptor ReshapeCodegenRmProgramFactory::create_descriptor(
         {"seq_id", 0},
         {"batch", 1},
         {"nabatch", kReshapeNabatch},
+        // The unified reader carries modes this factory never selects
+        // (TILEROW, TILEROW_PAD, LASTDIM_REPEAT, ...). if constexpr still
+        // semantically checks discarded branches in non-template code, so
+        // every name the kernel reads must exist in the map regardless of the
+        // selected mode; the ones below are inert under SEQUENTIAL/NONALIGNED.
+        // elem_size is 4 rather than 0 because the dead TILEROW_PAD branch
+        // instantiates fill_with_val<elem_size>, whose static_assert accepts
+        // only 2 or 4.
+        {"hoist_cb_write_ptr", 0},
+        {"elem_size", 4},
+        {"tile_height", 32},
+        {"tile_row_shift_bits", 5},
+        {"num_pages_in_row", 1},
+        {"unpadded_X_bytes", 0},
+        {"valid_last_page_bytes", 0},
+        {"page_size", 0},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -439,6 +455,10 @@ ProgramDescriptor ReshapeCodegenTileProgramFactory::create_descriptor(
         {"seq_id", 0},  // SEQ_IDENTITY
         {"cb_id", kCbIn},
         {"batch", 1},
+        // The kernel reads this unconditionally (0 = no override, the tensor
+        // accessor stays the pitch authority); leaving it out of the map fails
+        // JIT with an unresolvable named compile-time arg.
+        {"src_page_pitch", 0},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
