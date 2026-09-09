@@ -195,26 +195,31 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice; the medians below are the current cut.
+    # (55k / code_debug). Re-cut for the routed experts' bf16 gate/up accumulators, which the
+    # previous cut predates.
     #
-    # The shift from the previous cut is -10.8% to -15.2% per chunk, largest at chunk 0 and tapering
-    # with depth. In absolute terms it is close to flat -- 0.072-0.076 s off chunks 0-5, drifting to
-    # 0.087-0.093 s over chunks 7-10 -- so the bulk of it is a fixed cost coming off the front of each
-    # chunk, whose share shrinks as the depth ramp grows (chunk c attends to KV[0:c*CHUNK]). The extra
-    # saving at the deep chunks is on top of that and does scale with the attended window.
+    # +2.4% to +4.6% per chunk, 6.089 -> 6.295 s over the eleven (+3.4%). The op-level cost of those
+    # accumulators is far larger than this (+5% at 128 active tokens to +24% at 5120), so what lands
+    # here is diluted: the routed experts are one stage of the layer, and the hybrid split now sends
+    # any expert above 768 active tokens to the composite, which the change did not touch. The
+    # remaining shape is a mild deepening -- +2.4-3.5% over chunks 0-6 against +4.2-4.6% over 7-9 --
+    # consistent with per-expert counts rising as more of the KV window is attended.
+    #
+    # Cut from one run. Within-run stddev is 0.000-0.002 s (<=0.3%), so the medians are tight, but
+    # this table asks for a median across independent Galaxy runs -- re-cut that way when a chunk
+    # first disagrees rather than widening the 3% band.
     (61, 11, 10): [
-        0.412,
-        0.418,
-        0.451,
-        0.481,
-        0.512,
-        0.546,
-        0.574,
-        0.608,
-        0.656,
-        0.696,
-        0.735,
+        0.424,
+        0.428,
+        0.466,
+        0.493,
+        0.528,
+        0.559,
+        0.594,
+        0.634,
+        0.686,
+        0.725,
+        0.758,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
