@@ -126,8 +126,7 @@ TEST(TileConstructor, CustomFaceShapeRejectsTooManyFacesAlongADim) {
 }
 
 // transpose_tile is an extra flag on both constructors, not part of shape validation.
-// The tile-shape-only constructor additionally requires height 16 or 32; the custom
-// face-shape constructor does not.
+// Both constructors require height 16 or 32 when transpose is enabled.
 TEST(TileConstructorTranspose, DefaultsToOff) {
     const Tile tile({32, 32});
     EXPECT_FALSE(tile.get_transpose_within_face());
@@ -150,10 +149,16 @@ TEST(TileConstructorTranspose, TileShapeOnlyRejectsHeightOtherThan16Or32) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Tile height must equal 16 or 32 in transpose mode")));
 }
 
-TEST(TileConstructorTranspose, CustomFaceShapeEnablesFlagsWithoutHeightCheck) {
-    const Tile tile({8, 32}, {8, 16}, /*transpose_tile=*/true);
+TEST(TileConstructorTranspose, CustomFaceShapeEnablesFlagsWhenHeightIs16Or32) {
+    const Tile tile({16, 32}, {8, 16}, /*transpose_tile=*/true);
     EXPECT_TRUE(tile.get_transpose_within_face());
     EXPECT_TRUE(tile.get_transpose_of_faces());
+}
+
+TEST(TileConstructorTranspose, CustomFaceShapeRejectsHeightOtherThan16Or32) {
+    EXPECT_THAT(
+        [] { Tile({8, 32}, {8, 16}, /*transpose_tile=*/true); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Tile height must equal 16 or 32 in transpose mode")));
 }
 
 TEST(TileFromFaceGrid, DefaultFaceProduces32x32) { EXPECT_EQ(Tile::from_face_grid({2, 2}), Tile()); }
