@@ -378,7 +378,7 @@ jobs:
               "bh_loudbox"
               "bh_p300"
               "bh_p300_viommu"
-              "bh_loudbox_civ2_viommu"
+              "bh_loudbox_iommu"
               "bh_quietbox_2"
               "bh_quietbox_2_iommu"
             )

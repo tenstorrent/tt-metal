@@ -64,8 +64,8 @@ on:
         required: false
         default: true
         type: boolean
-      run-bh_loudbox_civ2_viommu:
-        description: "Run on bh_loudbox_civ2_viommu"
+      run-bh_loudbox_iommu:
+        description: "Run on bh_loudbox_iommu"
         required: false
         default: true
         type: boolean
@@ -181,7 +181,7 @@ jobs:
         || (github.event_name == 'workflow_dispatch' && (
               inputs.run-wh_n300_civ2 || inputs.run-wh_llmbox_civ2 || inputs.run-wh_galaxy
               || inputs.run-bh_loudbox || inputs.run-bh_p300 || inputs.run-bh_quietbox_2
-              || inputs.run-bh_loudbox_civ2_viommu))
+              || inputs.run-bh_loudbox_iommu))
         || github.event_name == 'push'
         || github.event_name == 'workflow_call' }}
       # Assemble enabled-skus from the checked per-SKU booleans on workflow_dispatch;
@@ -196,7 +196,7 @@ jobs:
               inputs.run-bh_loudbox               && 'bh_loudbox,'               || '',
               inputs.run-bh_p300                  && 'bh_p300,'                  || '',
               inputs.run-bh_quietbox_2            && 'bh_quietbox_2,'            || '',
-              inputs.run-bh_loudbox_civ2_viommu   && 'bh_loudbox_civ2_viommu,'   || ''
+              inputs.run-bh_loudbox_iommu         && 'bh_loudbox_iommu,'         || ''
             ) || 'ALL_SKUS_IN_TESTS' }}
       test-names: ${{ inputs.hw-test-names || '' }}
 
