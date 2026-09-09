@@ -171,12 +171,13 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     // operation_attributes.output_mem_config, which may be a shard_spec-less MemoryConfig.
     // validate_on_program_cache_miss() resolves the same way, so this keeps path selection here
     // consistent with the preconditions checked there.
-    const bool is_native =
-        (dim == 0) &&
-        ttnn::operations::data_movement::indexed_fill::is_native_indexed_fill_sharding(
-            input_a.tensor_spec(), input_b.tensor_spec(), batch_ids.tensor_spec(), output.memory_config());
+    const bool is_dim_0 = (dim == 0);
 
-    const bool is_shard_local = (dim == 0) && !is_native &&
+    const bool is_native =
+        is_dim_0 && ttnn::operations::data_movement::indexed_fill::is_native_indexed_fill_sharding(
+                        input_a.tensor_spec(), input_b.tensor_spec(), batch_ids.tensor_spec(), output.memory_config());
+
+    const bool is_shard_local = is_dim_0 && !is_native &&
                                 ttnn::operations::data_movement::indexed_fill::is_shard_local_indexed_fill(
                                     input_a.tensor_spec(), input_b.tensor_spec(), output.memory_config());
 
