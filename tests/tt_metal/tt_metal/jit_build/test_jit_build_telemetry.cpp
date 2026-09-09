@@ -127,7 +127,8 @@ TEST_F(BuildCacheTelemetryTest, ConcurrentRegistrationOfOneNameYieldsOneToken) {
 
     std::vector<std::thread> threads;
     std::vector<TelemetryToken*> observed(num_threads, nullptr);
-    for (int i = 0; i < num_threads; ++i) {
+    threads.reserve(num_threads);
+for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i] {
             auto& token = tel.get_or_register_metric("test.concurrent_registration");
             observed[i] = &token;
