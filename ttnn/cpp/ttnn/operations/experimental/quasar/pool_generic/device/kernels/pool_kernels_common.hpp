@@ -100,10 +100,8 @@ ALWI void fill_scalar(
     uint32_t& scalar_index,
     uint32_t stick_index,
     volatile uint16_t* config_ptr) {
-    // Per-stick scalar (avg pool, !one_scalar_per_core). stick_index is the GLOBAL output-stick index
-    // on this core: the config table is segmented by global stick, and with num_threads lanes each
-    // reader thread only visits every T-th stick, so a per-lane call counter would index the wrong
-    // segment. (The pre-lane version advanced a private counter by num_readers per call.)
+    // Per-stick scalar (avg pool). stick_index is the GLOBAL output-stick index on this core: the
+    // config table is segmented by global stick, and each lane only visits every T-th stick.
     scalar_cb.reserve_back(1);
 
     while (stick_index >= scalar_end && scalar_end < reader_nindices) {

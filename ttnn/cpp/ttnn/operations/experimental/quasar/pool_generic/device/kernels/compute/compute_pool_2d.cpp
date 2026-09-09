@@ -167,10 +167,9 @@ void kernel_main() {
     // runtime args are used while for grid sample the max out sticks is set
     const uint32_t num_out_sticks_this_cluster =
         max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
-    // This lane's share. The reader deals sticks round-robin (stick i -> lane i % T), so lane t owns
-    // quotient + 1 sticks for t < sticks % T and quotient otherwise; a lane past the stick count runs
-    // zero iterations (1 stick/core at T=4 leaves lanes 1..3 idle). The thread count never has to
-    // divide the stick count. get_num_threads()/get_my_thread_id() are 1/0 off Quasar.
+    // This lane's share: the reader deals sticks round-robin (stick i -> lane i % T), so lane t owns
+    // quotient + 1 sticks for t < sticks % T and quotient otherwise — no divisibility required.
+    // get_num_threads()/get_my_thread_id() are 1/0 off Quasar.
     const uint32_t num_threads = get_num_threads();
     const uint32_t num_out_sticks_per_thread =
         num_out_sticks_this_cluster / num_threads +

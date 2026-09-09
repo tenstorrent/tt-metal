@@ -579,21 +579,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
 
-    // Output sticks owned by each core (mirrors the legacy per-core loop); the compute RTA. The lanes
-    // split it themselves (reader: stick i -> lane i % T; compute: quotient + 1 for the first
-    // sticks % T lanes), so no divisibility by the thread count is required.
-    const uint32_t total_out_nhw = in_n * out_h * out_w;
-    const auto out_nhw_for_core = [&](uint32_t core_i) -> uint32_t {
-        uint32_t total_out_nhw_processed = 0;
-        if (is_block_sharded) {
-            total_out_nhw_processed = (core_i / rectangular_x) * max_out_nhw_per_core;
-        } else if (!is_width_sharded) {
-            total_out_nhw_processed = core_i * max_out_nhw_per_core;
-        }
-        const uint32_t remaining_out_nhw =
-            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
-        return std::min(max_out_nhw_per_core, remaining_out_nhw);
-    };
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
         input.dtype(),
@@ -810,13 +795,10 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // clear value CB (one entry per reader thread: each lane fills and reads its own copy)
     dfbs.push_back(
         local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, params.num_threads_per_cluster, params.data_format));
-    // raw input shard CB (borrowed input). Raw views only supply a base pointer (the kernel undoes
-    // the per-thread lane stagger with ptr - lane * entry_size), but striding validation still needs
-    // num_entries % num_threads, and shard heights (e.g. halo'd rows) divide by nothing — so view the
-    // shard as num_threads * k aligned-down entries instead of per-row pages. The TRISC-side stride of
-    // a STRIDED binding is entry_size * num_threads = the whole view per lane pass and must fit
-    // uint16_t L1 units (16 B), i.e. ~1 MB: k > 1 only for shards beyond that (e.g. the 112x112x64
-    // resnet stem held on a single cluster), where it keeps the stride in range at no kernel cost.
+    // raw input shard CB (borrowed input). Raw views only supply a base pointer (kernels undo the
+    // lane stagger with ptr - lane * entry_size), but striding validation still needs num_entries %
+    // num_threads, so view the region as num_threads * k aligned-down entries. k > 1 only when the
+    // STRIDED stride (entry_size * num_threads, uint16 in 16 B units) would exceed ~1 MB.
     const auto raw_view_geometry = [&](uint32_t total_bytes) {
         constexpr uint32_t k_max_stride_bytes = std::numeric_limits<uint16_t>::max() * 16u;
         const uint32_t k = std::max(1u, tt::div_up(total_bytes, k_max_stride_bytes));
@@ -909,12 +891,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             is_output_tiled ? std::nullopt : std::optional{pack_untilize_face},
             is_output_tiled ? std::nullopt : pack_untilize_tile));
     } else {
-        // Row-major pool2d output: compute packs each stick into the scratch DFB and the reader
-        // writes the output shard through DFB_OUT_SHARD, so out_cb is only the census self-loop
-        // binding below -- no kernel uses its pages. Its natural page count (sticks x 16-wide
-        // faces) need not divide the lane count (1 stick x 2 faces on a 32-channel width shard
-        // TT_FATALs the STRIDED entry check at num_threads=4), so give it the same lane-agnostic
-        // raw-view geometry as the other borrowed views (num_threads * k entries, base-only).
+        // Row-major output: compute packs into the scratch DFB and the reader writes the shard via
+        // DFB_OUT_SHARD, so out_cb is census-only -- no kernel touches its pages. Its natural page
+        // count need not divide the lane count, so reuse the lane-agnostic raw-view geometry.
         const auto [out_view_entry_size, out_view_num_entries] =
             raw_view_geometry(cb_sizes.out_cb_pagesize * cb_sizes.out_cb_npages);
         dfbs.push_back(
@@ -970,13 +949,10 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         TT_FATAL(config_mt != nullptr, "config tensor must be present when !one_scalar_per_core");
         constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
         const uint32_t max_config_tensor_size = max_out_nhw_per_core * 3 * sizeof(uint16_t);
-        // Lane-aware like DFB_READER_INDICES: the reader has num_threads producer threads, so a
-        // single entry fails the STRIDED entry check. DRAM path: one full-page staging slot per
-        // reader thread (each stages and reads its own copy at its write cursor). L1 path: raw view
-        // of the borrowed per-core page as num_threads * k entries; the kernel recovers the table
-        // base with ptr - lane * entry_size.
+        // Lane-aware like DFB_READER_INDICES. DRAM path: one full-page staging slot per reader
+        // thread. L1 path: raw view of the borrowed per-core page (num_threads * k entries).
         if (config_tensor_in_dram) {
-            // Slot holds one DRAM page (the reader's NoC read size); adjacent lane slots must not overlap.
+            // Slot holds one DRAM page (the reader's NoC read size); lane slots must not overlap.
             const uint32_t config_slot_size =
                 tt::round_up(std::max(max_config_tensor_size, config_buffer_page_size), 16u);
             dfbs.push_back(local_dfb(DFB_CONFIG, config_slot_size, params.num_threads_per_cluster, config_df));
@@ -1545,7 +1521,19 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         const NodeCoord node{core_x_i, core_y_i};
 
         const uint32_t core_nhw_index = is_block_sharded ? core_y_i : is_width_sharded ? 0 : core_i;
-        const uint32_t out_nhw_this_core = out_nhw_for_core(core_i);
+        // Output sticks owned by this core; the compute RTA. The lanes split it themselves (reader:
+        // stick i -> lane i % T; compute: quotient + 1 for the first sticks % T lanes), so no
+        // divisibility by the thread count is required.
+        uint32_t total_out_nhw_processed = 0;
+        if (is_block_sharded) {
+            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
+        } else if (!is_width_sharded) {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+        }
+        const uint32_t total_out_nhw = in_n * out_h * out_w;
+        const uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        const uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
 
         KernelRunArgs::RuntimeArgValues& reader0_rtas = reader0_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& reader1_rtas = reader1_run.runtime_arg_values;

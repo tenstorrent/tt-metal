@@ -135,16 +135,11 @@ FactoryParameters get_factory_parameters(
     bool split_reader = !single_reader_stream;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
     const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
-    // SPMD threads per cluster (reader AND compute KernelSpecs — symmetric STRIDED pairs producer
-    // thread i with consumer thread i, giving each (DM, NEO) team a private lane). Gen1 stays 1.
-    // Any per-core stick count is legal: the reader deals sticks round-robin (stick i -> lane i % T)
-    // and each compute lane derives its own share (quotient, +1 for the first sticks % T lanes), so
-    // a remainder just leaves the tail lanes with one stick fewer -- or idle, for shapes with fewer
-    // sticks than lanes (a batch-1 global avg pool is 1 stick/core). The lane count never degrades.
-    // TILE output stays single-lane (deliberate gap, not a shape accident): the tiled-output path
-    // keeps a 32-stick tilize accumulation across sticks and sizes DFB_FAST_TILIZE at in_ntiles_c
-    // entries, neither of which is lane-aware -- at num_threads=4 it TT_FATALs on the DFB entry
-    // count for in_ntiles_c < 4 and hangs otherwise (seen on the ZeBu emulator, 2026-09-04).
+    // SPMD threads per cluster: symmetric STRIDED pairs reader thread i with compute thread i into
+    // private (DM, NEO) lanes; Gen1 stays 1. Any per-core stick count is legal — the reader deals
+    // sticks round-robin and each compute lane derives its own share, so remainders just shorten
+    // tail lanes. TILE output stays single-lane (deliberate gap): its 32-stick tilize accumulation
+    // and DFB_FAST_TILIZE entry count are not lane-aware.
     const bool tiled_output = output_layout == Layout::TILE;
     const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? 4 : 1;
 

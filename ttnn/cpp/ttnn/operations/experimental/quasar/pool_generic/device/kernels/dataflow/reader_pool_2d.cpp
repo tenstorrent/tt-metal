@@ -309,14 +309,10 @@ void kernel_main() {
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         // for average pool the boundary fill in the large-kernel loop covers it, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            // Clear the WHOLE in_cb ring with the pool identity (-inf for max, 0 for avg). A
-            // thread's ring entries are strided (i, i+T, ...), so a per-thread contiguous clear
-            // from its own cursor miscovers the ring for num_threads > 1 — instead recover the
-            // ring base (cursor - thread_id * entry, the raw-view pattern) and let every thread
-            // idempotently fill it all. Direct CPU fill + flush instead of clear_out_tiles: its
-            // NoC self-loopback read is unreliable on the Quasar sim. NOTE: an earlier bring-up
-            // version zero-filled here, which is a valid max identity only for non-negative
-            // (post-ReLU) inputs; -inf is correct for any input.
+            // Clear the WHOLE in_cb ring with the pool identity (-inf for max, 0 for avg — a zero
+            // fill is only valid for non-negative inputs). A thread's ring entries are strided, so
+            // every thread recovers the ring base and idempotently fills it all. Direct CPU fill +
+            // flush: clear_out_tiles' NoC self-loopback read is unreliable on the Quasar sim.
             DataflowBuffer icb_clear(in_cb_id);
             const uint32_t icb_base = icb_clear.get_write_ptr() - get_my_thread_id() * icb_clear.get_entry_size();
             const uint32_t clear_bytes = icb_clear.get_entry_size() * multi_buffering_factor * get_num_threads();
@@ -355,8 +351,7 @@ void kernel_main() {
             cfg_noc.async_read(
                 reader_indices_accessor, reader_indices_cb, reader_page_size, {.page_id = core_nhw_index}, {});
             cfg_noc.async_read_barrier();
-            // No push: nothing consumes this (compute's census binding never waits); the staged
-            // copy is read back at this thread's write cursor.
+            // No push: census-only (nothing waits); read back at this thread's write cursor.
         }
     }
     // DRAM path: this thread's lane holds its own staged copy at its write cursor. L1 path: shared
@@ -393,8 +388,7 @@ void kernel_main() {
                 cfg_noc.async_read_barrier();
             }
         } else {
-            // L1 path: shared raw view (num_threads * k entries) of the per-core config page -- undo
-            // the lane stagger to recover the table base (same pattern as reader_indices / in_shard).
+            // L1 path: shared raw view -- undo the lane stagger (same pattern as reader_indices).
             config_l1_addr -= my_lane * config_cb.get_entry_size();
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
