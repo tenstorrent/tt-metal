@@ -200,3 +200,218 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def test_attach_counter_derived_bw_uses_real_peaks(tmp_path):
+    """End-to-end for the counter-derived BW% path: a synthetic noc-trace + fabric_link_bw
+    sidecar must yield NoC BW% against the AICLK-derived per-port peak and ETH BW% against
+    the trained per-link speed -- both computed from real peaks, not hardcoded constants."""
+    import json
+
+    # 50 GB/s/link, as the device sidecar reports on a 400G BH mesh.
+    (tmp_path / "fabric_link_bw_0.json").write_text(json.dumps({"device_id": 0, "per_link_gb_s": 50.0}))
+    # op 1: pure NoC, one port, 21.6 MB in 1 ms -> 21.6 GB/s == 50% of the 43.2 GB/s port peak.
+    # op 2: one fabric link, 25 MB in 1 ms -> 25 GB/s == 50% of the 50 GB/s link peak.
+    (tmp_path / "noc_trace_0.json").write_text(
+        json.dumps(
+            [
+                {"run_host_id": 1, "noc": "NOC_0", "num_bytes": 21_600_000, "sx": 0, "sy": 0, "type": "WRITE"},
+                {
+                    "run_host_id": 2,
+                    "noc": "NOC_0",
+                    "num_bytes": 25_000_000,
+                    "sx": 0,
+                    "sy": 0,
+                    "dx": 1,
+                    "dy": 9,
+                    "fabric_send": {"eth_chan": 0},
+                },
+            ]
+        )
+    )
+
+    # _device_perf_row cycles -> a measured AICLK of 1350 MHz (1.35 Mcycle over 1 ms), so the NoC
+    # port peak is derived from the real clock: 1350 MHz x 32 B/cycle = 43.2 GB/s. This mirrors the
+    # op["_device_perf_row"] the C++ fast path attaches (CSV-stage keys are not populated yet).
+    def _op(gid):
+        return {
+            "global_call_count": gid,
+            "_device_perf_row": {
+                "DEVICE FW DURATION [ns]": 1_000_000,
+                "DEVICE FW START CYCLE": 0,
+                "DEVICE FW END CYCLE": 1_350_000,
+            },
+        }
+
+    ops = [_op(1), _op(2)]
+    touched = process_ops_logs._attach_counter_derived_bw(iter(ops), tmp_path)
+    assert touched == 2
+    assert ops[0]["NOC BW UTIL FROM COUNTERS (%)"] == pytest.approx(50.0, abs=1.0)
+    assert "ETH BW UTIL FROM COUNTERS (%)" not in ops[0]  # no fabric traffic -> no lie
+    assert ops[1]["ETH BW UTIL FROM COUNTERS (%)"] == pytest.approx(50.0, abs=1.0)
+
+
+def test_analytical_ccl_bw_from_op_record():
+    """The all-gather BW is derived from the op record alone (output shape + ring_size + topology +
+    measured duration) -- no noc-traces. Reproduces the hand-validated stage-2 gather at 43%."""
+    op = {
+        "op_code": "AllGatherAsyncDeviceOperation",
+        "attributes": {"ring_size": "2", "num_links": "2", "topology": "Topology::Linear", "dim": "3"},
+        "output_tensors": [
+            {"shape": {"W": "1[1]", "Z": "1[1]", "Y": "9696[9696]", "X": "4096[4096]"}, "dtype": "BFLOAT16"}
+        ],
+    }
+    gbps, pct = process_ops_logs._analytical_ccl_bw(op, duration_ns=924_000, per_link_gbps=50.0)
+    assert gbps == pytest.approx(21.49, abs=0.2)
+    assert pct == pytest.approx(43.0, abs=1.0)
+    # No trained peak -> GB/s still known, %util blank (never fabricated).
+    _, pct_np = process_ops_logs._analytical_ccl_bw(op, 924_000, None)
+    assert pct_np is None
+    # A non-CCL op is left entirely alone.
+    matmul = {"op_code": "Matmul", "attributes": {}, "output_tensors": op["output_tensors"]}
+    assert process_ops_logs._analytical_ccl_bw(matmul, 924_000, 50.0) == (None, None)
+
+
+def test_generate_reports_writes_ccl_fabric_bw_column(tmp_path):
+    """End-to-end: an all-gather op + a fabric_link_bw sidecar must surface the analytical CCL
+    fabric-BW columns in the CSV, computed against the real trained link speed and no noc-traces."""
+    import json
+
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+    (log_folder / "fabric_link_bw_0.json").write_text(json.dumps({"device_id": 0, "per_link_gb_s": 50.0}))
+
+    ops = {
+        1: {
+            "global_call_count": 1,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "op_code": "AllGatherAsyncDeviceOperation",
+            "attributes": {"ring_size": "2", "num_links": "2", "topology": "Topology::Linear"},
+            "input_tensors": [],
+            "output_tensors": [
+                {
+                    "shape": {"W": "1[1]", "Z": "1[1]", "Y": "9696[9696]", "X": "4096[4096]"},
+                    "layout": "TILE",
+                    "dtype": "BFLOAT16",
+                    "storage_type": "DEV_0_DRAM_INTERLEAVED",
+                }
+            ],
+            "DEVICE FW DURATION [ns]": 924_000,
+        }
+    }
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    report_csv = Path(report_folder) / "ops_perf_results.csv"
+    with report_csv.open("r", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        row = next(reader)
+        assert "CCL FABRIC BW [GB/s]" in reader.fieldnames
+        assert "CCL FABRIC BW UTIL (%)" in reader.fieldnames
+        assert float(row["CCL FABRIC BW [GB/s]"]) == pytest.approx(21.49, abs=0.3)
+        assert float(row["CCL FABRIC BW UTIL (%)"]) == pytest.approx(43.0, abs=1.0)
+
+
+def test_enrich_ops_from_perf_csv_raises_when_op_missing(expect_error):
+    """A stale/partial cpp_device_perf_report.csv -- a host op absent from the perf CSV -- must raise
+    PerfCsvIncomplete (not assert-crash) so append_device_data can fall back to the complete legacy
+    path. This is the exact failure a stale report left in .logs by an earlier run produces."""
+    host_ops_by_device = {0: [{"global_call_count": 1, "metal_trace_id": None}]}
+    device_perf_by_device = {0: {(999, None, None): {"CORE COUNT": 8}}}  # knows op 999, not op 1
+    with expect_error(process_ops_logs.PerfCsvIncomplete, "not present in"):
+        process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
+
+    # A whole device missing from the perf CSV is likewise incomplete, not fatal.
+    with expect_error(process_ops_logs.PerfCsvIncomplete, "missing from"):
+        process_ops_logs._enrich_ops_from_perf_csv({1: [{"global_call_count": 1}]}, {0: {}}, None)
+
+
+def test_enrich_ops_from_perf_csv_enriches_when_complete():
+    """When the perf CSV covers every host op, the fast path enriches in place and attaches the
+    C++ perf row -- no exception, no fallback."""
+    host_ops_by_device = {0: [{"global_call_count": 5, "metal_trace_id": None}]}
+    device_perf_by_device = {0: {(5, None, None): {"CORE COUNT": 42, "METAL TRACE ID": None}}}
+    out = process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
+    op = out[0][0]
+    assert op["core_usage"]["count"] == 42
+    assert op["_device_perf_row"]["CORE COUNT"] == 42
+
+
+def test_append_device_data_falls_back_to_legacy_on_stale_perf_csv(monkeypatch, tmp_path):
+    """End-to-end routing: a stale/partial perf CSV present in .logs must not abort the report --
+    append_device_data catches PerfCsvIncomplete and re-runs the complete legacy device-log path
+    exactly once, on a freshly re-derived host op set."""
+    (tmp_path / process_ops_logs.PROFILER_CPP_DEVICE_PERF_REPORT).write_text("")  # exists -> fast path chosen
+    ops = {1: {"global_call_count": 1, "device_id": 0, "metal_trace_id": None}}
+
+    # Perf CSV parses to a report that does not contain op 1 -> fast path raises PerfCsvIncomplete.
+    monkeypatch.setattr(process_ops_logs, "load_device_perf_report", lambda _p: {0: {(999, None, None): {}}})
+
+    legacy_calls = {"n": 0}
+
+    def _fake_legacy(host_ops_by_device, log_folder, device_analysis_types, trace_replays):
+        legacy_calls["n"] += 1
+        return host_ops_by_device
+
+    monkeypatch.setattr(process_ops_logs, "_enrich_ops_from_device_logs", _fake_legacy)
+    monkeypatch.setattr(process_ops_logs, "build_sub_device_id_lookup_from_device_csv", lambda _p: {})
+    monkeypatch.setattr(process_ops_logs, "attach_sub_device_ids_to_ops", lambda *_a, **_k: None)
+    monkeypatch.setattr(process_ops_logs, "_build_trace_ops_mapping", lambda *_a, **_k: {})
+
+    host_ops_by_device, _ = process_ops_logs.append_device_data(
+        ops=ops,
+        traceReplays={},
+        logFolder=tmp_path,
+        analyze_noc_traces=False,
+        device_analysis_types=[],
+    )
+    assert legacy_calls["n"] == 1  # fell back to legacy exactly once
+    assert 0 in host_ops_by_device  # produced ops via legacy, no crash
+
+
+def test_generate_reports_writes_noc_counter_bytes_column(tmp_path):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    ops = {
+        1: {
+            "global_call_count": 1,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "input_tensors": [],
+            "output_tensors": [],
+            "NOC BYTES FROM COUNTERS": 402653184,
+        }
+    }
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    report_csv = Path(report_folder) / "ops_perf_results.csv"
+    with report_csv.open("r", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        row = next(reader)
+        assert "NOC BYTES FROM COUNTERS" in reader.fieldnames
+        assert row["NOC BYTES FROM COUNTERS"] == "402653184"

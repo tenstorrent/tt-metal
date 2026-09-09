@@ -271,6 +271,9 @@ def main():
         # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
         counter_group_bits = {
             "fpu": 0,
+            # SFPU_COUNTER is armed by the FPU group's register path; it has no
+            # bit of its own, so requesting "sfpu" selects the FPU group.
+            "sfpu": 0,
             "pack": 1,
             "unpack": 2,
             "l1_0": 3,
@@ -293,7 +296,7 @@ def main():
             else:
                 logger.warning(
                     f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
+                    f"Valid groups: fpu, sfpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
         # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
@@ -332,9 +335,11 @@ def main():
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
             logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
 
-    if not (
-        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
-    ):
+    # NOTE: perf_counter_groups is NOT a conflicting option anymore. The C++ fast post-process now
+    # emits the HW perf-counter columns itself (see impl/profiler/perf_counter_metrics.cpp), so a
+    # counter capture stays on the cpp path instead of falling back to the legacy Python parse of the
+    # full per-core device log (which OOMs at mesh scale).
+    if not (options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
     else:
         reasons = []
@@ -344,8 +349,6 @@ def main():
             reasons.append("--enable-sum-profiling")
         if options.profile_dispatch_cores:
             reasons.append("--profile-dispatch-cores")
-        if options.perf_counter_groups:
-            reasons.append("--profiler-capture-perf-counters")
 
         reason_str = ", ".join(reasons)
         logger.warning(

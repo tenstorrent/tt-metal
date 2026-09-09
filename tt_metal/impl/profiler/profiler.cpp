@@ -888,7 +888,10 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                          marker.risc == tracy::RiscType::NCRISC)) {
                         zones_by_op[program_execution_uid].push_back(marker);
                     }
-                } else if (isMarkerATimestampedDatapoint(marker)) {
+                } else if (isMarkerATimestampedDatapoint(marker) && marker.marker_id != PERF_COUNTER_PROFILER_ID) {
+                    // Perf-counter markers share the TS_DATA type but carry counter data, not a noc
+                    // event; decoding their payload as NocEventMetadata yields a bogus xfer_type that
+                    // trips the validity assert in coalesceFabricEvents.
                     timestamped_datapoints_by_op[program_execution_uid].push_back(marker);
                 }
             }
@@ -2193,7 +2196,18 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                                   const std::set<tracy::TTDeviceMarker>::iterator& original_marker_it)
         -> std::pair<std::set<tracy::TTDeviceMarker>::iterator, std::set<tracy::TTDeviceMarker>::iterator> {
         const auto& next_device_marker_it = device_markers.erase(original_marker_it);
-        const auto& [device_marker_it, _] = device_markers.insert(updated_marker);
+        const auto& [device_marker_it, inserted] = device_markers.insert(updated_marker);
+        // updateDeviceMarker only rewrites non-key fields (marker_name/meta_data/runtime_host_id),
+        // so on a clean capture the reinsert lands exactly where the erased marker was and
+        // std::next(device_marker_it) == next_device_marker_it. A dropped-marker run can emit a
+        // duplicate sort key: then insert is a no-op pointing at an unrelated element, or the
+        // reinsert shifts position. Trusting device_marker_it there corrupts set traversal and
+        // crashes a later deref. Degrade to a partial report: hand back the valid erase result so
+        // the caller keeps advancing and never stacks/derefs the bogus iterator.
+        if (this->had_dropped_markers.load(std::memory_order_relaxed) &&
+            (!inserted || std::next(device_marker_it) != next_device_marker_it)) {
+            return {next_device_marker_it, next_device_marker_it};
+        }
         TT_ASSERT(std::next(device_marker_it) == next_device_marker_it);
         return {device_marker_it, next_device_marker_it};
     };
@@ -2491,8 +2505,37 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
             ->device_programs_perf_analyses_map.at(this->device_id);
     device_programs_perf_analyses.push_back(translateProgramsPerfResults(programs_perf_results));
 
+    // HW perf-counter columns on the fast path. Reads the per-(op,core) counter markers straight
+    // from the in-memory device markers, so a counter run no longer falls back to the legacy Python
+    // path that pandas-reads the full per-core device log (the mesh-scale OOM). Returns empty (no
+    // added columns) when no counter markers were captured, leaving the default path byte-identical.
+    std::map<experimental::ProgramExecutionUID, double> kernel_cycles_by_uid;
+    {
+        std::optional<size_t> kernel_idx;
+        for (size_t i = 0; i < programs_perf_results.analysis_results_configs.size(); ++i) {
+            if (programs_perf_results.analysis_results_configs[i].analysis_name == "DEVICE KERNEL DURATION [ns]") {
+                kernel_idx = i;
+                break;
+            }
+        }
+        if (kernel_idx.has_value()) {
+            for (const auto& [uid, single] : programs_perf_results.program_execution_uid_to_perf_results) {
+                if (kernel_idx.value() < single.analysis_results.size()) {
+                    const auto& kr = single.analysis_results[kernel_idx.value()];
+                    if (kr.end_timestamp >= kr.start_timestamp) {
+                        kernel_cycles_by_uid[uid] = static_cast<double>(kr.end_timestamp - kr.start_timestamp);
+                    }
+                }
+            }
+        }
+    }
+    const bool counters_enabled = MetalContext::instance(context_id).rtoptions().get_profiler_perf_counter_mode() != 0;
+    const profiler_perf_counters::PerfCounterColumns counter_columns =
+        profiler_perf_counters::computePerfCounterColumns(
+            device_markers, this->max_compute_cores, kernel_cycles_by_uid, counters_enabled);
+
     writeProgramsPerfResultsToCSV(
-        programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME);
+        programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME, counter_columns);
 #endif
 }
 
@@ -2668,20 +2711,111 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     dumpDeviceResultsToCSV(
         device_markers_per_core_risc_map, device_arch, device_core_frequency, max_compute_cores, log_path);
 
+    // Persist the real per-link fabric bandwidth (read from eth-FW train_speed) so the offline
+    // post-process can compute ETH BW-util % against the speed the links actually trained to
+    // (200/400/800G) instead of a hardcoded per-arch peak -- otherwise the stat lies when the
+    // machine, cabling, or arch changes.
+    {
+        const auto link_bw = MetalContext::instance(context_id).get_cluster().get_trained_fabric_link_bw(device_id);
+        const nlohmann::json link_bw_json = {
+            {"device_id", device_id},
+            {"arch", get_string_lowercase(device_arch)},
+            {"per_link_gb_s", link_bw.per_link_gb_s},
+            {"num_active_eth_links", link_bw.num_active_links},
+            {"source", link_bw.from_hw ? "eth_fw_train_speed" : "arch_nominal"},
+        };
+        std::ofstream link_bw_file(device_logs_output_dir / fmt::format("fabric_link_bw_{}.json", device_id));
+        if (link_bw_file.is_open()) {
+            link_bw_file << link_bw_json.dump(2);
+        }
+    }
+
     if (MetalContext::instance(context_id).rtoptions().get_profiler_noc_events_enabled()) {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
-        FabricRoutingLookup routing_lookup;
-        std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
-            convertNocTracePacketsToJson(
-                device_markers_per_core_risc_map, context_id, device_id, routing_lookup, freq_scale, shift);
+        // A dropped-marker overflow leaves the noc-event stream truncated mid-sequence: the fabric
+        // coalescer then decodes stale bytes as event types/coordinates and TT_FATALs. The bytes are
+        // undercounted anyway, so skip noc-trace JSON for this device rather than abort the whole run.
+        if (this->had_dropped_markers.load(std::memory_order_relaxed)) {
+            log_warning(
+                tt::LogMetal,
+                "[profiler noc tracing] Device {} dropped profiler markers (buffer overflow); skipping noc-trace "
+                "JSON for this device -- the noc-event stream is truncated and its bandwidth would be undercounted. "
+                "Scope the capture smaller or drain mid-run to get noc traces.",
+                device_id);
+        } else {
+            FabricRoutingLookup routing_lookup;
+            std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
+                convertNocTracePacketsToJson(
+                    device_markers_per_core_risc_map, context_id, device_id, routing_lookup, freq_scale, shift);
 
-        if (!noc_trace_data.empty()) {
-            dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
+            if (!noc_trace_data.empty()) {
+                dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
+            }
         }
     }
 #endif
 }
+
+#if defined(TRACY_ENABLE)
+// TT: Phase 4 (Nsight-like zone tooltips) helper. Compact magnitude for a counter digest value
+// (1234567 -> "1.23M") so the per-zone label stays short. // TT-END
+static std::string formatCounterMagnitude(double v) {
+    const char* suffix = "";
+    if (v >= 1e9) {
+        v /= 1e9;
+        suffix = "G";
+    } else if (v >= 1e6) {
+        v /= 1e6;
+        suffix = "M";
+    } else if (v >= 1e3) {
+        v /= 1e3;
+        suffix = "K";
+    } else {
+        return fmt::format("{:.0f}", v);
+    }
+    return fmt::format("{:.2f}{}", v, suffix);
+}
+
+// TT: Phase 4. Aggregate each op's captured HW counters (summed across the op's cores, per the
+// plan's "NoC/compute counters are an across-core aggregate" rule) into a short digest string keyed
+// by runtime_host_id. Surfaced on the op's FW zone in the Tracy GUI (see TracyTTDevice.hpp). Built
+// only from counters already present this run, so it is empty and zero-overhead on the default
+// no-counter profile. Bounded to the top counters so the srcloc label (and #srclocs) stays small.
+// TT-END
+static std::unordered_map<uint64_t, std::string> buildOpCounterDigests(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
+    std::unordered_map<uint64_t, std::map<std::string, double>> per_op;
+    for (const auto& ref : device_markers_vec) {
+        const tracy::TTDeviceMarker& m = ref.get();
+        if (m.marker_id != PERF_COUNTER_PROFILER_ID) {
+            continue;
+        }
+        if (!m.meta_data.contains("counter type") || !m.meta_data.contains("value") ||
+            !m.meta_data["value"].is_number()) {
+            continue;
+        }
+        per_op[m.runtime_host_id][m.meta_data["counter type"].get<std::string>()] += m.meta_data["value"].get<double>();
+    }
+
+    std::unordered_map<uint64_t, std::string> digests;
+    for (const auto& [op_id, by_type] : per_op) {
+        std::vector<std::pair<std::string, double>> items(by_type.begin(), by_type.end());
+        std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::string digest = "[HW";
+        size_t n = 0;
+        for (const auto& [type, value] : items) {
+            if (n++ >= 4) {
+                break;
+            }
+            digest += fmt::format(" {}={}", type, formatCounterMagnitude(value));
+        }
+        digest += "]";
+        digests[op_id] = std::move(digest);
+    }
+    return digests;
+}
+#endif
 
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
@@ -2702,6 +2836,19 @@ void DeviceProfiler::pushTracyDeviceResults(
     }
 
     updateTracyContexts(device_markers_vec);
+
+    // TT: Phase 4 -- per-op HW-counter digest surfaced on the op's FW zone (rendered by
+    // TracyTTDevice.hpp). Empty when no counters were captured, so the default profile is unchanged.
+    const std::unordered_map<uint64_t, std::string> op_zone_summary = buildOpCounterDigests(device_markers_vec);
+    if (!op_zone_summary.empty()) {
+        // Verifiable evidence the digest reached the Tracy push path (the GUI srcloc label is the
+        // only part that then needs the Tracy GUI to eyeball).
+        log_info(
+            tt::LogMetal,
+            "Phase 4: built HW-counter zone digests for {} ops (e.g. {})",
+            op_zone_summary.size(),
+            op_zone_summary.begin()->second);
+    }
 
     for (auto& marker_ref : device_markers_vec) {
         std::reference_wrapper<const tracy::TTDeviceMarker>& marker_to_push_ref = marker_ref;
@@ -2730,6 +2877,26 @@ void DeviceProfiler::pushTracyDeviceResults(
                 orig_marker.marker_name_keyword_flags,
                 orig_marker.meta_data);
             marker_to_push_ref = std::cref(marker_with_adjusted_timestamp);
+        }
+
+        // TT: Phase 4 -- attach the op's counter digest to its FW ZONE_START (the same zones that
+        // carry the run-id in TracyTTDevice::getRunIdString, so #srclocs stays bounded to #ops).
+        tracy::TTDeviceMarker marker_with_summary;
+        if (!op_zone_summary.empty()) {
+            const tracy::TTDeviceMarker& m = marker_to_push_ref.get();
+            const bool is_op_fw_zone_start =
+                m.marker_type == tracy::TTDeviceMarkerType::ZONE_START &&
+                (m.marker_name_keyword_flags[static_cast<uint16_t>(
+                     tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
+                 m.marker_name_keyword_flags[static_cast<uint16_t>(tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]);
+            if (is_op_fw_zone_start) {
+                const auto summary_it = op_zone_summary.find(m.runtime_host_id);
+                if (summary_it != op_zone_summary.end()) {
+                    marker_with_summary = m;
+                    marker_with_summary.meta_data["zone_summary"] = summary_it->second;
+                    marker_to_push_ref = std::cref(marker_with_summary);
+                }
+            }
         }
 
         const tracy::TTDeviceMarker& marker_to_push = marker_to_push_ref.get();
