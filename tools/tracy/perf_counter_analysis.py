@@ -162,8 +162,7 @@ COUNTER_TYPE_NAMES = {
     129: "DEST_READ_GRANTED_2",
     130: "DEST_READ_GRANTED_3",
     131: "MATH_NOT_STALLED_DEST_WR_PORT",
-    # L1 Bank 4 req (BH only, mux position 4): ext packers 6-7, tag-search packer 1 (ports 32-34) and
-    # ext unpacker read interfaces 8-12 (ports 35-39)
+    # L1 bank 4 (BH only): ext packers 6-7, tag search, unpacker 0's extended read interfaces 1-5
     132: "L1_4_EXT_PACKER_6",
     133: "L1_4_EXT_PACKER_7",
     134: "L1_4_TAG_SEARCH_PACKER_1",
