@@ -35,8 +35,7 @@ def test_bw_expm1_all_bitpatterns(device, dtype):
     """Exhaustive: every bfloat16 bit pattern as the input, with an all-ones gradient.
 
     d/dx expm1(x) is exp(x), which is a normal float down to x = -87.34, so no finite input
-    in the swept set has a zero gradient.  Building it as expm1(x) + 1 lost the whole
-    x <= -6.25 (bfloat16) / x <= -17 (float32) tail to cancellation and returned exactly 0.
+    in the swept set has a zero gradient.
 
     The reference is evaluated in float64 rather than through the registered golden so that
     the comparison is not limited by the reference's own float32 rounding.
@@ -74,4 +73,4 @@ def test_bw_expm1_all_bitpatterns(device, dtype):
 
     lost = checked & (result == 0)
     assert lost.sum() == 0, f"{int(lost.sum())} inputs returned a zero gradient, first at x={float(x[lost][0])}"
-    assert_with_ulp(golden[checked], result[checked], ulp_threshold=2)
+    assert_with_ulp(expected_result=golden[checked], actual_result=result[checked], ulp_threshold=2)
