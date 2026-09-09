@@ -23,10 +23,6 @@ dot = ttnn.moreh_dot
 dot_backward = ttnn.moreh_dot_backward
 fold = ttnn.moreh_fold
 getitem = ttnn.moreh_getitem
-group_norm = ttnn.moreh_group_norm
-group_norm_backward = ttnn.moreh_group_norm_backward
-layer_norm = ttnn.moreh_layer_norm
-layer_norm_backward = ttnn.moreh_layer_norm_backward
 linear = ttnn.moreh_linear
 linear_backward = ttnn.moreh_linear_backward
 logsoftmax = ttnn.moreh_logsoftmax
@@ -41,17 +37,11 @@ nll_loss_unreduced_backward = ttnn.moreh_nll_loss_unreduced_backward
 norm = ttnn.moreh_norm
 norm_backward = ttnn.moreh_norm_backward
 sgd = ttnn.moreh_sgd
-softmax = ttnn.moreh_softmax
-softmax_backward = ttnn.moreh_softmax_backward
 softmin = ttnn.moreh_softmin
 softmin_backward = ttnn.moreh_softmin_backward
 sum = ttnn.moreh_sum
 sum_backward = ttnn.moreh_sum_backward
 
-SoftmaxBackwardOp = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp
-SoftmaxBackwardOpParallelizationStrategy = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOpParallelizationStrategy
-SoftmaxOp = ttnn._ttnn.operations.moreh.MorehSoftmaxOpParallelizationStrategy
-SoftmaxOpParallelizationStrategy = ttnn._ttnn.operations.moreh.MorehSoftmaxOpParallelizationStrategy
 
 
 def _golden_abs_pow(input, p, *_, **__):

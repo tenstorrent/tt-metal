@@ -30,7 +30,6 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
             sdpa_config.hpp
-            attention_softmax/attention_softmax.hpp
             concatenate_heads/concatenate_heads.hpp
             sdpa/sdpa.hpp
             sdpa/sparse_sdpa.hpp

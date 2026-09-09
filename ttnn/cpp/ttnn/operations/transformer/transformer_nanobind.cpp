@@ -12,7 +12,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
 #include "gated_delta_attn/gated_delta_attn_nanobind.hpp"
 #include "chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.hpp"
@@ -69,7 +68,6 @@ void py_module(nb::module_& mod) {
                 "PagedCacheGeometryOverride(block_size={}, num_kv_heads={})", geo.block_size, geo.num_kv_heads);
         });
 
-    bind_attention_softmax(mod);
     bind_concatenate_heads(mod);
     bind_split_query_key_value_and_split_heads(mod);
 
