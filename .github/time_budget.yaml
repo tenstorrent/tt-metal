@@ -193,6 +193,7 @@ shield:
     bh_p150: 60
   demo:
     bh_sc4: 50
+    bh_sc1: 75
 
 scaleout:
   merge_gate:
@@ -408,7 +409,7 @@ models:
   demo:
     bh_galaxy: 470
     bh_sc1: 536
-    bh_sc1_high_power: 176
+    bh_sc1_high_power: 191
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

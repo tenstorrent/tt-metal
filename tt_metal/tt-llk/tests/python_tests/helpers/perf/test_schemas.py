@@ -904,8 +904,10 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_unary_datacopy_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "data_copy_type",
             "dest_acc",
             "dest_sync",
@@ -919,6 +921,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -1059,8 +1063,10 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_l1_acc_quasar": "perf_pack_l1_acc_quasar"},
     },
     "perf_pack_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -1072,6 +1078,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
