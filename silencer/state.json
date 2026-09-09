@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-08",
+  "last_scan_date": "2026-09-09",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -44,7 +44,8 @@
     "34085742089",
     "34182246734",
     "34079232201",
-    34310201941
+    34310201941,
+    "34189578249"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -354,13 +355,13 @@
     {
       "title": "Warn once for tilize legacy shard-spec fallback",
       "branch": "silencer/tilize-warn-once-shard-spec",
-      "status": "dispatched",
-      "reported": false,
+      "status": "resolved",
+      "reported": true,
       "category": 6,
-      "note": "Interim: build-artifact success, Qwen3-32B e2e test job still queued in run 34277441628. Posted interim comment + marked ready for review 2026-09-09. Awaiting terminal state next run.",
+      "note": "PR #55822 fully resolved: validation run 34277441628 (models-t2-e2e-tests, Qwen3-32B) job 102237001225 completed/failure - unrelated cross-batch consistency AssertionError in test_qwen3_32b eval, not the tilize fix. Re-grepped full job log for target warning: 2 occurrences (was 192 in a 5000-line sample pre-fix) - one per process, confirming std::call_once per-process gating works as intended. Outcome commented (/codeowners ping) on 2026-09-09. PR was already out of draft; no mark-ready-for-review needed.",
       "validation_dispatched": "models-t2-e2e-tests.yaml (model=qwen3-32b, sku=wh_llmbox_perf) dispatched this run",
       "nonterminal_reported": true,
-      "last_state": "in_progress",
+      "last_state": "failure",
       "number": 55822
     },
     {
@@ -369,7 +370,22 @@
       "status": "opened",
       "reported": false,
       "note": "PR opened this run to add __test__=False to TestMetadataLoader in tests/tt_metal/tt_metal/data_movement/python/test_metadata.py; found in runtime-perf-profiler-tests/runtime_perf_data_movement[bh_p150_perf] job 102343682696 of run 34310201941."
+    },
+    {
+      "branch": "silencer/dedupe-split-l1-dram-downgrade-warnings",
+      "title": "Dedupe repeated ttnn.split L1/DRAM downgrade warnings",
+      "pattern": "ttnn.split: L1 budget exceeded / migrating L1 input to DRAM - both fire once per op invocation with identical values (500x each in a 5000-line sample of one job)",
+      "source_run_id": "34189578249",
+      "source_job_id": "101947802153",
+      "source_workflow": "models-t3-e2e-tests.yaml",
+      "category": 5,
+      "validation_workflow_dispatched": "models-t3-e2e-tests",
+      "dispatched": "2026-09-09",
+      "status": "dispatched",
+      "reported": false,
+      "nonterminal_reported": false,
+      "note": "PR opened this run (gated both log_warning calls in ttnn/cpp/ttnn/operations/data_movement/split/split.cpp with static std::once_flag/std::call_once, same idiom as groupnorm.cpp). Dispatched models-t3-e2e-tests for validation; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Rotated through galaxy-integration-tests (34182246734: warning/critical lines were real fatal hw errors in a failing job, not noise - skipped) and models-t2-e2e-tests (34079232201: found tilize shard-spec warning spam, fixed, PR opened branch silencer/tilize-warn-once-shard-spec). Next rotation: blackhole-sanity-tests, then continue models-t2/t3-e2e-tests."
+  "backlog_cursor": "Rotated to models-t3-e2e-tests (run 34189578249): found ttnn.split L1-budget/migration warning spam (500x each in Gemma-2-2B job sample) - fixed, PR opened branch silencer/dedupe-split-l1-dram-downgrade-warnings. Noted matmul mem-config-mismatch spam still present (Falcon-7B job, 2703x sample) but already tracked under PR #51894 (inconclusive) - not re-targeting. Next: continue models-t3-e2e-tests other jobs, then blackhole-sanity-tests (stale since Aug 13), then models-t1/t2-e2e-tests."
 }
