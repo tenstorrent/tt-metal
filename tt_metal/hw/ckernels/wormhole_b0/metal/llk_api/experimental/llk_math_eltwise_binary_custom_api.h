@@ -45,15 +45,23 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
  */
 inline void llk_math_sub_bcast_cols_compensated_init() { _llk_math_sub_bcast_cols_compensated_init_(); }
 
+// Diagnose actual unsupported calls, not inclusion of this header by 16-bit kernels.
+[[gnu::error("Wormhole compensated column subtraction requires FP32 destination accumulation")]]
+void llk_math_sub_bcast_cols_compensated_requires_fp32_dest();
+
 /**
  * @brief Runs cancellation-resistant column subtraction over consecutive destination tiles.
  * @param operandA CB id of the input tiles; its tile shape configures the FPU traversal.
  * @param dst_index First destination tile index.
  * @param ct_dim Number of consecutive destination tiles to process.
  * @note Call @ref llk_math_sub_bcast_cols_compensated_init first. The destination range must fit in the acquired bank.
+ * @note Wormhole requires FP32 destination accumulation because its TF32 MOVB2D seed writes 32-bit DST rows.
  */
 inline void llk_math_sub_bcast_cols_compensated(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    if constexpr (!DST_ACCUM_MODE) {
+        llk_math_sub_bcast_cols_compensated_requires_fp32_dest();
+    }
     LLK_ASSERT(
         (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
