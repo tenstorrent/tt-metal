@@ -19,7 +19,12 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from models.tt_transformers.tt.load_checkpoints import is_param_replicated_across_shards
+
+def _is_param_replicated_across_shards(key: str) -> bool:
+    """Replicated (not sharded) Meta checkpoint params must not be concatenated."""
+    if key.startswith("vision_model."):
+        return any(keyword in key for keyword in ("ln", "gate", "embed", "c_proj.bias"))
+    return any(keyword in key for keyword in ("norm", "gate"))
 
 
 def layer_num(key):
@@ -41,7 +46,7 @@ def chunk_key(key, chunk_size):
 
 def get_unified_tensor(key, value, hidden_size):
     res = None
-    if len(value) == 1 or is_param_replicated_across_shards(key):
+    if len(value) == 1 or _is_param_replicated_across_shards(key):
         res = value[0]
     else:
         if key.endswith("tok_embeddings.weight") or key.endswith("output.weight"):

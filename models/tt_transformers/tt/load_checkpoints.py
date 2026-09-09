@@ -5,42 +5,9 @@
 import json
 import os
 import re
-from pathlib import Path
 
 import torch
-from loguru import logger
-from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import safe_open as safetensors_safe_open
-from tqdm import tqdm
-
-
-# TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
-def load_hf_state_dict(ckpt_dir):
-    # First check if index file exists
-    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
-    if os.path.exists(index_path):
-        # Multi-file case: Read the index file and load all referenced safetensor files
-        with open(index_path, "r") as f:
-            index_data = json.load(f)
-
-        # Retrieve the weight file names from the index JSON
-        weight_map = index_data["weight_map"]
-        safetensor_files = set(weight_map.values())
-
-        # Read each safetensors file mentioned in the index
-        loaded_weights = {}
-        for file in safetensor_files:
-            safetensor_path = os.path.join(ckpt_dir, file)
-            weights = safetensors_load_file(safetensor_path)
-            loaded_weights.update(weights)  # Merge weights into a single dictionary
-    else:
-        # Single-file case: Load the single model.safetensors file
-        safetensor_path = os.path.join(ckpt_dir, "model.safetensors")
-        if not os.path.exists(safetensor_path):
-            raise FileNotFoundError(f"Neither model.safetensors.index.json nor model.safetensors found in {ckpt_dir}")
-        loaded_weights = safetensors_load_file(safetensor_path)
-
-    return loaded_weights
 
 
 def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
@@ -331,83 +298,6 @@ def convert_vision_hf_to_meta_no_qkv_permute(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
     state_dict = map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim)
     return state_dict
-
-
-def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = any(ckpt.stem.startswith("layers_") for ckpt in checkpoints)
-    if is_chunked:
-        checkpoints = [ckpt_name for ckpt_name in checkpoints if ckpt_name.stem.startswith("layers_")]
-        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
-    else:
-        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
-
-    return checkpoint
-
-
-def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
-    checkpoint = {}
-
-    (f"Loading {len(checkpoints)} chunked checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        if n_layers:
-            # Layer range is in the file name, like layers_start-end.pth
-            layer_range = ckpt.stem.split("_")[1]
-            start_layer, end_layer = map(int, layer_range.split("-"))
-            if start_layer > n_layers + start_layer_idx:
-                continue
-            if end_layer < start_layer_idx:
-                continue
-
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        checkpoint.update(loaded_ckpt)
-    return checkpoint
-
-
-def is_param_replicated_across_shards(key: str) -> bool:
-    """
-    Return `True` if the parameter is replicated (i.e., not sharded)
-    across checkpoint files and should not be concatenated.
-    """
-    if key.startswith("vision_model."):
-        return any(keyword in key for keyword in ("ln", "gate", "embed", "c_proj.bias"))
-    else:
-        # for Meta checkpoint keys, key either starts with "text_model." or contains no such prefix; both cases are handled here
-        return any(keyword in key for keyword in ("norm", "gate"))
-
-
-def load_sharded_checkpoints(checkpoints, n_layers):
-    checkpoint = {}
-    logger.info(f"Loading {len(checkpoints)} sharded checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        for key, value in loaded_ckpt.items():
-            if "layers." in key:
-                layer_num = int(key.split("layers.")[1].split(".")[0])
-                if n_layers and layer_num >= n_layers:
-                    continue
-            if key in checkpoint:
-                checkpoint[key] += [value]
-            else:
-                checkpoint[key] = [value]
-        del loaded_ckpt
-
-    # concat checkpoint values
-    for key, value in checkpoint.items():
-        if len(value) == 1 or is_param_replicated_across_shards(key):
-            checkpoint[key] = value[0]
-        else:
-            if key.endswith("tok_embeddings.weight") or key.endswith("output.weight"):
-                assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
-                # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
-                checkpoint[key] = torch.cat(value, dim=0)
-            else:
-                # cat_dim is index of the smallest dimension in value[0].shape
-                cat_dim = torch.argmin(torch.tensor(value[0].shape))
-                checkpoint[key] = torch.cat(value, dim=cat_dim)
-
-    return checkpoint
 
 
 def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):

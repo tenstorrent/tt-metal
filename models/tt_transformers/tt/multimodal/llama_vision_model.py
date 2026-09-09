@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import collections
 import logging
 import math
 from collections import defaultdict
@@ -33,34 +32,6 @@ MP_SCALE = 8
 
 def get_negative_inf_value(dtype):
     return torch.finfo(dtype).min
-
-
-def to_2tuple(x):
-    if isinstance(x, collections.abc.Iterable):
-        return x
-    return (x, x)
-
-
-def build_encoder_attention_mask(
-    x: torch.Tensor,
-    ar: torch.Tensor,
-    ntok: int,
-    num_chunks: int,
-    n_heads: int,
-):
-    """
-    Build vision encoder attention mask that omits padding tokens.
-    """
-    masks = []
-    for arx in ar:
-        mask_i = torch.ones((num_chunks, x.shape[2], 1), dtype=x.dtype)
-        mask_i[: arx[0] * arx[1], :ntok] = 0
-        mask_i = mask_i.view(num_chunks * x.shape[2], -1)
-        mask_i = mask_i @ mask_i.T * get_negative_inf_value(x.dtype)
-        mask_i = mask_i.unsqueeze(0)
-        masks.append(mask_i)
-    masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
-    return masks
 
 
 def _get_full_row_masked_out_mask(

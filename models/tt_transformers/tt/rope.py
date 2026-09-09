@@ -338,15 +338,6 @@ def rotary_embedding_factory(
         )
 
 
-def compute_freqs_cis(
-    dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling]
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    rotary_embedding = rotary_embedding_factory(
-        dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
-    )
-    return rotary_embedding.freqs_cis
-
-
 def compute_gather_cos_sin(
     dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling]
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -455,145 +446,11 @@ def get_rot_mats_hf(
     return [cos_matrix, sin_matrix]
 
 
-class HfRotarySetupOld(LightweightModule):
-    """Legacy HF rope setup: HF-format cos/sin caches for ``ttnn.experimental.rotary_embedding``.
-
-    Prefer :class:`HfRotarySetup` with ``ttnn.experimental.rotary_embedding_hf`` for production.
-    """
-
-    def __init__(
-        self,
-        device: Any,
-        batch_size: int,
-        head_dim: int,
-        max_seq_len: int,
-        rope_theta: float,
-        rope_scaling: Optional[RopeScaling] = None,
-        use_qk_fused: bool = False,
-        datatype: ttnn.DataType = ttnn.bfloat16,
-        shard_batch_to_mesh_dim: Optional[int] = 1,  # Those are kept for API compatibility with RotarySetup
-        prefetcher: Optional[Prefetcher] = None,
-    ) -> None:
-        super().__init__()
-        if use_qk_fused:
-            raise NotImplementedError("use_qk_fused")
-        self.batch_size = batch_size
-        self.head_dim = head_dim
-        self.max_seq_len = max_seq_len
-
-        self.device = device
-        # Generate the cos/sin matrices in HF format (no Meta permutation)
-        # Generate for max_seq_len to allow slicing in prepare_inputs_prefill
-        self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
-            head_dim=head_dim,
-            device=device,
-            seq_len=max_seq_len,
-            theta=rope_theta,
-            rope_scaling=rope_scaling,
-            datatype=datatype,
-        )
-
-        self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats_hf(
-            head_dim=head_dim,
-            device=device,
-            seq_len=max_seq_len,
-            theta=rope_theta,
-            rope_scaling=rope_scaling,
-            datatype=datatype,
-        )
-
-        # Store 2D versions for embedding lookup (trace-compatible slicing)
-        # Reshape from [1, 1, max_seq_len, head_dim] to [max_seq_len, head_dim]
-        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, head_dim))
-        self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, head_dim))
-
-        self.transformation_mat = None
-        self.transformation_mat_prefill = None
-
-    def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
-        assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
-        assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
-
-        batch = position_idxs.shape[0]
-        position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
-        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
-        assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
-
-        # Add padding if needed
-        pad_size = nearest_32(batch) - batch
-        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
-
-        if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
-            rot_idxs = ttnn.as_tensor(
-                position_idxs,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
-            )
-        else:  # On device
-            rot_idxs = ttnn.as_tensor(
-                position_idxs,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
-            )
-
-        return rot_idxs
-
-    def get_rot_mats(
-        self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
-    ) -> List[ttnn.Tensor]:
-        """Get rotation matrices (cos/sin) for HF-style RoPE, one row per batch slot.
-
-        Decode attention slices ``cos[:, :, b:b+1, :]`` / ``sin`` to ``[1, 1, 1, head_dim]`` and
-        calls ``ttnn.experimental.rotary_embedding(..., token_idx=0)`` per batch index (trace-safe
-        fixed loop). Prefill uses full-sequence cos/sin from separate tensors.
-
-        Args:
-            position_idxs: Per-batch positions. Device ``ttnn.Tensor`` ``[1, batch_padded]`` (``uint32``,
-                same padding as ``get_rot_idxs``) for trace, or 1D / ``[1, batch]`` ``torch.Tensor``
-                (processed via ``get_rot_idxs``). Each batch slot must appear explicitly in the index
-                tensor; there is no special case for a single position replicated across
-                ``batch_size`` or for a Python ``int``.
-            return_rot_idxs: If True, also return ``position_idxs`` unchanged.
-
-        Returns:
-            ``[cos, sin]`` with shape ``[1, 1, batch_padded, head_dim]``.
-        """
-        if isinstance(position_idxs, ttnn.Tensor):
-            rot_idx = position_idxs
-            if len(rot_idx.shape) == 1:
-                rot_idx = ttnn.unsqueeze(rot_idx, 0)
-            cos_emb = ttnn.embedding(rot_idx, self.cos_matrix_2d, layout=ttnn.TILE_LAYOUT)
-            sin_emb = ttnn.embedding(rot_idx, self.sin_matrix_2d, layout=ttnn.TILE_LAYOUT)
-            cos_sliced = ttnn.unsqueeze_to_4D(cos_emb)
-            sin_sliced = ttnn.unsqueeze_to_4D(sin_emb)
-        elif isinstance(position_idxs, torch.Tensor):
-            idx_1d = position_idxs.reshape(-1)
-            rot_idx = self.get_rot_idxs(idx_1d)
-            cos_emb = ttnn.embedding(rot_idx, self.cos_matrix_2d, layout=ttnn.TILE_LAYOUT)
-            sin_emb = ttnn.embedding(rot_idx, self.sin_matrix_2d, layout=ttnn.TILE_LAYOUT)
-            cos_sliced = ttnn.unsqueeze_to_4D(cos_emb)
-            sin_sliced = ttnn.unsqueeze_to_4D(sin_emb)
-        else:
-            raise TypeError(f"position_idxs must be torch.Tensor or ttnn.Tensor, got {type(position_idxs)}")
-
-        if return_rot_idxs:
-            return [cos_sliced, sin_sliced], position_idxs
-        return [cos_sliced, sin_sliced]
-
-    def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
-        return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
-
-
 class HfRotarySetup(LightweightModule):
     """HF rope setup for ``ttnn.experimental.rotary_embedding_hf`` (decode and prefill).
 
     Decode cos/sin caches use ``ROW_MAJOR`` layout for ``ttnn.embedding`` row gather; prefill
-    uses ``TILE`` layout via :func:`get_rot_mats_hf`. See :class:`HfRotarySetupOld` for the legacy
-    ``rotary_embedding`` path.
+    uses ``TILE`` layout via :func:`get_rot_mats_hf`.
     """
 
     def __init__(
@@ -947,12 +804,10 @@ class RotarySetup(LightweightModule):
         (e.g., rotary_embedding_llama). It slices the cos/sin cache by position indices
         and returns batch-specific, sharded rotation matrices.
 
-        NOTE: This behaves differently from HfRotarySetupOld.get_rot_mats() due to different
-        underlying RoPE implementations:
-        - RotarySetup (this class): Uses Meta-style RoPE with embedding-based position slicing.
-          Returns cos/sin matrices sliced by position_idxs and sharded across batch dimension.
-        - HfRotarySetupOld: Legacy HF-style RoPE (``ttnn.experimental.rotary_embedding``) which expects
-          the full cos/sin cache. Returns the raw, unsliced cache matrices.
+        NOTE: This is Meta-style RoPE with embedding-based position slicing (used by
+        ``rotary_embedding_llama``). It returns cos/sin sliced by ``position_idxs`` and
+        sharded across the batch dimension. :class:`HfRotarySetup` is the HF-format path
+        (``ttnn.experimental.rotary_embedding_hf``).
 
         Args:
             position_idxs: Position indices to slice rotation matrices. Can be torch.Tensor or ttnn.Tensor.

@@ -53,24 +53,6 @@ class Mode(Enum):
     PREFILL = "prefill"
 
 
-class HostEmbedding(torch.nn.Module):
-    def __init__(self, model_args):
-        super().__init__()
-        self.emb = torch.nn.Embedding(model_args.vocab_size, model_args.dim)
-
-    def forward(self, x):
-        return self.emb(x)
-
-
-class HostScaledEmbedding(HostEmbedding):
-    def __init__(self, model_args):
-        super().__init__(model_args)
-        self.embed_scale = model_args.embed_scale
-
-    def forward(self, x):
-        return self.emb(x) * self.embed_scale
-
-
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):
@@ -531,88 +513,12 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
-    cos, sin = precompute_freqs(
-        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
-    )
-    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
-    assert cos_gathered.size() == (1, 1, seq_len, head_dim)
-    assert sin_gathered.size() == (1, 1, seq_len, head_dim)
-
-    cos_gathereds = ttnn.from_torch(
-        cos_gathered,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    sin_gathereds = ttnn.from_torch(
-        sin_gathered,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    rot_mats = [cos_gathereds, sin_gathereds]
-    return rot_mats
-
-
 #  Add-Multiply method of rotary embeddings for prefill
 def get_rot_transformation_mat(dhead=32):
     # ROPE op uses a single tile
     dhead = 32
     # Delegate to TTTv2 implementation for consistency
     return get_rot_transformation_mat_v2(dhead)
-
-
-def get_single_rot_mat(
-    dhead,
-    mesh_device,
-    num_devices,
-    start_pos,
-    theta,
-    scale_factor,
-    orig_context_len,
-    on_host=False,
-):
-    freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
-    if scale_factor is not None:
-        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type="llama3")
-    rot_matrix = torch.zeros(dhead, dhead)
-    # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
-    sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
-    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-    rot_matrix = rot_matrix.transpose(-1, -2)
-
-    # Support for start_pos different than 0
-    freqs = start_pos * freqs_unscaled
-    if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type="llama3")
-    current_rot_mat = torch.zeros(dhead, dhead)
-    # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
-    sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)
-    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-
-    return ttnn.from_torch(
-        current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-        device=mesh_device if not on_host else None,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
-    ), ttnn.from_torch(
-        rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-        device=mesh_device if not on_host else None,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
-    )
 
 
 def num_to_core_range_set(x):
@@ -680,22 +586,6 @@ def get_out_subblock_w(per_core_N, out_subblock_h):
             break
         out_subblock_w -= 1
     return out_subblock_w
-
-
-def first_five(tensor, mesh_device, start=0, end=5):
-    """
-    Helper function to return the first 5 elements of a tensor via torch, or optionally another slice
-    """
-    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[
-        0, 0, 0, start:end
-    ]
-
-
-def last_five(tensor, mesh_device):
-    """
-    Helper function to return the last 5 elements of a tensor via torch
-    """
-    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, -5:]
 
 
 # Sample logits from a distribution
@@ -775,10 +665,6 @@ def get_block_size(kv_cache):
 
 def num_blocks_in_seq(seq_len, block_size):
     return math.ceil(seq_len / block_size)
-
-
-def nearest_pow_2(x):
-    return 2 ** math.ceil(math.log2(x))
 
 
 def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
@@ -1007,33 +893,6 @@ def hf_multimodal_encode(messages, processor):
             mask=None,
         ),
     )
-
-
-def get_decode_mask(args, mesh_device, paged_attention_config=None):
-    """Function to create a decoding mask for the attention mechanism."""
-    if paged_attention_config is not None:
-        max_seq_len = (paged_attention_config.max_num_blocks * paged_attention_config.block_size) // args.max_batch_size
-    else:
-        max_seq_len = args.max_seq_len
-    mask = torch.triu(
-        torch.full(
-            (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
-            -float("inf"),
-            dtype=torch.bfloat16,
-        ),
-        diagonal=1,
-    )
-    if args.sliding_window > 0:
-        mask += torch.tril(
-            torch.full(
-                (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
-                -float("inf"),
-                dtype=torch.bfloat16,
-            ),
-            diagonal=-args.sliding_window,
-        )
-
-    return mask
 
 
 def build_encoder_attention_mask(

@@ -14,7 +14,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
 from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, get_single_rot_mat
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
@@ -340,17 +340,6 @@ def test_cross_attention_transformer_text_inference(
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
-            rot_mats, _ = get_single_rot_mat(
-                model_args.head_dim,
-                mesh_device,
-                model_args.num_devices,
-                start_pos=cur_pos - 1,
-                theta=model_args.rope_theta,
-                scale_factor=model_args.rope_scaling.factor if model_args.rope_scaling else None,
-                orig_context_len=model_args.rope_scaling.original_max_position_embeddings
-                if model_args.rope_scaling
-                else None,
-            )
             tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
             rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)
 
