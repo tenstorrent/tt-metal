@@ -20,9 +20,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-template <typename FIXTURE>
 static void prepare_bidir_integrity(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& send_core,
     uint32_t transfer_size,
@@ -42,8 +40,8 @@ static void prepare_bidir_integrity(
     uint32_t recvbuf1,
     tt_metal::Program* send_program) {
     /* =================== */
-    tensix_counter_dram(fixture, mesh_device, dram_start_addr, dram_end_addr, read_bank);
-    tensix_zero_dram(fixture, mesh_device, dram_start_addr, dram_end_addr, write_bank);
+    tensix_counter_dram(mesh_device, dram_start_addr, dram_end_addr, read_bank);
+    tensix_zero_dram(mesh_device, dram_start_addr, dram_end_addr, write_bank);
 
     auto send_eth_config = tt_metal::EthernetConfig{
         .noc = tt_metal::NOC::NOC_0,
@@ -82,9 +80,7 @@ static void prepare_bidir_integrity(
         });
 }
 
-template <typename FIXTURE>
 static bool run_test_integrity_dram_bidir(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
@@ -130,7 +126,6 @@ static bool run_test_integrity_dram_bidir(
     };
 
     prepare_bidir_integrity(
-        fixture,
         send_mesh_device,
         send_core,
         transfer_size,
@@ -151,7 +146,6 @@ static bool run_test_integrity_dram_bidir(
         programs[send_mesh_device].get());
 
     prepare_bidir_integrity(
-        fixture,
         recv_mesh_device,
         recv_core,
         transfer_size,
@@ -171,9 +165,6 @@ static bool run_test_integrity_dram_bidir(
         recvbuf1,
         programs[recv_mesh_device].get());
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
     vector<struct core_setup> cores = {
         {
             .program = programs[send_mesh_device],
@@ -190,7 +181,7 @@ static bool run_test_integrity_dram_bidir(
             .expected_count = dram_end_addr,
         },
     };
-    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
+    wait_to_finish_eth_timeout_cores(cores, programs);
 
     double threshold = 140; /* NOTE: Same on both bh glx and p150 */
 
@@ -198,10 +189,8 @@ static bool run_test_integrity_dram_bidir(
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
     pass &= bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, threshold);
 
-    pass &= tensix_compare_dram_banks(
-        fixture, send_mesh_device, dram_start_addr, dram_end_addr, send_bank_id0, recv_bank_id0);
-    pass &= tensix_compare_dram_banks(
-        fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id1, recv_bank_id1);
+    pass &= tensix_compare_dram_banks(send_mesh_device, dram_start_addr, dram_end_addr, send_bank_id0, recv_bank_id0);
+    pass &= tensix_compare_dram_banks(recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id1, recv_bank_id1);
 
     return pass;
 }
@@ -244,8 +233,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
                     receiver_core,
                     get_connector(sender_device, sender_core));
 
-                bool passed = run_test_integrity_dram_bidir(
-                    this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core);
+                bool passed =
+                    run_test_integrity_dram_bidir(sender_mesh_device, receiver_mesh_device, sender_core, receiver_core);
                 if (!passed) {
                     errors.emplace_back(
                         sender_device->id(),
