@@ -75,13 +75,13 @@ auto h = RegisterCallback("data-sink", [](const Batch<RecordType::TimestampedDat
 A point event carrying a 64-bit runtime value. Renders as a triangle above the row; the tooltip
 shows name, timestamp, and the value — here `Data: 49152` = `bytes_moved` after 24 iterations.
 
-## 3. Flag — `DeviceFlag`
+## 3. Event — `DeviceRecordEvent`
 
 Device:
 
 ```cpp
 for (uint32_t it = 0; it < N_ITERS; it++) {
-    DeviceFlag("LOOP-START");   // a named instant, no payload
+    DeviceRecordEvent("LOOP-START");   // a named instant, no payload
     do_compute();
 }
 ```
@@ -89,7 +89,7 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — an `Event` is a name and a time, nothing else:
 
 ```cpp
-auto h = RegisterCallback("flag-sink", [](const Batch<RecordType::Events>& b) {
+auto h = RegisterCallback("event-sink", [](const Batch<RecordType::Events>& b) {
     for (const Event& e : b.events()) {
         fmt::print("{} @ {} on core ({},{})\n",
             e.site().name, e.time().time_since_epoch().count(), // "LOOP-START" @ host time
@@ -98,11 +98,13 @@ auto h = RegisterCallback("flag-sink", [](const Batch<RecordType::Events>& b) {
 });
 ```
 
-![device flag](docs/zone_gifs/device_flag.gif)
+![device event](docs/zone_gifs/device_flag.gif)
 
 The payload-free point event: a name and a device timestamp, nothing else. Use it to put a
 moment (phase boundary, retry, error path) on the timeline. Here one `LOOP-START` per
-iteration, next to that iteration's `BYTES-MOVED` on the same row.
+iteration, next to that iteration's `BYTES-MOVED` on the same row. Same macro as the DRAM
+profiler's; there its argument is a runtime `uint16_t` id, here it is a compile-time name like
+the other two primitives, because the streaming wire resolves every marker's name from the ELF.
 
 ## Where to go next
 

@@ -301,7 +301,7 @@ void TracySink::push_marker(
     marker.risc = kRisc[static_cast<uint32_t>(core.risc)];
     marker.timestamp = static_cast<uint64_t>(to_timeline(timestamp_ns));
     marker.runtime_host_id = runtime_id;
-    marker.marker_type = values.empty() ? tracy::TTDeviceMarkerType::FLAG : tracy::TTDeviceMarkerType::DATA;
+    marker.marker_type = values.empty() ? tracy::TTDeviceMarkerType::EVENT : tracy::TTDeviceMarkerType::DATA;
     marker.marker_name = std::string(name);
     marker.file = "kernel_profiler";
     marker.line = 0;

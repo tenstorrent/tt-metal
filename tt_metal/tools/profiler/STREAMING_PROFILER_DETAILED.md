@@ -161,7 +161,9 @@ Device-side selection is one header: `tt_metal/tools/profiler/kernel_profiler.hp
 verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tt_metal/tools/profiler/kernel_profiler_streaming.hpp`.
 Shared streaming constants live in `hw/inc/hostdev/streaming_profiler_common.h`;
 `hw/inc/hostdev/profiler_common.h` is the DRAM profiler's own. Not supported on the streaming
-producer: sum zones (`DeviceZoneScopedSumN*`) and `DeviceRecordEvent` (both compile to nothing).
+producer: sum zones (`DeviceZoneScopedSumN*`), which compile to nothing. `DeviceRecordEvent` is the same
+macro on both producers, but here it takes a compile-time name rather than the DRAM producer's runtime id,
+because the streaming wire resolves every marker's name from the ELF.
 
 ### 1.2 Environment variables
 
@@ -259,7 +261,7 @@ class TimestampedData : public Record {  // a DeviceTimestampedData marker
     std::chrono::steady_clock::time_point time() const;
     std::span<const uint64_t> payload() const;  // two 32-bit words per element, first word high; batch-scoped
 };
-class Event : public Record {  // a DeviceFlag marker
+class Event : public Record {  // a DeviceRecordEvent marker
     uint64_t timestamp() const;
     std::chrono::steady_clock::time_point time() const;
 };
@@ -1037,7 +1039,7 @@ no repro, because it looks like progress.
 
 ## 4. Zone primitives and the wire format
 
-Three device-side primitives — `DeviceZoneScopedN`, `DeviceTimestampedData`, `DeviceFlag` — and the
+Three device-side primitives — `DeviceZoneScopedN`, `DeviceTimestampedData`, `DeviceRecordEvent` — and the
 variable-width packet family that carries them. §4.1 points at the illustrated intro to the three;
 §4.2 is the wire format and what it measures like. Consumers see complete
 zones either way and none of §4.2 changes that contract.
@@ -1045,7 +1047,7 @@ zones either way and none of §4.2 changes that contract.
 ### 4.1 Zones and point markers in the Tracy GUI
 
 The three primitives are introduced, with a GIF of each in the Tracy GUI, in the short standalone
-[`STREAMING_PROFILER.md`](STREAMING_PROFILER.md) (zone scope, timestamped data, flag). It is kept
+[`STREAMING_PROFILER.md`](STREAMING_PROFILER.md) (zone scope, timestamped data, event). It is kept
 separate on purpose: it is the first thing to read, and it does not depend on anything below.
 
 ### 4.2 The zone wire format, and what it measures like

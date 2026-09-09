@@ -470,9 +470,9 @@ inline __attribute__((always_inline)) void time_stamped_data(uint64_t data, Args
     publish_tail_batched(1 + 3 + 2 * total_data_count);
 }
 
-// PP_EVENT point marker: compile-time flag, 2 words, no payload.
+// PP_EVENT point marker: compile-time event, 2 words, no payload.
 template <uint32_t data_id>
-inline __attribute__((always_inline)) void record_flag() {
+inline __attribute__((always_inline)) void record_event() {
     ring_ensure_room(SPSC_MARKER_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -494,7 +494,7 @@ struct stackCanaryScope {
     inline __attribute__((always_inline)) stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     inline __attribute__((always_inline)) ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
-            record_flag<STACK_CANARY_DEAD_ID>();
+            record_event<STACK_CANARY_DEAD_ID>();
         }
     }
 };
@@ -515,18 +515,19 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
     TT_ZONE_DEFINE_ID(hash, name);        \
     kernel_profiler::profileScopeIf<hash> zone = kernel_profiler::profileScopeIf<hash>(active);
 
-// DeviceTimestampedData carries a payload; DeviceFlag is a bare 2-word flag. Both have a compile-time tag
-// and an ELF-resolvable name.
+// DeviceTimestampedData carries a payload; DeviceRecordEvent is a bare 2-word marker. Both have a compile-time
+// tag and an ELF-resolvable name. The DRAM backend's DeviceRecordEvent takes a runtime uint16 id; here the wire
+// names every point marker from the ELF, so the argument is a compile-time name like the other macros'.
 #define DeviceTimestampedData(name, data)               \
     {                                                   \
         TT_ZONE_DEFINE_ID(hash, name);                  \
         kernel_profiler::time_stamped_data<hash>(data); \
     }
 
-#define DeviceFlag(name)                      \
-    {                                         \
-        TT_ZONE_DEFINE_ID(hash, name);        \
-        kernel_profiler::record_flag<hash>(); \
+#define DeviceRecordEvent(name)                \
+    {                                          \
+        TT_ZONE_DEFINE_ID(hash, name);         \
+        kernel_profiler::record_event<hash>(); \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
@@ -547,14 +548,11 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define DeviceTraceOnlyProfilerInit()
 #define DeviceIncrementTraceCount()
 
-// NOT SUPPORTED on this backend, kept as null macros so the shared call sites compile:
-//  * sum zones (llk_io_{pack,unpack}.h "CB-COMPUTE-*" accumulators) -- a DRAM-profiler feature; the
-//    streaming wire ships every zone whole instead of summing on device.
-//  * DeviceRecordEvent(runtime id) -- the streaming wire names every point marker from the ELF, so an
-//    id known only at run time has nothing to resolve against. Use DeviceTimestampedData(name, id).
+// NOT SUPPORTED on this backend, kept as null macros so the shared call sites compile: sum zones
+// (llk_io_{pack,unpack}.h "CB-COMPUTE-*" accumulators) are a DRAM-profiler feature; the streaming wire ships
+// every zone whole instead of summing on device.
 #define DeviceZoneScopedSumN1(name) (void(name))
 #define DeviceZoneScopedSumN2(name) (void(name))
-#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
 
 #else
 
@@ -580,8 +578,6 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 
 #define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
-
-#define DeviceFlag(data_id) (void(sizeof(data_id)))
 
 #define DeviceProfilerInit()
 

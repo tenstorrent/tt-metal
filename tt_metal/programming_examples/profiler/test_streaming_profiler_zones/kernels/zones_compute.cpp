@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t kSlot = 4;
 #endif
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BENCH_ADDR) + kSlot * 2u;
-    // BENCH_KIND 0 = spin only, 1 = empty zone (3 words), 2 = DeviceFlag (3 words), 3 = DeviceTimestampedData
+    // BENCH_KIND 0 = spin only, 1 = empty zone (3 words), 2 = DeviceRecordEvent (3 words), 3 = DeviceTimestampedData
     // (6 words), 4 / 5 = DeviceZoneScopedNIf with an opaque runtime true / false; the burst stays under the 512-word
     // ring so it never blocks.
     constexpr uint32_t kBurst = BENCH_KIND == 3 ? 64 : 100;
@@ -88,7 +88,7 @@ void kernel_main() {
 #if BENCH_KIND == 3
             DeviceTimestampedData(ZTAG "_BENCH", (uint64_t)i);
 #elif BENCH_KIND == 2
-            DeviceFlag(ZTAG "_BENCH");
+            DeviceRecordEvent(ZTAG "_BENCH");
 #elif BENCH_KIND == 1
             DeviceZoneScopedN(ZTAG "_BENCH");
 #elif BENCH_KIND == 4 || BENCH_KIND == 5
