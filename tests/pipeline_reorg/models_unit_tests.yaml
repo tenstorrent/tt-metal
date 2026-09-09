@@ -970,7 +970,7 @@
 
 - name: TT-DiT encoder unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
