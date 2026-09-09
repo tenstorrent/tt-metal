@@ -3158,6 +3158,8 @@ class UnarySFPUGolden:
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
     def _relu_max(self, x, threshold=RELU_MAX_THRESHOLD):
+        # Threshold first, then the relu clamp: that order turns a NaN into the threshold,
+        # where relu-then-threshold would keep it.
         return sfpu_relu_max(float(x), float(threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
