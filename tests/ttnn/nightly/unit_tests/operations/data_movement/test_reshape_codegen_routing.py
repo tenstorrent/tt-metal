@@ -39,9 +39,13 @@ def _make_input(shape, dtype):
 
 
 # (dtype, layout, shape, kwargs)
-_ROUTING = []
+_ROUTING = [
 
-_ROUTING_IDS = []
+]
+
+_ROUTING_IDS = [
+
+]
 
 
 @pytest.mark.parametrize("dtype,layout,shape,kwargs", _ROUTING, ids=_ROUTING_IDS)
@@ -61,6 +65,6 @@ def test_reshape_codegen_routing(device, dtype, layout, shape, kwargs):
     routed = ttnn.to_torch(ttnn.reshape(tt_input, **kwargs))
 
     assert_equal(golden, routed)
-    assert (
-        device.num_program_cache_entries() == entries_before
-    ), "an unsupported case routed to the codegen path (the program cache grew); expected native"
+    assert device.num_program_cache_entries() == entries_before, (
+        "an unsupported case routed to the codegen path (the program cache grew); expected native"
+    )

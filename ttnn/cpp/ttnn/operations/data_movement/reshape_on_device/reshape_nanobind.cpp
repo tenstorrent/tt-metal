@@ -12,6 +12,7 @@
 #include "reshape.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"  // for ttsl::SmallVector<int32_t>
+#include "ttnn/operations/data_movement/reshape_view/reshape_force.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -77,6 +78,66 @@ void bind_reshape(nb::module_& mod) {
         nb::arg("X"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none());
+
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See reshape_force.hpp.
+    mod.def(
+        "reshape_force_native",
+        &ttnn::operations::data_movement::detail::reshape_force_native,
+        nb::arg("input_tensor"),
+        nb::arg("logical_shape"),
+        nb::arg("padded_shape"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the existing native/composite reshape implementation
+            unconditionally. Not part of the ttnn API; use ttnn.reshape, which selects an
+            implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                logical_shape (ttnn.Shape): the requested logical output shape.
+                padded_shape (ttnn.Shape): the requested padded output shape.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+        )doc");
+
+    mod.def(
+        "reshape_force_codegen",
+        &ttnn::operations::data_movement::detail::reshape_force_codegen,
+        nb::arg("input_tensor"),
+        nb::arg("logical_shape"),
+        nb::arg("padded_shape"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the generated reshape implementation unconditionally, raising
+            for a case outside its support scope rather than falling back to native. Not part of
+            the ttnn API; use ttnn.reshape, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                logical_shape (ttnn.Shape): the requested logical output shape.
+                padded_shape (ttnn.Shape): the requested padded output shape.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Raises:
+                RuntimeError: the generated path does not support this case.
+        )doc");
 }
 
 }  // namespace ttnn::operations::data_movement
