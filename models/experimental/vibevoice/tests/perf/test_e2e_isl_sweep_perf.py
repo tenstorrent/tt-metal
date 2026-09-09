@@ -12,11 +12,12 @@ Loads the demo script + voice clones once, then for each ISL:
 Reports per ISL (same fields as ``demo.py`` meta):
 
   prefill_s, prefill_tok_s, ttft_s, decode_tok_s, ms_per_tok_steady, e2e_s, ar_tokens_generated,
-  audio_s, rtf, rtf_x, rtf_decode
+  audio_samples, audio_frames, audio_s, rtf, rtf_x, rtf_decode
 
 RTF (real-time factor) = processing time / rendered audio duration
-(``ar_tokens / 7.5`` s). ``rtf`` is end-to-end (full ``generate()``); ``rtf_decode`` is the
-sustained decode rate only. RTF < 1 ⇒ faster than real time; ``rtf_x`` = 1/rtf is the "× RT"
+(``audio_samples / 24000`` s, from the waveform — ``ar_tokens`` also counts the speech-start/end
+and EOS tokens, which emit no audio). ``rtf`` is end-to-end (full ``generate()``); ``rtf_decode``
+is the sustained decode rate only. RTF < 1 ⇒ faster than real time; ``rtf_x`` = 1/rtf is the "× RT"
 figure. The full per-ISL table is also written to ``vibevoice/output/e2e_isl_perf/<name>.json``.
 
 Env::
@@ -230,9 +231,13 @@ def test_e2e_isl_sweep_4p_climate_100min(mesh_device, device_params):
         e2e_s = time.perf_counter() - t0
 
         ar_tokens = int(tt_out.sequences.shape[1] - prefill_len)
+        # Audio duration comes from the waveform, not from ar_tokens: speech-start/end and EOS
+        # are part of the AR stream but emit no audio.
+        audio_samples = int(tt_out.speech_outputs[0].numel()) if tt_out.speech_outputs else 0
         metrics = summarize_generate_perf(
             prefill_len=prefill_len,
             ar_tokens=ar_tokens,
+            audio_samples=audio_samples,
             prefill_wall_s=tt_out.prefill_wall_s,
             decode_wall_s=tt_out.decode_wall_s,
             generate_wall_s=e2e_s,

@@ -35,7 +35,7 @@ from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
     SemanticTokenizerWeights,
     _parse_depths,
     _get_conv_weights,
-    _get_or_zeros,
+    _get_required,
     TTConv1d,
     TTBlock1DDevice,
     TTSemanticTokenizer,
@@ -84,12 +84,12 @@ def _get_block_weights(hf_state: dict, prefix: str, dim: int, eps: float, causal
 
     # Raw (bf16, mmap-backed) tensors; the cast/reshape is deferred to the device-upload thunks in
     # TTBlock1DDevice, so a cache hit never reads the checkpoint here.
-    norm_w = hf_state.get(f"{prefix}.norm.weight", torch.ones(dim))
-    ffn_norm_w = hf_state.get(f"{prefix}.ffn_norm.weight", torch.ones(dim))
+    norm_w = _get_required(hf_state, f"{prefix}.norm.weight", (dim,))
+    ffn_norm_w = _get_required(hf_state, f"{prefix}.ffn_norm.weight", (dim,))
 
-    l1_w = _get_or_zeros(hf_state, f"{prefix}.ffn.linear1.weight", (ffn_dim_default, dim))
+    l1_w = _get_required(hf_state, f"{prefix}.ffn.linear1.weight", (ffn_dim_default, dim))
     l1_b = hf_state.get(f"{prefix}.ffn.linear1.bias", None)
-    l2_w = _get_or_zeros(hf_state, f"{prefix}.ffn.linear2.weight", (dim, ffn_dim_default))
+    l2_w = _get_required(hf_state, f"{prefix}.ffn.linear2.weight", (dim, ffn_dim_default))
     l2_b = hf_state.get(f"{prefix}.ffn.linear2.bias", None)
 
     gamma = hf_state.get(f"{prefix}.gamma", None)
@@ -167,7 +167,7 @@ def preprocess_acoustic_tokenizer_weights(
         kernel_size = ratio * 2
         pref = f"decoder.upsample_layers.{i + 1}.0.convtr.convtr"
         # Raw tensors; the phase split + cast is deferred to the TTConvTranspose1d build thunks.
-        w = _get_or_zeros(hf_state, f"{pref}.weight", (in_ch, out_ch, kernel_size))
+        w = _get_required(hf_state, f"{pref}.weight", (in_ch, out_ch, kernel_size))
         b = hf_state.get(f"{pref}.bias", None)
         upsample_convs.append(ConvTransposeWeightsHost(weight=w, bias=b, stride=ratio, trim_right=kernel_size - ratio))
 

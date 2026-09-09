@@ -138,7 +138,7 @@ def main() -> int:
         "--max_new_tokens",
         type=int,
         default=None,
-        help="Optional AR cap (default: until EOS, bounded by max_length_times)",
+        help="Optional AR cap (default: until EOS, bounded by max_length_times). Must fit the remaining context (max_position_embeddings - prefill tokens); a larger value is an error, not clamped.",
     )
     ap.add_argument(
         "--max_length_times",
@@ -440,6 +440,8 @@ def main() -> int:
             perf = summarize_generate_perf(
                 prefill_len=prefill_len,
                 ar_tokens=_ar_tokens,
+                # From the waveform, not the token count — speech-start/end and EOS emit no audio.
+                audio_samples=int(speech_parts[-1].numel()),
                 prefill_wall_s=tt_out.prefill_wall_s,
                 decode_wall_s=tt_out.decode_wall_s,
                 generate_wall_s=_generate_wall,

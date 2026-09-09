@@ -270,18 +270,22 @@ python models/experimental/vibevoice/demo/demo.py --text /tmp/my_script.txt \
 
 | File | Content |
 |------|---------|
-| `{demo_id}_tt.wav` | Generated audio — 24 kHz mono, PCM. Duration ≈ `ar_tokens × 133.3 ms` |
+| `{demo_id}_tt.wav` | Generated audio — 24 kHz mono, PCM. Duration = `audio_frames × 133.3 ms` for a single-pass render; with `--chunks N` it is the sum over all chunks |
 | `{demo_id}_script.txt` | Verbatim copy of the script that was rendered |
-| `{demo_id}_meta.json` | Run manifest + perf. Manifest: `demo_id`, `text_file`, `voice_cloning`, `voice_mapping`, `isl`, `full_prefill_tokens`, `warmup`, `warmup_tokens`, `max_length_times`, `max_new_tokens`, `tt_wav`, `script_copy`. Perf (spread in from `summarize_generate_perf`): `prefill_tokens`, `ar_tokens_generated`, `prefill_s`, `prefill_tok_s`, `ttft_s`, `decode_s`, `decode_tok_s`, `ms_per_tok_steady`, `e2e_s`, `audio_s`, `rtf`, `rtf_x`, `rtf_decode`, `decode_mode`, `steady_decode_frames` |
+| `{demo_id}_meta.json` | Run manifest + perf. Manifest: `demo_id`, `text_file`, `voice_cloning`, `voice_mapping`, `isl`, `full_prefill_tokens`, `warmup`, `warmup_tokens`, `max_length_times`, `max_new_tokens`, `tt_wav`, `script_copy`. Perf (spread in from `summarize_generate_perf`): `prefill_tokens`, `ar_tokens_generated`, `prefill_s`, `prefill_tok_s`, `ttft_s`, `decode_s`, `decode_tok_s`, `ms_per_tok_steady`, `e2e_s`, `audio_samples`, `audio_frames`, `audio_s`, `rtf`, `rtf_x`, `rtf_decode`, `decode_mode`, `steady_decode_frames` |
 
 The run also prints a one-line perf summary (`prefill` tok/s, TTFT, `decode` tok/s, ms/tok, e2e,
 `ar_tokens`, `isl`) — the same fields written to `meta.json`. For representative timings at each ISL
-see [Performance](#performance). Each AR frame is a fixed 3200 samples, so the rendered duration is
-`ar_tokens / 7.5` seconds, and `ar_tokens` may come in under `--max_new_tokens` if EOS fires first.
+see [Performance](#performance). Each diffusion frame is a fixed 3200 samples, so the rendered
+duration is `audio_frames / 7.5` seconds — measured from the waveform, not from `ar_tokens`, which
+also counts the speech-start/end and EOS tokens that emit no audio. `ar_tokens` may come in under
+`--max_new_tokens` if EOS fires first. With `--chunks N` every perf field (`audio_frames` included)
+describes the **final** chunk only — one `summarize_generate_perf` call per chunk, last one wins —
+while the `.wav` holds all N concatenated.
 
 Sanity checks on a good render: audio is finite and non-silent, duration matches
-`ar_tokens / 7.5` seconds, speech is intelligible under Whisper, and the cloned speaker is
-identifiable (this is exactly what `test_e2e_wer.py` and `test_e2e_sim.py` assert).
+`audio_frames / 7.5` seconds (single pass), speech is intelligible under Whisper, and the cloned
+speaker is identifiable (this is exactly what `test_e2e_wer.py` and `test_e2e_sim.py` assert).
 
 ## Running the demo
 
@@ -313,7 +317,7 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --tra
 | `--weight-cache-dir <dir>` | `$VV_WEIGHT_CACHE_DIR`, else `$TT_CACHE_PATH/vibevoice/weight_cache`, else `generated/ttnn/vibevoice/weight_cache` | Device-weight cache location; entries are keyed by checkpoint identity |
 | `--cfg_scale <float>` | `1.3` | Classifier-free guidance scale (2 LM rows per frame) |
 | `--num_steps <int>` | `10` | DPM-Solver++ diffusion steps per frame |
-| `--max_new_tokens <int>` | `None` | AR frame cap. Default: run until EOS, bounded by `max_length_times` |
+| `--max_new_tokens <int>` | `None` | AR frame cap. Default: run until EOS, bounded by `max_length_times`. An explicit value must fit the remaining context (`max_position_embeddings - prefill`) or generate raises — a long prompt can leave less room than `max_length_times × ISL` asks for, and only that default path clamps |
 | `--max_length_times <float>` | `2.0` | Max AR steps ≈ this × prefill length (HF default) |
 | `--isl <int>` | `None` | Crop the processor batch to the first N tokens *after* tokenization — for ISL-controlled perf runs |
 | `--warmup` | off | Untimed short `generate()` before the measured pass (warms the program cache) |
@@ -568,6 +572,12 @@ at long ISL; see the `test_prefill.py` docstrings).
 first-time compile frames are excluded.
 
 Measured 2026-08-11 at commit `5a965b7`.
+
+> **Audio (s) / RTF / ×RT below predate the waveform-based duration fix.** They were computed as
+> `AR toks / 7.5`, which counts the speech-start/end and EOS tokens that emit no audio, so the
+> durations are long and the RTF figures correspondingly optimistic — by one frame per non-audio
+> token (~1.3% on the long multi-speaker runs, less on the short ISLs). Prefill, decode tok/s,
+> ms/tok, E2E and RTF decode are unaffected. The columns will be regenerated on the next sweep.
 
 | ISL | Prefill (s) | Prefill tok/s | TTFT (s) | Decode tok/s | ms/tok | E2E (s) | Audio (s) | RTF | ×RT | RTF decode | AR toks | Steady frames |
 |------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|
