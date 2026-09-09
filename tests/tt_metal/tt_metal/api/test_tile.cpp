@@ -156,5 +156,21 @@ TEST(TileConstructorTranspose, CustomFaceShapeEnablesFlagsWithoutHeightCheck) {
     EXPECT_TRUE(tile.get_transpose_of_faces());
 }
 
+TEST(TileFromFaceGrid, DefaultFaceProduces32x32) { EXPECT_EQ(Tile::from_face_grid({2, 2}), Tile()); }
+
+TEST(TileFromFaceGrid, CustomFaceMatchesEquivalentConstructor) {
+    constexpr std::array<uint32_t, 2> face_shape{8, 16};
+    const Tile from_grid = Tile::from_face_grid({2, 2}, face_shape);
+    const Tile from_ctor({16, 32}, face_shape);
+    EXPECT_EQ(from_grid, from_ctor);
+}
+
+TEST(TileFromFaceGrid, RejectsGridThatExceedsMaxFaces) {
+    // 4x2 faces of 8x16 → 32x32 tile, but 4 faces along a dim exceeds the max of 2.
+    EXPECT_THAT(
+        [] { (void)Tile::from_face_grid({4, 2}, {8, 16}); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("exceeds the maximum supported num_faces")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal
