@@ -7,6 +7,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -444,7 +445,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     }
     bool fuse_mm_op = mm_fused_op_signaler.has_value();
     // Per-core MM signaling: L1 array of per-MM-core progress counters, one row per RS worker core
-    std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> mm_progress_counters_buffer;
     uint32_t captured_mm_progress_counters_addr = 0;
     if (fuse_mm_op) {
         mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
@@ -486,13 +487,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 tt::tt_metal::ShardOrientation::ROW_MAJOR,
                 {1, num_mm_core_slots},
                 {num_rs_cores, num_mm_core_slots});
-            mm_progress_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                .device = mesh_device,
-                .size = num_rs_cores * counters_row_bytes,
-                .page_size = counters_row_bytes,
-                .buffer_type = tt::tt_metal::BufferType::L1,
-                .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                .shard_parameters = counter_shard_spec});
+            mm_progress_counters_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = num_rs_cores * counters_row_bytes},
+                {.page_size = counters_row_bytes,
+                 .buffer_type = tt::tt_metal::BufferType::L1,
+                 .sharding_args = tt::tt_metal::BufferShardingArgs(
+                     counter_shard_spec, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)},
+                mesh_device);
             mm_fused_op_signaler->mm_progress_counters_addr =
                 static_cast<uint32_t>(mm_progress_counters_buffer->address());
         }
@@ -508,7 +509,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // HEIGHT_SHARDED over the MM grid => the row is at the same local L1 address on every MM core.
     // Signalling walks an explicit list of MM core NOC coords, mirroring how the matmul signals the
     // RS (OpSignaler::signal_op_per_core) rather than multicasting to a rectangle.
-    std::shared_ptr<tt::tt_metal::Buffer> rs_credit_counters_buffer;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> rs_credit_counters_buffer;
     const uint32_t num_rs_readers = num_directions_per_link * num_links * num_workers_per_direction;
     uint32_t rs_credit_counters_addr = 0;
     std::vector<CoreCoord> mm_cores_noc;
@@ -558,13 +559,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 tt::tt_metal::ShardOrientation::ROW_MAJOR,
                 {1, num_rs_readers},
                 {num_mm_cores, num_rs_readers});
-            rs_credit_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                .device = mesh_device,
-                .size = num_mm_cores * credit_row_bytes,
-                .page_size = credit_row_bytes,
-                .buffer_type = tt::tt_metal::BufferType::L1,
-                .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                .shard_parameters = credit_shard_spec});
+            rs_credit_counters_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = num_mm_cores * credit_row_bytes},
+                {.page_size = credit_row_bytes,
+                 .buffer_type = tt::tt_metal::BufferType::L1,
+                 .sharding_args = tt::tt_metal::BufferShardingArgs(
+                     credit_shard_spec, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)},
+                mesh_device);
             rs_credit_counters_addr = static_cast<uint32_t>(rs_credit_counters_buffer->address());
         }
 

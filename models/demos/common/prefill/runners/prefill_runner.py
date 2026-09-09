@@ -16,7 +16,10 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.migration import (
+    is_per_host_storage,
     migration_file_export_enabled,
+    migration_table_path,
+    migration_table_path_is_explicit,
     remove_stale_device_map_sidecars,
     serialize_device_map,
 )
@@ -414,10 +417,7 @@ def _print_config() -> None:
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
-        (
-            "PREFILL_MIGRATION_TABLE_PATH",
-            os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
-        ),
+        ("PREFILL_MIGRATION_TABLE_PATH", migration_table_path()),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
         ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
         (
@@ -583,7 +583,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _file_export = migration_file_export_enabled()
 
     if _mock_migration and not _migration_enabled:
-        _mock_table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        _mock_table_path = migration_table_path()
         _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
         remove_stale_device_map_sidecars(_mock_map_path)
@@ -607,17 +607,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         first_layer_idx, num_my_layers = compute_layer_split(
             NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
         )[rank]
-        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        table_path = migration_table_path()
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
-        if num_ranks > 1:
-            _abs_table = os.path.abspath(table_path)
-            if any(_abs_table == p or _abs_table.startswith(p + "/") for p in ("/tmp", "/dev/shm", "/run", "/var/tmp")):
+        if num_ranks > 1 and is_per_host_storage(table_path):
+            if migration_table_path_is_explicit():
                 raise ValueError(
-                    f"PREFILL_MIGRATION_TABLE_PATH={_abs_table} is on per-host storage; with num_ranks="
-                    f"{num_ranks} the table rank 0 writes is invisible to the other hosts' readers. Point "
-                    "it at shared/NFS storage (e.g. /data/...)."
+                    f"PREFILL_MIGRATION_TABLE_PATH={os.path.abspath(table_path)} is on per-host storage; "
+                    f"with num_ranks={num_ranks} the table rank 0 writes is invisible to the other hosts' "
+                    "readers. Point it at shared/NFS storage (e.g. /data/...)."
                 )
+            logger.warning(
+                f"[migration] KV chunk table defaults to per-host {table_path} at num_ranks={num_ranks}; "
+                "readers on other hosts cannot see it. Set PREFILL_MIGRATION_TABLE_PATH to shared storage "
+                "if one is expected."
+            )
 
         if is_first_rank and os.path.exists(table_path):
             logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
@@ -713,7 +717,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 "publish a table covering only its own layer slice; a merged mock table is not "
                 "implemented); run single-rank or unset PREFILL_MOCK_MIGRATION."
             )
-        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        table_path = migration_table_path()
         runtime.build_kv_chunk_table(kv_caches, path=table_path)
         device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         serialize_device_map(mesh_device, device_map_path)

@@ -3169,7 +3169,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         uint32_t prev_offset_before_prefetcher_pipe = state.offset;
-        state.offset = program_dispatch::finalize_prefetcher_pipes(index, programs, state.offset);
+        state.offset = program_dispatch::finalize_prefetcher_pipes(metal_ctx, index, programs, state.offset);
         state.prefetcher_pipe_offset = (state.offset > prev_offset_before_prefetcher_pipe)
                                            ? (prev_offset_before_prefetcher_pipe - state.config_base_offset)
                                            : REMOTE_DFB_OFFSET_NONE;
@@ -3279,10 +3279,18 @@ bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
     return program_device_map_.contains(device);
 }
 
-void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done) {
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+    return workload;
+}
+
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    return workload;
 }
 
 }  // namespace tt::tt_metal

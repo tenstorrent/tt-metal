@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+#include <tuple>
 // Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
 #include <map>
 #include <set>
@@ -57,11 +58,15 @@ namespace tt::tt_metal {
 namespace {
 
 string get_kernel_source_to_include(const KernelSource& kernel_src) {
+    // Kernels define kernel_main() with no prior declaration (-Wmissing-prototypes). Not static:
+    // that lets the compiler inline the only call and drop the symbol, which dump-consts.py and
+    // llk-audit resolve by name.
+    constexpr const char* kernel_main_decl = "void kernel_main();\n";
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
-            return "#include \"" + kernel_src.path_.string() + "\"\n";
+            return kernel_main_decl + ("#include \"" + kernel_src.path_.string() + "\"\n");
         }
-        case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        case KernelSource::SOURCE_CODE: return kernel_main_decl + kernel_src.source_;
     }
     ttsl::unreachable();
 }
@@ -102,7 +107,7 @@ void write_file(const string& path, const string& content) {
 
 // Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
 // of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
-// on the command line. Emitted for any kernel with named CT args, Metal 2.0 or legacy, blaze or not.
+// on the command line. Emitted only for the legacy map API, including Metal 2.0 kernels.
 // Returns true if a header was written.
 //
 // Written here rather than in the build step so it lands in the kernel's generated-files directory

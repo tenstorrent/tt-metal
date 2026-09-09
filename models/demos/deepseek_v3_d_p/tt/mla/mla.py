@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
@@ -414,8 +415,14 @@ class ttMLA:
         rope_scaling = getattr(config, "rope_scaling", None) or {}
         rope_factor = rope_scaling.get("factor")
 
+        # Not every YaRN model folds the mscale amplitude into the softmax scale. Mistral Small 4
+        # carries a full YaRN block (factor=128) but its own implementation uses the bare
+        # qk_head_dim**-0.5 and reports attention_scaling = 1.0, so no mscale is applied anywhere.
+        # Applying DeepSeek's correction anyway multiplies the attention logits by mscale^2 (2.2058
+        # at factor=128): no crash, just a wrong softmax temperature. Absent (-> False) on every
+        # other variant, so those paths are byte-identical.
         self.scale = self.qk_head_dim**-0.5
-        if rope_factor is not None and rope_factor > 1.0:
+        if rope_factor is not None and rope_factor > 1.0 and not getattr(config, "mla_disable_yarn_mscale", False):
             mscale = rope_scaling["mscale"]
             mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
             self.scale = self.scale * mscale * mscale
@@ -423,6 +430,12 @@ class ttMLA:
             f"mla_use_nope=True but rope_scaling carries a YaRN factor ({rope_factor}) that scaled "
             f"softmax to {self.scale}; a NoPE model has no positional scaling to compensate for"
         )
+
+        # Mistral's query temperature. Only Mistral's rope_scaling carries it, so absent (-> None)
+        # leaves every other variant's op graph byte-identical.
+        self._llama4_beta = rope_scaling.get("llama_4_scaling_beta")
+        self._llama4_orig_max = rope_scaling.get("original_max_position_embeddings")
+        self._llama4_cache: dict = {}
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -1132,7 +1145,88 @@ class ttMLA:
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
+
+        if self._llama4_beta is not None:
+            scaled = ttnn.multiply(tt_q, self._llama4_scale(kv_actual_isl, seq_len_local, metadata))
+            ttnn.deallocate(tt_q)
+            tt_q = scaled
         return tt_q
+
+    def _llama4_scale(self, kv_actual_isl: Optional[int], seq_len_local: int, metadata) -> ttnn.Tensor:
+        """Per-position query temperature for this chunk, shaped like tt_q, SP-sharded.
+
+        Metadata/traced path reads ChunkMetadata.llama4_scale -- a captured graph can only read device
+        memory, and write_chunk_metadata refreshes it alongside the scalars. Building a host tensor
+        there would bake one chunk's offset into the capture. The host-scalar path builds it fresh and
+        caches on (start, seq_len_local), since the same offsets recur on every layer.
+
+        The geometry is re-derived from this object's own axes rather than through
+        rope._llama4_scale_geometry: that helper reads mesh_device.shape[1 - sp_axis] where this reads
+        self.tp_factor, which are the same value on a 2-D mesh but reached from different state. Keep
+        the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
+
+        NOTE ON RESIDENCY: the cache is per ttMLA, i.e. per layer, and holds one
+        [1, heads_local, chunk, width] bf16 tensor per distinct offset -- 3.28 MB per entry at 8x4 /
+        chunk 5120, freed only with the model. Growth is linear in context depth, since an offset is
+        visited once per request and never repeats:
+
+            261,120 tokens (the longest row tested)   51 offsets  ->  6.0 GB per device
+            1,048,576 tokens (MAX_POSITION_EMBEDDINGS) 204 offsets -> 24.1 GB per device
+
+        Both are before weights and KV cache, so the advertised max context does not fit. The
+        contents are layer-invariant, so sharing one set across layers cuts either figure by 36x
+        (to 0.17 / 0.67 GB), and a single buffer refreshed in place cuts it to one tensor.
+
+        Left as follow-up rather than fixed here, and deliberately joined to
+        https://github.com/tenstorrent/tt-metal/issues/55126: the chosen fix there is to pre-build
+        one device buffer per deterministic k * chunk_size offset and reuse it, which is the same
+        machinery this needs. Refreshing in place additionally requires validating that no other
+        layer's enqueued multiply is still reading the buffer; doing both under one validation pass
+        is cheaper than doing them twice.
+
+        An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
+        miss and rebuild a ~105 MB host tensor, which measured 3x slower at long context.
+
+        Full width rather than [1, 1, S, 1] + broadcast: a width-1 TILE_LAYOUT operand is tile-padded
+        to 32, and relying on bcast to read only column 0 is not worth the risk.
+        """
+        if metadata is not None:
+            buf = getattr(metadata, "llama4_scale", None)
+            assert buf is not None, (
+                "llama4 query scale on the metadata path needs ChunkMetadata.llama4_scale (allocate "
+                "with RotarySetup.make_llama4_scale_buffer, refresh via write_chunk_metadata)"
+            )
+            return buf
+
+        start = kv_actual_isl or 0
+        key = (start, seq_len_local)
+        cached = self._llama4_cache.get(key)
+        if cached is not None:
+            return cached
+
+        scale = llama4_scale_host(
+            start,
+            self.sp_factor,
+            seq_len_local,
+            self.num_heads // self.tp_factor,
+            self.kv_lora_rank + self.qk_rope_head_dim,
+            self._llama4_beta,
+            self._llama4_orig_max,
+        )
+        shard_dims = [None, None]
+        shard_dims[self.sp_axis] = 2
+        tensor = ttnn.from_torch(
+            scale.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
+            ),
+        )
+        self._llama4_cache[key] = tensor
+        return tensor
 
     def _kv_stem(
         self,
