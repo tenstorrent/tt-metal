@@ -35,7 +35,9 @@ void kernel_main() {
     Noc noc;
     // scratch::in0 is a reader-private L1 scratchpad: the reader stages input pages in it.
     // dfb::in1 is the reader->writer output-page FIFO.
-    Scratchpad<std::uint32_t> in0(scratch::in0);
+    // uint8_t view: the kernel only takes the base address; a byte element type keeps the
+    // Scratchpad size%sizeof(T) invariant valid for any page size (UINT8/FP8, odd RM widths).
+    Scratchpad<std::uint8_t> in0(scratch::in0);
     DataflowBuffer dfb_in1(dfb::in1);
 
     const auto accessor_src = TensorAccessor(tensor::src);

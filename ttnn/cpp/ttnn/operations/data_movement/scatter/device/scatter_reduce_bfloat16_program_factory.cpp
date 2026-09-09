@@ -117,8 +117,8 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
         make_dfb(DST_DFB, output_tensor.dtype(), output_page_size_bytes),
     };
 
-    // The reader alone fills and drains INPUT/INDEX/SRC and the FP32_TEMP scratch (self-loop: bound
-    // PRODUCER + CONSUMER); it produces DST, which the writer consumes.
+    // The reader alone fills and drains INPUT/INDEX/SRC (self-loop: bound PRODUCER + CONSUMER) and
+    // privately fills/drains the FP32_TEMP scratchpad; it produces DST, which the writer consumes.
     KernelSpec reader{
         .unique_id = READER,
         .source = reader_kernel_path,
