@@ -146,12 +146,11 @@ enum class HighLevelTrafficPattern {
     SequentialMeshPassthrough,
 };
 
-// Mesh scope filter for high-level unicast patterns on multi-mesh systems.
-// Only applied to unicast pair-based expansions (all_to_all / one_to_all / sequential_all_to_all);
-// multicast expansions currently ignore mesh_scope.
-// ALL:        intra-mesh pairs plus inter-mesh pairs to adjacent meshes (default).
-// INTRA_MESH: only same-mesh pairs.
-// INTER_MESH: only inter-mesh pairs to adjacent meshes.
+// Mesh scope filter for high-level traffic patterns on multi-mesh systems.
+// Unicast pair-based expansions apply all three scopes. Multicast cannot cross mesh boundaries:
+// INTRA_MESH and ALL stay within the sender's mesh, while INTER_MESH produces no traffic.
+// For unicast, ALL includes intra-mesh pairs plus inter-mesh pairs to adjacent meshes (default),
+// INTRA_MESH keeps only same-mesh pairs, and INTER_MESH keeps only adjacent inter-mesh pairs.
 // Note: distinct from tt::tt_fabric::MeshScope (LOCAL/GLOBAL), which describes mesh ownership.
 enum class MeshTrafficScope { ALL, INTRA_MESH, INTER_MESH };
 

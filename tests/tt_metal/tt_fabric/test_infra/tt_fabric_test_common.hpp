@@ -835,24 +835,26 @@ public:
         }
 
         const auto src_coord = get_device_coord(src_node_id);
+        const auto mesh_shape = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+            src_node_id.mesh_id, MeshScope::GLOBAL);
         auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
 
-        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, EW_DIM)) {
-            // EW dimension: need to cover (mesh_shape_[EW_DIM] - 1) total hops
-            uint32_t ew_total_hops = mesh_shape_[EW_DIM] - 1;
+        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, EW_DIM)) {
+            // EW dimension: need to cover (mesh_shape[EW_DIM] - 1) total hops
+            uint32_t ew_total_hops = mesh_shape[EW_DIM] - 1;
             uint32_t ew_forward_hops = ew_total_hops / 2;                 // Half go in one direction
             uint32_t ew_backward_hops = ew_total_hops - ew_forward_hops;  // Rest go in other direction
 
             hops[RoutingDirection::E] = ew_forward_hops;
             hops[RoutingDirection::W] = ew_backward_hops;
         } else {
-            hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+            hops[RoutingDirection::E] = mesh_shape[EW_DIM] - src_coord[EW_DIM] - 1;
             hops[RoutingDirection::W] = src_coord[EW_DIM];
         }
 
-        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, NS_DIM)) {
-            // NS dimension: need to cover (mesh_shape_[NS_DIM] - 1) total hops
-            uint32_t ns_total_hops = mesh_shape_[NS_DIM] - 1;
+        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, NS_DIM)) {
+            // NS dimension: need to cover (mesh_shape[NS_DIM] - 1) total hops
+            uint32_t ns_total_hops = mesh_shape[NS_DIM] - 1;
             uint32_t ns_forward_hops = ns_total_hops / 2;                 // Half go in one direction
             uint32_t ns_backward_hops = ns_total_hops - ns_forward_hops;  // Rest go in other direction
 
@@ -861,7 +863,7 @@ public:
         } else {
             // Mesh/Linear: go all the way in one direction per dimension
             hops[RoutingDirection::N] = src_coord[NS_DIM];
-            hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+            hops[RoutingDirection::S] = mesh_shape[NS_DIM] - src_coord[NS_DIM] - 1;
         }
 
         return hops;
