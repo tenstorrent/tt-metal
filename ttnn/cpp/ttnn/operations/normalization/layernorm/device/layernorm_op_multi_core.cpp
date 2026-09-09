@@ -323,7 +323,6 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
         layernorm::select_interleaved_statistics_backend(
             requested_use_welford,
             device->arch(),
-            rms_norm,
             input_is_row_major,
             fp32_dest_acc_en,
             {.input_format = input_format,

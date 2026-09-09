@@ -70,7 +70,6 @@ constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& para
 constexpr StatisticsBackend select_interleaved_statistics_backend(
     bool requested_use_welford,
     tt::ARCH arch,
-    bool rms_norm,
     bool input_is_row_major,
     bool fp32_dest_acc_en,
     const BlackholeStatsSelectorParams& blackhole_params) {
@@ -88,9 +87,7 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
     if (input_is_row_major) {
         return StatisticsBackend::TILE_REDUCTION;
     }
-    // RMSNorm does not execute the Welford calculation, but its existing
-    // Welford-configured route has distinct kernel and CB requirements.
-    if (arch != tt::ARCH::BLACKHOLE || rms_norm) {
+    if (arch != tt::ARCH::BLACKHOLE) {
         return StatisticsBackend::SFPU_TWO_PASS;
     }
     return use_blackhole_sfpu_stats(blackhole_params) ? StatisticsBackend::SFPU_TWO_PASS

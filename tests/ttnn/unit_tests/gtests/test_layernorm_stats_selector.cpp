@@ -146,41 +146,35 @@ TEST(LayerNormStatsSelector, InterleavedArchitectureAndLayoutPolicy) {
     bf16_partial_affine_below_crossover.has_beta = false;
 
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false, true, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, true, params),
         StatisticsBackend::SFPU_TWO_PASS);
     EXPECT_EQ(
         select_interleaved_statistics_backend(
-            true, tt::ARCH::BLACKHOLE, false, false, true, bf16_partial_affine_below_crossover),
+            true, tt::ARCH::BLACKHOLE, false, true, bf16_partial_affine_below_crossover),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false, false, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, false, true, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, true, params),
         StatisticsBackend::SFPU_TWO_PASS);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, false, false, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, false, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::QUASAR, false, false, true, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::QUASAR, false, true, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, true, true, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, true, true, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, true, false, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, true, false, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, true, true, params),
+        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, true, true, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(false, tt::ARCH::BLACKHOLE, false, false, true, params),
-        StatisticsBackend::TILE_REDUCTION);
-    EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, true, false, true, params),
-        StatisticsBackend::SFPU_TWO_PASS);
-    EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, true, false, false, params),
+        select_interleaved_statistics_backend(false, tt::ARCH::BLACKHOLE, false, true, params),
         StatisticsBackend::TILE_REDUCTION);
 }
 
