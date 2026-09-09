@@ -33,6 +33,7 @@
  */
 template <ckernel::trisc::BfdResource E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
+    LLK_REINIT_GUARD_NOTE_PROGRAMMED(E, operand_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
