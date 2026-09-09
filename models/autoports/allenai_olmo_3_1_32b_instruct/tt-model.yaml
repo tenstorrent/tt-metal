@@ -52,12 +52,11 @@ serve_profiles:
     max_model_len: 32768                                          # VALIDATED by stage 04 (16384 fallback)
     env: {TT_METAL_VISIBLE_DEVICES: "0"}
   - name: p300
-    description: One p300 board, both chips (TP2); 64k context.
+    description: One p300 board, both chips (TP2); 64k context. Needs a P300 host (2 chips); on a QuietBox-2 use p300x2.
     hardware: p300
     mesh_device: P300
     max_num_seqs: 16
     max_model_len: 65536
-    env: {TT_METAL_VISIBLE_DEVICES: "0,1"}
     additional_config: {tt: {fabric_config: FABRIC_1D}}
   - name: p300x2
     description: Two p300 boards / QuietBox 2, 4 chips (TP4); 64k context, 32 users.
