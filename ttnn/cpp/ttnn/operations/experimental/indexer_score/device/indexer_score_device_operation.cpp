@@ -92,18 +92,19 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
         const uint32_t kB = indexed_k.logical_shape()[0];
         if (!attrs.cache_batch_idx.has_value()) {
             // Metadata path: the slot is a device word, so only the recomposition stride is checkable.
+            // Skip the slot-range check ONLY -- falling through keeps the kv_len block below covered.
             TT_FATAL(
                 attrs.index_cache_num_layers <= kB && kB % attrs.index_cache_num_layers == 0,
                 "indexer_score index_cache_num_layers {} must divide the index cache's {} slots (user-major)",
                 attrs.index_cache_num_layers,
                 kB);
-            return;
+        } else {
+            TT_FATAL(
+                attrs.cache_batch_idx.value() < kB,
+                "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
+                attrs.cache_batch_idx.value(),
+                kB);
         }
-        TT_FATAL(
-            attrs.cache_batch_idx.value() < kB,
-            "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
-            attrs.cache_batch_idx.value(),
-            kB);
     }
 
     // Runtime KV length: kv_len <= T is the valid prefix this dispatch (not hashed -> re-checked here). The
@@ -467,6 +468,8 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
+    validate_chunk_start_metadata(attrs, tensor_args);
+    validate_cache_slot_metadata(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
     // K shard k_local [B,1,sll,D] (the all-gather INPUT), single-head, matching head dim, tile-aligned.

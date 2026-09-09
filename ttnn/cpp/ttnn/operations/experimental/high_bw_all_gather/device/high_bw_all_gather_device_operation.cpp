@@ -130,6 +130,13 @@ void validate_batch_index_metadata(const HighBwAllGatherParams& args, const High
     TT_FATAL(
         meta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "high_bw_all_gather input_batch_index_tensor must be INTERLEAVED");
+    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments while the program hash
+    // records only that metadata is present, so an L1 tensor on one dispatch and a DRAM one on the next would
+    // cache-hit a binary built for the other address space. Pin the placement, as indexer_score and
+    // topk_large_indices do.
+    TT_FATAL(
+        meta.memory_config().buffer_type() == BufferType::DRAM,
+        "high_bw_all_gather input_batch_index_tensor must be in DRAM");
 }
 
 // Structural checks for the trace-safe active-extent tensor.
@@ -172,6 +179,13 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
     TT_FATAL(
         meta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "high_bw_all_gather gathered_prefix_tensor must be INTERLEAVED");
+    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments while the program hash
+    // records only that metadata is present, so an L1 tensor on one dispatch and a DRAM one on the next would
+    // cache-hit a binary built for the other address space. Pin the placement, as indexer_score and
+    // topk_large_indices do.
+    TT_FATAL(
+        meta.memory_config().buffer_type() == BufferType::DRAM,
+        "high_bw_all_gather gathered_prefix_tensor must be in DRAM");
 }
 
 }  // namespace

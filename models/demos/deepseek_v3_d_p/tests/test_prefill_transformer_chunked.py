@@ -82,6 +82,10 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
+# GLM rows only; the Kimi/Mistral rows keep their own device params.
+GLM_L1_SMALL_SIZE = 1216
+GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
+
 
 def _resolve_trace_dir(variant) -> Path:
     """Golden chunked-prefill trace dir for `variant`: PREFILL_TRACE_DIR overrides the variant's
@@ -1380,11 +1384,10 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     [
         pytest.param(
             (8, 4),
-            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
             torus_xy_device_params(
                 fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
-                l1_small_size=1216,
-                trace_region_size=512 * 1024 * 1024,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -1424,21 +1427,15 @@ def test_glm_prefill_transformer_chunked(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
-        1,  # num_iters: accuracy, not timing — the perf sweep is test_glm_..._no_pcc
+        1,  # num_iters: accuracy, not timing
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
         tp_shard_kv=tp_shard_kv,
         check_pcc=True,
-        # Per-layer PCC is impossible under capture (host readback mid-forward), so it rides the
-        # untraced arm only; both arms still assert the cache PCCs.
-        check_layer_pcc=not use_trace,
+        check_layer_pcc=not use_trace,  # per-layer PCC needs a host readback, impossible under capture
         use_trace=use_trace,
-        # GLM's calibrated KVPE floor, not Kimi's 0.96 (which is above GLM's documented minimum).
         kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD,
-        # 55k, the golden-trace length — NOT the perf sweep's 100k default. Accuracy never runs past the
-        # trace, the shorter cache keeps the PCCs comparable with this test's historical numbers, and the
-        # allocated length changes the indexer's key width (and so the accumulation order).
-        seq_cache=SEQ_CACHE,
+        seq_cache=SEQ_CACHE,  # golden-trace length; changing it moves the indexer's key width
     )
 
 
@@ -2521,17 +2518,10 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     [
         pytest.param(
             (8, 4),
-            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
-            # and retain the existing reserve for other needs. 1216 not 1152 so a tp_sharded run that
-            # falls back off the snake still fits: the fallback adds two gather programs, +64 B/bank.
-            #
-            # The trace region is reserved for BOTH use_trace arms: device_params is its own parametrize
-            # axis and cannot be conditioned on use_trace, so the untraced arm pays DRAM it does not use.
-            # Too small fails loudly at end_trace_capture, not silently.
             torus_xy_device_params(
                 fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
-                l1_small_size=1216,
-                trace_region_size=512 * 1024 * 1024,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -2541,9 +2531,9 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         # since TORUS_XY always prefers the snake. Not comparable to the torus leg (all axes go Linear).
         pytest.param(
             (8, 4),
-            # 1216 like the torus legs: at 1152 the region is full, so the fallback's extra 64 B/bank
-            # makes the MoE routing's all_gather in offset_cumsum fail instead. Measured floor is 1168.
-            fabric2d_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
+            fabric2d_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=GLM_L1_SMALL_SIZE
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",

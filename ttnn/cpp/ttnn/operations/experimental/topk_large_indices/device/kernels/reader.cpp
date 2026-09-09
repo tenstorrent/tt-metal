@@ -44,11 +44,14 @@ void kernel_main() {
         const uint32_t metadata_length =
             trace_metadata::read_metadata_scalar_u32(noc, meta_args, get_arg_val<uint32_t>(5), scratch);
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
-        // outside the input row. Device ASSERT surfaces as a runtime failure, matching the scalar API's rejection.
-        ASSERT(
-            meta_offset <= input_width && metadata_length <= input_width - meta_offset &&
-            (metadata_length != 0 || meta_offset != 0));
-        search_len = metadata_length + meta_offset;
+        // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
+        // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only
+        // under the watcher. Clamping to input_width also matches the score kernel's coupled derivation, which
+        // saturates its own extent (kv_len_tiles is clamped to k_len_tiles) rather than reading past the row.
+        const bool metadata_valid = meta_offset <= input_width && metadata_length <= input_width - meta_offset &&
+                                    (metadata_length != 0 || meta_offset != 0);
+        ASSERT(metadata_valid);
+        search_len = metadata_valid ? metadata_length + meta_offset : input_width;
         bounds = calculate_topk_bounds(search_len, llk_k);
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
         mailbox->num_chunks = bounds.num_chunks;
