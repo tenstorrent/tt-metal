@@ -76,7 +76,8 @@ ALWI void matmul_row_major(
     KSteps k_steps,
     PreK pre_k = {},
     In1Offset in1_offset = {},
-    uint32_t out_column_offset = 0) {
+    uint32_t out_column_offset = 0,
+    uint32_t in0_row0 = 0) {  // first in0 m-subblock, in retained-in0 units (rows already resident)
     const uint32_t in0_cb = in0.get_cb_id();
     const uint32_t in1_cb = in1.get_cb_id();
     const uint32_t out_cb = out.get_cb_id();
@@ -98,7 +99,7 @@ ALWI void matmul_row_major(
         if constexpr (!retain_in0) {
             in0.wait_front(in0_block_tiles);
         } else if (!shape.wait_in0_per_m_subblock) {
-            in0.wait_front(in0_block_tiles);
+            in0.wait_front(in0_row0 * in0_subblock_tiles + in0_block_tiles);
         }
         if constexpr (!retain_in1) {
             in1.wait_front(in1_block_tiles);
@@ -113,7 +114,7 @@ ALWI void matmul_row_major(
         for (uint32_t m_subblock = 0; m_subblock < shape.m_subblocks; ++m_subblock) {
             if constexpr (retain_in0) {
                 if (shape.wait_in0_per_m_subblock) {
-                    in0.wait_front((m_subblock + 1) * in0_subblock_tiles);
+                    in0.wait_front((in0_row0 + m_subblock + 1) * in0_subblock_tiles);
                 }
             }
             uint32_t in1_index = in1_offset(k_block);
@@ -134,7 +135,7 @@ ALWI void matmul_row_major(
                     matmul_block_init(in0_cb, in1_cb, false, shape.subblock_w, shape.subblock_h, shape.k_tiles);
                 }
 
-                uint32_t in0_index = m_subblock * in0_subblock_tiles;
+                uint32_t in0_index = (in0_row0 + m_subblock) * in0_subblock_tiles;
                 for (uint32_t step = 0; step < inner_steps; ++step) {
                     ckernel::matmul_block(
                         in0_cb, in1_cb, in0_index, in1_index, 0, false, n_width, shape.subblock_h, shape.k_tiles);

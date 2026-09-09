@@ -430,6 +430,11 @@ void kernel_main() {
     // so a ragged block moves the full width and writes only its `m_eff` prefix. Only the LAST
     // block of an expert is ragged — and there are experts after it now.
     constexpr uint32_t GU_FULL = M_BLOCK * HN_PAD;
+    // The accumulator's capacity: the whole block, or the half-M ring (compute runs the gate/up
+    // matmul in two M-halves and the scatter follows it half-chunk by half-chunk).
+    constexpr uint32_t ACC_PAGES = CT(ACC_PAGES);
+    constexpr bool ACC_RING = ACC_PAGES < GU_FULL;
+    constexpr uint32_t HALF_ROWS = M_BLOCK / 2;
     // cb_h's physical capacity, in tiles. Every M-block must START with cb_h's write pointer at the
     // CB base: the writer derives its round's landing address as `base + (my_row % DEPTH_H) * HROW`
     // from its own never-advancing interface, so a pointer off the base puts the two senders'
@@ -605,6 +610,26 @@ void kernel_main() {
             // Under wd_mrow: the diagonal cores of the FIRST m_eff rows send; each row is assembled by
             // HGROUPS x workers_per_row slices; `mrow_pad` payload-free cb_h slots follow the rounds.
             const bool mrow_sender = wd_mrow && is_row_agg && (my_row < m_eff);
+            // The program's FIRST block, accumulator ring only: nothing has landed yet and no h_local
+            // is in flight, so invite the column NOW instead of after x staging and the weight issue
+            // (the invite doubles as h_local's flow control, which is why every later block keeps it
+            // in the reduce section). The ring holds 1.5 chunks; compute then stalls until this
+            // core's scatter runs, and the scatter waits for the slowest peer's invite -- measured
+            // 22-43 us of PACK stall in block 0 at every M, 0.4 us in every later block.
+            const bool early_invite = ACC_RING && gb == 0;
+            if (early_invite) {
+                if (moe_fused_swiglu::slice_assigned(m_eff * HN_PAD, KGROUPS, my_row) != 0) {
+                    cb_reserve_back(cb_gather_gate, GATHER_PAGES);
+                    cb_reserve_back(cb_gather_up, GATHER_PAGES);
+                }
+                const uint32_t sem_go_early = static_cast<uint32_t>(get_semaphore(SEM_GO));
+                for (uint32_t i = 0; i < KGROUPS; ++i) {
+                    const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * i + 0);
+                    const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * i + 1);
+                    noc_semaphore_inc(get_noc_addr(px, py, sem_go_early), 1);
+                }
+                noc_async_atomic_barrier();
+            }
             const uint32_t mrow_wpr = wd_mrow ? moe_fused_swiglu::mrow_workers_per_row(m_eff, HN_PAD, KGROUPS) : 0;
             const uint32_t mrow_pad = (wd_mrow && !wd_mgroup) ? moe_fused_swiglu::mrow_pad_slots(m_eff, DEPTH_H) : 0;
             // Both running totals are advanced from GRID-UNIFORM predicates rather than from the branch
@@ -1040,7 +1065,7 @@ void kernel_main() {
             // contributor and push WHOLE. This is also cb_h_local's flow control, transitively: my
             // invite for block_idx+1 is issued after my phase 2 of block_idx has read it, and no worker's
             // h-slice send for block_idx+1 can precede this invite. So the h landing needs no second handshake.
-            {
+            if (!early_invite) {
                 MaybeDeviceZoneScope("reader_reduce_reserve");
                 if (slice_tiles) {
                     cb_reserve_back(cb_gather_gate, GATHER_PAGES);
@@ -1059,7 +1084,7 @@ void kernel_main() {
                 }
             }
             const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
-            {
+            if (!early_invite) {
                 MaybeDeviceZoneScope("reader_reduce_invite");
                 for (uint32_t i = 0; i < KGROUPS; ++i) {
                     const uint32_t p = i;
@@ -1088,25 +1113,35 @@ void kernel_main() {
                     MaybeDeviceZoneScope("reader_reduce_invite_wait");
                     moe_fused_swiglu::sem_wait_min(SEM_GO, (gb + 1) * KGROUPS);
                 }
+                // With the ring, compute publishes each chunk as two HALF-chunks (rows 0-3, then 4-7):
+                // half h goes to workers [h*HALF_ROWS, (h+1)*HALF_ROWS) only. Chunk order and the
+                // per-chunk landing publication are the whole-block path's.
+                constexpr uint32_t HALVES = ACC_RING ? 2 : 1;
+                constexpr uint32_t PUSH_PAGES = ACC_RING ? HALF_ROWS * GU_CHUNK_W : CHUNK_PAGES;
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                    {
-                        MaybeDeviceZoneScope("reader_reduce_up_wait");
-                        cb_wait_front(cb_up_acc, CHUNK_PAGES);
+                    for (uint32_t h = 0; h < HALVES; ++h) {
+                        const uint32_t first_worker = ACC_RING ? h * HALF_ROWS : 0;
+                        const uint32_t workers = ACC_RING ? HALF_ROWS : slice_worker_count;
+                        {
+                            MaybeDeviceZoneScope("reader_reduce_up_wait");
+                            cb_wait_front(cb_up_acc, PUSH_PAGES);
+                        }
+                        {
+                            MaybeDeviceZoneScope("reader_reduce_up_payload");
+                            moe_fused_swiglu::scatter_payload_range(
+                                RT_PEERS,
+                                cb_up_acc,
+                                gather_up_base + c * CHUNK_PAGES * ACC_TILE,
+                                first_worker,
+                                workers,
+                                GU_CHUNK_W,
+                                my_row,
+                                ACC_TILE);
+                        }
+                        asm volatile("fence" ::: "memory");
+                        mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] = ++up_chunks_done;
+                        cb_pop_front(cb_up_acc, PUSH_PAGES);
                     }
-                    {
-                        MaybeDeviceZoneScope("reader_reduce_up_payload");
-                        moe_fused_swiglu::scatter_payload_to(
-                            RT_PEERS,
-                            cb_up_acc,
-                            gather_up_base + c * CHUNK_PAGES * ACC_TILE,
-                            slice_worker_count,
-                            GU_CHUNK_W,
-                            my_row,
-                            ACC_TILE);
-                    }
-                    asm volatile("fence" ::: "memory");
-                    mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] = ++up_chunks_done;
-                    cb_pop_front(cb_up_acc, CHUNK_PAGES);
                     if (slice_tiles) {
                         data_arrivals += KGROUPS;
                         {
@@ -1127,7 +1162,7 @@ void kernel_main() {
             } else {
                 {
                     MaybeDeviceZoneScope("reader_reduce_up_wait");
-                    cb_wait_front(cb_up_acc, GU_FULL);
+                    cb_wait_front(cb_up_acc, ACC_PAGES);  // a partial block fills at most the ring
                 }
                 // The UP half of the column all-to-all, on NOC_0; the writer carries the GATE half.
                 // Wait for the WHOLE column's invites first, exactly as the writer does: every core
@@ -1158,7 +1193,7 @@ void kernel_main() {
                         my_row,
                         ACC_TILE);
                 }
-                cb_pop_front(cb_up_acc, GU_FULL);
+                cb_pop_front(cb_up_acc, ACC_PAGES);
             }
             if (slice_tiles && !chunked) {
                 // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent

@@ -44,6 +44,8 @@ using namespace moe_fused_swiglu::compute;
 #else
 #define MaybeDeviceZoneScope(name)
 #endif
+// The full stage set no longer fits the kernel-config buffer with the ring's code: for a bottleneck
+// run, promote the few zones of interest to DeviceZoneScopedN by hand (see WORKLOG for the recipe).
 
 // PER-STAGE ZONES — enabled explicitly for bottleneck runs. A compute TU does NOT
 // get the profiler through `dataflow_api.h` (it must not see the dataflow API at all), which is
@@ -314,6 +316,45 @@ struct PackedWdOffset {
     }
 };
 
+// Runtime in1 tile base (the helper's In1Offset functor); 0 everywhere today.
+struct In1Base {
+    uint32_t base;
+    ALWI uint32_t operator()(uint32_t) const { return base; }
+};
+
+// One gate or up pass over (a row range of) the resident x block against one N-chunk of the
+// weights. A plain function, not a lambda: wrapping the call in a [&] lambda inside the pass loop
+// cost ~45% of the op (the shape and offsets went to the stack and the K loop reloaded them every
+// step). in0_row0 selects the first resident x row, for the ring's two half-chunk calls.
+template <bool RETAIN_IN1>
+ALWI void gate_up_pass(
+    CircularBuffer& x_buf,
+    CircularBuffer& weight_buf,
+    CircularBuffer& accum_buf,
+    const MatmulShape& shape,
+    uint32_t out_row_width,
+    uint32_t kr_rows,
+    uint32_t in1_base,
+    uint32_t out_col_offset,
+    uint32_t in0_row0 = 0) {
+    // init_matmul=false: every pass of a block shares one shape (HN_BLOCK x OUT_SUBBLOCK_H_GU x KR_PAD)
+    // and both weight CBs carry the same format, so the caller inits ONCE per block. Per-call inits
+    // were ~0.8 us each; the half-M ring doubles the call count, which made that visible (+6%).
+    matmul_row_major</*init_matmul=*/false, /*retain_in0=*/true, RETAIN_IN1, MatmulTarget::Interm>(
+        x_buf,
+        weight_buf,
+        accum_buf,
+        accum_buf,
+        shape,
+        /*in1_width=*/GU_CHUNK_W,
+        out_row_width,
+        KrSteps{kr_rows},
+        NoPreKBlock{},
+        In1Base{in1_base},
+        out_col_offset,
+        in0_row0);
+}
+
 void kernel_main() {
     // Ahead of the runtime args, not because it needs them -- the operand CBs are compile-time --
     // but because it programs the UNPACK/MATH/PACK config and must precede every compute API call,
@@ -369,6 +410,13 @@ void kernel_main() {
     // ragged block moves the full width and computes only its `m_eff` prefix. Only the LAST block of
     // an expert is ragged — and there are experts after it now.
     constexpr uint32_t GU_FULL = M_BLOCK * HN_PAD;
+    // Accumulator capacity. ACC_RING: bf16 partials on a chunkable full-block plan run the gate/up
+    // matmul in two M-halves so each accumulator is a ring of (M_BLOCK/2)*HN_PAD pages -- three
+    // half-chunks deep -- instead of the whole block; that is what fits bf16 partials on 7168x3072.
+    // Partial blocks (m_eff <= M_BLOCK/2) fill at most the ring, so they publish ACC_PAGES whole.
+    constexpr uint32_t ACC_PAGES = CT(ACC_PAGES);
+    constexpr bool ACC_RING = ACC_PAGES < GU_FULL;
+    constexpr uint32_t HALF_ROWS = M_BLOCK / 2;
     constexpr uint32_t SLICE_FULL = GU_FULL / KGROUPS;
     constexpr uint32_t OUT_FULL =
         (WD_MGROUPS && MGROUP_ROWS * EC_GROUP_MAX > M_BLOCK * EC_MAX) ? MGROUP_ROWS * EC_GROUP_MAX : M_BLOCK * EC_MAX;
@@ -523,11 +571,26 @@ void kernel_main() {
             // retain gate then up. `out_col_offset` + `caller_owns_pack_target` keep the layout m-major.
             {
                 MaybeDeviceZoneScope("compute_gateup");
-                gate_buf.reserve_back(GU_FULL);
-                up_buf.reserve_back(GU_FULL);
-                // The ONE reconfig this phase needs, hoisted out of the loop (see the calls below).
+                // ACC ring (chunked full blocks): each pass is TWO 4-row calls, each packed into its own
+                // HALF-chunk (rows 0-3 then 4-7 of the chunk-major [row][GU_CHUNK_W] layout are exactly
+                // the ring's 12-page push units), reserved and published one at a time so the pointer
+                // wraps between them instead of a 24-page pack running past the ring's end. Chunk
+                // order, weight consumption and per-chunk landing all stay as in the whole-block path:
+                // a half-outer order (rows 0-3 of every chunk first) measured +6-10%, because it
+                // outran the block-0 weight stream and left the gate pass exposed to W_gate's arrival.
+                const bool ring = ACC_RING && chunked;
+                if (!ring) {
+                    gate_buf.reserve_back(ACC_PAGES);
+                    up_buf.reserve_back(ACC_PAGES);
+                }
+                // The ONE reconfig this phase needs, hoisted out of the loop (see the calls below), and
+                // the one matmul init: cb_w_gate and cb_w_up share a format and every pass uses the
+                // same sub-block shape, so gate_up_pass runs with init_matmul=false.
                 reconfig_data_format(cb_w_gate, cb_x_tiles);
                 pack_reconfig_data_format(cb_gate_acc);
+                matmul_block_init(cb_x_tiles, cb_w_gate, false, HN_BLOCK, OUT_SUBBLOCK_H_GU, KR_PAD);
+                constexpr uint32_t CHUNK_W_TILES = KR_PAD * GU_CHUNK_W;
+                constexpr uint32_t HALF_CHUNK_PAGES = HALF_ROWS * GU_CHUNK_W;
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                     // The ragged column (hn_cols < HN_PAD) narrows the FMA width of the chunk it falls in;
                     // the host guarantees every chunk keeps at least one real column. 0 means "full".
@@ -538,12 +601,18 @@ void kernel_main() {
                         // push it (unread) so cb_w_gate/cb_w_up's residency wrap is core-independent, so
                         // consume it here without a matmul. The output columns it leaves untouched are
                         // pad, and `down`'s HnSteps narrows the last K-block past them.
-                        constexpr uint32_t CHUNK_W_TILES = KR_PAD * GU_CHUNK_W;
                         wg_buf.wait_front(CHUNK_W_TILES);
                         wg_buf.pop_front(CHUNK_W_TILES);
                         wu_buf.wait_front(CHUNK_W_TILES);
                         wu_buf.pop_front(CHUNK_W_TILES);
-                        if (chunked) {
+                        if (ring) {
+                            for (uint32_t h = 0; h < 2; ++h) {
+                                gate_buf.reserve_back(HALF_CHUNK_PAGES);
+                                up_buf.reserve_back(HALF_CHUNK_PAGES);
+                                gate_buf.push_back(HALF_CHUNK_PAGES);  // pad chunk, published unwritten
+                                up_buf.push_back(HALF_CHUNK_PAGES);
+                            }
+                        } else if (chunked) {
                             gate_buf.push_back(CHUNK_PAGES);  // pad chunk, published unwritten
                             up_buf.push_back(CHUNK_PAGES);
                         }
@@ -574,45 +643,60 @@ void kernel_main() {
                         CircularBuffer& weight_buf = run_up ? wu_buf : wg_buf;
                         CircularBuffer& accum_buf = run_up ? up_buf : gate_buf;
                         shape_c.wait_in0_per_m_subblock = stream_m && (pass == 0);
-                        if (run_up) {
+                        if (ring) {
+                            // Two half-chunk calls against the same retained weight chunk (retain_in1 skips
+                            // the helper's wait and pop, so both are explicit here, once per pass).
+                            weight_buf.wait_front(CHUNK_W_TILES);
+                            MatmulShape half = shape_c;
+                            for (uint32_t h = 0; h < 2; ++h) {
+                                const uint32_t row0 = h * HALF_ROWS;
+                                // Rows this half really has; a ragged tail block computes only its real prefix.
+                                const uint32_t rows = shape_c.m_subblocks > row0 ? shape_c.m_subblocks - row0 : 0;
+                                half.m_subblocks = rows < HALF_ROWS ? rows : HALF_ROWS;
+                                accum_buf.reserve_back(HALF_CHUNK_PAGES);
+                                if (half.m_subblocks != 0) {
+                                    if (run_up) {
+                                        MaybeDeviceZoneScope("compute_up_matmul");
+                                        gate_up_pass<true>(
+                                            x_buf,
+                                            weight_buf,
+                                            accum_buf,
+                                            half,
+                                            out_row_width,
+                                            kr_rows,
+                                            0u,
+                                            out_col_offset,
+                                            row0);
+                                    } else {
+                                        MaybeDeviceZoneScope("compute_gate_matmul");
+                                        gate_up_pass<true>(
+                                            x_buf,
+                                            weight_buf,
+                                            accum_buf,
+                                            half,
+                                            out_row_width,
+                                            kr_rows,
+                                            0u,
+                                            out_col_offset,
+                                            row0);
+                                    }
+                                }
+                                // Publish this half-chunk now: the dataflow kernels scatter it while the
+                                // rest computes, and the push is what wraps the write pointer inside the ring.
+                                accum_buf.push_back(HALF_CHUNK_PAGES);
+                            }
+                            weight_buf.pop_front(CHUNK_W_TILES);
+                        } else if (run_up) {
                             MaybeDeviceZoneScope("compute_up_matmul");
-                            matmul_row_major<
-                                /*init_matmul=*/true,
-                                /*retain_in0=*/true,
-                                /*retain_in1=*/false,
-                                MatmulTarget::Interm>(
-                                x_buf,
-                                weight_buf,
-                                accum_buf,
-                                accum_buf,
-                                shape_c,
-                                /*in1_width=*/GU_CHUNK_W,
-                                out_row_width,
-                                KrSteps{kr_rows},
-                                NoPreKBlock{},
-                                NoIn1Offset{},
-                                out_col_offset);
+                            gate_up_pass<false>(
+                                x_buf, weight_buf, accum_buf, shape_c, out_row_width, kr_rows, 0u, out_col_offset);
                         } else {
                             MaybeDeviceZoneScope("compute_gate_matmul");
-                            matmul_row_major<
-                                /*init_matmul=*/true,
-                                /*retain_in0=*/true,
-                                /*retain_in1=*/false,
-                                MatmulTarget::Interm>(
-                                x_buf,
-                                weight_buf,
-                                accum_buf,
-                                accum_buf,
-                                shape_c,
-                                /*in1_width=*/GU_CHUNK_W,
-                                out_row_width,
-                                KrSteps{kr_rows},
-                                NoPreKBlock{},
-                                NoIn1Offset{},
-                                out_col_offset);
+                            gate_up_pass<false>(
+                                x_buf, weight_buf, accum_buf, shape_c, out_row_width, kr_rows, 0u, out_col_offset);
                         }
                     }
-                    if (chunked) {
+                    if (chunked && !ring) {
                         // Publish this chunk now: the dataflow kernels scatter it while the next chunk
                         // computes. (Compute pushes; the reservation above covered the whole block.)
                         gate_buf.push_back(CHUNK_PAGES);
@@ -624,13 +708,20 @@ void kernel_main() {
                     }
                 }
                 if (!chunked) {
-                    gate_buf.push_back(GU_FULL);
-                    up_buf.push_back(GU_FULL);
+                    gate_buf.push_back(ACC_PAGES);
+                    up_buf.push_back(ACC_PAGES);
                 }
                 // packer_l1_acc leaves L1 accumulation ENABLED after the last chunk (the `down` matmul
                 // below carries the same note). The reduce chain that follows would otherwise ACCUMULATE
                 // onto stale L1 instead of overwriting.
                 pack_reconfig_l1_acc(0);
+                if constexpr (ACC_RING) {
+                    // The slice CBs may share the accumulators' allocations (host cb_allocations), so
+                    // the reduce must not write until this core's own scatter has popped every page.
+                    // A whole-ring reservation is exactly that wait; nothing is pushed against it.
+                    gate_buf.reserve_back(ACC_PAGES);
+                    up_buf.reserve_back(ACC_PAGES);
+                }
             }
 
             // ---- 3. cross-column reduce + SwiGLU ----

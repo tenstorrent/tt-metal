@@ -87,6 +87,10 @@ Knobs Knobs::from_env() {
     if (const char* up = std::getenv("MOE_FUSED_SWIGLU_ACC_UP_BF16"); up != nullptr && *up != '\0') {
         knobs.acc_up_bf16 = std::strtoul(up, nullptr, 10) != 0;
     }
+    if (const char* ring = std::getenv("MOE_FUSED_SWIGLU_ACC_RING"); ring != nullptr && *ring != '\0') {
+        knobs.acc_ring = std::strtoul(ring, nullptr, 10) != 0;
+    }
+    knobs.acc_alias = env_u32("MOE_FUSED_SWIGLU_ACC_ALIAS", knobs.acc_alias ? 1u : 0u) != 0;
     knobs.depth_x = env_u32("MOE_FUSED_SWIGLU_DEPTH_X", knobs.depth_x);
     knobs.depth_h = env_u32("MOE_FUSED_SWIGLU_DEPTH_H", knobs.depth_h);
     knobs.hack_ahead = env_u32("MOE_FUSED_SWIGLU_HACK_AHEAD", knobs.hack_ahead);
@@ -157,6 +161,18 @@ Blocking::Blocking(
     slice_pages = choice.plan.slice_pages;
     gu_chunk_w = hn_pad / gu_chunks;
     hn_block = gu_chunk_w;
+    // The kernels' chunked_scatter_ok(M_BLOCK, ...) in host terms: the full-block plan hands every
+    // worker exactly one token tile-row (a == hn_pad), which is what lets a chunk be scattered on
+    // its own. The ring rides on that path and on the halves dividing M_BLOCK; SiTU never chunks.
+    const bool chunked_full = knobs.chunked_scatter && SCATTER_ONE_SIGNAL && gu_chunks > 1 &&
+                              !choice.plan.sizes.empty() && choice.plan.sizes.back() == hn_pad;
+    acc_ring_capable = (acc_bf16 || acc_up_bf16) && chunked_full && !knobs.situ && (M_BLOCK % 2 == 0);
+    // Whole-block accumulators unless forced; the ladder below takes the ring only when the bf16
+    // layout does not fit otherwise. The ring costs ~1-4% device time: with 1.5 chunks of slack,
+    // compute waits on this core's own scatter, which in block 0 waits on the reader's and writer's
+    // weight-issue preamble and, per chunk, on two payload barriers instead of one.
+    acc_ring = acc_ring_capable && knobs.acc_ring.value_or(false);
+    acc_pages = acc_ring ? (M_BLOCK / 2) * hn_pad : M_BLOCK * hn_pad;
     gu_in1_subblocks = gu_chunk_w / hn_block;
     if (balanced_hn) {
         std::tie(hn_sizes, hn_starts) = split(hid_t, hgroups);
@@ -258,6 +274,14 @@ Blocking::Blocking(
     // (DSV4 Pro) / 6144x3072 (MiniMax M3) the bfp8 layout already sits within 43 KB of the budget,
     // so the second bf16 pair (+138 KB) has nothing left to displace. Dropping it also lets
     // cb_up_acc share cb_h's allocation (cb_allocations), which is what brings those shapes in.
+    // The accumulator ring (half-M matmul, moe_fused_swiglu_compute.cpp): -147 KB on the two
+    // accumulators and it lets cb_slice_gate/cb_slice_up share their allocations. Before the
+    // precision rung, since it keeps both paths in bf16.
+    if (acc_ring_capable && !acc_ring && !knobs.acc_ring.has_value() &&
+        l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
+        acc_ring = true;
+        acc_pages = (M_BLOCK / 2) * hn_pad;
+    }
     if (acc_up_bf16 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
         acc_up_bf16 = false;
         acc_up_tile = bfp8_tile;
@@ -369,11 +393,17 @@ std::vector<CbView> Blocking::cb_layout(
         {CB_SLICE_UP, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_SLICE, slice_pages, bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_TILES, DEPTH_OUT * out_block, output_tile, FormatKey::Out},
-        {CB_GATE_ACC, gu, acc_gate_tile, FormatKey::AccGate},
-        {CB_UP_ACC, gu, acc_up_tile, FormatKey::AccUp},
+        {CB_GATE_ACC, acc_pages, acc_gate_tile, FormatKey::AccGate},
+        {CB_UP_ACC, acc_pages, acc_up_tile, FormatKey::AccUp},
         {CB_GATE_SILU, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_LOCAL, std::max(gu, h_fast), bfp8_tile, FormatKey::Bfp8},
-        {CB_OUT_INTERM, out_interm, bf16_tile, FormatKey::Bf16},
+        // cb_out_interm is base-addressed scratch (never pushed), so its page count only has to
+        // cover the down matmul's partial. Declared at the ring's size when it will share the gate
+        // accumulator's allocation, so the two views agree instead of meeting at an LCM.
+        {CB_OUT_INTERM,
+         (acc_ring && acc_bf16 && out_interm <= acc_pages) ? acc_pages : out_interm,
+         bf16_tile,
+         FormatKey::Bf16},
     };
 }
 
@@ -437,28 +467,65 @@ std::vector<CbAllocation> Blocking::cb_allocations(
         if (phase_cb_alias(requested_out_tile)) {
             aliases.push_back({CB_GATHER_GATE, CB_H_SLICE, CB_OUT_TILES});
         }
-        bool out_interm_taken = false;
-        // The bf16-partials regimes pay for themselves with two phase-disjoint aliases. Both partners
-        // of each pair are consumed by this core's own compute, in program order, so no peer protocol
-        // is involved:
-        //  * cb_gate_acc (phase 1: packed by compute, read out by the writer's scatter, whose payload
-        //    barrier precedes the signal this core's own reduce waits for) with cb_out_interm (phase 2:
-        //    the down matmul's L1-accumulate scratch, base-addressed, never pushed).
-        //  * cb_up_acc (phase 1, same lifetime via the reader's scatter) with cb_h (phase 2: the h
-        //    rounds land only after every peer's reduce, i.e. after this core's up payload has left;
-        //    the down matmul drains them before compute packs the next block's partials). cb_h keeps
-        //    its own capacity -- the LCM is its page count -- so its base-derived landing addresses and
-        //    realignment pads are untouched.
-        // Taken only in a bf16 regime so the shipped bfp8 allocation stays byte-identical.
-        if (acc_bf16 || acc_up_bf16) {
-            if (alias_pays({CB_GATE_ACC, CB_OUT_INTERM})) {
-                aliases.push_back({CB_GATE_ACC, CB_OUT_INTERM});
-                out_interm_taken = true;
+        std::unordered_set<uint32_t> taken;
+        // Grow a group greedily: a partner joins if the page sizes match and the LCM capacity still
+        // beats separate allocations.
+        const auto grow = [&](uint32_t root, std::initializer_list<uint32_t> partners) {
+            std::vector<uint32_t> group{root};
+            for (const uint32_t partner : partners) {
+                if (taken.contains(partner)) {
+                    continue;
+                }
+                std::vector<uint32_t> trial = group;
+                trial.push_back(partner);
+                uint32_t pages = 1;
+                uint32_t separate = 0;
+                bool same_page = true;
+                for (const uint32_t index : trial) {
+                    const auto& view = by_index.at(index);
+                    same_page &= view.page_size == by_index.at(root).page_size;
+                    pages = std::lcm(pages, view.pages);
+                    separate += view.pages;
+                }
+                if (same_page && pages < separate) {
+                    group = std::move(trial);
+                }
             }
-            if (alias_pays({CB_UP_ACC, CB_H})) {
-                aliases.push_back({CB_UP_ACC, CB_H});
+            if (group.size() > 1) {
+                for (const uint32_t index : group) {
+                    taken.insert(index);
+                }
+                aliases.push_back(std::move(group));
+            }
+        };
+        // The bf16-partials regimes pay for themselves with phase-disjoint aliases on the two
+        // accumulators. Every partner is consumed by this core's own compute, in program order, so no
+        // peer protocol is involved:
+        //  * cb_out_interm (phase 2): the down matmul's L1-accumulate scratch, base-addressed, never
+        //    pushed. The gate partials' payload barrier precedes the signal this core's own reduce
+        //    waits for, so they have left before down starts.
+        //  * cb_h (phase 2): the h rounds land only after every peer's reduce, i.e. after this core's
+        //    up payload has left; down drains them before compute packs the next block's partials.
+        //    cb_h keeps its own capacity (the LCM is its page count), so its base-derived landing
+        //    addresses and realignment pads are untouched.
+        //  * cb_slice_gate / cb_slice_up (the reduce): ONLY with the accumulator ring, whose compute
+        //    reserves the whole ring before the reduce -- i.e. waits until its own scatter has popped
+        //    every page -- so the fold's writes cannot land on a payload in flight. 36 and 18 pages
+        //    meet at 36; the whole-block 72 would not. ONE reduce-phase CB per group: the three
+        //    slice CBs overlap each other inside the reduce (slice_gate is read by the SiLU add that
+        //    writes gate_silu; slice_up and gate_silu are read together by the multiply), so putting
+        //    two of them on one allocation clobbers live tiles -- measured PCC 0.005.
+        // Taken only in a bf16 regime so the shipped bfp8 allocation stays byte-identical.
+        if ((acc_bf16 || acc_up_bf16) && knobs.acc_alias) {
+            if (acc_ring) {
+                grow(CB_GATE_ACC, {CB_OUT_INTERM, CB_SLICE_GATE});
+                grow(CB_UP_ACC, {CB_SLICE_UP, CB_H});
+            } else {
+                grow(CB_GATE_ACC, {CB_OUT_INTERM});
+                grow(CB_UP_ACC, {CB_H});
             }
         }
+        const bool out_interm_taken = taken.contains(CB_OUT_INTERM) || taken.contains(CB_GATE_SILU);
         if (!out_interm_taken && alias_pays({CB_GATE_SILU, CB_OUT_INTERM})) {
             aliases.push_back({CB_GATE_SILU, CB_OUT_INTERM});
         }
@@ -507,7 +574,8 @@ std::string Blocking::describe() const {
            << ", hn_pad " << hn_pad << ", gu_chunks " << gu_chunks << ", ec_max " << ec_max << ", depth_wd " << depth_wd
            << ", depth_x " << depth_x << ", depth_h " << depth_h << ", wd_split " << wd_split << ", wd_mrow "
            << (wd_mrow_rounds && wd_resident) << ", hack_ahead " << hack_ahead << ", acc "
-           << (acc_bf16 ? "bf16" : "bfp8") << '/' << (acc_up_bf16 ? "bf16" : "bfp8");
+           << (acc_bf16 ? "bf16" : "bfp8") << '/' << (acc_up_bf16 ? "bf16" : "bfp8") << ", acc_pages " << acc_pages
+           << (acc_ring ? " (ring)" : "");
     return stream.str();
 }
 

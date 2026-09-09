@@ -280,6 +280,10 @@ void kernel_main() {
     // block still moves the full width and this kernel reads only its `m_eff` prefix. Only the LAST
     // block of an expert is ragged — and there are experts after it now.
     constexpr uint32_t GU_FULL = M_BLOCK * HN_PAD;
+    // See the reader: whole-block accumulator, or the half-M ring.
+    constexpr uint32_t ACC_PAGES = CT(ACC_PAGES);
+    constexpr bool ACC_RING = ACC_PAGES < GU_FULL;
+    constexpr uint32_t HALF_ROWS = M_BLOCK / 2;
     constexpr uint32_t SLICE_FULL = GU_FULL / KGROUPS;
     constexpr uint32_t OUT_FULL =
         (WD_MGROUPS && MGROUP_ROWS * EC_GROUP_MAX > M_BLOCK * EC_MAX) ? MGROUP_ROWS * EC_GROUP_MAX : M_BLOCK * EC_MAX;
@@ -523,7 +527,7 @@ void kernel_main() {
 #endif
                 if (!chunked) {
                     MaybeDeviceZoneScope("writer_scatter_gate_wait");
-                    cb_wait_front(cb_gate_acc, GU_FULL);
+                    cb_wait_front(cb_gate_acc, ACC_PAGES);  // a partial block fills at most the ring
                 }
                 uint32_t gate_dst = get_write_ptr(cb_gather_gate);
                 if constexpr (PHASE_CB_ALIAS) {
@@ -543,34 +547,44 @@ void kernel_main() {
                     // CHUNKED: my GATE chunk c to every worker's landing slot for chunk c, then one
                     // signal per destination once the reader's UP chunk c has landed too.
                     constexpr uint32_t CHUNK_PAGES = M_BLOCK * GU_CHUNK_W;
+                    // Ring: half h of chunk c is HALF_ROWS rows, one per worker in
+                    // [h*HALF_ROWS, (h+1)*HALF_ROWS); the reader's mailbox counts half-chunks too. Each
+                    // worker is still signalled once per chunk, so the landing count is the same.
+                    constexpr uint32_t HALVES = ACC_RING ? 2 : 1;
+                    constexpr uint32_t PUSH_PAGES = ACC_RING ? HALF_ROWS * GU_CHUNK_W : CHUNK_PAGES;
                     for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                        {
-                            MaybeDeviceZoneScope("writer_scatter_gate_wait");
-                            cb_wait_front(cb_gate_acc, CHUNK_PAGES);
-                        }
-                        {
-                            MaybeDeviceZoneScope("writer_scatter_gate_payload");
-                            moe_fused_swiglu::scatter_payload_to(
-                                RT_PEERS,
-                                cb_gate_acc,
-                                gate_dst + c * CHUNK_PAGES * ACC_TILE,
-                                sl_w,
-                                GU_CHUNK_W,
-                                my_row,
-                                ACC_TILE);
-                        }
-                        ++up_chunks_seen;
-                        {
-                            MaybeDeviceZoneScope("writer_scatter_up_wait");
-                            while (mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] < up_chunks_seen) {
-                                invalidate_l1_cache();
+                        for (uint32_t h = 0; h < HALVES; ++h) {
+                            const uint32_t first_worker = ACC_RING ? h * HALF_ROWS : 0;
+                            const uint32_t workers = ACC_RING ? HALF_ROWS : sl_w;
+                            {
+                                MaybeDeviceZoneScope("writer_scatter_gate_wait");
+                                cb_wait_front(cb_gate_acc, PUSH_PAGES);
                             }
+                            {
+                                MaybeDeviceZoneScope("writer_scatter_gate_payload");
+                                moe_fused_swiglu::scatter_payload_range(
+                                    RT_PEERS,
+                                    cb_gate_acc,
+                                    gate_dst + c * CHUNK_PAGES * ACC_TILE,
+                                    first_worker,
+                                    workers,
+                                    GU_CHUNK_W,
+                                    my_row,
+                                    ACC_TILE);
+                            }
+                            ++up_chunks_seen;
+                            {
+                                MaybeDeviceZoneScope("writer_scatter_up_wait");
+                                while (mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] < up_chunks_seen) {
+                                    invalidate_l1_cache();
+                                }
+                            }
+                            {
+                                MaybeDeviceZoneScope("writer_scatter_signal");
+                                moe_fused_swiglu::scatter_signal_range(RT_PEERS, SEM_DATA, first_worker, workers);
+                            }
+                            cb_pop_front(cb_gate_acc, PUSH_PAGES);
                         }
-                        {
-                            MaybeDeviceZoneScope("writer_scatter_signal");
-                            moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
-                        }
-                        cb_pop_front(cb_gate_acc, CHUNK_PAGES);
                     }
                 } else {
                     // The GATE half of the column all-to-all, on NOC_1. The reader carries the UP half on
@@ -606,7 +620,7 @@ void kernel_main() {
                             moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
                         }
                     }
-                    cb_pop_front(cb_gate_acc, GU_FULL);
+                    cb_pop_front(cb_gate_acc, ACC_PAGES);
                 }
             }
             // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----

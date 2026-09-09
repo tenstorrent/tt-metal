@@ -171,6 +171,36 @@ FORCE_INLINE void scatter_payload_to(
     noc_async_write_barrier();
 }
 
+//: The half-M accumulator ring's leg: the same unicast for workers [first, first + count) only, the
+//: source being the ring's current half-chunk, whose row i is worker (first + i)'s slice.
+FORCE_INLINE void scatter_payload_range(
+    uint32_t rt_peers,
+    uint32_t src_cb,
+    uint32_t dst,
+    uint32_t first,
+    uint32_t count,
+    uint32_t slice_tiles,
+    uint32_t my_row,
+    uint32_t tile_bytes) {
+    const uint32_t src = get_read_ptr(src_cb);
+    dst += my_row * slice_tiles * tile_bytes;
+    const uint32_t bytes = slice_tiles * tile_bytes;
+    for (uint32_t i = 0; i < count; ++i) {
+        const Peer p = peer_at(rt_peers, first + i);
+        noc_async_write(src + i * bytes, get_noc_addr(p.x, p.y, dst), bytes);
+    }
+    noc_async_write_barrier();
+}
+
+FORCE_INLINE void scatter_signal_range(uint32_t rt_peers, uint32_t sem_data, uint32_t first, uint32_t count) {
+    const uint32_t sem = static_cast<uint32_t>(get_semaphore(sem_data));
+    for (uint32_t i = 0; i < count; ++i) {
+        const Peer p = peer_at(rt_peers, first + i);
+        noc_semaphore_inc(get_noc_addr(p.x, p.y, sem), 1);
+    }
+    noc_async_atomic_barrier();
+}
+
 FORCE_INLINE void scatter_payload(
     uint32_t rt_peers,
     uint32_t src_cb,

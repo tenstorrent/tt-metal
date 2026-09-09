@@ -209,6 +209,7 @@ std::vector<uint32_t> make_reader_ct(
         wg_shard_w,
         wd_shard_w,
         blocking.gather_pages,
+        blocking.acc_pages,
         direct_write || operation_arguments.read_x_at_offset,
         operation_arguments.read_x_at_offset,
         start_page,
@@ -301,6 +302,7 @@ std::vector<uint32_t> make_writer_ct(
         wd_shard_w,
         blocking.gather_pages,
         phase_alias ? blocking.phase_cb_alias_pages(output_tile) : 0,
+        blocking.acc_pages,
         direct_write,
         output_m_tiles,
         geo::CB_W_UP,
@@ -348,6 +350,7 @@ std::vector<uint32_t> make_compute_ct(
         geo::ELTWISE_BLK,
         geo::DEST_LIMIT,
         blocking.gather_pages,
+        blocking.acc_pages,
         blocking.depth_h,
         blocking.knobs.mrow_partial ? 1u : 0u,
         blocking.knobs.chunked_scatter ? 1u : 0u,
@@ -400,6 +403,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     if (std::getenv("MOE_FUSED_SWIGLU_ACC_BF16") == nullptr) {
         knobs.acc_bf16 = operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT16;
     }
+    knobs.situ = operation_arguments.activation == RoutedExpertActivation::SituGlu;
     // The widest K slot any row can get; the split is even, so this is just the ceiling.
     const uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
     const uint32_t activation_slice =

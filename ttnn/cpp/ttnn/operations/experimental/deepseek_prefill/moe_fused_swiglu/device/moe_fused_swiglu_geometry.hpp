@@ -120,6 +120,13 @@ struct Knobs {
     bool acc_bf16 = false;
     // UP partials (CB_UP_ACC / CB_GATHER_UP). Follows acc_bf16 unless set. MOE_FUSED_SWIGLU_ACC_UP_BF16
     std::optional<bool> acc_up_bf16;
+    // SiTU-GLU fuses both reductions and never chunks the scatter, so the accumulator ring below is
+    // off for it. Set by the program factory from the activation.
+    bool situ = false;
+    // Experiment switches: force the accumulator ring on/off (MOE_FUSED_SWIGLU_ACC_RING) and
+    // disable the accumulator aliases (MOE_FUSED_SWIGLU_ACC_ALIAS=0).
+    std::optional<bool> acc_ring;
+    bool acc_alias = true;
     // 1, not the constant's 2: the second resident-x slot measured as free to drop at every M (the
     // row-major prefetch lands in cb_x_in, and the reader reaches the next block's multicast only
     // after its own phase 2), and it is 244 KB -- what pays for the bf16 intermediates.
@@ -237,6 +244,12 @@ public:
     bool acc_up_bf16;  // up partials + up landing in bf16
     uint32_t acc_gate_tile;
     uint32_t acc_up_tile;
+    // bf16 regimes on a chunkable full-block plan run the gate/up matmul in two M-halves and keep
+    // each accumulator as a ring of (M_BLOCK/2)*hn_pad pages instead of a whole M_BLOCK*hn_pad block
+    // (moe_fused_swiglu_compute.cpp, "ACC_RING"). acc_pages is what every kernel sizes by.
+    bool acc_ring;
+    bool acc_ring_capable;
+    uint32_t acc_pages;
     bool enable_phase_alias;
     bool x_is_rm;
     uint32_t l1_budget;
