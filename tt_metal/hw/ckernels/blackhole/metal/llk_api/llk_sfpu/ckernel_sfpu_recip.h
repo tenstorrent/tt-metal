@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_mutex_guard.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
@@ -17,6 +18,11 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+
+// Forward declaration: shared macro-slot programmer for the fp32 recip path, defined below with
+// _init_reciprocal_fast_24b_5c_. Declared here so the consume path (_calculate_reciprocal_fast_24b_5c_,
+// which appears earlier in the file) can call it under the mutex::SFPU guard.
+inline void _program_reciprocal_24b_5c_macros_();
 
 // Computes the reciprocal of a floating point value x.
 template <int max_iter = 2>
@@ -191,23 +197,38 @@ inline void _calculate_reciprocal_fast_24b_5c_(const int iterations) {
     // 2 |      |                        |                         |         |
     // 3 |      |                        |                         | [z] L16 |
 
-    lltt::replay(0, 4);
-    TTI_SFPLOAD(7, 0, ADDR_MOD_6, 0);
+    // The SHARED LoadMacroConfig (templates/sequence/Misc) is programmed by both MATH (fp32 recip) and PACK
+    // (exp) with no Auto TTSync (tt-metal#50381). Guard the whole consume with mutex::SFPU and REPROGRAM the
+    // shared slots under the lock, so whatever a peer left behind is overwritten before we replay. The
+    // critical section MUST end with an explicit SFPU drain BEFORE the guard releases: ATRELM does not drain
+    // the SFPU backend, and SFPLOADMACRO schedules future-cycle work that stays in-flight after issue.
+    {
+        ckernel::T6MutexLockGuard _sfpu_lock(ckernel::mutex::SFPU);
+
+        _program_reciprocal_24b_5c_macros_();
+
+        lltt::replay(0, 4);
+        TTI_SFPLOAD(7, 0, ADDR_MOD_6, 0);
 
 #pragma GCC unroll 7
-    for (int d = 0; d < iterations - 1; d++) {
-        lltt::replay(0, 5);
-    }
+        for (int d = 0; d < iterations - 1; d++) {
+            lltt::replay(0, 5);
+        }
 
-    TTI_SFPNOP;
-    lltt::replay(1, 1);
-    TTI_SFPNOP;
-    lltt::replay(3, 2);
+        TTI_SFPNOP;
+        lltt::replay(1, 1);
+        TTI_SFPNOP;
+        lltt::replay(3, 2);
 
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+
+        // DRAIN: wait for the SFPU backend to finish all scheduled macro work before releasing the mutex,
+        // otherwise a peer could reprogram the shared slots while our SFPLOADMACRO work is still in flight.
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    }  // guard destructor (ATRELM) runs here, after the drain
 #endif
 }
 
@@ -278,12 +299,14 @@ inline void _init_reciprocal_fast_8b_3c_() {
 #endif
 }
 
-inline void _init_reciprocal_fast_24b_5c_() {
-#ifndef DISABLE_SFPLOADMACRO
-    constexpr int e = p_sfpu::LREG0;
+// SHARED per-lane macro state: InstructionTemplate[0..3] + Macro Sequence[0..3] + Misc, all programmed via
+// SFPCONFIG (dest 0-3 = templates, 4-7 = sequence, 8 = Misc). This LoadMacroConfig backend is a single
+// per-lane resource shared across MATH (TRISC1) and PACK (TRISC2) and is NOT protected by Auto TTSync
+// (tt-metal#50381). Pulled out of _init_reciprocal_fast_24b_5c_ so the consume path can reprogram it under
+// the mutex::SFPU guard before every use, making cross-thread clobbering benign.
+inline void _program_reciprocal_24b_5c_macros_() {
     constexpr int t2 = p_sfpu::LREG1;
     constexpr int z = p_sfpu::LREG2;
-    constexpr int y = p_sfpu::LREG3;
 
     // InstructionTemplate[0]
     TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
@@ -344,7 +367,23 @@ inline void _init_reciprocal_fast_24b_5c_() {
 
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
     TTI_SFPCONFIG(0xff0, 8, 1);
+}
 
+inline void _init_reciprocal_fast_24b_5c_() {
+#ifndef DISABLE_SFPLOADMACRO
+    constexpr int e = p_sfpu::LREG0;
+    constexpr int t2 = p_sfpu::LREG1;
+    constexpr int z = p_sfpu::LREG2;
+    constexpr int y = p_sfpu::LREG3;
+
+    // Program the SHARED macro slots + Misc once here as well, so a lone init (without an interleaved peer)
+    // leaves the backend in the expected state. The consume path re-runs this under mutex::SFPU before every
+    // use, so a cross-thread clobber between init and consume is benign.
+    _program_reciprocal_24b_5c_macros_();
+
+    // PER-THREAD replay recording. The SFPU replay buffer is a per-thread frontend resource (not the
+    // tt-metal#50381 collision); recording it once here is safe. It stores SFPLOADMACRO encodings by
+    // macro-slot index; the shared slots above must hold the matching contents at replay time.
     constexpr std::uint32_t prev_offset = -2 & 0x3ff;
     constexpr std::uint32_t offset = 0;
 
