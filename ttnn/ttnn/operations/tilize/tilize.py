@@ -224,8 +224,23 @@ SUPPORTED = {
     # independent of every tensor dimension. See l1_ledger.md's total, in which
     # no tensor dimension appears at either setting.
     "low_l1": [False, True],
-    "shard_api": ["none"],
-    "out_scheme": ["interleaved"],
+    # A shard fixes the core assignment and the per-core extent, so the block
+    # grid is READ off the shard spec instead of solved, and the sharded side's
+    # CB is placed on the shard buffer (zero-copy) rather than re-read through a
+    # TensorAccessor. tilize has no dependent axis — an output tile depends only
+    # on its own column slice of its own tile_h sticks — so a shard IS a block
+    # and there is no cross-core combine. Both APIs are the same partition seen
+    # through two descriptors; a live tensor normalizes an ND spec down to the
+    # equivalent legacy 2-D one whenever it has one, which is why `nd_in_legacy_out`
+    # ends up fully native. See tilize_program_descriptor.shard_partition.
+    "shard_api": ["none", "legacy_2d", "nd"],
+    "out_scheme": [
+        "interleaved",
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "nd",
+    ],
     # All four interleaved buffer transitions. Placement is a `TensorAccessor`
     # concern on both legs and the kernels never name a buffer type; promoted
     # from [dram_to_dram] by the verification pass after all three additional
@@ -238,7 +253,11 @@ SUPPORTED = {
     # tile dims of their own, so they are reachable only with a pad requested
     # and belong to the padding refinement.
     "rank": [2, 3, 4, 5, 6],
-    "orientation": ["none"],
+    # The orientation only re-linearizes shard -> core; the partition is read
+    # through `corerange_to_cores(grid, n, row_wise=(orientation == ROW_MAJOR))`,
+    # which is the same enumeration the buffer itself places shards with, so
+    # COL_MAJOR needs no separate path.
+    "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "pad_mode": ["none"],
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
@@ -509,6 +528,33 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
+def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile):
+    """TensorSpec for the output at ANY placement.
+
+    Three constructors, one per placement family: an ND config carries an
+    `NdShardSpec` and NO legacy 2-D spec, so passing its (None) `shard_spec` to
+    the sharded overload is a `bad optional access` — the ND overload is the one
+    that takes it. Interleaved goes through the plain overload for the same
+    reason in reverse.
+    """
+    shape = ttnn.Shape(list(logical_shape))
+    if not out_memory_config.is_sharded():
+        return ttnn.TensorSpec(shape, out_dtype, ttnn.TILE_LAYOUT, out_memory_config.buffer_type, out_tile)
+    if out_memory_config.shard_spec is None:
+        return ttnn.TensorSpec(
+            shape, out_dtype, ttnn.TILE_LAYOUT, out_memory_config.nd_shard_spec, out_memory_config.buffer_type, out_tile
+        )
+    return ttnn.TensorSpec(
+        shape,
+        out_dtype,
+        ttnn.TILE_LAYOUT,
+        out_memory_config.memory_layout,
+        out_memory_config.shard_spec,
+        out_memory_config.buffer_type,
+        out_tile,
+    )
+
+
 def tilize(
     input_tensor: ttnn.Tensor,
     memory_config: "ttnn.MemoryConfig | None" = None,
@@ -544,15 +590,7 @@ def tilize(
     # The output's LOGICAL shape is the input's. A padded call would grow only
     # the padded shape, which the TensorSpec derives from (logical shape, tile).
     output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.TensorSpec(
-            ttnn.Shape(list(input_tensor.shape)),
-            out_dtype,
-            ttnn.TILE_LAYOUT,
-            out_memory_config.memory_layout,
-            out_memory_config.shard_spec,
-            out_memory_config.buffer_type,
-            out_tile,
-        ),
+        _output_tensor_spec(input_tensor.shape, out_dtype, out_memory_config, out_tile),
         device,
     )
 

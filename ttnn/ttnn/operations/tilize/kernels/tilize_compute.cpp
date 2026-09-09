@@ -29,13 +29,16 @@ void kernel_main() {
 
     const uint32_t start_block_id = get_arg_val<uint32_t>(0);
     const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(1);
+    // 1 on the solved plan (contiguous block ranges); the core count on the
+    // shard-driven plan, where core i owns shards {i, i+N, i+2N, ...}.
+    const uint32_t block_stride = get_arg_val<uint32_t>(2);
 
     // PREREQUISITE of compute_kernel_lib::tilize (tilize_helpers.hpp:89-93).
     compute_kernel_hw_startup(cb_input_rows, cb_output_tiles);
 
     for (uint32_t b = 0; b < num_blocks_this_core; ++b) {
         // resolve_block — the identical derivation the reader and writer run.
-        const uint32_t block_id = start_block_id + b;
+        const uint32_t block_id = start_block_id + b * block_stride;
         const uint32_t row_group = block_id / num_w_chunks;
         const uint32_t row_start = (row_group * tensor_row_blocks) / num_row_groups;
         const uint32_t row_end = ((row_group + 1) * tensor_row_blocks) / num_row_groups;

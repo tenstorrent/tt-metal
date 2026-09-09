@@ -3,6 +3,13 @@
 //
 // tilize writer (NoC1) — `store_block`.
 //
+// NOT INSTANTIATED on the native sharded-output path: there the packer has
+// already written every tile into the output shard's own L1 (cb_output_tiles is
+// placed on that buffer), so the program carries no writer kernel at all. This
+// file is the store for every destination that is genuinely elsewhere —
+// interleaved, DRAM-sharded, or an L1 shard on a DIFFERENT partition from the
+// one the blocks were cut on (the cross-spec gather, a real remote write).
+//
 // RAW-API JUSTIFICATION (the only non-helper block operation in this op).
 // The two candidate dataflow helpers were checked against this destination and
 // both mismatch concretely:
@@ -53,13 +60,16 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block_id = get_arg_val<uint32_t>(1);
     const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(2);
+    // 1 on the solved plan (contiguous block ranges); the core count on the
+    // shard-driven plan, where core i owns shards {i, i+N, i+2N, ...}.
+    const uint32_t block_stride = get_arg_val<uint32_t>(3);
 
     // Tile-indexed accessor over the TILE-layout output.
     const auto out_acc = TensorAccessor(out_args, dst_addr);
 
     for (uint32_t b = 0; b < num_blocks_this_core; ++b) {
         // resolve_block — the identical derivation the reader and compute run.
-        const uint32_t block_id = start_block_id + b;
+        const uint32_t block_id = start_block_id + b * block_stride;
         const uint32_t row_group = block_id / num_w_chunks;
         const uint32_t w_chunk = block_id - row_group * num_w_chunks;
 

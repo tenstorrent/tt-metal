@@ -16,6 +16,15 @@
 // `byte_offset_within_page` is the helper's documented wide-W chunking
 // parameter: it selects this block's column slice INSIDE each stick page, so
 // the CB footprint scales with the chunk width and not with the tensor's W.
+//
+// NATIVE SHARDED INPUT (`input_is_native`). When the block IS this core's own
+// resident shard, cb_input_rows is PLACED ON the shard buffer by the host, so
+// the block's bytes are already the CB's contents and there is nothing to move:
+// `load_block` degenerates to marking the block's pages available. That is what
+// consuming a shard means — an accessor read of a core's own shard would go out
+// over the NoC to fetch bytes that are already in this core's L1. The accessor
+// stays declared unconditionally (it owns the interleaved leg and the non-local
+// cross-spec leg) so the compile-time arg indices never move.
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
@@ -28,20 +37,24 @@ void kernel_main() {
     constexpr uint32_t num_row_groups = get_compile_time_arg_val(4);
     constexpr uint32_t num_w_chunks = get_compile_time_arg_val(5);
     constexpr uint32_t block_row_bytes = get_compile_time_arg_val(6);  // block_width_tiles*32*elem
-    constexpr auto in_args = TensorAccessorArgs<7>();
+    constexpr uint32_t input_is_native = get_compile_time_arg_val(7);
+    constexpr auto in_args = TensorAccessorArgs<8>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block_id = get_arg_val<uint32_t>(1);
     const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(2);
+    // 1 on the solved plan (contiguous block ranges); the core count on the
+    // shard-driven plan, where core i owns shards {i, i+N, i+2N, ...}.
+    const uint32_t block_stride = get_arg_val<uint32_t>(3);
 
     // Stick-indexed accessor over the ROW_MAJOR input; page size comes from the
     // accessor's own compile-time args (the tensor's aligned stick size).
-    const auto in_acc = TensorAccessor(in_args, src_addr);
+    [[maybe_unused]] const auto in_acc = TensorAccessor(in_args, src_addr);
 
     for (uint32_t b = 0; b < num_blocks_this_core; ++b) {
         // resolve_block — index arithmetic only, from the same CT plan the
         // compute and writer kernels see.
-        const uint32_t block_id = start_block_id + b;
+        const uint32_t block_id = start_block_id + b * block_stride;
         const uint32_t row_group = block_id / num_w_chunks;
         const uint32_t w_chunk = block_id - row_group * num_w_chunks;
 
@@ -50,14 +63,25 @@ void kernel_main() {
         const uint32_t row_end = ((row_group + 1) * tensor_row_blocks) / num_row_groups;
         const uint32_t block_row_extent = row_end - row_start;
 
-        // load_block. Valid as one contiguous stick run because H % tile_h == 0
-        // on the tile-aligned path, so tile-row r starts at stick r * tile_h
-        // exactly, even where R comes from the leading-dim fold.
-        dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rows, dataflow_kernel_lib::TilizeGranularity::TILE>(
-            in_acc,
-            /* total_num_rows          */ block_row_extent * tile_h,
-            /* row_bytes               */ block_row_bytes,
-            /* start_page              */ row_start * tile_h,
-            /* byte_offset_within_page */ w_chunk * block_row_bytes);
+        if constexpr (input_is_native) {
+            // load_block, zero-copy: the block's `block_row_extent` tile-rows are
+            // already resident in this core's L1 behind cb_input_rows. Marking
+            // the whole block available in one push keeps the reader's quantum a
+            // BLOCK, matching the accessor leg; the compute helper still waits
+            // and pops one tile-row at a time.
+            const uint32_t block_pages = block_row_extent * block_width_tiles;
+            cb_reserve_back(cb_input_rows, block_pages);
+            cb_push_back(cb_input_rows, block_pages);
+        } else {
+            // load_block. Valid as one contiguous stick run because H % tile_h == 0
+            // on the tile-aligned path, so tile-row r starts at stick r * tile_h
+            // exactly, even where R comes from the leading-dim fold.
+            dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rows, dataflow_kernel_lib::TilizeGranularity::TILE>(
+                in_acc,
+                /* total_num_rows          */ block_row_extent * tile_h,
+                /* row_bytes               */ block_row_bytes,
+                /* start_page              */ row_start * tile_h,
+                /* byte_offset_within_page */ w_chunk * block_row_bytes);
+        }
     }
 }
