@@ -376,9 +376,10 @@ void PrefetcherPipeImpl::write_config_to_device() {
             per_device_pages = build_dram_sender_receiver_config_pages(target_device);
         }
         for (const auto& [core, page] : dram_sender ? per_device_pages : config_pages_) {
-            auto page_copy = page;
+            const auto page_bytes =
+                std::span(reinterpret_cast<const uint8_t*>(page.data()), page.size() * sizeof(uint32_t));
             TT_FATAL(
-                tt_metal::detail::WriteToDeviceL1(target_device, core, config_address_, page_copy),
+                tt_metal::detail::WriteToDeviceL1(target_device, core, config_address_, page_bytes),
                 "Failed to write PrefetcherPipe config page to core {} on device {}",
                 core.str(),
                 target_device->id());

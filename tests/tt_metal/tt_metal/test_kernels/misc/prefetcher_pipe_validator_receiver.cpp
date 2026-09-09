@@ -89,7 +89,8 @@ void kernel_main() {
     for (uint32_t layer = 0; layer < num_layers; ++layer) {
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             pipe.wait_front(1);
-            const uint32_t page_addr = pipe.get_read_ptr().get_address();
+            const auto entry = pipe.scoped_read_lock(1);
+            const uint32_t page_addr = entry.get_ptr().get_address();
 
             // Streaming delivers each receiver's blocks ring-rotated, so FIFO position blk is
             // physical block (lead_block + blk) mod num_blocks; batched delivery is the identity.

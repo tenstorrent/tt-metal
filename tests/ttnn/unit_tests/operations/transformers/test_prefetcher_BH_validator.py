@@ -586,15 +586,9 @@ def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_p
     ring_units) -- landing on a block boundary. Two layers so the ring wraps at least once with a
     gap in play.
     """
-    tt_weight, _pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank
     )
-    num_dram_banks = device.dram_grid_size().x
-    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
-    bank_to_receivers = [
-        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
-    ]
     gapped_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
         device,
         bank_to_receivers,
@@ -621,15 +615,9 @@ def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank,
     half-block trailing gap after that one block, so each push credits payload plus gap and the
     derived cursor wraps back to zero every time.
     """
-    tt_weight, _pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank
     )
-    num_dram_banks = device.dram_grid_size().x
-    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
-    bank_to_receivers = [
-        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
-    ]
     shallow_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
         device,
         bank_to_receivers,
