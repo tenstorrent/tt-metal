@@ -2863,19 +2863,6 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
-
-    const auto core_type = MetalContext::instance().hal().get_programmable_core_type(index);
-    const auto target = enchantum::to_string(core_type);
-    const auto record_size = [&](std::string_view name, uint32_t bytes) {
-        per_target_telemetry_token(name, target, "B").record(bytes);
-    };
-    record_size("program_config_size.rta", state.sem_offset - state.rta_offset);
-    record_size("program_config_size.semaphore", state.sem_size);
-    record_size("program_config_size.circular_buffer", state.cb_size);
-    record_size("program_config_size.local_circular_buffer", state.local_cb_size);
-    record_size("program_config_size.dataflow_buffer", state.dfb_size);
-    record_size("program_config_size.kernel_text", state.kernel_text_size);
-    record_size("program_config_size.total", state.offset);
 }
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
@@ -3012,6 +2999,25 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.offset,
             max_size,
             enchantum::to_string(programmable_core_type));
+
+        // Recorded here, not per program: `state` is computed once per core type and then copied
+        // into every program in the span, so recording inside the loop below would log the same
+        // numbers N times for an N-program MeshWorkload (inflating count/total, and making min==max).
+        {
+            const auto target = enchantum::to_string(programmable_core_type);
+            const auto record_size = [&](std::string_view name, uint32_t bytes) {
+                per_target_telemetry_token(name, target, "B").record(bytes);
+            };
+            // finalize_rt_args lays out unique RTAs and common RTAs back to back between rta_offset
+            // and sem_offset, so this span covers both (plus alignment padding), not unique RTAs alone.
+            record_size("program_config_size.rta_and_crta", state.sem_offset - state.rta_offset);
+            record_size("program_config_size.semaphore", state.sem_size);
+            record_size("program_config_size.circular_buffer", state.cb_size);
+            record_size("program_config_size.local_circular_buffer", state.local_cb_size);
+            record_size("program_config_size.dataflow_buffer", state.dfb_size);
+            record_size("program_config_size.kernel_text", state.kernel_text_size);
+            record_size("program_config_size.total", state.offset);
+        }
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

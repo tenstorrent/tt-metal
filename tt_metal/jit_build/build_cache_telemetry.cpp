@@ -11,7 +11,10 @@
 #include <string>
 #include <unordered_map>
 
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+
+#include "env_lib.hpp"
 
 namespace tt::tt_metal {
 
@@ -76,17 +79,10 @@ BuildCacheTelemetry& BuildCacheTelemetry::inst() {
 
 TelemetryToken& per_target_telemetry_token(
     std::string_view metric_name, std::string_view target_name, std::string_view unit) {
-    static std::mutex mutex;
-    static std::unordered_map<std::string, TelemetryToken*> tokens;
     std::string key(metric_name);
     key += '.';
     key += target_name;
-    std::lock_guard lock(mutex);
-    auto [it, inserted] = tokens.try_emplace(key, nullptr);
-    if (inserted) {
-        it->second = &BuildCacheTelemetry::inst().register_metric(key, std::string(unit));
-    }
-    return *it->second;
+    return BuildCacheTelemetry::inst().get_or_register_metric(key, std::string(unit));
 }
 
 void BuildCacheTelemetry::enable() {
@@ -223,10 +219,21 @@ void BuildCacheTelemetry::log_compile_summary() const {
         genfiles);
 }
 
-TelemetryToken& BuildCacheTelemetry::register_metric(const std::string& name, std::string unit) {
+TelemetryToken& BuildCacheTelemetry::get_or_register_metric(const std::string& name, std::string unit) {
     std::lock_guard lk(owned_tokens_mutex_);
+    auto [it, inserted] = tokens_by_name_.try_emplace(name, nullptr);
+    if (!inserted) {
+        TT_FATAL(
+            it->second->unit() == unit,
+            "Telemetry metric '{}' is already registered with unit '{}'; cannot register it with unit '{}'",
+            name,
+            it->second->unit(),
+            unit);
+        return *it->second;
+    }
     owned_tokens_.push_back(std::make_unique<TelemetryToken>(name, std::move(unit)));
     auto* token = owned_tokens_.back().get();
+    it->second = token;
     token->set_recording_enabled(impl_ != nullptr);
     if (impl_) {
         std::lock_guard reg_lk(impl_->token_registry_mutex);
@@ -245,22 +252,36 @@ void BuildCacheTelemetry::dump_metrics() const {
     std::lock_guard lk(impl_->token_registry_mutex);
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());
 
+    // One info line per token, and the per-target metrics register dozens of them, so every
+    // tt-metal process would print a wall of output at exit. Off by default; opt in with
+    // TT_METAL_LOG_JIT_TELEMETRY=1, mirroring the TT_METAL_LOG_KERNEL_COMPILE gate in build.cpp.
+    static const bool log_tokens = tt::parse_env<bool>("TT_METAL_LOG_JIT_TELEMETRY", false);
+    if (!log_tokens) {
+        return;
+    }
+
     for (const auto* token : impl_->registered_tokens) {
         const TelemetryTokenData snap = token->snapshot();
         if (snap.count == 0) {
             continue;
         }
         const double mean_val = snap.total / static_cast<double>(snap.count);
+        // Byte counts are whole numbers; three decimals would just be trailing zeros.
+        const int precision = token->unit() == "B" ? 0 : 3;
         log_info(
             tt::LogBuildKernels,
-            "JIT telemetry [{}] ({}): count={}, total={:.3f}, min={:.3f}, max={:.3f}, mean={:.3f}",
+            "JIT telemetry [{}] ({}): count={}, total={:.{}f}, min={:.{}f}, max={:.{}f}, mean={:.{}f}",
             token->name(),
             token->unit(),
             snap.count,
             snap.total,
+            precision,
             snap.min_val,
+            precision,
             snap.max_val,
-            mean_val);
+            precision,
+            mean_val,
+            precision);
     }
 }
 

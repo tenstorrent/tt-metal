@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -26,7 +27,7 @@ struct TelemetryTokenData {
     double max_val{-std::numeric_limits<double>::infinity()};
 };
 
-// Opaque handle returned by BuildCacheTelemetry::register_metric().
+// Opaque handle returned by BuildCacheTelemetry::get_or_register_metric().
 // Maintains mutex-protected running total/count/min/max per value stream.
 // record() and snapshot() are safe for concurrent use.
 // References stay valid for the lifetime of BuildCacheTelemetry::inst();
@@ -58,7 +59,7 @@ struct BuildCacheTelemetryImpl;  // forward declaration
 
 // Process-wide telemetry for JIT build cache merge diagnostics.
 //
-// register_metric() returns a TelemetryToken (running aggregate stats) that is
+// get_or_register_metric() returns a TelemetryToken (running aggregate stats) that is
 // owned in owned_tokens_ for the life of the inst() singleton; disable()/enable()
 // tear down impl_ and rebuild the token registry (enable() is a no-op if already
 // enabled). Tokens are not destroyed across disable/enable; only recording is toggled.
@@ -93,14 +94,15 @@ public:
 
     void log_compile_summary() const;
 
-    // Register a named metric stream and return a non-owning reference to a
-    // TelemetryToken owned in owned_tokens_. The reference remains valid until
-    // the process-wide singleton (inst()) is destroyed; it is not invalidated by
-    // disable()/enable(), which only clear impl_ and rebuild the registry while
-    // leaving tokens allocated. Callers must not take ownership. While telemetry
-    // is disabled, TelemetryToken::record() is a no-op; snapshot() still reflects
-    // aggregates recorded while enabled.
-    TelemetryToken& register_metric(const std::string& name, std::string unit = "ms");
+    // Return the metric stream named `name`, registering it on first use. The returned
+    // TelemetryToken is owned in owned_tokens_ and the reference remains valid until the
+    // process-wide singleton (inst()) is destroyed; it is not invalidated by disable()/enable(),
+    // which only clear impl_ and rebuild the registry while leaving tokens allocated. Callers
+    // must not take ownership. While telemetry is disabled, TelemetryToken::record() is a no-op;
+    // snapshot() still reflects aggregates recorded while enabled. Repeat calls for the same name
+    // must agree on `unit` -- a mismatch means two call sites are feeding one stream values of
+    // different kinds, so it fails loudly rather than silently mislabelling the dump.
+    TelemetryToken& get_or_register_metric(const std::string& name, std::string unit = "ms");
 
     void dump_metrics() const;
 
@@ -109,12 +111,14 @@ private:
     ~BuildCacheTelemetry();
     std::unique_ptr<BuildCacheTelemetryImpl> impl_;
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
+    // Name -> token index into owned_tokens_; guarded by owned_tokens_mutex_ alongside the vector.
+    std::unordered_map<std::string, TelemetryToken*> tokens_by_name_;
     std::mutex owned_tokens_mutex_;
 };
 
 // Times the scope it lives in: takes a steady_clock timestamp on construction and records the
 // elapsed milliseconds in `token` on destruction. The token must outlive the timer -- references
-// from BuildCacheTelemetry::register_metric() are valid for the life of the inst() singleton.
+// from BuildCacheTelemetry::get_or_register_metric() are valid for the life of the inst() singleton.
 // The delta is recorded even when the scope is left by an exception.
 class ScopedTelemetryTimer {
 public:
@@ -143,6 +147,8 @@ decltype(auto) record_elapsed(TelemetryToken& token, Fn&& fn, Args&&... args) {
     return std::forward<Fn>(fn)(std::forward<Args>(args)...);
 }
 
+// Convenience wrapper over BuildCacheTelemetry::get_or_register_metric() for metrics that are
+// broken down by target: builds the "<metric_name>.<target_name>" key and returns that stream.
 TelemetryToken& per_target_telemetry_token(
     std::string_view metric_name, std::string_view target_name, std::string_view unit);
 
