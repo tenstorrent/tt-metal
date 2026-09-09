@@ -1136,9 +1136,10 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     The negative half is the point, and the golden is an exact integer max, so a wrong
     threshold shows up as a wrong clamp value rather than a tolerance miss.
     """
-    # ReluMin is hardcoded here rather than parametrized, so the guard takes it directly.
-    _skip_coverage_unsupported(MathOperation.ReluMin)
-
+    # No _skip_coverage_unsupported here, unlike the sweeps: this case is one Int32 format
+    # pair rather than a broad-profile matrix, and relu_min's kernels do build under coverage
+    # instrumentation on both arches -- the unroll pragma the exclusion list is about is in
+    # _calculate_lrelu_, a different op.
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
     eltwise_unary_sfpu(
