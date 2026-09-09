@@ -92,10 +92,11 @@ TT_METAL_WATCHER=10 TT_METAL_WATCHER_APPEND=1 TT_METAL_LOGS_PATH=$MM3_MODEL_DIR/
 
 All numbers are from this stage's runs on the board above (`pcc/results.json`, entries carry `_meta` with the
 timestamp, commit and 1-minute load average; the committed copy is from the official gate run `~/mm3-bringup/checks/06.sh`
-after the stage-review fixes (`generated/gate06_final2.log`, `_meta.log_hint` = `gate06_final2`, 7 passed in 187.6 s, `GATE_OK`). The two earlier
-full runs (`generated/gate06_dev1.log`, 6 passed in 190 s, uncommitted tree; `generated/gate06_final.log`, 6 passed in 188 s,
-`GATE_OK`, commit `22334d12389`) produced the same PCC / log-mel / determinism values to every printed digit; only host wall
-timings differ between runs.)
+after the stage-review fixes (`generated/gate06_final3.log`, `_meta.log_hint` = `gate06_final3`, 7 passed in 187.4 s, `GATE_OK`). The three
+earlier full runs (`generated/gate06_dev1.log`, 6 passed in 190 s, uncommitted tree; `generated/gate06_final.log`, 6 passed in
+188 s, `GATE_OK`; `generated/gate06_final2.log`, 7 passed in 188 s, `GATE_OK`) produced the same PCC / log-mel / determinism
+values to every printed digit; only host wall timings differ between runs. `_meta.commit` names the commit checked out while
+the run recorded, i.e. the parent of the commit that contains the file.)
 
 ### Log-mel spectral-distance bar (host control, computed first)
 
@@ -115,7 +116,7 @@ latents / wav (`scripts/vocoder_control_cpu.py`, `pcc/vocoder_control.json`):
 **Bar: 2.0 dB RMS** = about twice the bf16 torch control (1.115 dB), three times what the measured DiT latent error
 alone contributes (0.578 dB), and about half of what the latent PCC bar itself (0.98 -> 3.84 dB) would tolerate.
 
-### Gate tests (`tests/test_pipeline.py`, 7 passed in 187.6 s, `GATE_OK`, `generated/gate06_final2.log`)
+### Gate tests (`tests/test_pipeline.py`, 7 passed in 187.4 s, `GATE_OK`, `generated/gate06_final3.log`)
 
 | test | bar | measured |
 |---|---|---|
@@ -126,7 +127,7 @@ alone contributes (0.578 dB), and about half of what the latent PCC bar itself (
 | free-running 10 s, seed 7, 30 steps | 44.1 kHz stereo, RMS > 1e-3, finite, 250 frames, duration within 1 s of frames / 25 | 9.996 s, RMS 0.0927 (-20.7 dBFS), peak 0.99999, 0 NaN, 250 frames (`max_frames`), windows `[0, 100]` |
 | free-running 10 s: semantic-code distribution | most common code <= 30 % | 178 distinct codes in 250 frames, most common 2.8 %, adjacent repeat 10.4 %, longest run 5, repeated 4-grams 0.4 %, full-frame repeats 0 |
 | `audio_duration` 0.4 s (10 frames -> 1 window, L = 34: the shortest realistic end-token song), 2 s (50 frames -> L = 172), 10 s (2 windows), 13 s (325 frames -> 3 windows `[0, 100, 200]`, tail 125 frames -> L = 430), seed 11, 6 steps | run; duration within 1 s | 0.395 s / 1.997 s / 9.996 s / 13.003 s, RMS 0.0025 / 0.017 / 0.025 / 0.064 |
-| golden replay: per-second wav PCC vs golden across the whole clip (covers the window join at latent 431 = sample 220672) | min >= 0.99 | min 0.9905 (second 0, the quiet intro), mean 0.9979; seconds 4-6 around the join 0.9994 / 0.9988 / 0.9984 |
+| golden replay: per-second wav PCC vs golden across the whole clip (covers the window join at latent 431 = sample 220672) | min >= 0.99 | min 0.9905 (second 0, the quiet intro), mean 0.9979; seconds 3-5 around the join 0.9994 / 0.9988 / 0.9984 |
 | golden replay: band energy (< 250 Hz / 250-2 kHz / 2-8 kHz / > 8 kHz) vs the golden clip's | each band within 0.02 | replay 0.364 / 0.512 / 0.087 / 0.037 vs golden 0.360 / 0.520 / 0.088 / 0.033 |
 | same seed twice (2 s, seed 3, 6 steps) | identical | codes equal, max latent diff 0.0, max audio diff 0.0; seed 4 differs (max audio diff 0.64, different codes) |
 
@@ -152,15 +153,20 @@ warm-up 0.5 s); the first-ever load converts the weights (minutes, stages 02 / 0
 
 | clip | prefill | AR (frames/s) | DiT per window (30 steps) | vocoder per window (host fp32, 12 threads) | total |
 |---|---|---|---|---|---|
-| golden replay 10 s (250 frames, 2 windows) | 0.13 s | 17.6 s (14.4) | 3.49 s (689 latents, 116 ms/step) / 2.79 s (516, 93 ms/step) | 6.74 s / 5.08 s | 35.7 s |
-| free-running 10 s, seed 7 | 0.13 s | 18.9 s (13.3) | 3.50 s / 2.76 s | 6.86 s / 5.22 s | 37.2 s |
+| golden replay 10 s (250 frames, 2 windows) | 0.13 s | 17.6 s (14.3) | 3.50 s (689 latents, 117 ms/step) / 2.79 s (516, 93 ms/step) | 6.84 s / 5.18 s | 35.9 s |
+| free-running 10 s, seed 7 | 0.13 s | 18.8 s (13.4) | 3.51 s / 2.76 s | 6.77 s / 5.13 s | 37.0 s |
 | 60 s golden prompt, seed 7 (1500 frames, 14 windows of 200 frames) | 0.13 s | 113.5 s (13.2) | 3.54-3.58 s each (118-119 ms/step), 49.9 s total | 6.57-6.96 s each, 94.2 s total | 257.6 s |
 | 60 s techno prompt, seed 7 (1500 frames, 14 windows) | 0.13 s | 113.5 s (13.2) | 3.57-3.61 s each, 50.2 s total | 6.66-7.05 s each, 95.7 s total | 259.3 s |
 
 The AR stage runs at stage 04's 13.3-14.4 frames/s (1.8x slower than the 25 frames/s realtime); the DiT at stage 05's
 ~116 ms per step for a full window; the host vocoder at 6.8 s per 689-latent window is now the largest single item per
-window (it is stage 07's TTNN port). First use of a new window length compiles the DiT programs once (the 13 s clip's
-430-latent tail: 3.97 s for 6 steps vs 0.71 s for the two warm 689-latent windows).
+window (it is stage 07's TTNN port). First use of a new window length on a **cold kernel cache** compiles the DiT programs
+once: in the first run (`gate06_dev1.log`) the 13 s clip's 430-latent tail (S_pad 512, never seen before) took 3.97 s for 6
+steps against 0.71 s for the two warm 689-latent windows. tt-metal's on-disk kernel cache carries the compiled binaries
+across processes, so in the committed run the same window costs 0.53 s (88 ms/step) and the only inflated case is the
+one whose bucket had never been compiled before that run's predecessor (the 0.4 s clip, S_pad 128: 95 ms/step in
+`gate06_final2`, 43 ms/step once cached in `gate06_final3`). A cold-cache first-request cost is real and unmeasured as a
+whole; the serving stage should measure it if first-request latency matters.
 
 ### Qualitative: two 60 s songs (`scripts/generate_song.py`, `qualitative/*.json`)
 
@@ -253,18 +259,19 @@ of the 4 devices' core states (`k_ids`, waypoints, attach / detach) and **zero**
 4. **DiT caches cleared after every song** (`FlowTransformer.clear_caches`) so that no tensor allocated after the AR
    traces were captured survives into the next song's trace replays (see the trace-lifetime rule). Cost: the RoPE / mask /
    selector tensors are re-created per window (milliseconds).
-5. **Reduced step count in the duration sweep** (6 Euler steps for the 2 s / 10 s / 13 s runs and the determinism test)
+5. **Reduced step count in the duration sweep** (6 Euler steps for the 0.4 s / 2 s / 10 s / 13 s runs and the determinism test)
    to keep the gate at about three minutes; the golden replay and the 10 s free run use the reference's 30 steps.
 6. **Warm-up in `load`**: a 1-frame song on a fixed dummy prompt (captures the backbone trace) and one 1-step 200-frame
    DiT window on zero hiddens (compiles the DiT programs at S_pad 768). Other window lengths compile on first use.
 7. **Context cap kept at the checkpoint's 10240 positions.** The backbone runs with `max_seq_len = 10240`
-   (`max_position_embeddings`, the stage-02 context contract), so a song holds at most `10240 - prompt_len - 1` frames;
+   (`max_position_embeddings`, the stage-02 context contract), so a song holds at most `10240 - prompt_len` frames (frame f
+   comes from the decode at position `prompt_len + f - 1`; the loop stops before decoding at position 10240);
    the reference's separate caps (5000 prompt tokens, 9000 frames) can exceed that and HF would extrapolate RoPE past the
    trained positions. Raising `max_seq_len` to 14000 would fit in DRAM (the paged KV cache is 3.3 GB at 10240; 11.7 GB
    are free) but would run the model outside its advertised positions, so it is not done here. `generate` now warns up
    front when `max_frames` exceeds the room left by the prompt, returns `context_frames` and `truncated_by_context`, and
    the AR loop's `stopped_by == "context"` marks the cut. With the prompts used here (104-140 tokens) the cap is
-   10099-10135 frames > the 9000-frame reference cap, i.e. it only binds for prompts longer than ~1240 tokens at the
+   10100-10136 frames > the 9000-frame reference cap, i.e. it only binds for prompts longer than 1240 tokens at the
    full 6-minute duration.
 8. **`generate` returns the latents and frame hiddens by default** (`keep_latents=True`) for the tests and the server's
    diagnostics; the server stage can turn it off.
@@ -281,7 +288,7 @@ of the 4 devices' core states (`k_ids`, waypoints, attach / detach) and **zero**
 * The stage-02 long-prompt precision (hidden PCC 0.982 at 5000 tokens) is inherited and untested end to end here
   (the prompts used are 104-140 tokens).
 * `load(dit_dtype="bfp8")` is untested (not needed: 11.7 GB DRAM headroom).
-* **Context cap** (decision 7): `frames <= 10240 - prompt_len - 1`. A 5000-token prompt yields at most 5239 frames
+* **Context cap** (decision 7): `frames <= 10240 - prompt_len`. A 5000-token prompt yields at most 5240 frames
   (209.6 s) however long `audio_duration` is; the result carries `truncated_by_context = True` and `stopped_by = "context"`.
 * End-token termination is not exercised end to end in this stage (every recorded run stopped at `max_frames` or the
   teacher codes); the `stopped_by = "end_token"` path is stage-04 evidence (seeds 5-42 all ended by themselves), and the

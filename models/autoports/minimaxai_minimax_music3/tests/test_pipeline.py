@@ -223,6 +223,8 @@ def test_golden_replay(pipeline, golden):
     for k, p in enumerate(latent_pccs):
         assert p >= PCC_LATENT, f"window {k}: latent PCC {p} < {PCC_LATENT}"
     assert dist["rms_db"] <= LOGMEL_BAR_DB, f"log-mel RMS distance {dist['rms_db']:.3f} dB > {LOGMEL_BAR_DB} dB"
+    # The binding second is second 0 (the quiet intro, measured 0.9905); the clip is bit-deterministic on a fixed tree,
+    # so a dip below the floor means a precision change, not flakiness.
     assert (
         min(per_second_pcc) >= 0.99
     ), f"per-second wav PCC dipped to {min(per_second_pcc):.4f} (window join / crop drift?)"

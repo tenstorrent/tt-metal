@@ -256,12 +256,13 @@ class MiniMaxMusic3Pipeline:
             raise ValueError(f"num_inference_steps must be >= 1, got {steps}")
 
         # Context cap: the backbone runs at the checkpoint's advertised 10240 positions (stage 02), so a song can hold
-        # at most 10240 - prompt_len - 1 frames; the reference's separate caps (5000 tokens + 9000 frames) exceed that.
-        # The AR loop stops with stopped_by == "context" when it is reached; say so up front instead of only at the end.
+        # at most 10240 - prompt_len frames (the AR loop emits frame f from the decode at position prompt_len + f - 1 and
+        # stops with stopped_by == "context" before decoding at position 10240); the reference's separate caps
+        # (5000 tokens + 9000 frames) exceed that. Say so up front instead of only at the end.
         if text_ids is None:
             text_ids = self.ar.build_text_ids(prompt, lyrics)
         prompt_len = int(text_ids.shape[1])
-        context_frames = self.llm.max_seq_len - prompt_len - 1
+        context_frames = self.llm.max_seq_len - prompt_len
         if max_frames > context_frames:
             logger.warning(
                 f"generate: {max_frames} frames requested but the {self.llm.max_seq_len}-position context leaves room for "
