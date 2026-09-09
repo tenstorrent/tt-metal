@@ -6,6 +6,15 @@ on:
     - cron: '0 1 * * *'
   workflow_dispatch:
     inputs:
+      architecture:
+        description: "Architecture to run e2e tests on"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - wormhole
+          - blackhole
       pytest_markers:
         description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
         required: false
@@ -17,12 +26,19 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   llk-e2e-tests:
     name: "LLK e2e Tests"
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
+      # Scheduled runs have no dispatch inputs, so retain the existing behavior.
+      architecture: ${{ inputs.architecture || 'all' }}
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar and not accuracy' }}
       coverage: false
 
