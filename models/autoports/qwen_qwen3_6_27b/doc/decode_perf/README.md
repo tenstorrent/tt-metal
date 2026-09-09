@@ -521,13 +521,50 @@ prefill-state seam comparison and the perf points.
 
 ## CI
 
-Benchmarks and evals were dispatched at `44e1aefadcc`, i.e. the 90.66 ms state,
-before the typecast change landed:
+The first dispatch pair, at `44e1aefadcc`, found a regression this document's
+local validation had missed. Enabling the fused conv changes `caches["conv"]`
+from the composite tiled `[1, batch, channels, kernel]` to the fused path's
+row-major `[batch, kernel, channels]` window, and two request-boundary methods in
+`model.py` were written against the composite layout only:
 
-| run | workflow |
-| --- | --- |
-| `34395177910` | benchmarks |
-| `34395194736` | evals |
+- `reset_slots` masked with a `(1, batch, 1, 1)` mask and an in-place elementwise
+  write; a preallocated row-major output is rejected, so it raised *"Optional
+  output tensor with Row Major input is not supported right now for Elementwise
+  operations"* and killed the vLLM EngineCore **on the first request**.
+  `vllm_tt_plugin` reaches it through `prefill_forward(empty_slots=...)`, so the
+  KDA-enabled serving path was broken end to end.
+- `remap_slots` indexed the conv slot axis as dim 1, which on the window is the
+  kernel axis.
 
-They queue behind `34360774551`, a benchmarks run dispatched earlier the same day
-from `38153c48c8a`, which is the right pre-change CI baseline to compare against.
+Both now borrow the composite layout for the duration of the call, reusing the
+borrow/restore pair the prefill chunk already uses. Decode is 88.74 ms/token
+before and after, since these are request boundaries rather than the step.
+
+**Why the suite missed it, and the general lesson.** `full_model_mixed_slots.py`
+covers both methods and `vllm_reduced_target.py` covers the whole adapter
+lifecycle including `empty_slots` and `slot_remap` — but at batch 2, and the
+fused decode path needs `kernel * batch` tile aligned, so at batch 2 it never
+engages. Every test that touched this state exercised the one layout the served
+batch does not use. That is the same shape of mistake as the per-layer harnesses
+passing no active mask: **a test pinned to a batch the model does not ship at is
+not testing the model.** Fixed by giving `vllm_reduced_target.py` a `--batch`
+(default 2, so its recorded behaviour is unchanged; `--batch 32` reports
+`fused_kda_decode=3/3` and all five checkpoints pass) and by adding
+`tests/slot_lifecycle_b32.py`, which asserts exact reset and exact remap at
+batch 32 with the fused conv live, and refuses to pass vacuously.
+
+**Also worth knowing: a crashed engine can report success.** Of the first pair,
+benchmarks `34395177910` went red, but evals `34395194736` reported
+**success** with a dead EngineCore — its `run-evals` job exited 0 after the
+traceback. The tell was the duration: 10 minutes for a model that needs ~15 just
+to stage and load weights. Do not read a green evals run as a passing model
+without checking the job duration and grepping the log for `EngineCore
+encountered a fatal error`.
+
+| run | workflow | tt-metal | outcome |
+| --- | --- | --- | --- |
+| `34360774551` | benchmarks | `38153c48c8a` | pre-change baseline |
+| `34395177910` | benchmarks | `44e1aefadcc` | failure — the `reset_slots` regression |
+| `34395194736` | evals | `44e1aefadcc` | "success", engine dead |
+| `34404067300` | benchmarks | `2092bf3424d` | dispatched after the fix |
+| `34404082346` | evals | `2092bf3424d` | dispatched after the fix |
