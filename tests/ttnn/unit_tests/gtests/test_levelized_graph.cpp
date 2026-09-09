@@ -14,7 +14,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"  // TODO(nuked-op softmax): ttnn::softmax calls below replaced with ttnn::relu
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
@@ -183,7 +183,7 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
 
     auto operation = [](const auto& input_tensor) {
         const auto output_tensor_1 = ttnn::sum(input_tensor, 2, true);
-        const auto output_tensor_2 = ttnn::softmax(output_tensor_1, -1);
+        const auto output_tensor_2 = ttnn::relu(output_tensor_1);
     };
 
     nlohmann::json ref_json_trace;
