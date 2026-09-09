@@ -3160,6 +3160,90 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warm
 
 
 @pytest.mark.parametrize(
+    "dtype, tile_aligned",
+    [(ttnn.bfloat8_b, True), (ttnn.bfloat16, False)],
+    ids=["bfloat8_b_tile_aligned", "bfloat16_unpadding"],
+)
+def test_untilize_codegen_native_tier_routes_to_native(device, dtype, tile_aligned):
+    """The codegen op's Native tier (no codegen CB plan fits live L1) is served by the native
+    untilize op through ttnn.untilize's routing, not by the codegen op reaching into another
+    device-op's program factories.
+
+    Both cases are in the codegen gate's static scope (supported_by_codegen is true), and both pin
+    a resident L1 buffer so that not even the single-buffered codegen CB plan fits the L1 that is
+    free right now. The routed call must then produce the right answer via native.
+
+      - bfloat8_b_tile_aligned: the codegen plan is sized by the bf16 OUTPUT tile (2048 B) while
+        the native op's own row-fits-in-L1 check (enough_space_height) uses the bf8_b INPUT tile
+        (1088 B). A headroom window between the two makes codegen land on Native while native
+        selects its ordinary multicore factory. Before the Native tier was lifted into
+        ttnn.untilize, this configuration threw ("native fallback selected a program factory
+        without descriptor support") because that factory is Metal 2.0 and no longer exposes
+        create_descriptor.
+      - bfloat16_unpadding: the non-tile-aligned (with-unpadding) codegen path, routed to the
+        native untilize_with_unpadding op.
+
+    Every tile row is given to a different core (total tile rows == compute grid area) so the
+    codegen planner sizes its CBs by the whole tile row (Wt), like the two native checks do.
+    """
+    torch.manual_seed(42)
+
+    BF16_TILE_BYTES = 2048
+    BF8_TILE_BYTES = 1088
+    info = ttnn._ttnn.reports.get_device_info(device)
+    grid = device.compute_with_storage_grid_size()
+    total_tile_rows = grid.x * grid.y
+
+    if tile_aligned:
+        wt = 128
+        # Native's enough_space_height threshold (input tile) .. codegen's single-buffer plan
+        # (planning tile = max(in, out) = bf16 out tile).
+        low_bound = 2 * wt * BF8_TILE_BYTES
+        single_buffer_bytes = 2 * wt * BF16_TILE_BYTES
+        headroom_target = (low_bound + single_buffer_bytes) // 2
+        expected_headroom = (low_bound, single_buffer_bytes)
+        input_torch_tensor = torch.randn([1, total_tile_rows, 32, 32 * wt], dtype=torch.bfloat16)
+    else:
+        wt = 192  # inside the gate's wide-chunk threshold: 2 * 192 * 2048 <= 800_000
+        single_buffer_bytes = 2 * wt * BF16_TILE_BYTES
+        headroom_target = 512 * 1024
+        expected_headroom = (0, single_buffer_bytes)
+        # Non-tile-aligned logical width (padded width stays 32 * wt).
+        input_torch_tensor = torch.randn([1, total_tile_rows, 32, 32 * wt - 1], dtype=torch.bfloat16)
+
+    if info.cb_limit <= single_buffer_bytes:
+        pytest.skip(f"needs more than {single_buffer_bytes} B of CB space, device offers {info.cb_limit} B")
+    tiles_per_bank = (info.cb_limit - headroom_target) // BF16_TILE_BYTES
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # bfloat8_b rounds the values; the golden is what native produces for the same input, which
+    # is exact against codegen/native alike since untilize only relayouts values.
+    golden = ttnn.to_torch(_force_native(input_ttnn_tensor))
+
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        low, high = expected_headroom
+        assert (
+            low <= actual_headroom < high
+        ), f"resident L1 buffer left {actual_headroom} B above the CB base; this case needs it in [{low}, {high})"
+
+        output = ttnn.untilize(input_ttnn_tensor)
+        assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(golden, ttnn.to_torch(output))
+    finally:
+        ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize(
     "tensor_shape",
     [
         (1, 1, 32, 7328),

@@ -127,6 +127,8 @@ ttnn::Tensor untilize_force_codegen(
             "chunking threshold). This entry never falls back to native, because a forced leg that "
             "quietly served native would make any comparison against native vacuous. Use ttnn::untilize "
             "if you want the case routed.");
+        // Deliberately no codegen_cb_plan_fits_live_l1 gate here either: if no codegen CB plan fits
+        // the L1 free right now, the prim's program factory fails loudly rather than serving native.
         return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
     };
 
@@ -144,6 +146,7 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using ttnn::operations::data_movement::untilize_codegen::codegen_cb_plan_fits_live_l1;
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
     using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
@@ -154,11 +157,19 @@ ttnn::Tensor untilize(
     // via build_ndiml_untilize -- otherwise a logical-rank>4 input reaches supported_by_codegen /
     // is_demoted / the codegen dispatch itself on the raw, un-squeezed tensor, while the native
     // path's equivalent decisions run on the squeezed 4D tensor.
+    //
+    // Three gates, in order: static scope (supported_by_codegen), perf ledger (is_demoted), and
+    // the live-L1 gate (codegen_cb_plan_fits_live_l1) -- the last is the codegen op's own CB
+    // planner run ahead of dispatch, so a case for which no codegen CB plan fits the L1 free right
+    // now takes the native path as a whole (untilize_native -> prim::untilize or
+    // untilize_with_unpadding, deriving fp32_dest_acc_en / enough_space_height / pf_type exactly
+    // as any other native call) instead of the codegen op building a native program itself.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
 
         if (controls_ok && supported_by_codegen(normalized_input, output_mem_config) &&
-            !is_demoted(normalized_input, output_mem_config)) {
+            !is_demoted(normalized_input, output_mem_config) &&
+            codegen_cb_plan_fits_live_l1(normalized_input, output_mem_config)) {
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
         }
 
