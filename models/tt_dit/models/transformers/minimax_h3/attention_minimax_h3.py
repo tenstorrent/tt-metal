@@ -559,7 +559,12 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor),
+            default_block_size=agmm_block_size(
+                self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
+            # qkv is M<N at the short durations; let the op pick the orientation by its own M>N test
+            # so `get_agmm_config` can reach the v3 rules for the shapes the table does not cover.
+            force_transpose=False,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -640,7 +645,10 @@ class MiniMaxH3Attention(Module):
                     spatial_1BND,
                     compute_kernel_config=self.mm_compute_kernel_config,
                     parallel_config=matmul_parallel_config,
-                    default_block_size=agmm_block_size(self.hidden_size, self.inner_dim // tp_factor),
+                    default_block_size=agmm_block_size(
+                        self.hidden_size, self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+                    ),
+                    force_transpose=False,
                 )
                 gate_BHNE = create_heads(gate_1BNF)
                 spatial_BHNE = ttnn.addcmul(spatial_BHNE, gate_BHNE, o_c)
@@ -658,7 +666,10 @@ class MiniMaxH3Attention(Module):
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=matmul_parallel_config,
-                default_block_size=agmm_block_size(self.inner_dim, self.hidden_size // tp_factor),
+                default_block_size=agmm_block_size(
+                    self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+                ),
+                force_transpose=False,
                 addcmul_a=addcmul_residual if fuse_gate else None,
                 addcmul_b=addcmul_gate if fuse_gate else None,
             )
@@ -753,7 +764,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(self.inner_dim, self.hidden_size // tp_factor),
+            default_block_size=agmm_block_size(
+                self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
+            force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
         )
