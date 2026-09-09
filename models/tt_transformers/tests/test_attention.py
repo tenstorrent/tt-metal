@@ -97,7 +97,7 @@ def test_attention_inference(
         pcc = llama90b_hf_rope_pcc
     elif model_args.model_name == "Llama-3.3-70B-Instruct" and not use_hf_rope:
         pcc = llama33_70b_mllama_rope_pcc
-    model_args.n_layers = 1  # For the unit test, just run a single layer
+    model_args.n_layers = int(os.environ.get("TT_TEST_LAYER_NUM", "0")) + 1  # unit test: layers up to the tested one
 
     state_dict = model_args.load_state_dict()
 
@@ -159,7 +159,7 @@ def test_attention_inference(
         model_args,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0")),  # bring-up aid: pick a layer kind
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,
