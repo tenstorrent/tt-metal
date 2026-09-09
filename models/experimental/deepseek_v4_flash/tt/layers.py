@@ -983,7 +983,10 @@ class LinearDecode(DeepSeekV4Module):
             )
         if self.use_prefetcher:
             if not use_rm_hs and not x.is_sharded():
-                x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
+                tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else x.get_tile().tile_shape[0]
+                x = ttnn.to_memory_config(
+                    x, self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height=tile_height)
+                )
             # Exactly one queued request per matmul: the matmul waits for one page per
             # receiver, so a missing request hangs it and a doubled one desynchronises the
             # GCB pointers. ``fetch_weights`` may already have issued this call's request.
