@@ -19,7 +19,7 @@ if [[ "$mode" == accuracy ]]; then
         python3 -m pytest -xv --timeout=90 \
         tests/ttnn/nightly/unit_tests/operations/data_movement/test_gather_invalid_indices.py
     python3 "$evidence/watchdog.py" "$evidence/existing.log" 1800 \
-        python3 -m pytest -xv --timeout=120 \
+        python3 -m pytest --import-mode=importlib -xv --timeout=120 \
         tests/ttnn/unit_tests/operations/data_movement/test_gather.py \
         tests/ttnn/nightly/unit_tests/operations/data_movement/test_gather.py \
         tests/ttnn/nightly/unit_tests/operations/data_movement/test_gather_codegen_routing.py
