@@ -302,7 +302,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_fused": "perf_fused"},
     },
     "perf_math_matmul": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -319,6 +319,8 @@ PERF_TEST_SCHEMAS = {
             "in0_r_dim",
             "in1_c_dim",
             "in1_r_dim",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
             "k_dimm",
             "loop_factor",
             "marker",
@@ -328,6 +330,8 @@ PERF_TEST_SCHEMAS = {
             "num_faces_A",
             "num_faces_B",
             "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
             "partial_a",
             "partial_b",
             "partial_face_math",
