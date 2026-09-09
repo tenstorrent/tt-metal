@@ -463,7 +463,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
-    const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
@@ -558,7 +557,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_WRITER_CUR_POS{"writer_cur_pos"};
     const DFBSpecName DFB_PAGE_TABLE{"page_table"};
     const DFBSpecName DFB_Q_RM{"q_rm"};
-    const DFBSpecName DFB_COL_IDENTITY{"col_identity"};
+    const DFBSpecName DFB_OUT_WORKER{"out_worker"};
     const DFBSpecName DFB_ZERO_IN{"zero_in"};
     const DFBSpecName DFB_SLIDING_MASK{"sliding_window_mask_in"};
     const DFBSpecName DFB_BLOCK_PAD_MASK{"block_pad_mask"};
@@ -566,8 +565,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_OUT_O{"out_o"};
     const DFBSpecName DFB_OUT_M{"out_m"};
     const DFBSpecName DFB_OUT_L{"out_l"};
-    const DFBSpecName DFB_INTERMED_OUT{"intermed_out"};
     const DFBSpecName DFB_OUT{"out"};
+    const ScratchpadSpecName INTERMED_OUT_SCRATCH{"intermed_out"};
     const DFBSpecName DFB_QK_IM{"qk_im"};
     const DFBSpecName DFB_OUT_IM{"out_im"};
     const DFBSpecName DFB_OUT_ACC_IM{"out_accumulate_im"};
@@ -585,6 +584,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     Group<DFBBinding> reader_dfb;
     Group<DFBBinding> writer_dfb;
     Group<DFBBinding> compute_dfb;
+    Group<ScratchpadSpec> scratchpads;
+    Group<ScratchpadBinding> writer_scratch;
 
     auto add_dfb = [&](const DFBSpecName& name,
                        uint32_t entry_size,
@@ -722,14 +723,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::CONSUMER);
     }
 
-    // col_identity — writer produces; no consumer in sdpa_decode's compute (dead-but-kept).
-    // (It is consumed by sdpa *prefill*'s matmul_reduce, so this reads as carried-over dead code from a
-    // matmul-based reduce path. Removing it is an ops-team cleanup, not a port drop, so it is preserved
-    // here as a single-toucher self-loop with zero functional effect.)
-    add_dfb(DFB_COL_IDENTITY, col_identity_tile_size, scale_tiles, scalar_df, &full_tile);
-    bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::PRODUCER);
-    bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::CONSUMER);
-
     // zero_in — writer produces, compute consumes.
     add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
@@ -749,12 +742,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_BLOCK_PAD_MASK, "block_pad_mask", DFBEndpointType::CONSUMER);
     }
 
-    // out_o/out_worker — tree-reduction multi-binding (writer P+C, compute P+C).
-    add_dfb(DFB_OUT_O, stats_tile_size, out_tiles, stats_df, &stats_tile, std::nullopt, /*multi=*/true);
+    // out_o — writer receives child O; compute consumes for tree reduction (Gen2: no multi-binding).
+    add_dfb(DFB_OUT_O, stats_tile_size, out_tiles, stats_df, &stats_tile);
     bind(writer_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
-    bind(writer_dfb, DFB_OUT_O, "out_worker", DFBEndpointType::CONSUMER);
-    bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::CONSUMER);
+    // out_worker — compute produces local O for parent send; writer consumes.
+    add_dfb(DFB_OUT_WORKER, stats_tile_size, out_tiles, stats_df, &stats_tile);
+    bind(compute_dfb, DFB_OUT_WORKER, "out_worker", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_OUT_WORKER, "out_worker", DFBEndpointType::CONSUMER);
 
     // out_m / out_l — compute produces, writer consumes.
     add_dfb(DFB_OUT_M, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
@@ -764,11 +759,13 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(compute_dfb, DFB_OUT_L, "out_l", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_OUT_L, "out_l", DFBEndpointType::CONSUMER);
 
-    // intermed_out — writer raw cross-core read/write (self-loop) (conditional).
+    // intermed_out — per-core NOC staging for tree reduction (Gen2: scratchpad, not DM self-loop DFB).
     if (intermed_output_tiles > 0) {
-        add_dfb(DFB_INTERMED_OUT, stats_tile_size, intermed_output_tiles, stats_df, &stats_tile);
-        bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::PRODUCER);
-        bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::CONSUMER);
+        const uint32_t intermed_scratch_bytes = intermed_output_tiles * stats_tile_size;
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = INTERMED_OUT_SCRATCH, .size_per_node = intermed_scratch_bytes});
+        writer_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = INTERMED_OUT_SCRATCH, .accessor_name = "intermed_out"});
     }
 
     // out — compute produces, writer consumes (final output shard).
@@ -1078,6 +1075,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_dfb),
         .semaphore_bindings = std::move(writer_sems),
+        .scratchpad_bindings = std::move(writer_scratch),
         .tensor_bindings = std::move(writer_tensors),
         .compile_time_args = std::move(writer_cta),
         .runtime_arg_schema =
@@ -1413,6 +1411,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores = std::move(semaphores),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_params),
         .work_units = {WorkUnitSpec{
             .name = "main",
