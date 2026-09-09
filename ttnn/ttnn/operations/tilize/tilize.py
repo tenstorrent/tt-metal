@@ -282,7 +282,16 @@ SUPPORTED = {
     # `read_sticks_for_tilize` is built on (source rows restart at each image
     # boundary), which is why the padded reader segments its block per image.
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
-    "tile_height": [32],
+    # Tiny tiles (Refinement 4). `tile_h` is a plan quantity everywhere already
+    # -- `in_page_bytes = tile_h*32*elem`, `rows_per_image = ceil(H/tile_h)`, the
+    # `TileDescriptor` on both CBs, and the reader's stick count -- so a sub-32
+    # output tile turns the knob and changes no structure. The one behavioural
+    # difference is that `can_use_fast_tilize` requires 32x32 output tiles
+    # (`tilize_helpers.inl:77`), so a tiny tile takes the regular
+    # `tilize_init`/`tilize_block` path, which is per-tile through DEST and
+    # therefore has no width cap of its own. The list IS `LEGAL_TILE_HEIGHTS`
+    # (the `_check_request` gate's own source), so the two cannot drift.
+    "tile_height": list(LEGAL_TILE_HEIGHTS),
     "in_tile_height": ["none"],
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
 }
