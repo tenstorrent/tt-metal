@@ -454,7 +454,7 @@ at 0; and all prior phases still pass.
 
 ---
 
-### [ ] Refinement 5 — Numerical configurability: the full `dtype × output_dtype` cartesian
+### [x] Refinement 5 — Numerical configurability: the full `dtype × output_dtype` cartesian
 
 **Goal**: add `float32`, `fp8_e4m3`, `uint32`, `int32`, `uint16`, `uint8` to
 `SUPPORTED["dtype"]` and `float32`, `bfloat8_b`, `bfloat4_b`, `uint32`, `int32`,
@@ -520,6 +520,50 @@ justified `EXCLUSIONS` set; `fp32 -> fp32` and every integer no-cast diagonal ar
 **bit-identical**; the lossy casts hold `helpers._transition_tolerance`'s floors;
 `test_regression.py`'s 10 cases pass; the three loud categories stay at 0; and every
 prior phase still passes across the widened cartesian.
+
+**Outcome**: DONE. `SUPPORTED` is 7x8 (both axes at full TARGET), and the golden
+suite went **49 -> 679 passing** (13.9x), `test_regression.py` 10/10, unit directory
+606/606. `fp32 -> fp32` is bit-identical (was `max_abs 1.95e-3`) via
+`Fp32Mode::Lossless` + `fp32_dest_acc_en` + `UnpackToDestFp32` on `cb_input_rows`,
+and all ten exactly-representable pairs are `torch.equal`.
+
+`uint8` was NOT excluded. The all-zeros failure was traced to a Wormhole B0 LLK
+defect — `_llk_math_hw_configure_` writes srcA's and srcB's ALU format fields as one
+word under the union of two 4-bit masks without `masked_data_format()`, so
+`UInt8` (30) spills bit 4 into srcB and the UInt8 datacopy MOP (ELWADD, which reads
+srcB) zeroes every datum. One `reconfig_data_format_srcb` call after
+`compute_kernel_hw_startup` rewrites that field alone and `uint8` is bit-exact. The
+shared LLK is deliberately left unpatched: it is reached by every op on this arch and
+is not a dtype refinement's to change.
+
+Four `EXCLUSIONS` cells, each with a mechanism at file:line: retile x cast (a re-tile
+has no packer to convert with), block-float output x `tile_height=16` (`llk_pack.h`'s
+partial-face BFP MOP packs 1 face instead of `num_faces` at the one height that is
+`partial_face` with a full 16-row face), `uint16`/`uint8` x negative pad (an unsigned
+dtype has no negative domain; `uint32` is deliberately kept because at 32 bits the
+comparison reinterprets at the same width), and `rank 0` x block float (PCC falls back
+to `allclose(atol=1e-4)` at `numel()==1`, two orders below block float's step).
+
+What is left, recorded rather than queued. (1) **`bfloat4_b` clears its 0.98 floor by
+only ~0.4%** (measured 0.981-0.985) and so is run-to-run flaky on small-numel padded
+scenarios. Characterized, not assumed: against a host-side
+`ttnn.from_torch(..., bfloat4_b, TILE_LAYOUT)` oracle on the same tensor,
+`bfloat8_b` shows **no gap at all** (op 0.999971 = host 0.999971) while `bfloat4_b`
+is **0.984 op vs 0.993 host** -- a real ~0.009 PCC gap in the DEVICE packer's bfp4
+mantissa rounding, about the half-ULP a 3-bit mantissa implies. It is not reachable
+from this op: the full `fp32_dest_acc_en x bfp8_pack_precise` sweep moves bfp4 by
+<2e-4 on both input dtypes, and `ComputeConfigDescriptor` exposes no packer
+rounding-mode field (`ALU_ROUNDING_MODE_Packer_srnd_en` lives inside the LLK
+hw-configure). The same sweep does nudge `bfloat8_b` the right way, but only in the
+fifth decimal, so the defaults are left alone. Probes 042/043. (2) **`fp8_e4m3` is in SUPPORTED with no on-device
+evidence**: it is Blackhole-only and the harness skips all of its cells before
+`validate()` on this Wormhole box. The path is dtype-generic and `pad_fill_word`
+gained an e4m3 encoder, but it is the one axis value here that was not exercised;
+a Blackhole run is what would confirm it, and no code change is expected. (3) The
+two remaining LLK gaps (`tile_height=16` block-float pack, and the UInt8 ALU-format
+spill this op works around locally) would both be closed upstream by a one-line
+`masked_data_format()` / `PACKCNT` fix in `tt_llk_wormhole_b0` -- out of scope here,
+and named so the next reader does not re-derive them.
 
 ---
 

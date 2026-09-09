@@ -628,3 +628,169 @@
   `probe_022.py` (tiny-tile sweep), `probe_023.py`, `probe_024.py` (the host proof
   of `retile_copy_unit` + the six golden scenarios), `probe_025.py` (the broad
   retile sweep), `probe_026.py` (footprints).
+
+## Refinement 5 — Numerical configurability: the full `dtype × output_dtype` cartesian
+- Date: 2026-09-09
+- What was done:
+
+  **`SUPPORTED` went from 1×1 to 7×8.** `dtype` gained `float32`, `fp8_e4m3`,
+  `uint32`, `int32`, `uint16`, `uint8`; `output_dtype` gained `float32`,
+  `bfloat8_b`, `bfloat4_b`, `uint32`, `int32`, `uint16`, `uint8`. **No kernel
+  forked and no CB was added**: the cast has always been carried by the two CBs'
+  `data_format`s and performed at pack time inside the same
+  `compute_kernel_lib::tilize` call the bfloat16 diagonal used. What the dtype
+  pair selects is the COMPUTE CONFIG the datapath needs in order to stay
+  value-preserving, and that is now three named predicates in
+  `tilize_program_descriptor.py` — `is_lossless_fp32_relay`,
+  `requires_fp32_dest_acc`, `needs_srcb_alu_format_repair` — each the single
+  source of its decision, carried on the plan, and gated in the compute kernel by
+  CT args that compile out everywhere they do not apply.
+
+  **`fp32 → fp32` is now bit-identical** (it was `max_abs 1.95e-3`). It needs all
+  three of `Fp32Mode::Lossless`, `fp32_dest_acc_en=true` and
+  `UnpackToDestMode::UnpackToDestFp32` on `cb_input_rows`; with any one missing
+  the datum still routes through SrcA's tf32. This is the one place the helper's
+  own "prefer Fast, the downstream FPU truncates anyway" advice does not apply —
+  there is no downstream FPU op, the tiled output IS the product. The tag is set
+  ONLY there: on `fp32 → bf16/bfp` fast tilize is live and `static_asserts` the
+  tag absent, so tagging that cell would be a compile error.
+
+  **`uint8` was ALL ZEROS on Wormhole B0, and was repaired rather than excluded.**
+  Root cause (found with an Explore sweep of the LLK after four config levers came
+  back flat): `_llk_math_hw_configure_`
+  (`tt_llk_wormhole_b0/llk_lib/llk_math_common.h`) builds srcA's and srcB's ALU
+  format fields into ONE config word and writes it under the union of their two
+  4-bit masks, without `masked_data_format()`. `DataFormat::UInt8` is 30, so bit 4
+  of the srcA value spills into srcB's low bit: srcA lands correct (14 = Int8) and
+  srcB lands 15. UInt8 is the only format in this op's matrix that both spills AND
+  reaches SrcA/SrcB — UInt32 spills too, but `_llk_unpack_tilize_init_` routes
+  UInt32/Int32 straight to DEST, which is why every other integer width was
+  already bit-exact. The UInt8 datacopy MOP is ELWADD, which READS the zero-filled
+  srcB, so the mistyped field zeroes every output datum. The repair is ONE public
+  compute-API call — `reconfig_data_format_srcb(cb_input_rows)` after
+  `compute_kernel_hw_startup` — which rewrites that field alone under a mask that
+  drops the spill bit. `uint8` is now bit-exact at every shape and tile height. The
+  LLK itself is deliberately NOT patched (a shared Wormhole register write reached
+  by every op is out of a dtype refinement's scope); the repair is local to this op
+  and is a no-op on Blackhole, which does not program the Src format fields at all.
+
+  **`compute_kernel_config` exposed** on the entry point. `math_fidelity`,
+  `math_approx_mode` and `dst_full_sync_en` pass through verbatim, and passing
+  nothing reproduces the pre-refinement descriptor exactly (HiFi4 / False / False).
+  `fp32_dest_acc_en` is the one field ORed rather than overridden: at the pairs
+  where `requires_fp32_dest_acc` holds, a 16-bit DEST is a wrong answer from a
+  value-preserving op, not a cheaper approximation.
+
+  **The empty tensor stopped crashing.** `torch.rand(0)` newly became reachable
+  once fp32 landed, and hit a host-side `ZeroDivisionError` in the column solve
+  (`tensor_col_tiles == 0`). `derive_plan` now has a zero-work arm: one core, zero
+  blocks, every kernel's loop running no iterations — still exactly one dispatch,
+  and no NoC access against the zero-page buffers.
+
+- Accuracy achieved: **bit-exact (`torch.equal`) on 10 of the 14 Wormhole-legal
+  pairs** — `bf16→bf16`, `bf16→fp32`, `fp32→bf16`, `fp32→fp32`, `uint32→uint32`,
+  `uint32→int32`, `int32→uint32`, `int32→int32`, `uint16→uint16`, `uint8→uint8`.
+  PCC=1.0, rtol=0, atol=0 on `(1,1,32,32)`, `(1,1,64,128)`, `(2,3,64,96)`,
+  `(1,1,128,512)`, `(1,1,256,2048)`, `(1,1,1024,1024)`, the three non-aligned
+  shapes, tile heights {16,4,1}, height-sharded L1, and both `low_l1` settings.
+  The four lossy targets are the block-float ones and hold their floors:
+  `→bfloat8_b` PCC 0.99996–0.99997 (floor 0.99, `max_abs` 0.023–0.039),
+  `→bfloat4_b` PCC 0.981–0.985 (floor 0.98, `max_abs` 0.48–0.94).
+- Golden test progress: `test_golden.py` **679 passed / 0 failed / 14 xfailed /
+  2394 skipped**, up from **49** passing before this refinement (the prior scope was
+  the single `bf16→bf16` cell of each of 55 scenarios, 6 of them retile-skipped) —
+  a **13.9x** increase and by a wide margin the largest cell unlock in the queue.
+  `test_regression.py` **10/10**. Whole unit directory **606 passed, 1 skipped**.
+  `test_translated.py` **938 passed** (was 727: +211), with 58 failures against a
+  51-failure baseline — see below for all 7 of the new ones.
+- Issues encountered:
+  * **Four EXCLUSIONS cells**, each with the mechanism named at file:line in
+    `tilize.py`, none of them "it didn't work":
+    - **retile × dtype cast.** A re-tile removes the compute stage entirely (the
+      reader assembles output tiles out of the source's faces over the NoC), and a
+      cast is a pack-time conversion. With no packer there is nothing to convert
+      with, so the no-cast diagonal is the whole of what a byte re-lay expresses.
+    - **block-float output × `tile_height == 16`.** `Tile` sets
+      `partial_face = (tile_h < 32)` and `face_shape = {min(tile_h,16), 16}`, so 16
+      is the ONLY height that is `partial_face` while still having a full 16-row
+      face. `llk_pack.h` branches on `partial_face && IS_BFP_FORMAT` into a MOP
+      written for sub-16-row faces, with `PACKCNT = 1` instead of `num_faces`, so
+      the second face and its shared exponents are never packed. Measured: PCC
+      collapses to ~0.01 at 16 and is 0.99997 / 0.984 at 32, 8, 4, 2 and 1, on four
+      shapes (`probes/probe_038.py`). Nothing host-side reaches that MOP.
+    - **`uint16` / `uint8` input × `pad_value` negative.** An unsigned dtype has no
+      negative domain. The op can WRITE the fill (a two's-complement bit_cast at
+      the element width), but the contract is unsatisfiable: a uint16 datum widened
+      to a signed comparison type is always ≥ 0, and at 8 bits the expectation
+      cannot even be built (`F.pad(uint8_tensor, value=-3)` raises). `uint32` is
+      deliberately NOT excluded — at 32 bits the comparison reinterprets at the
+      same width, so those bits ARE the negative value and the cell is verifiably
+      correct. The asymmetry is scoped to where the op cannot be shown right.
+    - **`rank == 0` × block-float output.** A rank-0 input has one logical element
+      and `get_atol_rtol_pcc` falls back from PCC to `allclose(atol=1e-4)` at
+      `numel() == 1`, two orders below block float's ~1e-2 step. The value is
+      correct to within the format (`max_abs` 0.0039 into bfp8); the cell is
+      unmeasurable, and no implementation can pass it. Rank 1 is unaffected.
+  * **`bfloat4_b` clears its 0.98 floor by only ~0.4% and is therefore run-to-run
+    flaky on small-numel padded scenarios** (measured 0.981–0.985 across shapes; a
+    64-element padded case once drew 0.9717, and `1x1x50x50-pad_explicit` flakes
+    either side of the floor between runs). The cause was CHARACTERIZED rather than
+    assumed, by comparing against a host-side `ttnn.from_torch(..., bfloat4_b,
+    TILE_LAYOUT)` conversion of the same tensor — a different code path used purely
+    as a numerical oracle (`probes/probe_042.py`, `probe_043.py`):
+
+    | output | op PCC | host PCC | verdict |
+    |--------|--------|----------|---------|
+    | `bfloat8_b` | 0.999971 | 0.999971 | **no gap** — the op is exactly as good as the format allows |
+    | `bfloat4_b` | 0.984 | **0.993** | a real ~0.009 PCC gap in the DEVICE packer |
+
+    So the earlier reading ("it is the format") was wrong and is corrected here: it
+    is the packer's bfp4 mantissa rounding. With a 3-bit mantissa, truncation versus
+    round-to-nearest is worth roughly the half-ULP this gap measures. It is not
+    reachable from the op: the full `fp32_dest_acc_en × bfp8_pack_precise` sweep moves
+    `bfloat4_b` by <2e-4 in either direction (0.98411–0.98425) on both input dtypes,
+    and `ComputeConfigDescriptor` exposes no packer rounding-mode field at all
+    (`ALU_ROUNDING_MODE_Packer_srnd_en` is set inside the LLK's hw-configure). Worth
+    recording that the same sweep DOES move `bfloat8_b` the right way — `(fp32 DEST,
+    precise)` takes it 0.999971 → 0.999975 and halves the differing-element count,
+    and `fp32 → bfp8` at `(16-bit DEST, precise)` matches the host BIT-FOR-BIT — but
+    every one of those deltas is in the fifth decimal, far below the 0.99 floor, so
+    the default is left alone rather than perturbed for no measurable gain.
+    `bfloat4_b` stays in SUPPORTED and stays failing when it draws badly, rather than
+    being silenced with an exclusion.
+  * **7 new `test_translated.py` failures, none of them an op defect** (verified by
+    re-running that suite against the pre-refinement op dir and diffing the failure
+    sets):
+    - 3 × `test_tilize_height_sharded_shapes[FLOAT32-…]` — the identical
+      "AUTO padding without `pad_value=`" contract mismatch that ALREADY fails at
+      bfloat16 in the baseline. The op's padding is opt-in by design; the fp32
+      twins were xfailed on dtype before and now reach the same refusal.
+    - 3 × `test_to_layout_pad_value_dtype[INT32-…]` — the translated test builds
+      its int32 device tensor from `torch.rand(...)` bfloat16 data (its integer
+      branch covers uint32/uint16 but not int32), so the device tensor is all
+      zeros while the expectation keeps the float values. A defect in the test's
+      own input construction; the op returns the input it was given.
+    - 1 × `test_to_from_01d[0]` — the empty tensor. The op-side crash is FIXED
+      (see above); the remaining failure is the harness's `compute_metrics`
+      calling `.max()` on a 0-element tensor.
+  * **`fp8_e4m3` is in SUPPORTED but could not be exercised on this box.** It is
+    Blackhole-only and the golden suite's own `skip_if_fp8_unsupported` fires before
+    `validate()` on Wormhole, so all of its cells skip. It is listed because the
+    path is genuinely dtype-generic — no kernel and no host derivation names a
+    format — and `pad_fill_word` gained an e4m3 encoder so the padded cells have an
+    answer too. Flagged rather than claimed: it is the one axis value in this
+    refinement with no on-device evidence behind it.
+  * One free failure, fixed immediately: `unpack_to_dest_mode` must be **32**
+    entries, not one per CB this op allocates — `get_unpack_dst_formats` indexes it
+    against the full per-core CB table and `TT_FATAL`s on anything shorter.
+- Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py` —
+  362 cases: the 14 Wormhole-legal pairs × 3 shapes; an 8-shape × 14-pair × 2-
+  distribution `test_tilize_precision_matrix` printing max/median/p99/rel-RMS for
+  every cell; the three fp32/uint8 descriptor legs asserted at the DESCRIPTOR (so a
+  dropped leg is caught as a missing tag, not only as a value drift); the
+  `compute_kernel_config` cross-product (4 fidelities × 2 sync × 2 acc, each also
+  asserting the bytes are unchanged); the new dtypes crossed with padding,
+  height-sharding, `low_l1` A/B and tiny tiles; the block-float × tile-height sweep
+  pinning BOTH the `tile_height=16` refusal and correctness at every other height;
+  the unsigned-negative-pad refusal AND the `uint32`/`int32` non-refusal; and the
+  empty-tensor zero-work dispatch. Probes `probe_028`–`probe_041`.

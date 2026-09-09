@@ -66,6 +66,14 @@ _TORCH = {
 # the input values losslessly, and a PCC floor only for the genuinely lossy
 # block-float targets. Kept in this file rather than imported so the unit suite
 # does not depend on the external benchmark.
+# MEASURED against a host-side `ttnn.from_torch(..., TILE_LAYOUT)` conversion of the
+# same tensor (probes/probe_042.py, probe_043.py): into `bfloat8_b` the op is exactly
+# as good as the format allows (op PCC 0.999971 == host 0.999971), while into
+# `bfloat4_b` the DEVICE packer's 3-bit-mantissa rounding costs ~0.009 PCC against the
+# host (0.984 vs 0.993). That gap is why the bfp4 floor here has so little headroom;
+# it is not reachable from the op (no packer rounding-mode field exists on
+# `ComputeConfigDescriptor`, and the fp32-DEST x precise-pack sweep moves bfp4 by
+# <2e-4).
 _EXACT = ("exact", None)
 _TOLERANCE = {
     (ttnn.bfloat16, ttnn.bfloat8_b): ("pcc", 0.99),
@@ -415,8 +423,10 @@ def test_tilize_dtype_x_padding(device, in_dtype, out_dtype, shape, pad_value):
     """
     torch.manual_seed(1)
     torch_input = make_input(in_dtype, shape)
-    if in_dtype == ttnn.uint8:
-        pad_value = abs(pad_value)  # uint8 has no negative domain
+    if in_dtype in (ttnn.uint8, ttnn.uint16) and pad_value < 0:
+        # An unsigned dtype narrower than 32 bits refuses a negative fill (see
+        # EXCLUSIONS); `test_tilize_unsigned_negative_pad_is_refused` pins that.
+        pad_value = abs(pad_value)
     tt_out = tilize(_to_device(torch_input, device, in_dtype), dtype=out_dtype, pad_value=pad_value)
 
     compare_dtype = _TORCH[out_dtype]
@@ -520,6 +530,62 @@ def test_tilize_block_float_x_tiny_tile(device, out_dtype, tile_h, expect_error)
         return
     tt_out = tilize(tt_in, dtype=out_dtype, tile=ttnn.Tile([tile_h, 32]))
     check_pair(ttnn.to_torch(tt_out), torch_input.to(_TORCH[out_dtype]), ttnn.bfloat16, out_dtype)
+
+
+@pytest.mark.parametrize(
+    "in_dtype,refused",
+    [
+        pytest.param(ttnn.uint8, True, id="uint8_refused"),
+        pytest.param(ttnn.uint16, True, id="uint16_refused"),
+        pytest.param(ttnn.uint32, False, id="uint32_allowed"),
+        pytest.param(ttnn.int32, False, id="int32_allowed"),
+    ],
+)
+def test_tilize_unsigned_negative_pad(device, in_dtype, refused, expect_error):
+    """A negative fill on a narrow UNSIGNED dtype is refused; uint32 and int32
+    are not.
+
+    The asymmetry is the assertion. `uint32` is left in because its
+    two's-complement bits ARE the negative value asked for when reinterpreted
+    at the same width, which is verifiable; `uint16` / `uint8` cannot be shown
+    right at any width and are refused. An exclusion that swept up all unsigned
+    dtypes on principle would pass a test that only checked the refusals.
+    """
+    from ttnn.operations._op_contract import ExcludedCell
+
+    shape = (1, 1, 33, 50)
+    torch.manual_seed(8)
+    torch_input = make_input(in_dtype, shape)
+    tt_in = _to_device(torch_input, device, in_dtype)
+    if refused:
+        with expect_error(ExcludedCell, "unsupported combination"):
+            tilize(tt_in, pad_value=-3)
+        return
+    tt_out = tilize(tt_in, pad_value=-3)
+    check_pair(ttnn.to_torch(tt_out), torch_input, in_dtype, in_dtype, context="logical view: ")
+
+
+def test_tilize_empty_tensor_is_a_zero_work_dispatch(device):
+    """A 0-element input still dispatches, and dispatches exactly once.
+
+    An empty tensor has no output tiles, so the column solve has no target to
+    divide by — an unguarded empty grid is a host-side ZeroDivisionError rather
+    than a wrong answer. The plan degenerates to one core owning ZERO blocks:
+    every kernel's block loop runs no iterations and no NoC access is issued
+    against the zero-page buffers.
+    """
+    torch_input = torch.rand(0, dtype=torch.float32)
+    tt_in = _to_device(torch_input, device, ttnn.float32)
+    tt_out = tilize(tt_in, pad_value=0.0, output_padded_shape=[32, 0])
+
+    assert tt_out.layout == ttnn.TILE_LAYOUT
+    assert list(tt_out.shape) == [0]
+    assert ttnn.to_torch(tt_out).numel() == 0
+
+    grid = device.compute_with_storage_grid_size()
+    plan = derive_plan(tt_in, tt_out, low_l1=False, grid=grid, pad_value=0.0)
+    assert plan.num_blocks_total == 0, "an empty grid must carry no blocks"
+    assert max(a[2] for a in plan.assignment) == 0, "no core may be handed work"
 
 
 def test_tilize_retile_with_a_cast_is_refused(device, expect_error):

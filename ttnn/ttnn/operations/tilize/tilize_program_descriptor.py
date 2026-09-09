@@ -875,7 +875,31 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
     input_depth_rows = INPUT_DEPTH_ROWS
     output_depth_batches = OUTPUT_DEPTH_BATCHES
 
-    if partition is not None:
+    if tensor_row_blocks == 0 or tensor_col_tiles == 0:
+        # --- the empty tensor: a grid with NO output tiles -----------------
+        # `torch.rand(0)` tilized is a legal, if degenerate, request: the output
+        # is a TILE tensor with zero elements. It has no blocks, so there is
+        # nothing to solve and nothing to distribute — and the column solve
+        # below divides by a target derived from `tensor_col_tiles`, which is
+        # where an unguarded empty grid turns into a host-side ZeroDivisionError.
+        #
+        # The op still DISPATCHES: one core is handed `num_blocks = 0`, all
+        # three kernels' block loops run zero iterations, and no NoC access is
+        # ever issued against the zero-page buffers. That keeps "exactly one
+        # native dispatch per invocation" true for the empty case as well, and
+        # keeps every extent at its minimum legal value (1) so the CB
+        # descriptors and the kernels' compile-time divisors stay well-formed.
+        block_width_tiles = 1
+        num_w_chunks = 1
+        num_row_groups = 1
+        num_blocks_total = 0
+        write_rows_per_barrier = 1
+        # A zero-page buffer has no resident shard to place a CB on, whatever
+        # its memory_config says.
+        input_native = output_native = False
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        assignment = [(ttnn.CoreCoord(0, 0), 0, 0, 1)]
+    elif partition is not None:
         # --- grid2d_sharded: every number below is READ, not solved. -------
         block_width_tiles = partition.shard_cols_tiles
         num_w_chunks = partition.num_shard_cols
