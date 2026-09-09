@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.reduce_tilize_a import reduce_tilize_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, L1AccessMode, bfd_current
@@ -16,6 +16,8 @@ from fuser.operand import BfdResource, L1AccessMode, bfd_current
 
 class UnpackReduceTilize(Unpacker):
     granularity = InvocationGranularity.TILE
+
+    golden_fn = staticmethod(reduce_tilize_a_golden)
 
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
@@ -26,19 +28,6 @@ class UnpackReduceTilize(Unpacker):
             "llk_unpack_common.h",
             "llk_unpack_reduce_col_tilizeA_strided.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return (
-            self.tilize_golden(tensor_a, config, operation, compute_unit),
-            tensor_b,
-        )
 
     def perf_set_valid(
         self,

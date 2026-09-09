@@ -7,6 +7,7 @@ from typing import List
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.reduce_block_max_row import reduce_block_max_row_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 
@@ -15,6 +16,8 @@ from .reduce_block_max import ReduceBlockMaxFpu
 
 class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
     granularity = InvocationGranularity.ROW
+
+    golden_fn = staticmethod(reduce_block_max_row_golden)
 
     def get_headers(self) -> List[str]:
         return [

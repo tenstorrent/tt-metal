@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.matmul import unpack_matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
@@ -18,21 +18,13 @@ class MatmulUnpacker(Unpacker):
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
 
+    golden_fn = staticmethod(unpack_matmul_golden)
+
     def get_headers(self) -> List[str]:
         return [
             "llk_unpack_common.h",
             "llk_unpack_matmul.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return tensor_a, tensor_b
 
     def perf_set_valid(
         self,

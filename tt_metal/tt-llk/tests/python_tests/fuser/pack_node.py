@@ -4,8 +4,6 @@
 
 from typing import TYPE_CHECKING, List
 
-import torch
-
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
@@ -77,14 +75,6 @@ class PackNode:
         config: "GlobalConfig",
     ) -> str:
         return self.packer.uninit(self, operation, config, None)
-
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> torch.Tensor:
-        return self.packer.golden(tensor, self, operation, config)
 
     def get_headers(self) -> List[str]:
         return self.packer.get_headers()

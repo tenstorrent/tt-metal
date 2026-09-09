@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TYPE_CHECKING, List, Tuple
-
-import torch
+from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
@@ -12,20 +10,18 @@ if TYPE_CHECKING:
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
-
-from .golden import Golden
 from .indexing import InvocationGranularity
 
 
-class Fpu(Golden):
+class Fpu:
     """Base class for fused test FPU (math) code generators.
 
     Subclasses represent specific math operations (e.g. MatmulFpu, DatacopyFpu, etc.)
     and override methods to emit the C++ LLK calls that configure and drive the
-    Math thread, plus a Python golden function for test validation.
+    Math thread.
 
     The lifecycle called by the pipeline is:
-        init() -> loop.math_loop() [which calls calculate()] -> uninit()
+        init() -> planned calls to calculate() -> uninit()
 
     Set `granularity` to the number of tiles one call covers, to control
     the tile iteration pattern used by the math phase.
@@ -38,49 +34,12 @@ class Fpu(Golden):
         2. Set `granularity` to the tiles one call covers
         3. Override get_headers() with the required LLK header files
         4. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        5. Override golden() to compute the expected math result, calling
-           self.eltwise_golden(), self.matmul_golden(), etc.
+        5. Bind the corresponding callable from fuser.golden.fpu.
     """
 
     # Controls the tile iteration pattern for the math loop.
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
-
-    per_call_golden: bool = False
-
-    def supports_per_call(self, node) -> bool:
-        return self.per_call_golden and (
-            self.granularity == InvocationGranularity.TILE
-            or getattr(node, "custom", False)
-        )
-
-    def golden_call(
-        self,
-        call,
-        srcs,
-        dest,
-        compute_unit: "FpuNode",
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> None:
-        from .golden_state import tile_operation
-
-        tensor_a, tensor_b = srcs.pop()
-        single = tile_operation(operation)
-        dimensions = single.max_output_dimensions
-        if tensor_a is None:
-            tensor_a = torch.zeros(dimensions)
-        if tensor_b is None:
-            tensor_b = torch.zeros(dimensions)
-        _, _, result = self.golden(
-            tensor_a,
-            tensor_b,
-            dest.get(call.dest),
-            single,
-            config,
-            compute_unit,
-        )
-        dest.set(call.dest, result.reshape(dimensions))
 
     def init(
         self,
@@ -89,13 +48,7 @@ class Fpu(Golden):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that initializes the math engine before the tile loop.
-
-        Called once per block before the math loop begins. Override to emit
-        the _llk_math_*_init_<>() call with the appropriate parameters.
-
-        Skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
-        """
+        """Return C++ code that initializes the math engine before the tile loop."""
         return ""
 
     def calculate(
@@ -105,12 +58,8 @@ class Fpu(Golden):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that performs the math operation on a single tile.
-
-        Called for each planned invocation. Use block.tile_id_block
-        for the dest register index. Override to emit the _llk_math_*_<>() call
-        that executes the FPU operation on data in the source register files.
-        """
+        """Return C++ code that performs one planned math call (dest index in
+        block.tile_id_block)."""
         return ""
 
     def uninit(
@@ -120,42 +69,11 @@ class Fpu(Golden):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that tears down the math engine after the tile loop.
-
-        Called once per block after the math loop completes. Override to emit
-        the _llk_math_*_uninit_() call that restores math state.
-
-        Skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
-        """
+        """Return C++ code that tears down the math engine after the tile loop."""
         return ""
 
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        tensor_dst: torch.Tensor,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-        compute_unit: "FpuNode",
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute the golden math result in Python.
-
-        Returns (tensor_a, tensor_b, tensor_dst) where tensor_dst is the expected
-        output after the math operation. tensor_a and tensor_b are passed through
-        (possibly modified) for downstream stages.
-
-        Called by FpuNode.golden() after the unpack golden. The input tensors
-        are the outputs of the unpacker's golden().
-        """
-        return (tensor_a, tensor_b, tensor_dst)
-
     def get_headers(self) -> List[str]:
-        """Return the list of C++ LLK header filenames required by this FPU.
-
-        These headers are #included in the generated test source file. Override to
-        return the headers that declare the _llk_math_*_ functions used by init(),
-        calculate(), and uninit().
-        """
+        """Return the LLK header filenames that declare this FPU's generated calls."""
         return []
 
     def __str__(self) -> str:

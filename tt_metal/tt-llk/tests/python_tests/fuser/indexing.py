@@ -38,6 +38,7 @@ class KernelInvocation:
     src1: Index = None
     dest: Index = None
     out: Index = None
+    tiles: Tuple["KernelInvocation", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,16 +84,11 @@ class LoopPlan:
     slots: Mapping[str, SlotIndex] = field(default_factory=dict)
     origins: Mapping[str, Tuple[int, ...]] = field(default_factory=dict)
     blocks_per_bank: int = 1
-    golden_levels: Optional[Tuple[Level, ...]] = None
-
-    @property
-    def _golden_levels(self) -> Tuple[Level, ...]:
-        return (
-            self.golden_levels if self.golden_levels is not None else self.call_levels
-        )
+    fanout_levels: Tuple[Level, ...] = ()
+    fanout_slots: Mapping[str, SlotIndex] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        declared = {level.var for level in self.bank_levels + self._golden_levels}
+        declared = {level.var for level in self.bank_levels + self.call_levels}
         declared |= set(self.origins)
         for name, index in self.slots.items():
             unknown = sorted(set(index.multipliers) - declared)
@@ -132,15 +128,23 @@ class LoopPlan:
                 var: self._block_origin(var, values, bank_idx, block)
                 for var, values in self.origins.items()
             }
-            for call in self._assignments(self._golden_levels):
-                result.append(
-                    KernelInvocation(
-                        **{
-                            slot: index.value({**bank, **origin, **call})
-                            for slot, index in self.slots.items()
-                        }
-                    )
+            for call in self._assignments(self.call_levels):
+                base = {
+                    slot: index.value({**bank, **origin, **call})
+                    for slot, index in self.slots.items()
+                }
+                tiles = tuple(
+                    KernelInvocation(**self._fanned(base, fan))
+                    for fan in self._assignments(self.fanout_levels)
                 )
+                result.append(KernelInvocation(**base, tiles=tiles))
+        return result
+
+    def _fanned(self, base, fan) -> Dict[str, int]:
+        result = {}
+        for slot, value in base.items():
+            index = self.fanout_slots.get(slot)
+            result[slot] = value + index.value(fan) if index else value
         return result
 
     def _emit(self, levels: Sequence[Level], render, constants: Dict[str, int]) -> str:
@@ -175,10 +179,6 @@ class LoopPlan:
             )
 
         constants = dict(bank_constants or {})
-        call_vars = {level.var for level in self.call_levels}
-        for level in self._golden_levels:
-            if level.var not in call_vars:
-                constants.setdefault(level.var, 0)
         inner = self._emit(self.call_levels, body, constants)
         if not self.origins or not inner:
             return inner
@@ -316,6 +316,17 @@ def default_plan(
             multipliers=multipliers,
         )
 
+    if granularity == InvocationGranularity.ROW:
+        fanout_levels = (Level(var=TILE_X, count=region.block_tiles_x),)
+        fanout_slots = {
+            slot: SlotIndex(multipliers={TILE_X: 1})
+            for slot in slots
+            if slot in ("in0", "dest", "out")
+        }
+    else:
+        fanout_levels = ()
+        fanout_slots = {}
+
     return LoopPlan(
         bank_levels=region.bank_levels,
         call_levels=levels,
@@ -326,6 +337,8 @@ def default_plan(
             )
             for slot in slots
         },
+        fanout_levels=fanout_levels,
+        fanout_slots=fanout_slots,
     )
 
 
