@@ -145,9 +145,22 @@ class SpeakerEncoder(LightweightModule):
         self._mel_stft_key = None
         self._fc_linear_weight_tt = None
         self._fc_bias_tt = None
+        # HiFi4, not LoFi. The k>1 device-conv path (im2col + matmul) runs through this
+        # config, and capture_forward_trace forces device convs on -- so this fidelity
+        # decides how far QWEN3_TTS_SE_TRACE=1 moves the speaker embedding away from the
+        # host torch convs. Measured against the host path on the 2048-d embedding:
+        #   LoFi  cosine 0.99924   HiFi4 cosine 0.99979   (3.6x closer)
+        # and it is FREE -- these shapes are not math-bound (384x192x64: 7.66 us LoFi vs
+        # 7.68 us HiFi4 in isolation; 6.9 vs 6.3 ms mean over 5 demo seeds). LoFi also
+        # cost text fidelity at the demo's default seed: seed 42 inserted an article
+        # ("with a bright sun") for WER 4.3 %, where HiFi4 and the untraced host-conv
+        # path are both 0.0 % on all of seeds 42/1/7/123/2024. See PERF_NOTES 3.ac.
+        #
+        # fp32_dest_acc_en is NOT available on top: it halves the DEST budget and the
+        # existing SE program configs then violate out_subblock_h * out_subblock_w <= 4.
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
         )
         self._conv1d_config = ttnn.Conv1dConfig(
             weights_dtype=ttnn.bfloat16,
