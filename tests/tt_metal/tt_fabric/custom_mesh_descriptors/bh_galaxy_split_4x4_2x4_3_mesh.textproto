@@ -33,17 +33,17 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "MESH4" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 1 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "MESH4" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 2 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 2 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
   }
 }
 
