@@ -923,7 +923,8 @@ template <bool broadcast_result>
 sfpi_inline void _two_pass_horizontal_sum_pair_()
 {
     // Reduce the eight columns in each 4x8 lane sub-vector. Interleave the
-    // mean and variance reductions to cover SFPSHFT2 latency.
+    // mean and variance reductions to cover Wormhole's SFPSHFT2 dependency
+    // latency. Blackhole additionally needs the unconditional spacing below.
 #define TWO_PASS_REDUCE_ROTATE_PAIR()                                                                     \
     TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1); \
     WELFORD_SFPU_INDEPENDENT_SHFT2_NOP();                                                                 \
