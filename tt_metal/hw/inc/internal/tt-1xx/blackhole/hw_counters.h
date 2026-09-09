@@ -123,12 +123,12 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_3_counter
      {PerfCounterType::L1_3_EXT_PACKER_5_GRANT, 263}}};
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
-// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7, tag-search + packer 1 (ports 32-34), unpacker 0's
-// extended read interfaces 1-5 (ports 35-39).
+// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7 (ports 32-33), packer L1 interface 1 arbitrated with the
+// tag-search accelerator, debug L1 RAM and timestamp (port 34), unpacker 0's extended read interfaces 1-5 (ports 35-39).
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_4_counters = {
     {{PerfCounterType::L1_4_EXT_PACKER_6, 0},
      {PerfCounterType::L1_4_EXT_PACKER_7, 1},
-     {PerfCounterType::L1_4_TAG_SEARCH_PACKER_1, 2},
+     {PerfCounterType::L1_4_PACKER_IF_1_TAG_SEARCH, 2},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_1, 3},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_2, 4},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_3, 5},
@@ -137,7 +137,7 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_4_counter
      // Grant counters
      {PerfCounterType::L1_4_EXT_PACKER_6_GRANT, 256},
      {PerfCounterType::L1_4_EXT_PACKER_7_GRANT, 257},
-     {PerfCounterType::L1_4_TAG_SEARCH_PACKER_1_GRANT, 258},
+     {PerfCounterType::L1_4_PACKER_IF_1_TAG_SEARCH_GRANT, 258},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_1_GRANT, 259},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_2_GRANT, 260},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_3_GRANT, 261},

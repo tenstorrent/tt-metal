@@ -50,7 +50,7 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 5` | 32 | INSTRN (instruction thread) |
 | `1 << 6` | 64 | L1 bank 2 (BH only: extended unpackers 4-7, ring0 NOC ports 2-3) |
 | `1 << 7` | 128 | L1 bank 3 (BH only: ring1 NOC ports 2-3, extended packers 2-5) |
-| `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, tag search, extended unpackers 8-12) |
+| `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, packer interface 1 with the tag-search accelerator, unpacker 0 extended interfaces 1-5) |
 | `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
 
 The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) = FPU | PACK | UNPACK.
