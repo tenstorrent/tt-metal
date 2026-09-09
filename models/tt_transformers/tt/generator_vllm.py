@@ -1295,6 +1295,28 @@ class Olmo3ForCausalLM(HybridAttentionForCausalLM):
         super().__init__(*args, **kwargs)
 
     @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """All-user KV-cache token capacity. One Blackhole chip (P150, 32 GB) holds ~21 GB of Olmo-3.1-32B
+        weights (bfp4 MLP, bfp8 attention); the framework default of 131072 tokens (16 GB of bfp8 KV over 64
+        layers) does not fit next to them, so cap the single-chip pool at 48k tokens (6 GB) — 16k context for 3
+        users, or 8 users at 6k. Multi-chip meshes shard the KV heads and keep the default."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        if devices_per_dp_cache == 1:
+            return 49_152
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
