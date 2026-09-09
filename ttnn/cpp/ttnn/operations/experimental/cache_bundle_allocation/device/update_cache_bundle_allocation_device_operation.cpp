@@ -146,12 +146,13 @@ ProgramDescriptor CacheBundleAllocationProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = i, .data_format = tt::DataFormat::UInt32, .page_size = bytes}}}});
     }
     const auto request_tensors = requests(t);
-    uint32_t request_mask = 0;
-    for (size_t i = 0; i < request_tensors.size(); ++i) {
-        request_mask |= uint32_t(request_tensors[i]->has_value()) << i;
-    }
-    ct.push_back(request_mask);
-    if (request_mask != 0) {
+    const bool use_slot_tensor = t.slot_id.has_value();
+    const bool use_start_tensor = t.actual_start.has_value();
+    const bool use_end_tensor = t.actual_end.has_value();
+    ct.push_back(static_cast<uint32_t>(use_slot_tensor));
+    ct.push_back(static_cast<uint32_t>(use_start_tensor));
+    ct.push_back(static_cast<uint32_t>(use_end_tensor));
+    if (use_slot_tensor || use_start_tensor || use_end_tensor) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = 32,
             .core_ranges = cores,
