@@ -8,6 +8,11 @@ import os
 
 
 class TestMetadataLoader:
+    # Not a pytest test class despite the "Test" prefix (it's a plain metadata-loading
+    # helper); without this, pytest tries to collect it and warns on every collection
+    # because it has an __init__ constructor.
+    __test__ = False
+
     def __init__(self, config):
         self.config = config
 
