@@ -269,49 +269,47 @@ inline void invert_block_horner8(
     DataflowBuffer& identity,
     DataflowBuffer& block_masks,
     DataflowBuffer& matrix,
-    DataflowBuffer& total_a,
-    DataflowBuffer& total_b,
+    DataflowBuffer& total,
     DataflowBuffer& product) {
     multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);
     matrix.wait_front(1);
-    DataflowBuffer* total = &total_a;
-    DataflowBuffer* next_total = &total_b;
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, *total, 1);
-    total->wait_front(1);
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, total, 1);
+    total.wait_front(1);
     for (uint32_t step = 0; step < 6; ++step) {
-        matmul_blocks<1, 1, 1, false>(matrix, *total, product);
+        matmul_blocks<1, 1, 1, false>(matrix, total, product);
         product.wait_front(1);
-        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, *next_total, 1);
-        next_total->wait_front(1);
-        total->pop_front(1);
+        // The two-entry total DFB holds the old and new Horner values together.
+        // Discarding the old front makes the new value current without a second DFB.
+        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, total, 1);
+        total.wait_front(2);
+        total.pop_front(1);
         product.pop_front(1);
-        DataflowBuffer* consumed = total;
-        total = next_total;
-        next_total = consumed;
     }
     matrix.pop_front(1);
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, *next_total);
-    next_total->wait_front(1);
-    matmul_blocks<1, 1, 1, false>(*total, *next_total, matrix);  // M = D^-1 L
+    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, product);
+    product.wait_front(1);
+    // -strict_lower(Akk) is dead after extracting L. Reuse its one-tile DFB
+    // below for I+M; all transactions remain one tile wide.
+    negative_strict_lower_akk.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(total, product, matrix);  // M = D^-1 L
     matrix.wait_front(1);
-    next_total->pop_front(1);
+    product.pop_front(1);
     matmul_blocks<1, 1, 1, false>(matrix, matrix, product);  // M^2
     product.wait_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, *next_total, 1);
-    next_total->wait_front(1);
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, negative_strict_lower_akk, 1);
+    negative_strict_lower_akk.wait_front(1);
     matrix.pop_front(1);
     elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, matrix, 1);
     matrix.wait_front(1);
     product.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(*next_total, matrix, product);  // (I+M)(I+M^2)
+    matmul_blocks<1, 1, 1, false>(negative_strict_lower_akk, matrix, product);  // (I+M)(I+M^2)
     product.wait_front(1);
-    next_total->pop_front(1);
-    matrix.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(product, *total, inverse);
-    product.pop_front(1);
-    total->pop_front(1);
     negative_strict_lower_akk.pop_front(1);
+    matrix.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(product, total, inverse);
+    product.pop_front(1);
+    total.pop_front(1);
 }
 
 // Transpose a tiled row [1,row_tiles] into a tiled column [row_tiles,1].
@@ -540,7 +538,6 @@ inline void prepare_t_inv(
     // intermediate
     DataflowBuffer& scratch_0,
     DataflowBuffer& scratch_1,
-    DataflowBuffer& scratch_2,
     DataflowBuffer& product) {
     constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
 
@@ -566,8 +563,7 @@ inline void prepare_t_inv(
         identity,
         block_masks,
         /*matrix=*/scratch_0,
-        /*total_a=*/scratch_1,
-        /*total_b=*/scratch_2,
+        /*total=*/scratch_1,
         /*product=*/product);
 }
 
@@ -633,7 +629,6 @@ TT_KERNEL void compute(uint32_t work_item_count) {
     DataflowBuffer anchor_decay(dfb::anchor_decay);
     DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
-    DataflowBuffer tile_workspace_3(dfb::tile_workspace_3);
     DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
     DataflowBuffer tile_workspace_1(dfb::tile_workspace_1);
     DataflowBuffer tile_workspace_2(dfb::tile_workspace_2);
@@ -706,7 +701,9 @@ TT_KERNEL void compute(uint32_t work_item_count) {
 
         prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
 
-        // All inverse scratch transactions are one tile; row-buffer cursors stay aligned.
+        // All inverse scratch transactions are one tile. tile_workspace_1 has two entries
+        // so each Horner update can enqueue its replacement before popping the old total;
+        // its eight transactions per work item also return both cursors to their starting slot.
         prepare_t_inv<Ct>(
             akk,
             tril,
@@ -715,7 +712,6 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             t_inv,
             /*scratch_0=*/tile_workspace_0,
             /*scratch_1=*/tile_workspace_1,
-            /*scratch_2=*/tile_workspace_3,
             /*product=*/tile_workspace_2);
 
         pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());

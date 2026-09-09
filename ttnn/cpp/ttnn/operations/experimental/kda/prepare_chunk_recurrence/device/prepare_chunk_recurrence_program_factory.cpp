@@ -78,7 +78,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
-    const m2::DFBSpecName tile_workspace_3_dfb{"tile_workspace_3"};
     const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
     const m2::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
     const m2::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
@@ -140,9 +139,9 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
-        make_dfb(tile_workspace_3_dfb, 1, fp32),
         make_dfb(tile_workspace_0_dfb, 1, fp32),
-        make_dfb(tile_workspace_1_dfb, 1, fp32),
+        // Horner keeps its current and replacement totals live together.
+        make_dfb(tile_workspace_1_dfb, 2, fp32),
         make_dfb(tile_workspace_2_dfb, 1, fp32),
 
         make_dfb(workspace_3_dfb, scratch, fp32),
@@ -234,7 +233,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[tile_workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_1_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_2_dfb] = UnpackMode::UnpackToSrc;
@@ -274,8 +272,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{tile_workspace_3_dfb, "tile_workspace_3", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tile_workspace_3_dfb, "tile_workspace_3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::PRODUCER},

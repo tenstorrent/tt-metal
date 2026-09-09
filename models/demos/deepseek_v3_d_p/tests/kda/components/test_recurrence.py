@@ -13,6 +13,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
@@ -20,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -372,7 +374,9 @@ def test_recurrence_captured_inputs_and_outputs(device: ttnn.Device) -> None:
     from models.demos.deepseek_v3_d_p.tests.kda.trace_utils import load_trace_rows
 
     root = Path(os.environ["KDA_REAL_TRACE_ROOT"]) / "kda"
-    sequence, heads, dim = 640, 96, 128
+    sequence = PREFILL_CHUNK_TOKENS_PER_CHIP
+    heads = KimiK3Config.KDA_NUM_HEADS
+    dim = KimiK3Config.KDA_HEAD_DIM
     host = [
         load_trace_rows(root / f"kda_{name}_layer_0.safetensors", 0, sequence).unsqueeze(0)
         for name in ("q", "k", "v", "gate", "beta")
@@ -383,9 +387,10 @@ def test_recurrence_captured_inputs_and_outputs(device: ttnn.Device) -> None:
     state = _to_device(torch.zeros(1, heads, dim, dim), device, ttnn.float32)
     with ttnn.manage_config("throw_exception_on_fallback", True):
         final_state, output = _run_recurrence(device, *inputs, state)
-    got = ttnn.to_torch(output).reshape(1, heads, sequence, dim).permute(0, 2, 1, 3).reshape(sequence, heads * dim)
-    want = load_trace_rows(root / "kda_attn_out_pre_layer_0.safetensors", 0, sequence)
+    actual = ttnn.to_torch(output).reshape(1, heads, sequence, dim).permute(0, 2, 1, 3).reshape(sequence, heads * dim)
+    expected = load_trace_rows(root / "kda_attn_out_pre_layer_0.safetensors", 0, sequence)
     # The captured FLA state is [V,K]; the TT recurrence owns [K,V].
-    want_state = load_trace_rows(root / "kda_recurrent_state_layer_0.safetensors", 0, 1).transpose(-1, -2)
-    assert_accurate(want, got, name="captured recurrence output", pcc_threshold=0.999)
-    assert_accurate(want_state, ttnn.to_torch(final_state), name="captured recurrent state", pcc_threshold=0.999)
+    expected_state = load_trace_rows(root / "kda_recurrent_state_layer_0.safetensors", 0, 1).transpose(-1, -2)
+    actual_state = ttnn.to_torch(final_state)
+    assert_accurate(expected, actual, name="captured recurrence output", pcc_threshold=0.999)
+    assert_accurate(expected_state, actual_state, name="captured recurrent state", pcc_threshold=0.999)

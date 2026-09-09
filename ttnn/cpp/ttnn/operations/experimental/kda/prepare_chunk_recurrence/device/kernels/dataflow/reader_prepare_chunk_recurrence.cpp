@@ -14,19 +14,27 @@
 inline void fill_constant_tiles(
     DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones, DataflowBuffer& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
+    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+    constexpr uint32_t tile_elements = tt::constants::TILE_HW;
+    constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
+    constexpr uint32_t faces_per_tile_row = tile_width / face_width;
+    constexpr uint32_t faces_per_tile = tile_elements / face_elements;
+    constexpr uint32_t inverse_block_size = 8;
+    constexpr uint32_t mask_tile_count = 2;
     constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
     constexpr uint32_t face_bytes = face_elements * sizeof(uint32_t);
 
     eye.reserve_back(1);
     tril.reserve_back(1);
     ones.reserve_back(1);
-    block_masks.reserve_back(2);
+    block_masks.reserve_back(mask_tile_count);
     Noc noc;
     noc.async_write_zeros(eye, eye.get_entry_size());
     noc.async_write_zeros(tril, tril.get_entry_size());
-    noc.async_write_zeros(block_masks, 2 * block_masks.get_entry_size());
+    noc.async_write_zeros(block_masks, mask_tile_count * block_masks.get_entry_size());
     noc.write_zeros_l1_barrier();
 
     volatile tt_l1_ptr uint32_t* eye_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr());
@@ -40,32 +48,33 @@ inline void fill_constant_tiles(
     UnicastEndpoint self;
     const auto ones_row = noc_traits_t<UnicastEndpoint>::src_args_type{
         .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = ones.get_write_ptr()};
-    for (uint32_t row = 1; row < face_width; ++row) {
+    for (uint32_t row = 1; row < face_height; ++row) {
         noc.async_read(self, ones, row_bytes, ones_row, {.offset_bytes = row * row_bytes});
     }
     noc.async_read_barrier();
     const auto ones_face = noc_traits_t<UnicastEndpoint>::src_args_type{
         .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = ones.get_write_ptr()};
-    for (uint32_t face = 1; face < 4; ++face) {
+    for (uint32_t face = 1; face < faces_per_tile; ++face) {
         noc.async_read(self, ones, face_bytes, ones_face, {.offset_bytes = face * face_bytes});
     }
-    noc.async_read(self, tril, face_bytes, ones_face, {.offset_bytes = 2 * face_bytes});
-    // Four diagonal 8x8 blocks and their strict block-lower complement.
+    noc.async_read(self, tril, face_bytes, ones_face, {.offset_bytes = faces_per_tile_row * face_bytes});
+    // Diagonal inverse blocks and their strict block-lower complement.
     volatile tt_l1_ptr uint32_t* masks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(block_masks.get_write_ptr());
-    for (uint32_t row = 0; row < 32; ++row) {
-        for (uint32_t column = 0; column < 32; ++column) {
-            const uint32_t index = ((row / 16) * 2 + column / 16) * 256 + (row % 16) * 16 + column % 16;
-            if (row / 8 == column / 8) {
+    for (uint32_t row = 0; row < tile_height; ++row) {
+        for (uint32_t column = 0; column < tile_width; ++column) {
+            const uint32_t face = (row / face_height) * faces_per_tile_row + column / face_width;
+            const uint32_t index = face * face_elements + (row % face_height) * face_width + column % face_width;
+            if (row / inverse_block_size == column / inverse_block_size) {
                 masks[index] = fp32_one_bits;
-            } else if (row / 8 > column / 8) {
-                masks[1024 + index] = fp32_one_bits;
+            } else if (row / inverse_block_size > column / inverse_block_size) {
+                masks[tile_elements + index] = fp32_one_bits;
             }
         }
     }
 
     noc.async_read_barrier();
 
-    for (uint32_t row = 0; row < face_width; ++row) {
+    for (uint32_t row = 0; row < face_height; ++row) {
         for (uint32_t column = 0; column <= row; ++column) {
             tril_tile[row * face_width + column] = fp32_one_bits;
         }
@@ -82,7 +91,7 @@ inline void fill_constant_tiles(
     eye.push_back(1);
     tril.push_back(1);
     ones.push_back(1);
-    block_masks.push_back(2);
+    block_masks.push_back(mask_tile_count);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
