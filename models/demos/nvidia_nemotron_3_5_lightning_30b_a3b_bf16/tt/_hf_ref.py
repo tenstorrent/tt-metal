@@ -109,10 +109,24 @@ def load_reference(layers: int | None = DEFAULT_GATE_LAYERS, dtype=torch.float32
     else:
         cfg = AutoConfig.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
         cfg._attn_implementation = "eager"
+        # SAME TWO FIELDS _truncate() SETS, MOVED BEFORE CONSTRUCTION. _truncate() used to be the
+        # only place that shrank num_hidden_layers/layers_block_type, but it ran on an
+        # already-fully-built model -- from_pretrained had by then read and materialized all 52
+        # layers' weights from the checkpoint (~66 GB bf16) before the other 45 were ever
+        # discarded, which is what OOM-killed the host on this model's first (cache-miss) load.
+        # Shrinking the SAME config fields first means from_pretrained only builds and fills the
+        # `layers` blocks that survive anyway -- the kept layers end up byte-identical (same
+        # checkpoint, same indices), so this changes nothing about the PCC golden or the roofline
+        # census (agent/weight_census.py reads the checkpoint files directly, never this object).
+        if layers is not None:
+            full_layer_count = cfg.num_hidden_layers
+            if layers < full_layer_count:
+                cfg.num_hidden_layers = layers
+                cfg.layers_block_type = list(cfg.layers_block_type)[:layers]
         model = AutoModelForCausalLM.from_pretrained(
             HF_MODEL_ID, config=cfg, trust_remote_code=True, dtype=torch.bfloat16, low_cpu_mem_usage=True
         )
-        model = _truncate(model, layers)
+        model = _truncate(model, layers)  # no-op safety net: cfg already matches `layers`
         if ckpt is not None:
             ckpt.mkdir(parents=True, exist_ok=True)
             model.save_pretrained(ckpt, safe_serialization=True)
