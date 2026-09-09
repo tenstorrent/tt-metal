@@ -17,7 +17,7 @@
 
 This guide documents the LLK test-suite interface for collecting Tensix hardware performance counters. The LLK suite runs bare-metal kernels in `tests/sources/*_perf.cpp` directly on the TRISC cores. There is no firmware or NoC stack involved, so the counter-collection path is implemented entirely inside the test kernels: a C++ macro arms and freezes the hardware counters around a measured scope, writes the snapshot to a fixed L1 buffer, and the host process reads that buffer back from outside the kernel.
 
-Tensix cores contain five hardware performance counter banks. Every bank exposes two values per measurement: total elapsed cycles (`OUT_L`) and an event count for the selected `counter_sel` (`OUT_H`). The counter set is fixed at compile time in `counters.h` and written to L1 by BRISC; the host no longer configures anything, it reads the shared config back to decode the snapshot. The device walks the slots at freeze and the driver pulls the results into a pandas DataFrame and optionally a CSV. The 16 derived metrics (utilisation %, stall %, and per-unit efficiency ratios) are computed in Python on top of the raw counts.
+Tensix cores contain five hardware performance counter banks. Every bank exposes two values per measurement: total elapsed cycles (`OUT_L`) and an event count for the selected `counter_sel` (`OUT_H`). The counter set is fixed at compile time in `counters.h` and written to L1 by BRISC; the host no longer configures anything, it reads the shared config back to decode the snapshot. The device walks the slots at freeze and the driver pulls the results into a pandas DataFrame and optionally a CSV. The derived metrics (utilisation %, stall %, and per-unit efficiency ratios) are computed in Python on top of the raw counts.
 
 | Bank | Description |
 |------|-------------|
@@ -107,7 +107,7 @@ The semaphore is used rather than L1 because its release is symmetric, detection
 
 Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). This:
 
-- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (114 slots on WH, 105 on BH, since only one L1 mux group is emitted) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory, see [Counter inventory single source](#counter-inventory-single-source).
+- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory, see [Counter inventory single source](#counter-inventory-single-source).
 - Clears every per-zone data area and sync word.
 - Clears `DBG_FEATURE_DISABLE` to `0`, see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - Programs each bank's reference-period and mode registers, sets `PERF_CNT_MUX_CTRL` for L1, and does an initial global arm (later overridden by the first `MEASURE_PERF_COUNTERS` zone).
@@ -146,7 +146,7 @@ pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_
 
 Wipe the artefact root (`/tmp/tt-llk-build`, or `$RUNNER_TEMP/tt-llk-build`) when switching between the two builds: the variant hash and the build markers ignore the counter flags, so the ELFs are otherwise reused.
 
-To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-4>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
+To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-5>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
 
 
 The `--enable-perf-counters` flag triggers two things:
@@ -180,16 +180,16 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 |---|---|---|
 | INSTRN_THREAD slots in inventory | 59 | 59 |
 | FPU slots | 3 | 3 |
-| TDMA_UNPACK slots | 22 | 22 |
+| TDMA_UNPACK slots | 18 | 18 |
 | TDMA_PACK slots | 14 | 5 |
-| L1 mux positions (Tensix) | 2 | 6 (the harness captures 0 to 4) |
-| L1 slots in inventory | 32 (16 × 2 mux) | 80 (16 × 5 mux) |
-| Total slots in `BUILTIN_COUNTER_CONFIG` (one L1 mux group) | 114 | 105 |
+| L1 mux positions (Tensix) | 2 | 6 (one group per build, `LLK_PERF_L1_MUX_GROUP` 0 to 5) |
+| L1 slots in inventory | 32 (16 × 2 mux) | 84 (16 × 5 mux + 4 on position 5) |
+| Total slots in `BUILTIN_COUNTER_CONFIG` (one L1 mux group) | 110 | 101 |
 | Total config words in L1 | 200 (rest are zero-padded) | 200 |
 
 **Wormhole** has `PACK_COUNT = 4` (per-engine packer busy signals are live in RTL), so `TDMA_PACK` exposes counters 11–14 for dest-read availability, 15–18 for per-engine plus aggregate packer busy, and 267–272 for per-engine dest-read grants plus `MATH_NOT_STALLED_DEST_WR_PORT` and `AVAILABLE_MATH`. The L1 mux is 1-bit wide: position 0 covers NoC Ring 0 plus L1 arbitration, position 1 covers NoC Ring 1 plus TDMA-extended signals.
 
-**Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (3 extra) which expose additional NoC rings and miscellaneous L1 ports.
+**Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (4 extra) which expose additional NoC rings and miscellaneous L1 ports.
 
 **INSTRN_THREAD bank.** Counters 0–8 and 12–23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each, 21 slots; the XSEARCH sels 9–11 are tied off in RTL and are not in the inventory). Counters 24–26 are per-thread total stall cycles. The stall-reason layout differs:
 
@@ -200,7 +200,7 @@ Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one pe
 
 ### Counter inventory single source
 
-The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h`, as grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..4_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
+The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h`, as grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..5_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
 
 - **Device (`counters.h`)** `#include`s `hw_counters.h` (with the `PerfCounterType` enum from `perf_counters.hpp`) and builds `BUILTIN_COUNTER_CONFIG[]` from those arrays at compile time, a `constexpr` concatenation in the fixed bank order the readout expects (INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group).
 
@@ -281,179 +281,28 @@ Rising-edge triggered. Bit 0 = start (0→1 also clears the counter), bit 1 = st
 
 ### L1 mux (`PERF_CNT_MUX_CTRL`)
 
-Each L1 mux group exposes 8 client interfaces x 2 counters (request sels 0–7 and grant sels 256–263), so 16 `counter_sel` values per group, giving the 32 (WH, 2 groups) and 80 (BH, 5 groups) inventory totals above. The mux field selects the group: bit 4 on Wormhole, bits 6:4 on Blackhole (5 of 8 encodings populated):
+Each L1 mux group exposes 8 client interfaces x 2 counters (request sels 0–7 and grant sels 256–263), so 16 `counter_sel` values per group, giving the 32 (WH, 2 groups) and 84 (BH, 6 groups) inventory totals above. The mux field selects the group: bit 4 on Wormhole, bits 6:4 on Blackhole (6 of 8 encodings populated):
 
 | Mux | WH meaning | BH meaning |
 |-----|------------|------------|
 | 0 | unpacker 0, packer port 1 (+ECC), TDMA bundles 0/1, NoC Ring 0 | unpacker 0, port 1 (unpacker 1 + ECC), TDMA bundles 0/1, NoC Ring 0 |
-| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 |
-| 2 | not present | ext unpackers 4–7, NoC Ring 0 secondary channels |
+| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | packer interface 0 (port 8), unpacker 1 extended interfaces 1-3, NoC Ring 1 |
+| 2 | not present | unpacker 1 extended interfaces 4-7, NoC Ring 0 secondary channels |
 | 3 | not present | NoC Ring 1 secondary channels, ext packers 2–5 |
-| 4 | not present | ext packers 6–7, tag search / packer 1, ext unpackers 8–12 |
-| 5 | not present | ext unpackers 13–14 (only slots 0 and 1 are wired; slots 2–7 read 0) |
+| 4 | not present | ext packers 6-7, packer interface 1 (with the tag-search accelerator), unpacker 0 extended interfaces 1-5 |
+| 5 | not present | unpacker 0 extended interfaces 6-7 (only slots 0 and 1 are wired; slots 2-7 read 0) |
 
-The Blackhole column is taken from the A0 tapeout RTL (ws-tensix `BH_A0_RC6`, `tt_tensix.sv`) and was confirmed on silicon by reading every selector under real workloads; positions 6 and 7 have no decode case and fall back to position 0. The labels in `hw_counters.h` and in the harness `counters.py` predate that check and are being brought in line by PR #55162 (the old `NOC_RING2/3` and `MISC_PORT` names describe a 4-NOC build that never shipped).
+The Blackhole column is taken from the A0 tapeout RTL (ws-tensix `BH_A0_RC6`, `tt_tensix.sv`) and was confirmed on silicon by reading every selector under real workloads; positions 6 and 7 have no decode case and fall back to position 0.
 
 The mux routes interfaces into the counters while they count and is written once by BRISC before arming, so the freeze path cannot re-aim it. A zone snapshot therefore contains exactly one mux position: the group that was selected while the counters ran. Sweep it by exporting `LLK_PERF_L1_MUX_GROUP` before the producer phase (it is an environment variable, not a CLI flag, and is baked in at compile time, so each value needs its own `--compile-producer`). Sweep across runs to cover the other groups.
 
 ## Derived Metrics Reference
 
-The LLK driver computes the `*_pct` metrics defined in `metrics.py` and mirrored by `perf/schema.py::METRIC_BASES`. The other entries below are upstream formulas that this driver does **not** compute; their raw counters are still in the per-zone CSV, so they can be re-derived by hand. Renaming or adding a `*_pct` key requires updating `perf/schema.py::METRIC_BASES` in the same change, or the report's schema check fails. Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md). The same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV.
+The harness computes every metric of the shared engine, [tools/tracy/perf_metrics_common.py](../../../../tools/tracy/perf_metrics_common.py), once per zone and run from the raw counters; `helpers/metrics.py` only adapts the counter frame to the engine's view. The catalogue with every key, label and formula is [tech_reports/PerfCounters/perf-counters.md](../../../../tech_reports/PerfCounters/perf-counters.md); the same keys appear here as `<RUN_TYPE>_<stat>(<key>)` columns and `perf/schema.py::METRIC_BASES` mirrors them, so a metric added to the engine shows up in the report without harness changes.
 
-> **Full catalogue.** Metrics #1–#47 in `tech_reports/PerfCounters/perf-counters.md` are the authoritative list. The sections below document the ones the LLK driver surfaces directly; raw counters for every other upstream metric are present in the per-zone CSV, so any upstream formula can be re-evaluated on LLK data without code changes.
-
----
-
-### Compute Utilisation
-
-### Computed metrics
-
-These are the entries the LLK driver evaluates.
-
-#### 1. FPU Utilisation
-
-Fraction of elapsed cycles the FPU was executing an instruction.
-
-*Counter group: FPU. Computed, exported as `fpu_utilization_pct`.*
-
-```
-FPU Util = FPU_COUNTER / FPU_OUT_L * 100
-```
-
-- **High value (>20%)**: FPU is the active compute unit. Expected for matmul, eltwise multiply.
-- **Low value (~0%)**: FPU is idle. Expected for SFPU-only or pure data-movement zones.
-
-**Use case:** Primary indicator of compute utilisation for FPU-path kernels.
-
-#### 3. Math Utilisation
-
-Combined FPU+SFPU active cycles. Counter 257 is the OR of both unit-active signals.
-
-*Counter group: FPU. Computed, exported as `compute_utilization_pct`.*
-
-```
-Math Util = MATH_COUNTER / FPU_OUT_L * 100
-```
-
-**Use case:** Single-number compute utilisation across FPU and SFPU.
+A metric whose counters this architecture does not expose, or whose counter group was not captured in the run, is empty in the CSV, never 0. Counters that exist on Wormhole only (per-engine packer busy) or Blackhole only (L1 banks 2-5) make their metrics empty on the other chip.
 
 ---
-
-### Pipeline Efficiency
-
-#### 4. Packer Efficiency
-
-Fraction of packer-busy cycles where destination data was available.
-
-*Counter group: TDMA_PACK. Computed, exported as `pack_dest_eff_pct`.*
-
-```
-Packer Efficiency = PACKER0_DEST_READ_REQ / PACKER_BUSY * 100
-```
-
-- **High value (~100%)**: Packer never waits for math output (no dest-read stalls).
-- **Low value (<80%)**: Packer is busy but math has not finished writing the destination, so math is the bottleneck.
-
-**Use case:** Detects destination-register stalls indicating the math stage cannot keep up.
-
-#### 8. Unpacker-to-Math Data Flow
-
-Unpacker write duty cycle. Despite the name this is **not** backpressure: the numerators are bare write-enable counts, so a low value means the unpacker was not writing, which is not evidence that math refused data.
-
-*Counter group: TDMA_UNPACK. Computed, exported as `unpack_to_math_flow0_ratio`, `unpack_to_math_flow1_ratio`, `unpack_to_math_flow_ratio` (raw ratios; the request counter also sees THCON and other-thread writes, so they can exceed 1).*
-
-```
-flow0 = SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0
-flow1 = SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0
-combined = mean(flow0, flow1)          # mean of the two ratios, not the ratio of two means
-```
-
-- **High value**: the unpacker was writing for most of the cycles it was busy.
-- **Low value**: the unpacker was mostly not writing. That is all this says. It is not evidence that math
-  refused data, because the numerator counts write-enables rather than accepted writes.
-
----
-
-### Thread Analysis
-
-#### 9. Thread N Stall Rate
-
-Fraction of cycles each TRISC thread was stalled.
-
-*Counter group: INSTRN_THREAD. Computed, exported as `unpack_thread_stall_pct`, `math_thread_stall_pct`, `pack_thread_stall_pct`.*
-
-```
-Thread N Stall Rate = THREAD_STALLS_N / INSTRN_OUT_L * 100
-```
-
-Thread mapping: T0 = UNPACK, T1 = MATH, T2 = PACK.
-
-- **High value (>30%)**: Thread waits on resources most of the time.
-- **Low value (<5%)**: Thread keeps the issue pipeline full.
-
-**Use case:** First-pass localisation of which thread is losing time. Follow up with the stall-reason breakdown.
-
-#### 14. Semaphore Zero/Full Wait per Thread
-
-Cycles each thread spent blocked on a semaphore.
-
-*Counter group: INSTRN_THREAD. Computed, exported as `math_sem_wait_pct`, `pack_sem_wait_pct`.*
-
-```
-Zero Wait TN = WAITING_FOR_NONZERO_SEM_N / INSTRN_OUT_L * 100
-Full Wait TN = WAITING_FOR_NONFULL_SEM_N / INSTRN_OUT_L * 100
-```
-
-- **Zero Wait high**: Thread waits for a producer to signal.
-- **Full Wait high**: Thread waits for a consumer to drain, downstream backpressure.
-
-**Use case:** Identifies producer/consumer imbalance across threads.
-
----
-
-### Upstream formulas, not computed here
-
-These come from the upstream report and nothing in tt-llk evaluates them. The counters are in the
-per-zone CSV, so they can be worked out by hand. Counter names are as they appear in
-`hw_counters.h`; anything missing on an arch reads as 0 rather than erroring.
-
-| # | Metric | Counter group | Formula | Arch |
-|---|---|---|---|---|
-| 2 | SFPU Utilisation | FPU | `SFPU Util = SFPU_COUNTER / FPU_OUT_L * 100` | both |
-| 5 | Math Pipeline Utilisation | TDMA_UNPACK | `Math Pipeline Utilisation = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100` | both |
-| 6 | FPU Execution Efficiency (ratio) | FPU + INSTRN_THREAD | `FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1` | both |
-| 7 | Math-to-Pack Handoff Ratio | TDMA_PACK | `Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100` | both |
-| 10 | Thread N Issue Rate | INSTRN_THREAD | `TN Issue Rate = THREAD_INSTRUCTIONS_N / INSTRN_OUT_L` | both |
-| 11 | SrcA/SrcB Valid Wait | INSTRN_THREAD | `SrcA Valid Wait = WAITING_FOR_SRCA_VALID / INSTRN_OUT_L * 100 SrcB Valid Wait = WAITING_FOR_SRCB_VALID / INSTRN_OUT_L * 100` | both |
-| 12 | SrcA/SrcB Clear Wait | INSTRN_THREAD | `SrcA Clear Wait = WAITING_FOR_SRCA_CLEAR / INSTRN_OUT_L * 100 SrcB Clear Wait = WAITING_FOR_SRCB_CLEAR / INSTRN_OUT_L * 100` | both |
-| 13 | Math / Pack / Unpack Idle Wait | INSTRN_THREAD | `Math Idle Wait T1 = WAITING_FOR_MATH_IDLE_1 / INSTRN_OUT_L * 100 Pack Idle Wait T2 = WAITING_FOR_PACK_IDLE_2 / INSTRN_OUT_L * 100 Unpack Idle Wait T0 = WAITING_FOR_UNPACK_IDLE_0 / INSTRN_OUT_L * 100` | both |
-| 15 | Data Hazard Stall Rate | TDMA_UNPACK | `Data Hazard Stall = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A) / MATH_INSTRN_AVAILABLE * 100` | both |
-| 16 | SrcB Write Port Blocked | TDMA_UNPACK | `SrcB Port Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCB_WRITE_REQ * 100` | both |
-| 17 | SrcA Write Overwrite Blocked | TDMA_UNPACK | `SrcA Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) / SRCA_WRITE_REQ * 100` | both |
-| 19 | Math Scoreboard Stall Rate | TDMA_PACK | `Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) / MATH_INSTRN_AVAILABLE * 100` | both |
-| 20 | Per-type Instruction Availability | INSTRN_THREAD | `TYPE Avail Rate = TYPE_INSTRN_AVAILABLE_N / INSTRN_OUT_L * 100` | both |
-| 21 | SrcA Write Actual Efficiency | TDMA_UNPACK | `SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_REQ * 100` | both |
-| 22 | SrcB Write Actual Efficiency | TDMA_UNPACK | `SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_REQ * 100` | both |
-| 24 | L1 Port / NoC Ring Utilisation | L1 | `L1 Port Util = L1_PORT_REQ / L1_OUT_L * 100 NoC Ring Util = avg(NOC_RINGN_CHANNEL_0, NOC_RINGN_CHANNEL_1) / L1_OUT_L * 100` | both |
-| 25 | L1 Backpressure | L1 | `L1 BP = (REQ - GRANT) / REQ * 100` | both |
-| 26 | Stall Cause Overlap Factor per Thread | INSTRN_THREAD | `Stall Overlap TN = sum(all WAITING_FOR_*_N) / THREAD_STALLS_N` | both |
-| 27 | Compute-to-Unpack Ratio | FPU + TDMA_UNPACK | `Compute-to-Unpack = MATH_COUNTER / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0) * 100` | both |
-| 32 | CFG / SFPU / THCON / MOVE Idle Wait | INSTRN_THREAD | `CFG Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / INSTRN_OUT_L * 100 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / INSTRN_OUT_L * 100 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / INSTRN_OUT_L * 100 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / INSTRN_OUT_L * 100` | both |
-| 33 | L1 TDMA Bundle Util | L1 (mux 0) | `L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L1_OUT_L * 100` | both |
-| 34 | NoC Ring 0/1 Outgoing/Incoming Util | L1 (Ring 0 on mux 0, Ring 1 on mux 1) | `NoC Ring 0 Outgoing Util = avg(L1_0_NOC_RING0_OUTGOING_0, L1_0_NOC_RING0_OUTGOING_1) / L1_OUT_L * 100 NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMING_1) / L1_OUT_L * 100` | both |
-| 35 | L1 Port 2 Util | L1 (mux 0) | `L1 Port 2 Util = L1_0_TDMA_BUNDLE_0_RISC / L1_OUT_L * 100` (TDMA bundle 0 with BRISC, TRISC0 and NCRISC) | both |
-| 36 | NoC Ring 0/1 Outgoing/Incoming Backpressure | L1 | `NoC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100` | both |
-| 37 | L1 Unpacker / Packer Port Backpressure | L1 (mux 0) | `L1 Unpacker BP = (L1_0_UNPACKER_0 - L1_0_UNPACKER_0_GRANT) / L1_0_UNPACKER_0 * 100 L1 Packer Port BP = (L1_0_PORT1 - L1_0_PORT1_GRANT) / L1_0_PORT1 * 100` | both |
-| 38 | L1 Total Bandwidth Util | L1 (mux 0) | `L1 Total BW Util = sum(all 8 port req counts) / (8 * L1_OUT_L) * 100` | both |
-| 39 | L1 Read vs Write Ratio | L1 (mux 0) | `L1 R/W Ratio = (Unpacker + NoC_Out) / (Unpacker + NoC_Out + Packer + NoC_In) * 100` | both |
-| 40 | NoC Ring Asymmetry | L1 (mux 0) | `NoC Asymmetry = NoC_Outgoing / (NoC_Outgoing + NoC_Incoming) * 100` | both |
-| 41 | L1 Contention Index | L1 (mux 0) | `L1 Contention Index = avg(BP of Unpacker, NoC Out 0, NoC Out 1, NoC In 0, NoC In 1)` | both |
-| 42 | Unpacker L1 Efficiency | L1 (mux 0) + TDMA_UNPACK | `Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100` | both |
-| 43 | Packer L1 Efficiency | L1 (mux 0) + TDMA_PACK | `Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100` | both |
-| 44 | NoC vs Compute Balance | L1 (mux 0) + FPU | `NoC vs Compute = (NoC_Out + NoC_In) / (FPU_COUNTER + NoC_Out + NoC_In) * 100` | both |
-| 45 | TDMA vs NoC L1 Share | L1 (mux 0) | `TDMA vs NoC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NoC_Out + NoC_In) * 100` | both |
-| 46 | Packer Load Imbalance | TDMA_PACK | `Packer Load Imbalance = (max(BUSY_0..2) - min(BUSY_0..2)) / max(BUSY_0..2) * 100` | Wormhole only (`PACK_COUNT=4`) |
-| 47 | Packer Engine N Util | TDMA_PACK | `Packer Engine N Util = PACKER_BUSY_N / TDMA_PACK_OUT_L * 100` | Wormhole only |
 
 ## Notes and Caveats
 

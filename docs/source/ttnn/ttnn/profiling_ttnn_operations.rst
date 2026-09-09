@@ -138,7 +138,7 @@ To capture performance counters alongside profiling data, use the ``python -m tr
 
 ..  code-block:: sh
 
-    python -m tracy --profiler-capture-perf-counters=fpu,pack,unpack,l1_0,instrn \
+    python -m tracy --profiler-capture-perf-counters=fpu,pack,l1_0 \
         -m "pytest your_test.py -x -v"
 
 Available counter groups:
@@ -146,14 +146,22 @@ Available counter groups:
 - ``fpu`` — compute utilization (FPU, SFPU, math counters)
 - ``pack`` — packer activity (dest read, packer busy, scoreboard)
 - ``unpack`` — unpacker activity, math pipeline stalls, source register writes
-- ``l1_0`` — L1 memory ports 0-7 (unpackers, TDMA bundles, NOC Ring 0; port 1 also carries the packer on Wormhole)
-- ``l1_1`` — L1 memory ports 8-15 (packer port 8, unpacker 1's extended read interfaces, NOC Ring 1)
+- ``l1_0``: L1 memory ports 0-7 (unpackers, TDMA bundles, NOC Ring 0; port 1 also carries the packer on Wormhole)
+- ``l1_1``: L1 memory ports 8-15 (packer port 8, unpacker 1's extended read interfaces, NOC Ring 1)
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
-- ``all`` — all of the above (recommended starting point)
+- ``all``: the architecture's full set (needs multiple passes, see below)
 
-**Note**: ``l1_0`` and ``l1_1`` share a hardware mux and cannot be captured simultaneously in a single ``python -m tracy`` run. To capture both, run them in separate passes. Automatic two-pass capture and merge is supported by the model-log wrapper (``process_model_log.run_device_profiler``).
+Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 client ports); on Blackhole ``all`` includes them.
 
-Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4`` (additional NOC ring ports).
+**Multi-pass capture**: two limits cap what one run can measure: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share a hardware mux, so at most one L1 bank counts per run. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
+
+..  code-block:: sh
+
+    python -m tracy --perf-counter-multipass \
+        --profiler-capture-perf-counters=all \
+        -m "pytest your_test.py -x -v"
+
+With ``--perf-counter-multipass`` a request is split into passes (at most three groups and one L1 bank per pass) and ``all`` expands to the architecture's full group set.
 
 **Output**
 
@@ -161,104 +169,22 @@ The profiler generates the standard ops performance CSV at ``generated/profiler/
 
 **Derived Metrics Reference**
 
-The following metrics are automatically computed from raw counters. Each metric appears in the CSV and console output with Min, Median, Max, and Avg aggregations across all cores for each operation.
+Derived metrics are computed per operation and per core, then aggregated to Min, Median, Max, and Avg columns across the cores of each operation in the CSV and console output. The formulas live in one shared module, ``tools/tracy/perf_metrics_common.py`` (also used by the tt-llk test harness), and the complete catalogue of metrics, grouped by topic with formulas and notes, is in the `PerfCounters tech report <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/PerfCounters/perf-counters.md#derived-metrics-reference>`_.
 
-*Compute Utilization*
+Two metric families appear in the output:
 
-- **SFPU Util (%)**: Fraction of cycles the SFPU was executing a valid operation. Higher is better for SFPU-heavy ops (e.g. sqrt, gelu).
-- **FPU Util (%)**: Fraction of cycles the FPU was executing. Higher is better for FPU-heavy ops (e.g. matmul).
-- **MATH Util (%)**: Fraction of cycles either FPU or SFPU was active (combined). Measures total math unit utilization.
+- Bounded percentages, with a ``(%)`` unit: utilizations, efficiencies, and stall or wait rates in 0-100%.
+- Unbounded ratios, with a ``(ratio)`` unit and a raw value: ``Math-to-Pack Handoff Efficiency`` (above 1 the packer is the handoff bottleneck), ``Compute-to-Unpack Ratio`` (above 1 = compute-bound), ``Unpacker/Packer L1 Efficiency`` (above 1 = ample L1 bandwidth), ``FPU Execution Efficiency`` (FPU dequeues from every thread over thread 1's math availability), ``Unpacker-to-Math Data Flow`` (source writes per unpacker busy cycle; THCON and other-thread writes count too) and ``Stall Overlap T0/T1/T2`` (above 1 = several waits overlap in the same cycle). These are never clamped; the excess over 1 is the signal. Every percentage is a fraction whose numerator is a subset of its denominator; the few that are additionally clamped say so in the catalogue.
 
-*Pipeline Efficiency*
-
-- **Packer Efficiency (%)**: Fraction of packer-busy cycles where dest data was available (``PACKER0_DEST_READ_REQ / PACKER_BUSY``). For workloads that don't use the packer (``PACKER_BUSY = 0``), falls back to the dest-read grant rate (``DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ``). 100% means the packer never waited for data.
-- **Math-to-Pack Handoff Ratio (%)**: Ratio of math-availability cycles to packer-busy cycles (``MATH_NOT_SCOREBOARD_STALLED / PACKER_BUSY``). Values >100% mean math produces output faster than packer consumes it; <100% means packer is the consumer bottleneck. Falls back to ``MATH_NOT_SCOREBOARD_STALLED / ref_cnt`` when the packer isn't used.
-- **Unpacker-to-Math Data Flow (ratio)**: Source register write requests per unpacker busy cycle (``SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0``, same for srcB). A raw ratio: THCON and other-thread writes also count, so it can exceed 1.
-- **Math Pipeline Utilization (%)**: Fraction of math-available cycles where the math instruction actually issued (``MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE``). 100% means every available math instruction issued immediately.
-- **FPU Execution Efficiency (ratio)**: FPU active cycles per cycle thread 1 had a math instruction available (``FPU_COUNTER / MATH_INSTRN_AVAILABLE_1``). A raw ratio: the FPU also dequeues other threads' work. Distinguishes compute-bound (high) from stall-bound (low) workloads.
-
-*Thread Analysis*
-
-- **Thread 0/1/2 Stall Rate (%)**: Fraction of cycles each thread was stalled. Thread 0 = unpack, Thread 1 = math, Thread 2 = pack. High values indicate the thread is waiting for a resource.
-
-*Pipeline Wait Metrics*
-
-- **SrcA/SrcB Valid Wait (%)**: Cycles waiting for source register data to become valid (data from unpacker not yet ready).
-- **SrcA/SrcB Clear Wait (%)**: Cycles waiting for source register to be cleared (previous math operation still using it).
-- **Math Idle Wait T1 (%)**: Cycles math thread waited for the math unit to become idle.
-- **Pack Idle Wait T2 (%)**: Cycles pack thread waited for pack hardware.
-- **Unpack Idle Wait T0 (%)**: Cycles unpack thread waited for unpack hardware.
-
-*Semaphore Waits*
-
-- **Semaphore Zero Wait T0/T1/T2 (%)**: Cycles each thread waited for a semaphore to become non-zero (waiting for producer).
-- **Semaphore Full Wait T0/T1/T2 (%)**: Cycles each thread waited for a semaphore to become non-full (waiting for consumer).
-
-*TDMA Stall Metrics*
-
-- **Data Hazard Stall Rate (%)**: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as ``(MATH_INSTRN_AVAILABLE - MATH_NOT_D2S_STALLED) / MATH_INSTRN_AVAILABLE``.
-- **SrcB Write Port Blocked Rate (%)**: Fraction of srcB DMA write attempts blocked by port unavailability (DMA mux contention).
-- **SrcA Write Overwrite Blocked Rate (%)**: Fraction of srcA write attempts blocked by overwrite protection — math hasn't consumed the previous value yet. High values indicate math-consumer bottleneck.
-- **Math Scoreboard Stall Rate (%)**: Cycles where math was stalled by FPU data hazard scoreboard.
-
-*Instruction Availability*
-
-- **CFG/SYNC/THCON/MOVE Instrn Avail Rate T0 (%)**: Fraction of cycles each instruction type was available in thread 0's instruction buffer. Shows which instruction types occupy the most scheduling time.
-- **MATH Instrn Avail Rate T1 (%)**: Math instruction availability on the math thread.
-- **UNPACK/PACK Instrn Avail Rate T0/T2 (%)**: Unpack and pack instruction availability on their primary threads.
-
-*Write Port Analysis*
-
-- **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts not blocked by port contention (``SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ``). 100% = no port blocking.
-- **SrcB Write Actual Efficiency (%)**: Same for srcB (``SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ``).
-
-*L1 Memory Utilization*
-
-- **L1 Unpacker/Packer Port Util (%)**: Fraction of cycles the unpacker or packer L1 port had a transaction.
-- **L1 TDMA Bundle Util (%)**: Average utilization of the two TDMA/RISC L1 ports.
-- **NOC Ring 0/1 Outgoing/Incoming Util (%)**: Average utilization of NOC channels on each ring.
-- **L1 Packer Port 8 Util (%)**: packer L1 port utilization on port 8 (``L1_1_TDMA_PACKER_2`` on Wormhole, ``L1_1_PACKER_IF_0`` on Blackhole; requires the L1_1 group).
-
-*L1 Backpressure*
-
-- **NOC Ring 0/1 Outgoing/Incoming Backpressure (%)**: Fraction of NOC transaction cycles where L1 was not ready. Higher = more contention.
-- **L1 Unpacker/Packer Port Backpressure (%)**: L1 port contention for unpacker and packer. On Blackhole, unpacker backpressure may be suppressed if the req/grant counter semantics differ (grant > req on some cores).
-
-*L1 Composite Metrics*
-
-- **L1 Total Bandwidth Util (%)**: Sum of all 8 L1 port request cycles divided by theoretical maximum (8 ports x ref_cnt). Shows overall L1 saturation.
-- **L1 Read vs Write Ratio (%)**: Read port traffic as a fraction of total traffic. 50% = balanced, >50% = read-heavy.
-- **NOC Ring 0 Asymmetry (%)**: Outgoing traffic as a fraction of total NOC Ring 0 traffic. 50% = balanced send/receive.
-- **L1 Contention Index (%)**: Average backpressure across all active L1 ports. Single number summarizing L1 memory stress.
-- **Unpacker L1 Efficiency (%)**: When the unpacker is busy, how often does L1 actually serve it.
-- **Packer L1 Efficiency (%)**: When the packer is busy, how often does L1 serve it.
-- **NOC vs Compute Balance (%)**: NOC cycles as a fraction of NOC + FPU cycles. >50% = NOC-bound, <50% = compute-bound.
-- **TDMA vs NOC L1 Share (%)**: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.
-
-*Wormhole-Only Metrics*
-
-These metrics depend on per-pack-engine hardware signals that don't exist on Blackhole (``PACK_COUNT=1``).
-
-- **Packer Engine 0/1/2 Util (%)**: Per-engine packer utilization (WH has 4 packer engines; BH has 1 and uses the combined ``PACKER_BUSY``).
-- **Packer Load Imbalance (%)**: Spread between most and least utilized pack engines.
-
-*Additional Idle Waits*
-
-- **CFG/SFPU/THCON/MOVE Idle Wait T0/T1 (%)**: Fraction of total cycles each thread spent waiting for specific hardware units.
-
-*Composite Metrics*
-
-- **Stall Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
-- **Compute-to-Unpack Ratio (%)**: MATH_COUNTER / unpack busy. >100% = compute-bound, <100% = memory-bound.
-- **T0/T1/T2 Instrn Issue Rate** (raw number): Instructions issued per cycle per thread (``THREAD_INSTRUCTIONS_N / ref_cnt``).
+A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics (Packer Engine 0/1/2 Util, Packer Load Imbalance) are N/A on Blackhole, and the Blackhole-only extended L1 metrics (L1 Packer Interfaces Util/Backpressure, L1 Unpacker0 Ext Util/Backpressure) are N/A on Wormhole. A metric is also N/A when any of its input counters was not captured in the run. The three ``Avg ... util on full grid (%)`` columns average the FPU, SFPU and MATH counters over every core of the grid and the kernel duration; a device-only run leaves them blank and reports the per-core ``Avg (%)`` columns instead.
 
 **Architecture Differences**
 
 Wormhole and Blackhole expose different raw hardware signals:
 
 - ``PACK_COUNT=1`` on Blackhole ties the per-engine packer busy and dest-read signals for engines 1-3 to constants, so per-engine packer metrics (Packer Engine 0/1/2 Util, Packer Load Imbalance) are WH-only.
-- Blackhole has additional L1 mux positions (3 extra for Tensix) providing deeper memory visibility through ``l1_2``, ``l1_3``, ``l1_4`` counter groups.
-- ``Packer Efficiency`` and ``Math-to-Pack Handoff Ratio`` fall back to alternative formulas when ``PACKER_BUSY = 0`` on a given op (e.g. pure-SFPU ops that don't drive the packer).
+- Blackhole has additional L1 mux positions (4 extra for Tensix) providing deeper memory visibility through ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` counter groups.
+- ``Math-to-Pack Handoff Efficiency`` falls back to the bank's reference cycles as denominator when ``PACKER_BUSY = 0`` on a given op (e.g. pure-SFPU ops); ``Packer Efficiency`` reports N/A there.
 
 For the authoritative per-architecture metric list, raw counter set, register maps, and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
 
