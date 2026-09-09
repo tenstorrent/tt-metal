@@ -1,0 +1,43 @@
+2026-09-09 19:55:19.247 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-09 19:55:19.369 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:227)
+2026-09-09 19:55:19.369 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-09-09 19:55:19.370 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-09 19:55:19.370 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-09 19:55:19.374 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:575)
+2026-09-09 19:55:19.375 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-09 19:55:19.453 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-09 19:55:19.453 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-09 19:55:19.453 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-09 19:55:19.453 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-09-09 19:55:19.454 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-09-09 19:55:19.629 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-09-09 19:55:19.757 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-09 19:55:19.757 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-09 19:55:19.757 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-09 19:55:19.757 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-09 19:55:19.757 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-09 19:55:19.793 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-09-09 19:55:20.449 | critical |          Always | TT_FATAL: sigmoid_gated_rms_norm: weight must be [V] (assert.hpp:104)
+2026-09-09 19:55:20.450 | critical |          Always | TT_FATAL: sigmoid_gated_rms_norm: weight must be [V] (assert.hpp:104)
+2026-09-09 19:55:20.450 | critical |          Always | TT_FATAL: sigmoid_gated_rms_norm: sequence must be positive and tile aligned (assert.hpp:104)
+shipped six-op tail: (1, 1, 32, 1536)
+  weight rank 4: rejected -- weight_shape.rank() == 1
+  weight rank 3: rejected -- weight_shape.rank() == 1
+  weight rank 1: rejected -- TILE_HEIGHT == 0
+  shipped six-op tail:   136.0 us
+
+BLOCKED, on shape rather than on the swish/sigmoid identity.
+The op wants input [B*H, T, V], gate [B, T, H*V], weight [V] and a
+tile-aligned sequence; decode has T = 1, so the last check fails:
+  attrs.sequence > 0 && attrs.sequence % TILE_HEIGHT == 0
+Reaching it needs the same user-major packing the fused conv needed, plus
+a permute of the padded [batch, heads, 1, dim] matmul output into the
+head-major layout the op expects. See doc/decode_perf.
+2026-09-09 19:55:20.856 | info     |    BuildKernels | JIT cache stats: 29/29 hits (100.0%) [29 cached, 2 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-09 19:55:20.856 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-09 19:55:20.867 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:547)
+2026-09-09 19:55:20.867 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-09-09 19:55:21.454 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-09-09 19:55:21.454 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-09-09 19:55:21.454 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)

@@ -1,0 +1,48 @@
+2026-09-09 18:37:25.889 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+2026-09-09 18:37:26.976 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:227)
+2026-09-09 18:37:26.976 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-09-09 18:37:26.977 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-09 18:37:26.977 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-09 18:37:26.981 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:575)
+2026-09-09 18:37:26.982 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-09 18:37:27.061 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-09 18:37:27.061 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-09 18:37:27.061 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-09 18:37:27.061 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-09-09 18:37:27.063 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-09-09 18:37:27.227 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-09-09 18:37:27.355 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-09 18:37:27.355 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-09 18:37:27.355 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-09 18:37:27.356 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-09 18:37:27.356 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-09 18:37:27.399 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-09 18:37:27.425 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-09 18:37:27.425 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-09 18:37:31.165 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-09 18:37:31.166 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.166 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.166 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.166 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.273 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-09 18:37:31.273 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.273 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.273 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-09 18:37:31.273 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+DENSE_TAPS decode step=0 composite_vs_hf=0.9999927581526314 fused_vs_hf=0.9999927314799986 fused_vs_composite=0.9999999641560098
+DENSE_TAPS decode step=1 composite_vs_hf=0.9999841789351613 fused_vs_hf=0.9999840694881029 fused_vs_composite=0.9999999053326145
+DENSE_TAPS decode step=2 composite_vs_hf=0.9999686124019969 fused_vs_hf=0.9999684831513084 fused_vs_composite=0.9999998710634971
+DENSE_TAPS decode step=3 composite_vs_hf=0.999968532496207 fused_vs_hf=0.9999684078189011 fused_vs_composite=0.9999998458330833
+DENSE_TAPS decode step=4 composite_vs_hf=0.9999634954129644 fused_vs_hf=0.9999633825596299 fused_vs_composite=0.9999998365081266
+DENSE_TAPS decode step=5 composite_vs_hf=0.9999603422852703 fused_vs_hf=0.9999602143545281 fused_vs_composite=0.9999998441952944
+DENSE_TAPS OK
+2026-09-09 18:37:34.452 | info     |    BuildKernels | JIT cache stats: 369/369 hits (100.0%) [369 cached, 125 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-09 18:37:34.452 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-09 18:37:34.465 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:547)
+2026-09-09 18:37:34.465 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-09-09 18:37:35.009 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-09-09 18:37:35.009 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-09-09 18:37:35.009 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)

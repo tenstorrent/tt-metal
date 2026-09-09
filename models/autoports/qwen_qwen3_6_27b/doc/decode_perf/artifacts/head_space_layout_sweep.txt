@@ -1,0 +1,49 @@
+2026-09-09 19:53:33.802 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-09 19:53:33.929 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:227)
+2026-09-09 19:53:33.929 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-09-09 19:53:33.929 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-09 19:53:33.929 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-09 19:53:33.933 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:575)
+2026-09-09 19:53:33.934 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-09 19:53:34.012 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-09 19:53:34.012 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-09 19:53:34.012 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-09 19:53:34.012 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-09-09 19:53:34.013 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-09-09 19:53:34.215 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-09-09 19:53:34.347 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-09 19:53:34.347 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-09 19:53:34.347 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-09 19:53:34.347 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-09 19:53:34.347 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-09 19:53:34.384 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+elementwise, per-head padded [32,12,1,128] (1.57 M elements):
+  multiply(x, y)                                           55.1 us
+  multiply(x, per-head scalar)                             34.6 us
+  sum(x, dim=-1, keepdim)                                  38.1 us
+  rms_norm(x, weight)                                      25.3 us
+  silu(x)                                                  24.9 us
+elementwise, packed [1,1,384,128] (49 K elements):
+  multiply(x, y)                                           32.3 us
+  multiply(x, per-row scalar)                              33.5 us
+  sum(x, dim=-1, keepdim)                                  12.4 us
+  rms_norm(x, weight)                                      10.4 us
+  silu(x)                                                  16.1 us
+conversions between the two:
+  reshape packed -> per-head                               23.8 us
+  reshape per-head -> packed                               21.4 us
+what the shipped code already pays to reach per-head form:
+  reshape [1,1,32,1536] -> [32,12,1,128]                   23.2 us
+  reshape [1,1,32,1536] -> [1,1,384,128]                   12.4 us
+  permute per-head (2,0,1,3)                               16.5 us
+
+five elementwise ops: padded 178.0 us, packed 104.7 us
+headroom per layer if the repack were free: 73.4 us
+2026-09-09 19:53:35.470 | info     |    BuildKernels | JIT cache stats: 56/56 hits (100.0%) [56 cached, 8 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-09 19:53:35.470 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-09 19:53:35.482 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:547)
+2026-09-09 19:53:35.482 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-09-09 19:53:36.042 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-09-09 19:53:36.042 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-09-09 19:53:36.042 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)

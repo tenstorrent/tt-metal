@@ -310,33 +310,67 @@ below that needs the state traffic itself cut, which is the next section.
 Still on the table, unimplemented, in descending size. These are measured from
 the post-change profile, not guessed.
 
-1. **Head-space tile padding, ~17 ms.** After the conv, query/key/value are
-   reshaped to `[32, 12, 1, 128]` so the state matmul can see one matrix per
-   (slot, head). In TILE layout that pads M from 1 to 32, so every elementwise op
-   in head space — two L2 norms, the beta multiply, the gate multiply, the gated
-   RMS norm, the transposes, the repeat-interleaves — runs on 1.57 M elements to
-   touch 49 K. Those ops total ~560 us per GDN layer, ~17 ms of the step.
-   `[1, 1, 384, 128]` (slot-major, head-minor) is tile aligned with no padding
-   and keeps per-(slot, head) reductions on the last axis, so the same arithmetic
-   fits. The catch is that the reshape between that and `[32, 12, 1, 128]` is
-   real data movement in tile layout, so the win depends on doing *all* the
-   head-space work in the packed form and reshaping once, around the matmul and
-   the outer product only.
-2. **State traffic, ~10 ms.** What is left of the recurrence moves the
+**The step is now op-count bound, not layout bound.** 740 device ops per 8-layer
+step scales to ~5900 for 64, and 88.76 ms / 5900 is 15 us per op. Measured on one
+device at the real head-space shapes:
+
+| op | `[32, 12, 1, 128]` (1.57 M elements, M padded 1 -> 32) | `[1, 1, 384, 128]` (49 K, no padding) |
+| --- | ---: | ---: |
+| `multiply(x, y)` | 35.8 us **(262 GB/s)** | 32.0 us (9 GB/s) |
+| `multiply(x, per-head scalar)` | 34.6 | 32.9 |
+| `sum(x, dim=-1)` | 38.0 | 12.3 |
+| `rms_norm(x, weight)` | 25.2 | 10.7 |
+| `silu(x)` | 23.8 | 16.0 |
+| **total** | **157.3** | **104.0** |
+
+The padded ops are already at the DRAM ceiling — 262 GB/s, the same rate the
+projections reach — so the padding is real work, not stall. But the unpadded
+versions are then *latency* bound at ~30 us apiece, so removing the padding buys
+only 53 us per layer, and a reshape between the two layouts costs **21-24 us**.
+The recurrence needs one M tile per (slot, head) for its matmul and its outer
+product, so a packed head space needs five such conversions per layer: **~110 us
+spent to save ~53 us.** Repacking head space is a measured net loss, and the
+"31/32 of every head-space op is padding" reading -- which is what an earlier
+draft of this document predicted was worth 17 ms -- is the wrong model of the
+cost. What is left is dominated by the per-op floor, so the lever is *fewer* ops,
+not smaller ones.
+
+Which makes fusion the only real remaining lever, and the fused op that would do
+it does not fit:
+
+- `ttnn.experimental.kda.sigmoid_gated_rms_norm` computes
+  `rms_norm(x) * weight * sigmoid(gate)` and repacks `[B*H, T, V] -> [B, T, H*V]`,
+  which is exactly this layer's six-op tail (norm, reshape z, silu, multiply,
+  permute, reshape). Qwen3.5 gates with swish rather than sigmoid, but
+  `silu(z) = z * sigmoid(z)`, so passing `gate = z` and multiplying the output by
+  `z` once -- in the packed layout the op already returns, where `z` natively
+  lives -- is the same function. **It is blocked on shape, not on that
+  identity**: the op wants `weight` rank 1 and a tile-aligned sequence, and decode
+  has `T = 1`, so it fails on
+  `attrs.sequence > 0 && attrs.sequence % TILE_HEIGHT == 0`. Its input is also
+  head-major while the state matmul produces batch-major. That tail costs
+  **136 us per layer, 6.5 ms of the step**, so the prize is real — but reaching it
+  needs the same user-major packing the conv op needed plus a permute of the
+  padded matmul output, and the net after those would be perhaps half of it.
+  Recorded with a reproducible probe (`fused_gated_norm_probe.py`), not taken.
+
+Then, in descending size and each a precision change rather than a rearrangement:
+
+1. **State traffic, ~10 ms.** What is left of the recurrence moves the
    `[32, 12, 128, 128]` state about 90 MB per layer per device: a broadcast
    multiply by decay, one matmul read, an outer-product write, a full add, and a
-   typecast into the cache. Read-once/write-once is 13.4 MB. Doing the arithmetic
-   in BFP8 rather than BF16 halves every one of those transfers, but it is a
-   precision change — measured here, multiplying straight off the BFP8 cache is
-   *not* bit identical to typecasting first (max 0.03 on unit-scale values), so
-   it needs its own validated cycle rather than being bundled in.
-3. **One matmul instead of two, ~3 ms.** `q @ (D + kᵀδ) = q@D + (q·kᵀ)δ` where
+   typecast into the cache. Read-once/write-once is 13.4 MB. BFP8 arithmetic
+   instead of BF16 halves every one of those transfers, but multiplying straight
+   off the BFP8 cache is measured *not* bit identical to typecasting first
+   (max 0.03 on unit-scale values), so it needs its own validated cycle.
+2. **One matmul instead of two, ~3 ms.** `q @ (D + kᵀδ) = q@D + (q·kᵀ)δ` where
    `q·kᵀ` is a scalar per (slot, head), so both projections read the same matrix
    `D = S·decay` and can share one matmul. Algebraically exact, not bit exact.
-4. **The M-tile padding in the state matmul.** One logical M row padded to a
-   32-row tile, so 31/32 of its arithmetic is waste. Only a batched mat-vec
-   primitive fixes that; nothing in ttnn offers one.
-5. **Batch 1 gets none of the conv win.** The fused decode path needs `K*B`
+3. **The M-tile padding inside the state matmul.** One logical M row padded to a
+   32-row tile, so 31/32 of its arithmetic is waste — but per the table above the
+   op is at the bandwidth ceiling anyway, so this only pays with a batched
+   mat-vec primitive, which ttnn does not have.
+4. **Batch 1 gets none of the conv win.** The fused decode path needs `K*B`
    tile aligned, so `B` must be a multiple of 8; batch 1 keeps the composite
    conv. Batch-1 decode is already 50.1 ms/step (19.96 t/s/u) because the same
    layout thrash is 32x smaller there, but the composite is still what runs.
@@ -353,11 +387,14 @@ extrapolated from Qwen3-32B on a **t3k (8 devices)** while this model runs on 4.
 every projection at BFP4, which is 7.4 ms at 100% of DRAM peak — so the target is
 not physically excluded. But the projections, the one part of the step that is
 purely a weight read, already run at their measured ceiling of ~265 GB/s (52% of
-peak) and contribute ~15 ms of the 88.76 ms on their own. Taking items 1-3 above
-at face value lands around **60 ms, ~17 t/s/u**, and getting under that needs
-either a batched mat-vec primitive or a fused gated-delta decode op. Quoting
-11-17 t/s/u as the reachable range on 4 devices is more useful than carrying an
-unvalidated 10x gap against a t3k extrapolation.
+peak) and contribute ~15 ms of the 88.76 ms on their own. With head-space
+repacking measured as a net loss and the fused tail blocked on shape, what is
+left is the ~13 ms of precision-dependent state work plus fusion that does not
+exist yet: call it **~75 ms, ~13 t/s/u** without a precision trade, and ~60 ms
+with one. Getting to 24.4 ms needs a fused gated-delta decode op or a batched
+mat-vec primitive, not tuning. Quoting 11-14 t/s/u as the reachable range on 4
+devices is more useful than carrying an unvalidated 10x gap against a t3k
+extrapolation.
 
 ## Result
 
