@@ -3010,6 +3010,18 @@ def _run_full_pipeline_ms():
             % ", ".join(_dropped),
             flush=True,
         )
+    # AND PUT BACK THIS GATE'S OWN CHOICE OF UNIT, which the drop above may have taken with it.
+    #
+    # A profiling bound is now expressed on the recurring stage's window as well as on depth -- a
+    # capture is bounded by DISPATCHES, and depth does not bound those. That variable is therefore
+    # in the strip list, and this gate had already set it a few lines up to the unit it means to
+    # report. Dropping it lands on the perf test's own default, which happens to agree, so nothing
+    # moved -- until someone sets the override for a cheap steering measurement, and it is silently
+    # ignored. Re-asserted rather than exempted from the strip: the profiling window must come off,
+    # and the gate's own value must go back on, and those are two different statements.
+    _gate_tokens = os.environ.get("PERF_MCP_FULLPIPE_TOKENS")
+    if _gate_tokens:
+        env[_tokens_env()] = _gate_tokens
     # -p depth_guard: this gate asks for ALL layers by removing the cap, and a perf test can fill
     # it back in at import via setdefault. The guard drops it again before the test body builds.
     cmd = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "timeout=0", "-s", node]
@@ -4806,6 +4818,16 @@ def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = 
             ),
         }
     return compute_lever_coverage(counts, seq, op_match, stale_dtype, new_dtype)
+
+
+def _tokens_env() -> str:
+    """The variable a model's perf test reads for its recurring-stage window; layer_depth owns it."""
+    try:
+        from agent.layer_depth import TOKENS_ENV
+
+        return TOKENS_ENV
+    except Exception:  # noqa: BLE001 -- a name we cannot resolve is one this gate must still spell
+        return "TT_PERF_OSL_TOKENS"
 
 
 @mcp.tool()

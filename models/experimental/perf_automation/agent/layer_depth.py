@@ -202,6 +202,40 @@ def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
 
 FORCE_ALL = "PERF_MCP_FORCE_ALL_LAYERS"
 
+# THE OTHER AXIS A PROFILE HAS TO BE BOUNDED ON, and the one that actually binds on a decode model.
+#
+# Depth bounds how much of the model is built. It does NOT bound how many times the built graph is
+# DISPATCHED, and tracy's ceiling is on dispatches: it names every program `Program_<N>` and refuses
+# past 32K "static or dynamic source locations". A recurring stage replays its whole graph once per
+# token, so the token window -- not the layer window -- decides whether a capture survives.
+#
+# Measured on voxtral_mini_3b_2507 (2026-09-09), layers already capped to 2 in both runs:
+#     128 tokens -> 26,268 distinct program names -> "Instrumentation failure", 26.0M rows
+#       4 tokens ->  2,465 distinct program names -> clean, 2.85M rows
+# Capping depth alone removed 6% of the capture. Capping the window removed 89%.
+TOKENS_ENV = "TT_PERF_OSL_TOKENS"
+
+# A RECURRING STAGE NEEDS MORE THAN ONE PASS TO BE ITSELF. The first token of a decode loop fills
+# what later tokens read -- a cache, a state -- so a one-token window measures the one iteration
+# that is not representative of the rest. Two is the smallest window that contains a steady-state
+# iteration, and the coverage depth is used when it asks for more, so the window follows the same
+# "how much is representative" answer the rest of the tool already derived rather than a second one
+# invented here.
+MIN_TOKEN_WINDOW = 2
+
+
+def token_window(coverage_depth) -> int:
+    """How many passes of a recurring stage a profile should capture.
+
+    Derived from the coverage depth the tool already computed, floored so a steady-state pass is
+    always included. Anything unusable yields the floor rather than an unbounded capture.
+    """
+    try:
+        n = int(coverage_depth)
+    except (TypeError, ValueError):
+        n = 0
+    return max(MIN_TOKEN_WINDOW, n)
+
 
 def set_depth(env, depth, key: str | None = None) -> dict:
     """Express `depth` to a model builder through the mapping `env`.

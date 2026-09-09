@@ -822,7 +822,9 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     from agent.layer_depth import set_depth as _set_depth
 
     _set_depth(env, k)
-    env["TT_PERF_OSL_TOKENS"] = "1"
+    # ONE pass: this probe counts op signatures, and a second pass repeats the same ones. The value
+    # is this probe's own; the NAME belongs to layer_depth, like every other profiling bound.
+    env[_tokens_env()] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
     if case:
@@ -1467,6 +1469,21 @@ def _first_block_map(seq):
     return {"stack0": fb} if fb else {}, source
 
 
+def _tokens_env() -> str:
+    """The variable a model's perf test reads for its recurring-stage window. Owned by layer_depth,
+    which owns every name this tool expresses a profiling bound through."""
+    from agent.layer_depth import TOKENS_ENV
+
+    return TOKENS_ENV
+
+
+def _token_window(coverage_depth) -> int:
+    """How many passes of the recurring stage to capture. layer_depth derives it."""
+    from agent.layer_depth import token_window
+
+    return token_window(coverage_depth)
+
+
 def _bridge_depth_env(
     repo_root: Path,
     mcp_env: dict,
@@ -1535,6 +1552,17 @@ def _bridge_depth_env(
     _numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
     if _numkey:
         _set_depth(env, _cov_int, key=_numkey)  # see _knob_at: never write the cap without clearing FORCE_ALL
+    # AND BOUND THE NUMBER OF PASSES, not only the depth of each one.
+    #
+    # Tracy's ceiling is on DISPATCHES -- it names every program `Program_<N>` and refuses past 32K
+    # -- and a recurring stage replays its whole graph once per token. So depth alone does not bound
+    # a capture: measured on this model with layers already capped to 2, 128 tokens produced 26,268
+    # program names and "Instrumentation failure", while 4 produced 2,465 and a clean capture. The
+    # depth cap removed 6% of the rows; the window removed 89%.
+    #
+    # Verified by the same probe as the depth cap below -- it is added before the probe runs, so a
+    # window that does not reduce work is reported and dropped exactly like a depth that does not.
+    env[_tokens_env()] = str(_token_window(_cov_int))
     # PER-STAGE FIRST, BY THE NAME THE MODEL DECLARES. The generated perf test reads
     # TT_PERF_<STAGE>_LAYERS and forwards it as the builder's `<stage>_layers`, and the knob repair
     # creates exactly those parameters -- all three derived from PIPELINE_STAGES, which the model
@@ -3003,7 +3031,7 @@ def _print_scorecard(
         isl = os.environ.get("TT_PERF_SEQ_LEN") or "(default)"
         # Same fallback the skeleton uses, so the scorecard reports the OSL that RAN. "4" here printed
         # OSL=4 on a run measuring 128 whenever the variable was unset.
-        osl = os.environ.get("TT_PERF_OSL_TOKENS", "128")
+        osl = os.environ.get(_tokens_env(), "128")
         L = ["  ┌─ optimize scorecard — pipeline: %s" % pipe.get("task", "?")]
         L.append("  │ hardware          : %s  x%s chip(s)" % (arch, chips))
         if facts.get("parallelism_known"):
