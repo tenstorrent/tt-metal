@@ -151,7 +151,7 @@ TEST_F(BuildCacheTelemetryTest, ConcurrentRegistrationOfOneNameYieldsOneToken) {
     std::vector<std::thread> threads;
     std::vector<TelemetryToken*> observed(num_threads, nullptr);
     threads.reserve(num_threads);
-for (int i = 0; i < num_threads; ++i) {
+    for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i] {
             auto& token = tel.get_or_register_metric("test.concurrent_registration");
             observed[i] = &token;
@@ -268,7 +268,7 @@ TEST_F(JitBuildWindowTest, ConcurrentBuildsWidenTheWindowToTheirExtent) {
     const auto base = std::chrono::steady_clock::now();
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
-for (int i = 0; i < num_threads; ++i) {
+    for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i] {
             for (int j = 0; j < 200; ++j) {
                 tel.note_build_window(base + std::chrono::milliseconds(i), base + std::chrono::milliseconds(i + 5));
