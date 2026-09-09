@@ -239,9 +239,9 @@ ALWI void face_compressed_mm_block_uninit(const std::uint32_t in0_cb_id, const s
 }
 
 // The mutexed pack path this op requires. The unpack thread borrows the pack thread's address
-// counters (ADCs) for the whole op, and two SETADC* instructions reaching the MISC unit in the same
-// cycle corrupt each other's counters, so every SETADC* the pack thread issues has to be serialized
-// against a hardware mutex. PackMode::Default only.
+// counters (ADCs) for bfp4 for the whole op (bfp2 borrows the math thread's), and two SETADC*
+// instructions reaching the MISC unit in the same cycle corrupt each other's counters, so every
+// SETADC* the pack thread issues has to be serialized against a hardware mutex. PackMode::Default only.
 //
 // Arm the packer through pack_init_mutex_ADC only, in place of any other pack init, and pack every tile
 // with pack_tile_mutex_ADC. pack_tile, pack_block, pack_untilize and pack_rows are not covered.

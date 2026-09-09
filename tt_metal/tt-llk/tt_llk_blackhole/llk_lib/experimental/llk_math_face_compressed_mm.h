@@ -24,9 +24,11 @@ using namespace ckernel::math;
 // to merge each pair.
 constexpr std::int16_t _llk_math_face_compressed_mm_split_acc_partial_rows_ = 8;
 
-// The math thread owns the replay buffer from replay_buf_offset up; the SFPU owns everything below it.
-constexpr std::uint32_t _llk_math_face_compressed_mm_replay_base_ = ckernel::math::replay_buf_offset;
-constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REPLAY_BUF_SIZE - _llk_math_face_compressed_mm_replay_base_;
+// This kernel does not use the SFPU, so the math thread takes the whole replay buffer -- the same
+// convention as the unpack half. The extra room below replay_buf_offset holds every 3-face
+// skip/MVMUL mix, so those dest walks never go through MASK_LOOP at kt_dim=256.
+constexpr std::uint32_t _llk_math_face_compressed_mm_replay_base_ = 0;
+constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REPLAY_BUF_SIZE;
 
 // The math code sequences: one character is one instruction, recorded into the replay buffer at init (see
 // instr_for_code in _llk_math_face_compressed_mm_mop_config_ for the encodings). The letter names the
@@ -42,22 +44,24 @@ constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REP
 // instructions this thread owns:
 //
 //   multi_seq (ct_dim >= 2) needs n i c N I C singly, plus ni Ni nI NI for the two-face midIncB only an
-//   odd width emits. They pack into the first eight characters at 0, 2, 4 and 6, leaving the clrB endings
-//   in the tail.
+//   odd width emits, nn/nN/Nn/NN for odd-width midIncB's trailing pair, and all eight {n,N}^3 triples
+//   so 3-face dest walks replay instead of MASK_LOOP. A binary de Bruijn of order 3 (nnnNnNNNnn) holds
+//   the triples and the pairs; the ni-family and clrB singles pack in the tail.
 //
 //   one_seq (ct_dim == 1) needs the I and C endings, nr for the MOP operands, and the six three-face
 //   midRevB fragments -- {n,N}{r,R}{n,N} less nrn and nrN, which the MOP issues directly. They pack as
 //   Nrn at 2, nRn at 4, nRN at 6, NrN at 8, NRN at 10, NRn at 12, and nr at 14.
 static constexpr auto _llk_math_face_compressed_mm_multi_seq_ =
-    ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("niNinINIncNcnCNC");
+    ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("nnnNnNNNnniNinINIcC");
 static constexpr auto _llk_math_face_compressed_mm_one_seq_ =
     ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("ICNrnRnRNrNRNRnr");
 
 static constexpr auto _llk_math_face_compressed_mm_even_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
-    [](const std::uint32_t m) -> std::uint32_t
+    [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
     {
-        const std::uint32_t faces123 = (m >> 2) & 0b111;
-        return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // nnn case encoded in the mop
+        // Replay the three noB faces. MASK_LOOP A=n / skipA=N races the dest walk at kt_dim=256
+        // for every skip/MVMUL mix, so this table never issues that MOP.
+        return case_encode("nnn", (m >> 2) & 0b111);
     });
 
 static constexpr auto _llk_math_face_compressed_mm_even_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
@@ -87,13 +91,13 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code
         switch (hdr)
         {
             case 0b00:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // noB
+                return case_encode("nnn", faces123); // noB
             case 0b01:
                 return case_encode("ni", faces12); // midIncB only two faces in this case
             case 0b10:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // endIncB
+                return case_encode("nnn", faces123); // endIncB
             case 0b11:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // endClrB
+                return case_encode("nnn", faces123); // endClrB
             default:
                 return 0;
         }
@@ -110,7 +114,7 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l2_table_ = ckernel::code
             case 0b00:
                 return case_encode("n", face4); // noB
             case 0b01:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 1, faces34); // midIncB the mop walks two faces
+                return case_encode("nn", faces34); // midIncB the two trailing faces
             case 0b10:
                 return case_encode("i", face4); // endIncB
             case 0b11:

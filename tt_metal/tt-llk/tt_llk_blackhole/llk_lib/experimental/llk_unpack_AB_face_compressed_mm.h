@@ -139,10 +139,10 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_()
         {
             case '0':
                 TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1);
-                break; // Ch0Y += 1
+                break; // Ch0Y += 1, AddrCntContextId 1 = math ADC
             case '1':
                 TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1);
-                break; // Ch0Y += 1
+                break; // Ch0Y += 1, AddrCntContextId 2 = pack ADC
             case 'S':
                 TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                 break;
@@ -176,9 +176,12 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_()
 }
 
 // The two BFP precisions need their own address counters so one instruction stream can alternate format
-// face to face, and the unpacker has only one set of its own. It borrows other threads' ADC sets via the
-// SETADC thread-id override: bfp2 counts in the math thread's set, bfp4 in the pack thread's. That is why
-// every SETADC* site below holds mutex::THREAD2_ADC -- see ckernel_common_ops.h for the override macros.
+// face to face. SrcB already occupies UNP1's native ADC set, so bfp2 borrows the math thread's
+// (AddrCntContextId 1, SETADC THREAD_OVRD_MATH) and bfp4 borrows the pack thread's (AddrCntContextId 2,
+// THREAD_OVRD_PACK). UNP0's native set cannot host bfp2: mixed bfp2/bfp4 streams then collide with the
+// unpacker and produce inf dest. The even-width 0b101 dest-walk race at kt_dim=256 is handled on the
+// math thread by replaying NnN instead of MASK_LOOP. Pack's set is still borrowed, so every SETADC*
+// site below holds mutex::THREAD2_ADC -- see ckernel_common_ops.h for the override macros.
 
 /**
  * @brief Configure the unpack thread for a face-granular compressed matmul.
@@ -283,8 +286,12 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     // A meta address word packs two fields: the low 24 bits are a 16B-word base address, written to one
     // unpacker context's Base_address, and the top byte is a Y offset, applied as that context's SET_Y.
+    // Y_OFF 0xFF means the context is unused this chunk -- never alias B's base as (off=0, y=0). A live
+    // sibling is copied onto the dead context so both ADCs stay coherent at the full_iters%16==0
+    // remainder (bfp4-only leftover would otherwise skip the math-thread SET_Y and leave a stale Y).
     constexpr std::uint32_t meta_addr_base_mask   = 0x00FFFFFF;
     constexpr std::uint32_t meta_addr_y_off_shift = 24;
+    constexpr std::uint32_t meta_addr_unused_y    = 0xFF;
 
     // Geometry of the index words, per the layout block above the decode tables. The stride is narrower
     // than the meta because consecutive metas share a bit, which is what fits six of them in one word.
@@ -300,15 +307,44 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     constexpr std::uint32_t unp_cfg_ctxt_offset_base = 0x0000; // cntx0 / cntx1
     constexpr std::uint32_t unp_cfg_ctxt_offset_alt  = 0x0002; // cntx2 / cntx3
 
+    auto context_used = [](const std::uint32_t addr_word) -> bool { return (addr_word >> meta_addr_y_off_shift) != meta_addr_unused_y; };
+
+    // If exactly one format is present this chunk, program the unused context from the live one so both
+    // borrowed ADCs stay in lockstep. Skipping the dead SET_Y left a stale math-thread Y at the
+    // bfp4-only leftover remainder (full_iters%16==0); (off=0, y=0) is still forbidden because it is B.
+    auto resolve_pair = [context_used](const std::uint32_t* addr_pair, std::uint32_t out[2])
+    {
+        out[0]           = addr_pair[0];
+        out[1]           = addr_pair[1];
+        const bool used0 = context_used(out[0]);
+        const bool used1 = context_used(out[1]);
+        if (used0 && !used1)
+        {
+            out[1] = out[0];
+        }
+        else if (used1 && !used0)
+        {
+            out[0] = out[1];
+        }
+    };
+
     // Apply the Y offsets of a consecutive bfp2/bfp4 pair of meta address words to the two borrowed Y
     // counters, so each context reads from the right row of its base. bfp2 counts in the math thread's ADC
-    // set and bfp4 in the pack thread's, so each needs its own write. Caller holds the mutex.
-    auto set_y_off = [](const std::uint32_t* addr_pair)
+    // set and bfp4 in the pack thread's, so each needs its own write. Drain in-flight UNPACRs first so a
+    // SET_Y cannot race the previous chunk. Caller holds the mutex.
+    auto set_y_off = [context_used, resolve_pair](const std::uint32_t* addr_pair)
     {
-        const std::uint32_t bfp2_y = addr_pair[0] >> meta_addr_y_off_shift;
-        const std::uint32_t bfp4_y = addr_pair[1] >> meta_addr_y_off_shift;
-        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_MATH, bfp2_y);
-        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_PACK, bfp4_y);
+        std::uint32_t pair[2];
+        resolve_pair(addr_pair, pair);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        if (context_used(pair[0]))
+        {
+            TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_MATH, pair[0] >> meta_addr_y_off_shift);
+        }
+        if (context_used(pair[1]))
+        {
+            TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_PACK, pair[1] >> meta_addr_y_off_shift);
+        }
     };
 
     auto emit_word = [](std::uint32_t meta)
@@ -349,6 +385,20 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
+    auto write_bases = [cfg, context_used, resolve_pair](const std::uint32_t cfg_bfp2, const std::uint32_t cfg_bfp4, const std::uint32_t* addr_pair)
+    {
+        std::uint32_t pair[2];
+        resolve_pair(addr_pair, pair);
+        if (context_used(pair[0]))
+        {
+            cfg[cfg_bfp2] = pair[0] & meta_addr_base_mask;
+        }
+        if (context_used(pair[1]))
+        {
+            cfg[cfg_bfp4] = pair[1] & meta_addr_base_mask;
+        }
+    };
+
     // per tile math meta is 6 bits, 5 entries fit into 32bits, round up
     const std::uint32_t math_meta_size = (kt_dim * ct_dim + 4) / 5;
     const std::uint32_t* pre_meta_ptr  = reinterpret_cast<std::uint32_t*>(base_address_meta) + math_meta_size;
@@ -366,8 +416,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     {
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
-    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
+    write_bases(THCON_SEC0_REG3_Base_address_ADDR32, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, pre_meta_ptr + 1);
     t6_mutex_acquire(mutex::THREAD2_ADC);
     set_y_off(pre_meta_ptr + 1);
     t6_mutex_release(mutex::THREAD2_ADC);
@@ -385,8 +434,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * b] & meta_addr_base_mask;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * b] & meta_addr_base_mask;
+        write_bases(THCON_SEC0_REG3_Base_cntx2_address_ADDR32, THCON_SEC0_REG3_Base_cntx3_address_ADDR32, pre_meta_ptr + 3 + 4 * b);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);
@@ -399,8 +447,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[5 + 4 * b] & meta_addr_base_mask;
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[6 + 4 * b] & meta_addr_base_mask;
+        write_bases(THCON_SEC0_REG3_Base_address_ADDR32, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, pre_meta_ptr + 5 + 4 * b);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);
@@ -417,8 +464,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * full_blocks] & meta_addr_base_mask;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * full_blocks] & meta_addr_base_mask;
+        write_bases(THCON_SEC0_REG3_Base_cntx2_address_ADDR32, THCON_SEC0_REG3_Base_cntx3_address_ADDR32, pre_meta_ptr + 3 + 4 * full_blocks);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);
@@ -429,6 +475,10 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         t6_mutex_release(mutex::THREAD2_ADC);
     }
 
+    // Remainder metas after a multiple of 16 full index words use the lookahead address pair already
+    // programmed by the last full_block (or the initial pair when full_blocks==0). A one-format leftover
+    // chunk aliases the unused context onto the live one, so both ADCs get a SET_Y and a bfp4-only
+    // remainder cannot leave a stale math-thread Y.
     for (; c < full_iters; ++c)
     {
         emit_word(meta_ptr[c]);

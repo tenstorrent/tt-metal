@@ -50,6 +50,11 @@ def promote_assignment(assignment, ct):
     return assignment
 
 
+# Y_OFF 0xFF marks a context unused this chunk. Distinct from a present format at (off=0, y=0),
+# which is a real first-in-chunk exp section. encode_meta must not map this to B's base.
+UNUSED_Y_OFF = 0xFF
+
+
 def pack_b(faces, chunk_faces=192):
     # Pack the assignment faces into the chunked split layout the unpack path streams.
     # faces = [(code, full_bytes)] in assignment order, full = 16B exps + mantissas.
@@ -59,20 +64,21 @@ def pack_b(faces, chunk_faces=192):
     #
     # Returns (packed_bytes, chunk_info). chunk_info[k] = (bfp2_off, bfp2_y_off, bfp4_off,
     # bfp4_y_off): per-format exp-section 16B-word offset and Y_OFF (the SET_Y stride,
-    # (exp_words-1)//(man_words-1)), or (0, 0) if absent. encode_meta bakes these into
-    # each chunk's base address + Y_OFF.
+    # (exp_words-1)//(man_words-1)), or (0, UNUSED_Y_OFF) if absent. encode_meta bakes these
+    # into each chunk's base address + Y_OFF, and the kernel skips Base_address / SET_Y for
+    # UNUSED_Y_OFF so an absent format never aliases B's base as (off=0, y=0).
     nz_faces = [(code, full) for code, full in faces if code != 0]
     EXP = 16  # bytes of shared exps per face (one 16B word)
     out = bytearray()
     chunk_info = []
     for start in range(0, len(nz_faces), chunk_faces):
         chunk = nz_faces[start : start + chunk_faces]
-        info = {}  # code -> (exp_word_off, y_off); (0, 0) if absent
+        info = {}  # code -> (exp_word_off, y_off); (0, UNUSED_Y_OFF) if absent
         # man_words = 16B mantissa words per face
         for code, man_words in ((FMT_CODE["bfp2"], 4), (FMT_CODE["bfp4"], 8)):
             fmt_faces = [full for c, full in chunk if c == code]
             if not fmt_faces:
-                info[code] = (0, 0)  # absent -> context unused
+                info[code] = (0, UNUSED_Y_OFF)  # unused, never B's base
                 continue
             off = len(out) // 16  # 16B-word offset of this exp section
             m = man_words - 1  # exp-section stride: 3 (bfp2) / 7 (bfp4)
@@ -183,16 +189,21 @@ def encode_meta(assignment, ct, kt, chunk_info):
 
     # Address section: one (bfp2, bfp4) base-address pair per 192-face chunk, which the
     # double-buffered unpacker reloads as it streams. The kernel reads full_iters//8 + 1
-    # pairs — the last is a never-used lookahead when full_iters is a multiple of 8 (the
-    # (0,0,0,0) pad covers it). Each word = (Y_OFF << 24) | ((base - Y_OFF) & 0xFFFFFF),
+    # pairs — the last is a lookahead, used by the remainder when full_iters % 16 == 0 and
+    # rem_iters > 0 (otherwise unused). Each word = (Y_OFF << 24) | ((base - Y_OFF) & 0xFFFFFF),
     # base = buf_b_words + chunk offset; the kernel re-adds Y_OFF via SETADC SET_Y so the
-    # read starts at the exp-section base (absent format -> (0,0) = base, no stride).
+    # read starts at the exp-section base. Absent format is Y_OFF = UNUSED_Y_OFF with no B
+    # base — never (off=0, y=0), which aliases a present format at the start of a chunk.
     def addr_word(off, y_off):
+        if y_off == UNUSED_Y_OFF:
+            return UNUSED_Y_OFF << 24  # unused: kernel skips Base_address and SET_Y
         base = buf_b_words + off  # absolute 16B-word base
         return (y_off << 24) | ((base - y_off) & 0x00FFFFFF)
 
     address_words = []
-    chunk_info = chunk_info + [(0, 0, 0, 0)]  # pad for the lookahead pair
+    chunk_info = chunk_info + [
+        (0, UNUSED_Y_OFF, 0, UNUSED_Y_OFF)
+    ]  # pad for the lookahead pair
     for k in range(full_iters // 8 + 1):
         b2_off, b2_y, b4_off, b4_y = chunk_info[k]
         address_words.append(addr_word(b2_off, b2_y))

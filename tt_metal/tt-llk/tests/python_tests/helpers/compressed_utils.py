@@ -22,6 +22,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CRK_TILE_DIMM, IN_FACE_DIMS, NUM_FACES
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
+from helpers.tile_shape import TileShape
 from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import matmul_acc_atol, passed_test
@@ -495,11 +496,20 @@ def run_compressed(
     # accumulates the K-deep sum in a bf16 dest, so noise grows ~linearly per K-tile.
     acc_atol = matmul_acc_atol(golden, kt, DataFormat.Float16_b)
 
+    # Flatten to 1D and dump as 16-col faces so a (M, N) dest (not 32x32 tiles) shows which
+    # N-faces diverged. The default 32x32 dump is empty when the result is already (M, N).
+    face_shape = TileShape(
+        face_r_dim=M,
+        face_c_dim=FACE_C_DIM,
+        num_faces_r_dim=1,
+        num_faces_c_dim=1,
+    )
     assert passed_test(
-        golden,
-        res_tensor,
+        golden.reshape(-1),
+        res_tensor.reshape(-1),
         DataFormat.Float16_b,
         custom_atol=acc_atol,
         custom_pcc_threshold=pcc_threshold,
         print_pcc=True,
+        tile_shape=face_shape,
     ), f"compressed matmul failed for shape=(M={M}, K={K}, N={N})"
