@@ -261,6 +261,8 @@ Unset on bare metal, where UMD's `gethostname()` is already right. Set by the la
 
 That is the **one** place metal reads the variable. Discovery still reads only `ClusterDescriptor::get_cluster_id()`; it does not consult the environment to second-guess what UMD stamped. Metal does not validate the value either — UMD throws on an illegal one (§5), and a second copy of the charset rule in metal would be one more thing to keep in sync.
 
+The one thing metal does decide is that **exported-but-empty counts as unset**, matching how `rtoptions` already reads `TT_METAL_MOCK_CLUSTER_DESC_PATH`. An empty id is illegal, so passing it through would throw; but `export TT_METAL_CLUSTER_ID=$SOME_UNSET_VAR` is a launcher accident rather than a request for an empty cluster id, and failing discovery over it would break bare-metal runs that the OS hostname would have served correctly.
+
 The variable is `TT_METAL_CLUSTER_ID` and not `TT_CLUSTER_ID` because it is metal's knob, sitting in metal's `EnvVarID` registry next to `TT_METAL_MOCK_CLUSTER_DESC_PATH` and the rest. A non-metal application that drives UMD directly sets `TopologyDiscoveryOptions::cluster_id` itself and never sees this variable.
 
 ---
