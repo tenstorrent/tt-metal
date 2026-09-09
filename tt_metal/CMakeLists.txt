@@ -39,6 +39,16 @@ target_sources(
         ${TT_METAL_SOURCES}
         ${API_GENERATED_HEADERS}
 )
+
+# clang-tidy reads configuration relative to the generated translation unit,
+# not the included header. Overlay the API checks only for this verification
+# target; the parent build directory's .clang-tidy supplies the normal checks.
+configure_file(
+    "${PROJECT_SOURCE_DIR}/cmake/clang-tidy.d/metalium-api/.clang-tidy"
+    "${CMAKE_CURRENT_BINARY_DIR}/tt_metal_verify_interface_header_sets/.clang-tidy"
+    COPYONLY
+)
+
 set_source_files_properties(
     api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
     PROPERTIES

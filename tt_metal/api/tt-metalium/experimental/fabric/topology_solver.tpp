@@ -1101,7 +1101,12 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine) {
-    using namespace tt::tt_fabric::detail;
+    using detail::ConstraintIndexData;
+    using detail::DFSSearchEngine;
+    using detail::GraphIndexData;
+    using detail::MappingValidator;
+    using detail::SatSearchEngine;
+    using detail::topology_mapping_should_use_sat_engine;
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -1155,7 +1160,13 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes) {
-    using namespace tt::tt_fabric::detail;
+    using detail::ConstraintIndexData;
+    using detail::DFSSearchEngine;
+    using detail::GraphIndexData;
+    using detail::MappingValidator;
+    using detail::SatSearchEngine;
+    using detail::topology_mapping_should_use_sat_engine;
+    using detail::TopologySearchState;
 
     if (max_solutions == 0 || max_solutions > kTopologyMappingEnumerateSolutionsHardCap) {
         max_solutions = kTopologyMappingEnumerateSolutionsHardCap;
@@ -1286,7 +1297,13 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes) {
-    using namespace tt::tt_fabric::detail;
+    using detail::DFSSearchEngine;
+    using detail::MappingValidator;
+    using detail::topology_mapping_shape_key;
+    using detail::topology_mapping_should_use_sat_engine;
+    using detail::TopologySatConstraintView;
+    using detail::TopologySatGraphView;
+    using detail::TopologySearchState;
     constraints.set_quiet_mode(quiet_mode);
 
     const bool context_match =
