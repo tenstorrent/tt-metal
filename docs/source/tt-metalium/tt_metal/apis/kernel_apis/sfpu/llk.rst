@@ -402,12 +402,29 @@ You may create predicate functions that return a ``vBool``, but they
 must be invoked inside a ``v_if`` (or ``v_elseif``) condition.  Do not
 store the return value and then interrogate it later.
 
-Note: There is currently a compiler defect regarding signed and
-unsigned integer comparisons, where ordering comparisons are only
-correct when the two operands are within 2^31 of eachother. Also,
-floating point comparisons use the multiply-add unit, which means
-comparisons are not strictly conforming -- specifically infinities and
-signed zeroes behave differently.
+Float comparisons have the following properties:
+
+  * Equality compares compare bit-patterns, thus ``-0.0f`` and
+    ``+0.0f``compare non-equal, as do all NaNs with different
+    representations.
+  * On Wormhole, ordering compares use a floating point subtract and
+    examine the resultant sign bit. Thus, due to rounding, ``-0.0``
+    compares less than or equal to ``+0.0`` and also greater than or
+    equal to ``+0.0`` even though it also compares as not equal. NaNs
+    might compare greater than or less than other values.
+  * On Blackhole and Quasar, a sign-magnitude comparison is used,
+    which provides a complete ordering of floating point values. That
+    ordering is ``-NaN > +Inf > +normal > +subnormal > +0.0 > -0.0
+    > -subnormal > -normal > -Inf > -NaN``.
+  * The IEEE feature that any comparison involving a NaN is false is
+    not supported.
+
+These features are determined by the hardware.
+
+Note: With the exception of signed integral compares on Quasar, there
+is currently a compiler defect regarding signed and unsigned integer
+comparisons, where ordering comparisons are only correct when the two
+operands are within 2^31 of each other.
 
 Scalar Values
 ^^^^^^^^^^^^^
