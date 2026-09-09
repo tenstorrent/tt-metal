@@ -45,6 +45,7 @@ the CI command below.
 
 ```bash
 export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
+export LLAMA_MODEL_PATH=$(python -c 'from models.demos.llama31_8b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
 python -m vllm.entrypoints.openai.api_server \
     --model "$LLAMA_MODEL_PATH" \
     --served-model-name meta-llama/Llama-3.1-8B-Instruct \
