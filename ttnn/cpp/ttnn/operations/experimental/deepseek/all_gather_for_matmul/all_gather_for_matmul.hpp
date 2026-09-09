@@ -8,8 +8,9 @@
 
 namespace ttnn::experimental::deepseek {
 
-// Untilize and gather a WIDTH_SHARDED input, then broadcast a full copy to every output core.
-ttnn::Tensor width_to_height_shard(
+// Untilize and gather a WIDTH_SHARDED input, or multicast a single-core HEIGHT_SHARDED
+// input, replicating a full row-major M x K copy onto every matmul core.
+ttnn::Tensor all_gather_for_matmul(
     const ttnn::Tensor& input_tensor,
     const CoreRangeSet& output_core_range_set,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
