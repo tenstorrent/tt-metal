@@ -23,7 +23,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_local_addr, noc_addr, bytes_per_transaction);
+            noc_async_write_pcie(l1_local_addr, noc_addr, bytes_per_transaction);
         }
         noc_async_write_barrier();
     }
