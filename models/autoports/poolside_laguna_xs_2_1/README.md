@@ -24,8 +24,8 @@ literally in commands. P300 and P300x2 are configuration shorthand in this guide
 product names or accepted launcher values.
 
 The recommended default is **p150x2/P300**. Use **p150x4/P300x2** with four P150 cards or the full
-QuietBox 2. Start with one active request at a time; the current performance results for both
-configurations are single-request measurements.
+QuietBox 2. Start with one active request at a time. The expected-performance table below is a
+single-request measurement of the recommended p150x2/P300 profile.
 
 ## Before you start
 
@@ -128,6 +128,23 @@ Application startup complete
 Once the environment and weights are available, a normal server start takes about 10 minutes. The
 first start also includes the approximately 63 GB model download.
 
+## Expected performance
+
+The p150x2 profile enables automatic prefix caching. This sweep deliberately bypassed prefix reuse,
+so the table shows cold requests.
+
+| Input tokens requested | Output tokens | Concurrency | Decode tok/s/user | Aggregate output tok/s | Time to first token | End-to-end latency |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 512 | 1 | 19.97 | 19.84 | 0.215 s | 25.801 s |
+| 1,024 | 512 | 1 | 19.82 | 18.29 | 2.213 s | 27.995 s |
+| 2,048 | 512 | 1 | 19.80 | 18.05 | 2.563 s | 28.366 s |
+| 4,096 | 512 | 1 | 19.78 | 14.70 | 8.984 s | 34.822 s |
+| 8,192 | 512 | 1 | 19.72 | 11.23 | 19.680 s | 45.592 s |
+| 16,384 | 512 | 1 | 19.61 | 8.53 | 33.931 s | 59.993 s |
+| 32,768 | 512 | 1 | 19.38 | 5.44 | 67.812 s | 94.178 s |
+| 65,536 | 512 | 1 | 18.95 | 2.79 | 156.630 s | 183.595 s |
+| 130,048 | 512 | 1 | 18.15 | 1.25 | 380.812 s | 408.967 s |
+
 ## Verify and use the model
 
 Check the health endpoint:
@@ -186,54 +203,3 @@ another user or workload is using any other card.
 
 To restart or switch profiles, stop the current server, wait for the reset to finish, and then run the
 desired start command again.
-
-## Troubleshooting
-
-### The launcher reports the wrong number of ASICs
-
-Run `tt-smi -ls` again. A p150x2/P300 launch needs exactly two unique ASIC IDs: one from each of two
-P150 cards, or both ASICs sharing a Board Number inside a QuietBox 2. A p150x4/P300x2 launch needs the
-four ASIC IDs from four P150 cards or the full QuietBox 2.
-
-### Hugging Face returns 401 or 403
-
-Confirm that your Hugging Face account has access to the model, then authenticate again:
-
-```bash
-"$MODEL_DIR/.venv/bin/hf" auth login
-```
-
-### Startup appears stuck
-
-The first build and first model download take a long time. Check the latest log instead of restarting:
-
-```bash
-tail -n 200 ~/laguna-logs/latest.log
-```
-
-Wait for `Application startup complete`. An older successful startup message in another log does not
-mean the current run is ready.
-
-### A card, server process, or port is busy
-
-Make sure no other workload is using the selected cards or port `8000`, then run:
-
-```bash
-"$MODEL_DIR/serve_vllm.sh" stop
-```
-
-Start the desired profile again after the reset completes.
-
-### The launcher rejects settings inherited from another environment
-
-Clear stale overrides and retry the documented command:
-
-```bash
-unset TT_METAL_HOME TT_MESH_GRAPH_DESC_PATH MESH_DEVICE VLLM_PLUGINS
-```
-
-If the Python environment itself is damaged, rebuild it as a last resort:
-
-```bash
-"$MODEL_DIR/setup_vllm.sh" --force
-```
