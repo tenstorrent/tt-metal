@@ -102,10 +102,10 @@ void kernel_main() {
                             for (uint32_t l = 0; l < face_size; l++) {
                                 const uint32_t global_index = get_value_from_tile(index_l1, count, index_df_size);
 
-                                // Clamp to the last valid input tile: an out-of-range index tile_idx
-                                // would otherwise address outside cb_input's Wt_input tiles in L1 and
-                                // hang the device (see #55819). gather_reader_streaming.cpp already
-                                // bounds its analogous tile_in_chunk the same way.
+                                // Bound reads to cb_input's allocated Wt_input tiles to prevent
+                                // an out-of-bounds L1 load (#55819). Invalid-index output remains
+                                // unspecified, including reads of logical input padding. Streaming
+                                // instead skips indices that do not match the current chunk.
                                 const uint32_t tile_idx_raw = global_index >> __builtin_ctz(tile_width);
                                 const uint32_t tile_idx = tile_idx_raw < Wt_input ? tile_idx_raw : (Wt_input - 1);
                                 const uint32_t index_in_local_tile = global_index & tile_width_mask;
@@ -138,9 +138,8 @@ void kernel_main() {
                                 // Map global_index to local_index in tiled layout:
                                 // tile_idx = which input tile along W
                                 // index_in_local_tile = position within that tile
-                                // Clamp to the last valid input tile: an out-of-range index would
-                                // otherwise address outside cb_input's Wt_input tiles in L1 and hang
-                                // the device (see #55819).
+                                // Bound reads to the allocated input tiles, not the logical axis.
+                                // Invalid-index output remains unspecified (#55819).
                                 const uint32_t tile_idx_raw = global_index >> __builtin_ctz(tile_width);
                                 const uint32_t tile_idx = tile_idx_raw < Wt_input ? tile_idx_raw : (Wt_input - 1);
                                 const uint32_t index_in_local_tile = global_index & tile_width_mask;
