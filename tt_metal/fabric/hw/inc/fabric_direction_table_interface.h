@@ -4,8 +4,6 @@
 
 #pragma once
 
-// Only included from the bottom of hostdevcommon/fabric_common.h; including it back here would create a cycle.
-
 namespace tt::tt_fabric {
 
 // Device-side (HW) inline implementations for direction_table_t

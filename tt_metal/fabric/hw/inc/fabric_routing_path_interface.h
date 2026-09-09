@@ -4,9 +4,6 @@
 
 #pragma once
 
-// Only included from the bottom of hostdevcommon/fabric_common.h, which provides everything used below;
-// including fabric_common.h or fabric_edm_packet_header.hpp back here would create an include cycle.
-
 namespace tt::tt_fabric {
 
 // Device-side compressed decoder function for 2D routing

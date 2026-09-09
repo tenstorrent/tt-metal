@@ -55,8 +55,6 @@ struct boot_results_t {
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-// Only FORCE_INLINE is needed here. Do not include internal/ethernet/erisc.h: it includes this
-// header back (include cycle).
 #include "internal/risc_attribs.h"
 
 FORCE_INLINE bool is_link_up() {
