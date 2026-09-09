@@ -43,6 +43,12 @@
 
 #include "api/compute/eltwise_binary.h"
 
+#ifdef ENABLE_PREFETCHER_PIPE
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul needs matmul_block_in1_at, which Quasar lacks"
+#endif
+#endif
+
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
  */
@@ -90,9 +96,30 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
     }
 }
 
+// Enter (or re-enter) matmul mode. Under PrefetcherPipe delivery cb_in1 is paged by K-block, so the
+// unpacker's SrcA tile stride cannot be left as that page: every init that names cb_in1 re-derives
+// the stride from it, and the matmul MOP walks a call's ct_dim tiles with it. in1_tile_size is
+// unused, and 0, on every other path.
+FORCE_INLINE void matmul_block_reinit(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    [[maybe_unused]] uint32_t in1_tile_size,
+    bool in1_transpose_tile,
+    uint32_t out_subblock_w,
+    uint32_t out_subblock_h,
+    uint32_t in0_block_w) {
+#ifdef ENABLE_PREFETCHER_PIPE
+    matmul_block_init_in1_at(
+        in0_cb_id, in1_cb_id, in1_tile_size, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#else
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
+}
+
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
+    uint32_t in1_tile_size,
     uint32_t mm_partials_cb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
@@ -112,7 +139,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_reinit(
+        in0_cb_id, in1_cb_id, in1_tile_size, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -214,7 +242,10 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_cb_id = dfb::cb_in0;
 
     DataflowBuffer in0_cb(in0_cb_id);
-    DataflowBuffer in1_cb(in1_cb_id);
+    // From the binding token, not the bare id: under PrefetcherPipe delivery the host marks cb_in1 a
+    // relay, and only the token constructor re-aligns it to the pipe's durable read cursor (firmware
+    // resets the DFB's pointers at every launch). Identical to the id form on every other path.
+    DataflowBuffer in1_cb(dfb::cb_in1);
     DataflowBuffer mm_partials_cb(mm_partials_cb_id);
     DataflowBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
@@ -252,7 +283,15 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
-    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // The tile stride the unpacker needs for cb_in1. It is the DFB entry size on every path but
+    // PrefetcherPipe delivery, where an entry is a whole K-block and the stride has to be derived
+    // from it. Same units as fifo_page_size (16-byte words on TRISC); constant for this kernel.
+    uint32_t in1_tile_size_units = 0;
+#ifdef ENABLE_PREFETCHER_PIPE
+    UNPACK(in1_tile_size_units = get_local_cb_interface(in1_cb_id).fifo_page_size / in1_block_num_tiles;)
+#endif
+    matmul_block_reinit(
+        in0_cb_id, in1_cb_id, in1_tile_size_units, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -313,15 +352,29 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
                         reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
-                        matmul_block_init(
-                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                        matmul_block_reinit(
+                            in0_cb_id,
+                            in1_cb_id,
+                            in1_tile_size_units,
+                            in1_transpose_tile,
+                            out_subblock_w,
+                            out_subblock_h,
+                            in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
                     in0_cb.wait_front(in0_block_num_tiles);
+#ifdef ENABLE_PREFETCHER_PIPE
+                    in1_cb.wait_front(1);
+                    // The block base moves one entry per K-block; read it once here rather than per
+                    // subblock, since the unpacker no longer derives it from a per-tile page stride.
+                    uint32_t in1_block_read_ptr = 0;
+                    UNPACK(in1_block_read_ptr = get_local_cb_interface(in1_cb_id).fifo_rd_ptr;)
+#else
                     in1_cb.wait_front(in1_block_num_tiles);
+#endif
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -342,6 +395,7 @@ void kernel_main() {
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
+                                    in1_tile_size_units,
                                     mm_partials_cb_id,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
@@ -362,6 +416,20 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
+#ifdef ENABLE_PREFETCHER_PIPE
+                                matmul_block_in1_at(
+                                    in0_cb_id,
+                                    in1_cb_id,
+                                    in1_block_read_ptr,
+                                    in1_tile_size_units,
+                                    in0_index,
+                                    in1_index,
+                                    dst_index,
+                                    in1_transpose_tile,
+                                    effective_subblock_w,
+                                    out_subblock_h,
+                                    in0_block_w);
+#else
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -372,6 +440,7 @@ void kernel_main() {
                                     effective_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
+#endif
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
@@ -470,7 +539,11 @@ void kernel_main() {
 #endif
 
                     in0_cb.pop_front(in0_block_num_tiles);
+#ifdef ENABLE_PREFETCHER_PIPE
+                    in1_cb.pop_front(1);
+#else
                     in1_cb.pop_front(in1_block_num_tiles);
+#endif
                 }
 
 #ifdef FUSE_BIAS
@@ -573,8 +646,14 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init(
-                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                    matmul_block_reinit(
+                        in0_cb_id,
+                        in1_cb_id,
+                        in1_tile_size_units,
+                        in1_transpose_tile,
+                        out_subblock_w,
+                        out_subblock_h,
+                        in0_block_w);
                 }
             }
         }

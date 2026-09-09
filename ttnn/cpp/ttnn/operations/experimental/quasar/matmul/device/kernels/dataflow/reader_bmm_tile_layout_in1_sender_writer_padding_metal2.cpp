@@ -30,6 +30,13 @@
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ENABLE_PREFETCHER_PIPE
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery needs the WH/BH device PrefetcherPipe class, which Quasar lacks"
+#endif
+#include "api/dataflow/prefetcher_pipe.h"
+#endif
+
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -145,6 +152,7 @@ void kernel_main() {
 #endif  // BIAS_SHARDED
 #endif  // FUSE_BIAS
 
+#ifndef ENABLE_PREFETCHER_PIPE
     constexpr uint32_t cb_id_in1 = dfb::cb_in1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
@@ -158,6 +166,10 @@ void kernel_main() {
 #else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 #endif
+// Under PrefetcherPipe delivery a cb_in1 entry is a whole K-block, not a tile, so none of the
+// per-tile sizes above are meaningful -- and nothing needs them: the block is neither read from
+// DRAM nor multicast.
+#endif  // ENABLE_PREFETCHER_PIPE
 
     constexpr uint32_t cb_id_out0 = dfb::cb_out;
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
@@ -175,12 +187,22 @@ void kernel_main() {
 #endif
 
 //  READER
-#ifdef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+    // cb_in1 is laid over this core's PrefetcherPipe ring, so the prefetcher's K-blocks arrive
+    // already in place: this kernel only converts a delivered entry into DFB credit and, once
+    // compute is done with it, that entry's credit back into an ack. One relay DFB spans the
+    // receivers of every pipe in the set, so the pipe is found by relay id rather than named.
+    // bind_relay() aligns cb_in1 to the pipe's durable cursor (firmware reset it at launch) and is
+    // what makes pop_front wait for compute. The object lives to the end of kernel_main; its
+    // destructor stores the cursor back (a local write, unordered against the NOC epilogue).
+    auto pipe = experimental::PrefetcherPipe::for_relay(dfb::cb_in1);
+    pipe.bind_relay();
+#elif defined(IN1_SHARDED)
     cb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     cb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
 #else
     const auto s1 = TensorAccessor(tensor::in1);
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
 
     //  WRITER
     // Used only when the output-write path below is compiled in (some mcast configs write via DFB
@@ -249,7 +271,14 @@ void kernel_main() {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
-#if !defined(IN1_SHARDED)
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        // One entry of lookahead, over a PrefetcherPipe: publish the current block
+                        // to compute, then hand the previous block's entry back to the sender once
+                        // the unpacker has drained it. One DFB entry is one K-block, which is also
+                        // one pipe entry.
+                        cb_in1.reserve_back(1);
+                        pipe.wait_front(block == 0 ? 1u : 2u);
+#elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         cb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
@@ -321,10 +350,24 @@ void kernel_main() {
                             in1_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-#ifndef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        cb_in1.push_back(1);
+                        // pop_front waits for the unpacker to have popped the block out of cb_in1
+                        // before acking, so no explicit free-space spin is needed. The block was
+                        // published once, just above; publishing it again through the relay view
+                        // would double the credit compute sees.
+                        if (block >= 1) {
+                            pipe.pop_front(1, noc);
+                        }
+#elif !defined(IN1_SHARDED)
                         cb_in1.push_back(in1_block_num_tiles);
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
                     }
+#ifdef ENABLE_PREFETCHER_PIPE
+                    if (num_blocks_inner_dim > 0) {
+                        pipe.pop_front(1, noc);
+                    }
+#endif
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {

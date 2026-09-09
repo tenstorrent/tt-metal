@@ -24,17 +24,20 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "hostdev/remote_dfb_constants.h"
 #include <variant>
 
 namespace tt::tt_metal::experimental {
@@ -66,6 +69,7 @@ struct CollectedSpecData {
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<PrefetcherPipeParamName, const PrefetcherPipeParameter*> prefetcher_pipe_param_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
@@ -518,6 +522,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         auto [it, inserted] =
             collected.tensor_parameter_by_name.try_emplace(tensor_parameter.unique_id, &tensor_parameter);
         TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
+    }
+
+    // Collect PrefetcherPipeParameters
+    for (const auto& pipe_param : spec.prefetcher_pipe_parameters) {
+        auto [it, inserted] = collected.prefetcher_pipe_param_by_name.try_emplace(pipe_param.unique_id, &pipe_param);
+        TT_FATAL(inserted, "Duplicate PrefetcherPipeParameter name '{}'", pipe_param.unique_id);
     }
 
     // Validate kernel tensor bindings
@@ -1628,6 +1638,84 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tensor_bytes);
     }
 
+    // Validate PrefetcherPipe relay DFBs.
+    //
+    // A relay DFB is laid over the durable rings of the pipes its parameters name instead of over
+    // Program-lifetime L1, so what has to hold is that every node of the DFB reads exactly one
+    // pipe's ring, and that a ring holds exactly the DFB's entries. Both are checked against the
+    // parameter declarations: the pipe objects arrive later, with the run arguments.
+    std::unordered_map<PrefetcherPipeParamName, DFBSpecName> pipe_param_relayed_by;
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.prefetcher_pipe_relays.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            !dfb.borrowed_from.has_value(),
+            "DFB '{}' both relays PrefetcherPipes and borrows from TensorParameter '{}'. A relay's "
+            "memory is the pipes' rings; drop borrowed_from.",
+            dfb.unique_id,
+            *dfb.borrowed_from);
+        TT_FATAL(
+            dfb_alias_with(dfb).empty(),
+            "DFB '{}' relays PrefetcherPipes and cannot be aliased: an alias group shares one "
+            "allocation, and this DFB's is a ring the pipes own.",
+            dfb.unique_id);
+        const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
+        NodeRangeSet covered_nodes;
+        for (const PrefetcherPipeParamName& param_name : dfb.prefetcher_pipe_relays) {
+            auto param_it = collected.prefetcher_pipe_param_by_name.find(param_name);
+            TT_FATAL(
+                param_it != collected.prefetcher_pipe_param_by_name.end(),
+                "DFB '{}' relays PrefetcherPipe parameter '{}', which the ProgramSpec does not declare",
+                dfb.unique_id,
+                param_name);
+            const PrefetcherPipeParameter& param = *param_it->second;
+            auto [relay_it, first_relay] = pipe_param_relayed_by.try_emplace(param_name, dfb.unique_id);
+            TT_FATAL(
+                first_relay,
+                "PrefetcherPipe parameter '{}' is relayed by both DFB '{}' and DFB '{}'. A pipe's "
+                "receiver role cannot be split, so one pipe feeds one relay DFB.",
+                param_name,
+                relay_it->second,
+                dfb.unique_id);
+            TT_FATAL(
+                param.receiver_nodes.num_cores() > 0,
+                "PrefetcherPipe parameter '{}' declares no receiver nodes",
+                param_name);
+            TT_FATAL(
+                param.ring_size % dfb.entry_size == 0 && param.ring_size / dfb.entry_size == dfb.num_entries,
+                "DFB '{}' relays PrefetcherPipe parameter '{}', whose {} B ring is not exactly its {} entries of "
+                "{} B. A relay DFB spans the whole ring, one entry per delivered entry.",
+                dfb.unique_id,
+                param_name,
+                param.ring_size,
+                dfb.num_entries,
+                dfb.entry_size);
+            const NodeRangeSet overlap = covered_nodes.intersection(param.receiver_nodes);
+            TT_FATAL(
+                overlap.num_cores() == 0,
+                "DFB '{}' relays two PrefetcherPipes on nodes {}. A node reads one ring, so the "
+                "relays must partition the DFB's nodes.",
+                dfb.unique_id,
+                overlap);
+            covered_nodes = covered_nodes.merge(param.receiver_nodes);
+        }
+        TT_FATAL(
+            covered_nodes.merge_ranges() == dfb_nodes.merge_ranges(),
+            "DFB '{}' runs on nodes {} but its PrefetcherPipe relays cover {}. Every node of a relay "
+            "DFB must be a receiver of one of its pipes.",
+            dfb.unique_id,
+            dfb_nodes,
+            covered_nodes);
+    }
+    for (const auto& pipe_param : spec.prefetcher_pipe_parameters) {
+        TT_FATAL(
+            pipe_param_relayed_by.contains(pipe_param.unique_id),
+            "PrefetcherPipeParameter '{}' is declared but no DFB relays it. A pipe reaches the "
+            "Program's kernels through a relay DFB.",
+            pipe_param.unique_id);
+    }
+
     // Validate DFB alias groups.
     // Rules:
     //  1. Transitivity: every DFB in an alias group must list every other member in its
@@ -2714,8 +2802,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
-        // The actual backing memory L1 address is attached at runtime.
-        .borrows_memory = dfb_spec->borrowed_from.has_value()};
+        // The actual backing memory L1 address is attached at runtime for a TensorParameter, and
+        // at registration time for a PrefetcherPipe relay (the pipes' ring address is already
+        // known then).
+        .borrows_memory = dfb_spec->borrowed_from.has_value() || !dfb_spec->prefetcher_pipe_relays.empty(),
+        .is_relay = !dfb_spec->prefetcher_pipe_relays.empty()};
 }
 
 // ----------------------------------------------------------------------------
@@ -3093,9 +3184,33 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
+    // PrefetcherPipe relays: declare each one and reserve its program slot. The pipes themselves
+    // are run arguments, so only the fields that need one -- the config-page address and the Attach
+    // entry size -- wait for SetProgramRunArgs; the slot cannot, because finalize sizes the
+    // launch-message dense index from the slot count and runs before the run args do. Placed after
+    // every DFB exists so the relay's DFB id -- what the pipe's receivers publish credit through --
+    // is final.
+    for (const auto& pipe_param : spec.prefetcher_pipe_parameters) {
+        program_impl->register_prefetcher_pipe_parameter(
+            pipe_param.unique_id.get(), pipe_param.receiver_nodes, pipe_param.ring_size);
+    }
+    for (const auto& dfb_spec : spec.dataflow_buffers) {
+        const uint32_t dfb_id = dfb_name_to_id.at(dfb_spec.unique_id);
+        for (const PrefetcherPipeParamName& param_name : dfb_spec.prefetcher_pipe_relays) {
+            program_impl->register_prefetcher_pipe_relay_binding(dfb_id, param_name.get());
+        }
+    }
+    program_impl->validate_prefetcher_pipe_relay_coverage();
+
+    // A relay DFB's kernels are told to find their pipe slot from the DFB's relay id at run time.
+    // No pipe id can be baked in here: the slots are handed out when the pipes are bound, which is
+    // after this Program compiles.
     std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
     for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {
-        dfb_name_to_prefetcher_pipe_id[dfb_name] = program_impl->get_prefetcher_pipe_id_for_relay(dfb_id).value_or(0xFF);
+        auto dfb_it = collected.dfb_by_name.find(dfb_name);
+        const bool relays_pipes =
+            dfb_it != collected.dfb_by_name.end() && !dfb_it->second->prefetcher_pipe_relays.empty();
+        dfb_name_to_prefetcher_pipe_id[dfb_name] = relays_pipes ? PREFETCHER_PIPE_ID_BY_RELAY : PREFETCHER_PIPE_ID_NONE;
     }
 
     // Wire alias groups: for each DFB that has alias_with entries, make the first

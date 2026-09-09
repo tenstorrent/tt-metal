@@ -8,6 +8,7 @@
 #include <tuple>
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -30,6 +31,10 @@ struct MatmulParams {
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
+    // Alternative in1 transport to global_cb: the Tensor prefetcher delivers this matmul's weight
+    // K-blocks into DRAM-sender PrefetcherPipes and the mcast_in0 body reads them in place through
+    // a relay DataflowBuffer. At most one of the two may be set.
+    std::optional<ttnn::operations::experimental::TensorPrefetcherPipes> prefetcher_pipes = std::nullopt;
 
     // Compile-time reflection used by the program-cache key (both the 64-bit hash and the
     // collision-free canonical key). Mirrors the Quasar Conv2dDeviceOperation migration
@@ -60,7 +65,8 @@ struct MatmulParams {
         "transpose_b",
         "output_tile",
         "global_cb",
-        "sub_device_id");
+        "sub_device_id",
+        "prefetcher_pipes");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->program_config),
@@ -76,7 +82,8 @@ struct MatmulParams {
             this->transpose_b,
             std::cref(this->output_tile),
             std::cref(this->global_cb),
-            std::cref(this->sub_device_id));
+            std::cref(this->sub_device_id),
+            std::cref(this->prefetcher_pipes));
     }
 };
 

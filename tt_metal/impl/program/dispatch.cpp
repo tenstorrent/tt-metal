@@ -544,6 +544,13 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             "PrefetcherPipe sparse participant prefetcher_pipe_id {} exceeds program slot count {}",
             participant.prefetcher_pipe_id,
             num_program_slots);
+        // A Metal 2.0 relay reserves its participants when the ProgramSpec is built and fills the
+        // config address in when the pipe argument arrives; zero here means that never happened.
+        TT_FATAL(
+            participant.config_page_addr != 0,
+            "PrefetcherPipe slot {} has no config page address. A declared PrefetcherPipeParameter was never "
+            "bound: supply its pipe through ProgramRunArgs::prefetcher_pipe_args before enqueueing.",
+            participant.prefetcher_pipe_id);
         const uint32_t base =
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         payload[base + 0] = participant.config_page_addr;

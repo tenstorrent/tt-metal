@@ -367,7 +367,7 @@ public:
     uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
 
     uint8_t add_prefetcher_pipe_attachment(
-        experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
 
     const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
@@ -377,6 +377,12 @@ public:
     // only on receiver cores and consumed by PrefetcherPipe::bind_relay().
     void register_prefetcher_pipe_relay_dfb(
         const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
+
+    // Check that every relay DFB registered above is fully covered by its pipes. Each
+    // register_prefetcher_pipe_relay_dfb call only claims part of a DFB (one relay DFB may span
+    // several pipes' receivers), so completeness is a whole-program property. Call once, after
+    // registering every pipe of every relay.
+    void validate_prefetcher_pipe_relay_coverage() const;
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -464,6 +470,53 @@ public:
     // bound to `tensor_parameter_name`.
     void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
     const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
+
+    // Metal 2.0: PrefetcherPipeParameter declarations, and which relay DFB consumes each one.
+    // A pipe object is a run argument, so the Program carries the declaration through compile and
+    // binds the pipe when SetProgramRunArgs supplies it.
+    struct RegisteredPrefetcherPipeParameter {
+        CoreRangeSet receiver_nodes;
+        uint32_t ring_size = 0;
+        // The pipe this parameter is bound to, once an argument has supplied one.
+        const experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
+    };
+    // One declared relay: the DFB laid over the parameter's pipe, and the program slot reserved
+    // for it at build. The slot is reserved before the pipe exists because finalize sizes the
+    // launch-message dense index from the slot count, and finalize runs before the run args do.
+    struct PrefetcherPipeRelayBinding {
+        uint32_t dfb_id = 0;
+        std::string prefetcher_pipe_param_name;
+        uint8_t prefetcher_pipe_id = 0;
+    };
+    void register_prefetcher_pipe_parameter(
+        const std::string& name, const CoreRangeSet& receiver_nodes, uint32_t ring_size);
+    // Returns nullptr if the name is not registered (caller validates).
+    const RegisteredPrefetcherPipeParameter* get_prefetcher_pipe_parameter(const std::string& name) const;
+    std::vector<std::string> get_registered_prefetcher_pipe_parameter_names() const;
+    // Declare a relay and reserve its program slot, before the pipe object exists. Records the
+    // per-core participants with placeholder pipe fields, which bind_prefetcher_pipe_relay fills.
+    void register_prefetcher_pipe_relay_binding(uint32_t dfb_id, const std::string& prefetcher_pipe_param_name);
+    const std::vector<PrefetcherPipeRelayBinding>& get_prefetcher_pipe_relay_bindings() const;
+    // Fill a reserved slot from the pipe a run argument supplied: the config-page address and
+    // Attach entry size on every participant, and the relay DFB's borrowed ring address. Legal
+    // after finalize -- both reach the device with the per-enqueue dispatch commands.
+    void bind_prefetcher_pipe_relay(
+        uint8_t prefetcher_pipe_id, const experimental::PrefetcherPipeImpl& pipe, uint32_t entry_size);
+
+private:
+    // Shared by the legacy Attach and the Metal 2.0 reserve: the checks that gate handing out a
+    // new program slot at all, and the slot itself.
+    uint8_t allocate_prefetcher_pipe_slot();
+    // Shared by the legacy Attach and the Metal 2.0 bind: what an Attach entry size must satisfy
+    // against the pipe's ring.
+    void validate_prefetcher_pipe_entry_size(uint32_t entry_size, uint32_t ring_size) const;
+    // Metal 2.0 reserve: claim `receiver_cores` on `relay_dfb_host_id` for a new slot, recording
+    // participants whose pipe fields bind_prefetcher_pipe_relay fills in later.
+    uint8_t reserve_prefetcher_pipe_relay_slot(const CoreRangeSet& receiver_cores, uint32_t relay_dfb_host_id);
+
+public:
+    // Record which pipe a parameter is now bound to; rejects a rebind to a different pipe.
+    void bind_prefetcher_pipe_parameter(const std::string& name, const experimental::PrefetcherPipeImpl& pipe);
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
@@ -587,9 +640,12 @@ private:
     uint8_t next_cross_node_dfb_slot_ = 0;
 
     std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
-    std::unordered_map<uint8_t, experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
+    std::unordered_map<uint8_t, const experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
     // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
     std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
+    // relay DFB host id → the nodes its pipes have claimed so far. Read to reject two pipes
+    // relaying through one DFB on a shared node, and to check whole-DFB coverage at the end.
+    std::unordered_map<uint32_t, CoreRangeSet> prefetcher_pipe_relay_covered_cores_;
     uint8_t next_prefetcher_pipe_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
@@ -617,6 +673,11 @@ private:
 
         // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
         std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
+
+        // PrefetcherPipeParameter name -> its declared geometry and the pipe bound to it.
+        std::unordered_map<std::string, RegisteredPrefetcherPipeParameter> prefetcher_pipe_parameters;
+        // Relay DFB declarations, each with the slot reserved for it.
+        std::vector<PrefetcherPipeRelayBinding> prefetcher_pipe_relay_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 

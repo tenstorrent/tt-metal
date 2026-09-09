@@ -16,6 +16,9 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 
+// Reserved prefetcher-pipe ids a RelayDFBBindingToken can carry (needed on every RISC).
+#include "hostdev/remote_dfb_constants.h"
+
 // PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
 // TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
 #if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
@@ -112,8 +115,12 @@ private:
 // region and snap the borrowed local iface to the durable fifo_ptr checkpoint.
 // CrossNode relays omit it (NO_PREFETCHER_PIPE): CrossNode state is re-zeroed every
 // launch, so the dispatch-written local CB config is already correct.
+// PREFETCHER_PIPE_BY_RELAY means "a pipe, but not the same one on every core": one relay
+// DFB spans the receivers of several pipes, and the slot is resolved by scanning for this
+// DFB's relay id.
 struct RelayDFBBindingToken {
-    static constexpr uint8_t NO_PREFETCHER_PIPE = 0xFF;
+    static constexpr uint8_t NO_PREFETCHER_PIPE = PREFETCHER_PIPE_ID_NONE;
+    static constexpr uint8_t PREFETCHER_PIPE_BY_RELAY = PREFETCHER_PIPE_ID_BY_RELAY;
 
     explicit constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id = NO_PREFETCHER_PIPE) noexcept :
         id_(id), prefetcher_pipe_id_(prefetcher_pipe_id) {}
@@ -146,7 +153,9 @@ public:
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
     DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
 #if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
-        if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
+        if (token.prefetcher_pipe_id() == RelayDFBBindingToken::PREFETCHER_PIPE_BY_RELAY) {
+            experimental::align_local_dfb_to_prefetcher_pipe_by_relay(logical_dfb_id_);
+        } else if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
             experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
         }
 #endif

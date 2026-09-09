@@ -17,8 +17,10 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -113,6 +115,31 @@ struct ProgramRunArgs {
     Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
+    // PrefetcherPipe arguments
+    ////////////////////////////////////////////////////////////////////////
+
+    // The actual PrefetcherPipe argument (non-owning reference).
+    using PrefetcherPipeArgument = std::reference_wrapper<const PrefetcherPipe>;
+
+    // A PrefetcherPipeArgument must be specified:
+    //  For EVERY PrefetcherPipeParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of PrefetcherPipeParameters, when calling UpdateProgramRunArgs. An omitted
+    //  parameter keeps the pipe it is already bound to.
+    //
+    // The supplied pipe's receivers and ring size must match the PrefetcherPipeParameter's
+    // declaration.
+    //
+    // CAUTION: PrefetcherPipe is an RAII object. The user is responsible for ensuring that the
+    //          pipe remains alive until the last Program execution that uses it has completed on
+    //          the device: the Program holds a non-owning pointer, and destroying a pipe frees its
+    //          ring and config pages.
+    //
+    // A pipe binds once per Program. Binding one parameter to a different pipe later is rejected:
+    // a pipe's config address reaches the device in the launch message rather than in a runtime
+    // argument, so it is baked into the Program's dispatch commands when they are first generated.
+    Table<PrefetcherPipeParamName, PrefetcherPipeArgument> prefetcher_pipe_args;
+
+    ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
     struct DFBRunOverrides {
@@ -140,6 +167,7 @@ struct ProgramRunArgs {
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
 using TensorArgument = ProgramRunArgs::TensorArgument;
+using PrefetcherPipeArgument = ProgramRunArgs::PrefetcherPipeArgument;
 
 //-----------------------------------------------------
 // Helper functions
