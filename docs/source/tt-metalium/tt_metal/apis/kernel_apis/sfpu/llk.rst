@@ -405,7 +405,7 @@ store the return value and then interrogate it later.
 Float comparisons have the following properties:
 
   * Equality compares compare bit-patterns, thus ``-0.0f`` and
-    ``+0.0f``compare non-equal, as do all NaNs with different
+    ``+0.0f`` compare non-equal, as do all NaNs with different
     representations.
   * On Wormhole, ordering compares use a floating point subtract and
     examine the resultant sign bit. Thus, due to rounding, ``-0.0``
@@ -414,7 +414,7 @@ Float comparisons have the following properties:
     might compare greater than or less than other values.
   * On Blackhole and Quasar, a sign-magnitude comparison is used,
     which provides a complete ordering of floating point values. That
-    ordering is ``-NaN > +Inf > +normal > +subnormal > +0.0 > -0.0
+    ordering is ``+NaN > +Inf > +normal > +subnormal > +0.0 > -0.0
     > -subnormal > -normal > -Inf > -NaN``.
   * The IEEE feature that any comparison involving a NaN is false is
     not supported.
