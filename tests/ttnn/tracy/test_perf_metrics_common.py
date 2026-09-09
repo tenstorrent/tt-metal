@@ -92,16 +92,14 @@ def test_csv_headers_cover_every_label_with_four_stats():
 def test_every_metric_is_none_when_any_of_its_inputs_is_missing():
     # Remove one counter at a time from a full capture: a metric may lose its value (None) or change because
     # a port dropped out of a mean, but it must never collapse to a fake 0 or 100.
-    import random
-
     names = [n for n in COUNTER_TYPE_NAMES.values() if n not in ("UNDEF", "QUASAR_L1_CLIENT_EVENT")]
-    random.seed(7)
-    for _ in range(5):
-        # grant <= request keeps the clamped L1 metrics away from their saturation points
-        full = {n: random.uniform(200.0, 900.0) for n in names}
-        for n in names:
+    for trial in range(5):
+        # Varied, deterministic counts in 200..900; grant <= request keeps the clamped L1 metrics away from
+        # their saturation points.
+        full = {n: 200.0 + (37 * i + 101 * trial) % 700 for i, n in enumerate(names)}
+        for i, n in enumerate(names):
             if n.endswith("_GRANT") and n[: -len("_GRANT")] in full:
-                full[n] = full[n[: -len("_GRANT")]] * random.uniform(0.5, 1.0)
+                full[n] = full[n[: -len("_GRANT")]] * (0.5 + ((13 * i + 7 * trial) % 50) / 100.0)
         base = mc.compute_metrics(_View(full, cycles=1000.0))
         for gone in names:
             reduced = dict(full)
