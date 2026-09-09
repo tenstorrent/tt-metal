@@ -32,6 +32,9 @@ ENABLE_LOGGING = True
 # Default Test Configuration                                                  #
 PRINT_DETAILED_COMPARISON_FLAG = False
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
+
 
 def test_ms_deformable_attention_requires_spatial_shapes(expect_error):
     config = DeformableAttentionConfig(embed_dims=256, num_heads=8, num_levels=4, num_points=4)
@@ -48,7 +51,6 @@ def test_ms_deformable_attention_requires_spatial_shapes(expect_error):
         ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_ms_deformable_attention_forward(
     device,

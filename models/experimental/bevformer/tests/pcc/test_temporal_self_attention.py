@@ -32,6 +32,9 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
+
 
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, num_bev_queue, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
@@ -44,7 +47,6 @@ PRINT_DETAILED_COMPARISON_FLAG = False
         ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.58, 0.4),  # Large BEV grid
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_temporal_self_attention_forward(
     device,
