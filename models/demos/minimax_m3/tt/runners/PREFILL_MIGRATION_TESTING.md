@@ -15,10 +15,10 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 | Gate | What it proves | Needs |
 |------|----------------|-------|
 | **0 — standalone PCC** | Prefill writes correct K / V / index_k vs golden | tt-metal tree only |
-| **1 — mock migration** | The 9-config address table is correct, read device-lessly | tt-metal tree only |
+| **1 — disk table** | The 9-config address table is correct, read device-lessly | tt-metal tree only |
 | **2 — loopback migration** | The real DRAM → DCN → DRAM copy, and migrated-KV accuracy | + tt-llm-engine migration layer |
 | **P0 — merged-table unit test** | The multi-stage merge's address math, device-free | tt-metal tree only, no device |
-| **P1 — pipeline mock migration** | The MERGED 60-layer table over 2 stages, read device-lessly | tt-metal tree only |
+| **P1 — pipeline disk table** | The MERGED 60-layer table over 2 stages, read device-lessly | tt-metal tree only |
 | **P2 — pipeline loopback migration** | The real copy driven off the merged table | + tt-llm-engine migration layer |
 
 (The former dependency on `nzhao/non-mla-migration-fixes` landed as #52113.)
@@ -30,11 +30,11 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 | File | Owns |
 |------|------|
 | `manifests/minimax_m3.json` | model: `PREFILL_MODEL`, 60 layers, `M3_INDEX_CACHE_BF16` |
-| `manifests/m3_binding_mock_migration_1rank.yaml` | Gate 1 runner: 1-rank topology + mock-migration env |
+| `manifests/m3_binding_mock_migration_1rank.yaml` | Gate 1 runner: 1-rank topology, table left on disk |
 | `manifests/m3_binding_loopback_migration_1rank.yaml` | Gate 2 runner: 1-rank topology + real-migration env |
 | `manifests/m3_producer_mock_migration.yaml` | Gate 1 producer: 2 slots × 2 chunks, golden PCC |
 | `manifests/m3_producer_loopback_migration.yaml` | Gate 2 driver: prefill 0,1 → migrate to 2,3 |
-| `manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml` | Gate P1 runner: 2-stage intragalaxy + merged mock |
+| `manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml` | Gate P1 runner: 2-stage intragalaxy, merged table on disk |
 | `manifests/m3_binding_loopback_migration_intragalaxy_2rank.yaml` | Gate P2 runner: 2-stage intragalaxy + real migration |
 | `manifests/m3_producer_mock_migration_2rank.yaml` | Gate P1 producer (sp=4, merged table paths) |
 | `manifests/m3_producer_loopback_migration_2rank.yaml` | Gate P2 driver (sp=4, merged table paths) |
@@ -95,7 +95,7 @@ env PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=5120 \
 
 ---
 
-## Gate 1 — mock migration + producer read-back (table addresses only)
+## Gate 1 — disk table + producer read-back (table addresses only)
 
 The cheapest isolated check of `build_kv_chunk_table`: the runner serializes the 9-config table and the
 fabric-node→ASIC device map, and the producer reads each chunk **device-lessly** (`read_dram_umd`, the same
@@ -110,7 +110,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration.yaml
 ```
 
-**Expect:** runner `[mock-migration] KV chunk table -> /tmp/m3_kv_chunk_table.pb, device map -> …`;
+**Expect:** runner `[migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb (no worker handshake)`
+and `[migration] rank 0: local device map -> …`;
 producer `[producer] layer acks 240/240`, per-layer `K=… V=… index_k=…`, then
 `[producer] slot N M3 KV PCC over [0,10240) across 60 layers` and `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93` — different from the runner's `0.88`
@@ -217,7 +218,7 @@ Because num_ranks>1, the table path must be on shared storage — the bindings u
 pytest models/demos/minimax_m3/tests/test_kv_chunk_table_merge.py -q
 ```
 
-### P1 — pipeline mock migration (merged table + producer read-back, no endpoint)
+### P1 — pipeline disk table (merged table + producer read-back, no endpoint)
 
 ```bash
 # ---- Terminal 1 — 2-rank runner ----
@@ -228,7 +229,7 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration_2rank.yaml
 ```
 
-**Expect:** rank 0 `[mock-migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
+**Expect:** rank 0 `[migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
 (configs=9, layers=60); each rank `local device map -> /tmp/m3_kv_device_map_r<rank>.json`; producer
 merges both maps (`merged 2 device maps: 32 chips total`), then per-layer `K=… V=… index_k=…` across
 `60/60 local layers` and `KV cache PCC PASSED`.

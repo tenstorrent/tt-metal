@@ -1,4 +1,4 @@
-# MiniMax-M3 — Gate 1 (mock migration) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
+# MiniMax-M3 — Gate 1 (KV table on disk) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
 #
 # The runner serializes the KV chunk table + the fabric-node -> ASIC device map and then serves H2D
 # pushes; no migration_endpoint / worker is involved. prefill_producer reads both files back device-lessly
@@ -28,11 +28,11 @@ global_env:
   PREFILL_NUM_USERS: "2"
   PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
 
-  PREFILL_MOCK_MIGRATION: "1"
+  PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/m3_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
   # The producer's only barrier before it reads the KV back; without it the read races the device.
-  # Defaults on only when PREFILL_ENABLE_MIGRATION=1, which the mock path does not set.
+  # Defaults on only when PREFILL_ENABLE_MIGRATION=1, which the disk path does not set.
   PREFILL_ENABLE_LAYER_ACK: "1"
   # Selects the host-callback ack transport, the only one this runtime implements — it enables no
   # tracing, since the runtime has no capture_trace.

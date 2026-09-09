@@ -137,9 +137,9 @@ SCENARIOS = {
     # 4) GLM-5.2 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
     #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
     #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
-    #    The runner builds that single merged table under PREFILL_MOCK_MIGRATION and the producer reads
-    #    BOTH configs back through it over UMD, so a wrong address in either config shows up as a PCC
-    #    failure. 11 x 5120 = 56320 is exactly the trace depth.
+    #    The runner builds that single merged table and the producer reads BOTH configs back through it
+    #    over UMD, so a wrong address in either config shows up as a PCC failure. 11 x 5120 = 56320 is
+    #    exactly the trace depth.
     #
     #    ALL layers is mandatory here, not a preference: the index cache is sized from the model's whole
     #    indexer_types map (21 full layers), so a truncated run leaves the upper index ranks unwritten —
@@ -203,7 +203,7 @@ if _PROMPT_FILE:
 
 def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYERS, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
-    for this scenario's runner+producer. `extra` layers on the runner (MOCK_MIGRATION) or producer
+    for this scenario's runner+producer. `extra` layers on the runner (layer-ack transport) or producer
     (schedule + CHECK_PCC) knobs.
 
     In the CI (mpirun) launch path the launcher's MPI/PMIx session variables are stripped from the
@@ -231,8 +231,8 @@ def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYER
 def _scenario_env(sc: dict, **extra) -> dict:
     """Child environment for one scenario's runner or producer: the shared transport knobs, the
     scenario's own layer count, its model-specific `env` (model, trace dir, ...), then the role-specific
-    `extra` (MOCK_MIGRATION for the runner; the schedule + CHECK_PCC for the producer). Both roles must
-    agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
+    `extra` (the layer-ack transport for the runner; the schedule + CHECK_PCC for the producer). Both
+    roles must agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
     return _transport_env(
         sc["users"],
         sc["max_seq_len"],
@@ -398,16 +398,14 @@ def _readiness_gates() -> str:
 
 @contextlib.contextmanager
 def _running_runner(tag: str, sc: dict, **extra):
-    """Spin up ONE runner (mock-migration, request mode) for a scenario and tear it down. Yields the
-    live _ChildStream once it has published the H2D descriptor + KV table + device map (i.e. it is
+    """Spin up ONE runner (request mode, KV table left on disk) for a scenario and tear it down. Yields
+    the live _ChildStream once it has published the H2D descriptor + KV table + device map (i.e. it is
     serving). `extra` layers additional env on top of the scenario's own (e.g. a generated prompt trace
     dir) -- same role as `_scenario_env`'s `extra`."""
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(
-        sc, PREFILL_MOCK_MIGRATION="1", PREFILL_ENABLE_LAYER_ACK="1", PREFILL_LAYER_ACK_D2H="1", **extra
-    )
+    env = _scenario_env(sc, PREFILL_ENABLE_LAYER_ACK="1", PREFILL_LAYER_ACK_D2H="1", **extra)
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":

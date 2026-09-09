@@ -1058,7 +1058,7 @@ def main() -> None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
             "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
-            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+            "(Gate 1 defaults this on via run_prefill_migration_gate.sh)."
         )
         sys.exit(1)
     if not cfg.verify:
