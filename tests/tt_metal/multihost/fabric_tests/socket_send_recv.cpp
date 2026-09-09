@@ -255,6 +255,7 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), tt_metal::CoreCoord(0, 0)));
 
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
+    socket_mem_config.per_core_allocation = true;
 
     if (parent_context->rank() == Rank{0}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
