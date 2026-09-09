@@ -22,7 +22,6 @@
 #include <iostream>
 #include <iterator>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -59,116 +58,6 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
-
-// The JIT link step drives the sfpi cross-compiler (riscv-tt-elf-g++), which by default spawns the
-// GNU ld shipped inside sfpi. mold links the same inputs considerably faster, which matters here
-// because every kernel build ends in a link. Mirrors the host-side selection in cmake/linking.cmake:
-// prefer mold when a new enough one is installed, otherwise silently keep sfpi's ld.
-struct MoldLinker {
-    std::string path;     // absolute path to the ld.mold binary
-    std::string version;  // full first line of `ld.mold --version`, hashed into the build key
-};
-
-// mold gained RISC-V (including RV32) support and linker-script coverage broad enough for the
-// kernel scripts in 2.0; older ones are rejected rather than silently miscompiling.
-constexpr std::string_view MOLD_MIN_VERSION = "2.0";
-
-bool mold_version_at_least(std::string_view version_line, std::string_view minimum) {
-    // Expected shape: "mold 2.32.0 (compatible with GNU ld)"
-    auto parse = [](std::string_view s, size_t& pos) -> int {
-        int value = 0;
-        bool any = false;
-        for (; pos < s.size() && s[pos] >= '0' && s[pos] <= '9'; ++pos) {
-            value = value * 10 + (s[pos] - '0');
-            any = true;
-        }
-        if (pos < s.size() && s[pos] == '.') {
-            ++pos;
-        }
-        return any ? value : -1;
-    };
-
-    const size_t name = version_line.find("mold ");
-    if (name == std::string_view::npos) {
-        return false;
-    }
-    size_t vpos = name + 5;
-    size_t mpos = 0;
-    for (int i = 0; i < 2; ++i) {
-        const int have = parse(version_line, vpos);
-        const int want = parse(minimum, mpos);
-        if (have < 0) {
-            return false;
-        }
-        if (have != want) {
-            return have > want;
-        }
-    }
-    return true;
-}
-
-// Resolve |program| to an absolute path: used as-is when it already contains a '/', otherwise
-// looked up in PATH.
-std::string which(const std::string& program) {
-    if (program.find('/') != std::string::npos) {
-        std::error_code ec;
-        return fs::is_regular_file(program, ec) ? program : std::string{};
-    }
-    const std::string path_env = parse_env<std::string>("PATH", std::string{});
-    for (size_t begin = 0; begin <= path_env.size();) {
-        const size_t end = std::min(path_env.find(':', begin), path_env.size());
-        if (end != begin) {
-            const fs::path candidate = fs::path(path_env.substr(begin, end - begin)) / program;
-            std::error_code ec;
-            if (fs::is_regular_file(candidate, ec)) {
-                return candidate.string();
-            }
-        }
-        begin = end + 1;
-    }
-    return {};
-}
-
-// TT_METAL_JIT_LINKER selects the linker the JIT link step hands to the sfpi driver:
-//   unset            -> use mold if a new enough one is on PATH, else sfpi's ld
-//   "default"/"bfd"  -> always sfpi's ld
-//   anything else    -> path to (or PATH-resolvable name of) the ld.mold to use
-std::optional<MoldLinker> find_mold_linker() {
-    const std::string requested = parse_env<std::string>("TT_METAL_JIT_LINKER", std::string{});
-    if (requested == "default" || requested == "bfd") {
-        return std::nullopt;
-    }
-
-    const std::string path = which(requested.empty() ? "ld.mold" : requested);
-    if (path.empty()) {
-        if (!requested.empty()) {
-            TT_THROW("TT_METAL_JIT_LINKER={} not found", requested);
-        }
-        return std::nullopt;
-    }
-
-    std::string version;
-    if (FILE* pipe = popen(fmt::format("exec '{}' --version", path).c_str(), "r")) {
-        char buf[128];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            version = buf;
-        }
-        pclose(pipe);
-    }
-    while (!version.empty() && (version.back() == '\n' || version.back() == '\r')) {
-        version.pop_back();
-    }
-
-    if (!mold_version_at_least(version, MOLD_MIN_VERSION)) {
-        if (!requested.empty()) {
-            TT_THROW("TT_METAL_JIT_LINKER={} is not mold >= {} (reports '{}')", path, MOLD_MIN_VERSION, version);
-        }
-        log_debug(tt::LogBuildKernels, "Ignoring {}: not mold >= {} (reports '{}')", path, MOLD_MIN_VERSION, version);
-        return std::nullopt;
-    }
-
-    return MoldLinker{path, version};
-}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -488,21 +377,6 @@ void JitBuildEnv::init(
     this->lflags_ = common_flags;
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
-    // Link with mold when one is available, in place of the ld that ships inside sfpi.
-    // -fuse-ld=mold makes the driver look for a program literally named "ld.mold"; the sfpi
-    // driver's exec prefixes are all inside sfpi, so -B puts mold's own directory on that search
-    // path. (-B also adds the directory to the library search path, which is harmless: host bin
-    // directories hold no libraries, and the kernel link is -nostdlib territory anyway.)
-    std::string linker_version;
-    if (const std::optional<MoldLinker> mold = find_mold_linker()) {
-        fmt::format_to(
-            std::back_inserter(this->lflags_),
-            "-B{} -fuse-ld=mold ",
-            std::filesystem::path(mold->path).parent_path().string());
-        linker_version = mold->version;
-        log_debug(tt::LogBuildKernels, "Using {} for JIT links ({})", mold->path, mold->version);
-    }
-
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::StableHasher hasher;
     hasher.update(build_key);
@@ -510,8 +384,6 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
-    // A mold upgrade can change the emitted ELF even though every flag is identical.
-    hasher.update(linker_version);
 
     if (get_rtoptions().get_build_map_enabled()) {
         // Do not hash compiler version when generating compiler logs
