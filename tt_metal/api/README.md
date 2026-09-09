@@ -28,11 +28,11 @@ approved experimental free-function/friend pattern remain permitted.
 Run from the repository root:
 
 ```sh
-python3 scripts/validate_api/validate_includes.py tt_metal/api
+python3 scripts/validate_api/validate_api.py tt_metal/api
 python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
 ```
 
-The existing `validate-metalium-includes` pre-commit hook runs all API validation
+The `validate-metalium-api` pre-commit hook runs all API validation
 through this command. The `all-static-checks.yaml`
 workflow runs on PR updates and merge groups. Checker failures fail its
 `Run Pre-commit Hooks` job. The checker tests also run through pre-commit when

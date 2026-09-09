@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validate_includes import (
+from validate_api import (
     ALLOWED_PREFIXES,
     ALLOWED_UMD_HEADERS,
     BANNED_HEADERS,
@@ -289,7 +289,7 @@ class ApiValidationTests(unittest.TestCase):
         exceptions.write_text("[]")
         command = [
             sys.executable,
-            str(Path(__file__).with_name("validate_includes.py")),
+            str(Path(__file__).with_name("validate_api.py")),
             str(self.root),
             "--exceptions",
             str(exceptions),
