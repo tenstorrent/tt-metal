@@ -6,14 +6,34 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+
+#include "autograd/auto_context.hpp"
 
 namespace ttml::test_utils {
 
-// Number of devices available on the host.
+// Number of devices this host owns, taken from the local extent of the system mesh.
+//
+// Probed through a short-lived MetalEnv rather than GetNumAvailableDevices() or
+// SystemMesh::instance(), since both implicitly create a process-wide MetalContext and
+// leave it in place.
+inline size_t host_device_count() {
+    // Inline and static so the count is cached between calls so only the first call probes.
+    static const size_t count = [] {
+        if (autograd::ctx().is_device_open()) {
+            throw std::runtime_error(
+                "host_device_count() must be called before opening a device: probing builds a second MetalEnv for the "
+                "silicon cluster, which hangs in UMD rather than reporting an error. Move the mesh-support check ahead "
+                "of ttml::autograd::ctx().open_device().");
+        }
+        return tt::tt_metal::MetalEnv{}.get_system_mesh().local_shape().mesh_size();
+    }();
+    return count;
+}
+
 inline bool host_supports_mesh(const tt::tt_metal::distributed::MeshShape& shape) {
-    return tt::tt_metal::GetNumAvailableDevices() >= shape.mesh_size();
+    return host_device_count() >= shape.mesh_size();
 }
 
 }  // namespace ttml::test_utils
@@ -29,6 +49,6 @@ inline bool host_supports_mesh(const tt::tt_metal::distributed::MeshShape& shape
                 "Skipping test: a {} mesh needs {} devices, this host has {}", \
                 s,                                                             \
                 s.mesh_size(),                                                 \
-                tt::tt_metal::GetNumAvailableDevices());                       \
+                ttml::test_utils::host_device_count());                        \
         }                                                                      \
     } while (0)

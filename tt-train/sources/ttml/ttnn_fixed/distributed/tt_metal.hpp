@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace ttml::ttnn_fixed::distributed {
 
@@ -19,11 +20,14 @@ std::optional<std::string> get_mgd_path(uint32_t num_devices);
 
 void enable_fabric(uint32_t num_devices);
 
-// Tear down any previously installed fabric config by transitioning to
-// FabricConfig::DISABLED. Safe to call when no devices are open (per
-// tt_metal/impl/context/metal_env.cpp: "Going TO DISABLED is allowed"),
-// which is the case immediately after AutoContext::close_device() and
-// during the failure path of open_device_mesh().
+// Reset the fabric config selected by enable_fabric(), so the next device open runs
+// without fabric. Without this, fabric stays the same for the rest of the process and
+// any subsequent default 1x1 open on a host where mmio_chip_ids().size() !=
+// all_chip_ids().size() trips the "Fabric is being used but Device i is not active" check
+// from tt_metal/impl/device/device_manager.cpp.
 void disable_fabric();
+
+// Fabric config chosen by the most recent enable_fabric(), or nullopt when fabric is off.
+[[nodiscard]] std::optional<tt::tt_fabric::FabricConfig> selected_fabric_config();
 
 }  // namespace ttml::ttnn_fixed::distributed

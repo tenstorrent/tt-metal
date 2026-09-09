@@ -109,6 +109,8 @@ public:
 
     void close_device();
 
+    [[nodiscard]] bool is_device_open() const;
+
     void initialize_distributed_context(int argc, char** argv);
 
     [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
