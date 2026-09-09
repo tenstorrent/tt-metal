@@ -677,4 +677,6 @@ def test_silu_mish_negative_tail_all_bitpatterns(ttnn_function, torch_function, 
     tail = (torch_input_tensor.to(torch.float64) < -80.0) & (reference.abs() >= 2.0**-126)
     assert tail.any()
     assert not (result[tail] == 0).any()
-    assert_with_ulp(reference[tail].to(torch_dtype), result[tail].to(torch_dtype), ulp_threshold=4)
+    assert_with_ulp(
+        expected_result=reference[tail].to(torch_dtype), actual_result=result[tail].to(torch_dtype), ulp_threshold=4
+    )
