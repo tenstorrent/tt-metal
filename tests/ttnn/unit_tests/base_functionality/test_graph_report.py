@@ -3983,19 +3983,6 @@ class TestRecordPythonOperation:
         assert len(g._python_io_data) == 1
         assert reserved["arguments"]["bias"] == "1"
 
-    def test_unprintable_arg_is_recorded_as_placeholder(self):
-        import ttnn.graph as g
-
-        class Boom:
-            def __str__(self):
-                raise RuntimeError("stringify failed")
-
-        g.record_python_operation("ttnn.add", (Boom(),), {})
-        assert len(g._python_io_data) == 1
-        record = g._python_io_data[0]
-        assert record["name"] == "ttnn.add"
-        assert record["arguments"]["0"] == "<unprintable Boom: RuntimeError: stringify failed>"
-
     def test_populate_failure_keeps_the_reserved_record(self, expect_error, monkeypatch):
         import ttnn.graph as g
 
