@@ -146,7 +146,7 @@ pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_
 
 Wipe the artefact root (`/tmp/tt-llk-build`, or `$RUNNER_TEMP/tt-llk-build`) when switching between the two builds: the variant hash and the build markers ignore the counter flags, so the ELFs are otherwise reused.
 
-To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-4>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
+To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-5>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
 
 
 The `--enable-perf-counters` flag triggers two things:
