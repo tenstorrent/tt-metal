@@ -455,12 +455,14 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     cv_.notify_all();
                     break;
                 }
-                // Same trigger for a d2d socket poll fed by another RANK. Without it the spinner is
-                // resumed forever, quiescence is never reached, and the tier-2 watchdog aborts a run
-                // that is only waiting on another process.
-                if (persistent_ && !any_waiting_on_host() && any_fresh_peer_socket_poll_waiter() &&
-                    peer_progress_probe()) {
-                    peer_wait_ = true;
+                // A peer-fed spinner cannot reach quiescence. Classify it only after every sibling
+                // stops running; a false probe is global deadlock, while true suspends for delivery.
+                if (persistent_ && !any_waiting_on_host() && running_ == 0 && any_fresh_peer_socket_poll_waiter()) {
+                    if (peer_progress_probe()) {
+                        peer_wait_ = true;
+                    } else {
+                        deadlock_ = true;
+                    }
                     abort_flag_ = true;
                     cv_.notify_all();
                     break;
@@ -524,7 +526,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     // into our L1. Yield on the HostWait contract instead of tearing the run down;
                     // the caller re-pumps when a delivery lands. A genuine global deadlock still
                     // falls through here, because the probe goes false once every rank is parked.
-                    if (peer_progress_probe() ) {
+                    if (peer_progress_probe()) {
                         peer_wait_ = true;
                         abort_flag_ = true;
                         --idle_;
