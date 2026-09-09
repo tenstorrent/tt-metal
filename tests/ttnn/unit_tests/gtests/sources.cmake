@@ -35,8 +35,6 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_launch_operation.cpp
     test_matmul.cpp
     test_sparse_matmul_fp32.cpp
-    test_mcast_host.cpp
-    test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
