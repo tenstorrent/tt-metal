@@ -83,27 +83,23 @@ uint32_t get_worker_noc_hop_distance(
     return get_worker_noc_hop_distance(device, logical_src, logical_dst, noc);
 }
 
-CoreCoord get_closest_worker_to_eth_core(
-    IDevice* device, const CoreCoord& logical_eth_core, NOC noc, uint32_t& noc_hops) {
+CoreAtNocHops get_closest_worker_to_eth_core(IDevice* device, const CoreCoord& logical_eth_core, NOC noc) {
     auto* dev = concrete_device(device);
     const auto eth_core = dev->physical_eth_core_from_logical_core(logical_eth_core);
     const auto grid_size = device->grid_size();
     const auto worker_grid_size = device->compute_with_storage_grid_size();
 
-    CoreCoord closest = CoreCoord{0, 0};
-    uint32_t min_hops_so_far = std::numeric_limits<uint32_t>::max();
+    CoreAtNocHops closest{CoreCoord{0, 0}, std::numeric_limits<uint32_t>::max()};
     for (uint32_t y = 0; y < worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < worker_grid_size.x; x++) {
             uint32_t hops = noc_hop_distance(
                 dev->physical_worker_core_from_logical_core(CoreCoord{x, y}), eth_core, grid_size, noc);
-            if (hops < min_hops_so_far) {
-                min_hops_so_far = hops;
-                closest = CoreCoord{x, y};
+            if (hops < closest.distance_in_noc_hops) {
+                closest = CoreAtNocHops{CoreCoord{x, y}, hops};
             }
         }
     }
 
-    noc_hops = min_hops_so_far;
     return closest;
 }
 
