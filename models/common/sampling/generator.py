@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
+from .tt_log_probs import LogProbsResult
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -88,6 +89,7 @@ class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
     force_argmax: bool
+    grammar_on: bool
     bucket: int | None = None
 
 
@@ -143,11 +145,18 @@ class SamplingGenerator:
         sampling trace captured at width B is only ever replayed against width-B logits."""
         self._active_trace_bucket = bucket
 
-    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
+    def _trace_slot(
+        self,
+        penalties_on: bool,
+        log_probs_on: bool,
+        force_argmax: bool,
+        grammar_on: bool = False,
+    ):
         key = _TraceKey(
             penalties_on=penalties_on,
             log_probs_on=log_probs_on,
             force_argmax=force_argmax,
+            grammar_on=grammar_on,
             bucket=self._active_trace_bucket,
         )
         slot = self._trace_states.get(key)
@@ -164,7 +173,9 @@ class SamplingGenerator:
             if slot["id"] is None:
                 continue
             logger.debug(
-                f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, "
+                f"log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, "
+                f"grammar={key.grammar_on}, trace_id={slot['id']})"
             )
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
@@ -182,6 +193,14 @@ class SamplingGenerator:
         if not self._penalties_active:
             return
         self.tt_penalties.reset_output_tokens(tokens)
+
+    def enable_device_grammar(self) -> None:
+        """Allocate grammar state before any sampling trace is captured."""
+        self.tt_sampling.enable_device_grammar()
+
+    def validate_grammar_bitmask(self, grammar_bitmask: torch.Tensor) -> None:
+        """Raise on an invalid mask without changing device or sampler state."""
+        self.tt_sampling.validate_grammar_bitmask(grammar_bitmask)
 
     # ---------------------------------------------------------------------
     # Prefill / decode state helpers
@@ -258,7 +277,6 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
-        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -268,8 +286,6 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
-        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
-            self.reset_trace()
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
@@ -314,12 +330,19 @@ class SamplingGenerator:
         logits,
         *,
         penalties_on: bool,
-        tt_out_tok: Optional[ttnn.Tensor],
+        grammar_on: bool,
+        tt_out_tok: ttnn.Tensor | None = None,
         count_tokens: bool = True,
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
-        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+
+        tt_tokens, tt_log_probs = self.tt_sampling(
+            logits,
+            tt_out_tok=tt_out_tok,
+            apply_grammar=grammar_on,
+        )
+
         if penalties_on and count_tokens:
             # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
             # sample(). The order is unchanged -- penalties are applied to this step's logits from the
@@ -347,7 +370,9 @@ class SamplingGenerator:
         self,
         logits: ttnn.Tensor,
         *,
-        tt_out_tok: Optional[ttnn.Tensor] = None,
+        tt_out_tok: ttnn.Tensor | None = None,
+        grammar_bitmask: torch.Tensor | None = None,
+        compile_token_update: bool = False,
     ) -> None:
         """Run the sampling pipeline once without capturing, to compile it and size its scratch.
 
@@ -358,36 +383,57 @@ class SamplingGenerator:
 
         ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
         """
+        grammar_on = grammar_bitmask is not None
+        if grammar_on:
+            self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
+
         self._run_sampling(
             logits,
             penalties_on=self._penalties_active,
+            grammar_on=grammar_on,
             tt_out_tok=tt_out_tok,
-            count_tokens=False,
+            count_tokens=compile_token_update,
         )
+
+        if compile_token_update:
+            self.reset_penalty_counts()
 
     def capture_trace(
         self,
         logits: ttnn.Tensor,
         *,
-        tt_out_tok: Optional[ttnn.Tensor] = None,
+        tt_out_tok: ttnn.Tensor | None = None,
         skip_precompile: bool = False,
-    ) -> ttnn.Tensor:
+        grammar_bitmask: torch.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         """
         Capture a trace of the sampling pipeline for the given configuration.
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
+        grammar_on = grammar_bitmask is not None
 
-        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+        if grammar_on:
+            self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
+
+        _, slot = self._trace_slot(
+            penalties_on,
+            log_probs_on,
+            force_argmax,
+            grammar_on,
+        )
 
         if not skip_precompile:
             logger.debug(
-                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+                f"Pre-compiling sampling path before trace capture "
+                f"(penalties={penalties_on}, log_probs={log_probs_on}, "
+                f"force_argmax={force_argmax}, grammar={grammar_on})"
             )
             self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
+                grammar_on=grammar_on,
                 tt_out_tok=tt_out_tok,
                 count_tokens=False,
             )
@@ -396,6 +442,7 @@ class SamplingGenerator:
         sampled = self._run_sampling(
             logits,
             penalties_on=penalties_on,
+            grammar_on=grammar_on,
             tt_out_tok=tt_out_tok,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
@@ -417,7 +464,7 @@ class SamplingGenerator:
 
         return slot["output"]
 
-    def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
+    def _execute_trace(self, key: _TraceKey) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         slot = self._trace_states.get(key)
         if slot is None:
             raise RuntimeError("Trace has not been captured yet.")
@@ -432,18 +479,27 @@ class SamplingGenerator:
         logits: ttnn.Tensor,
         *,
         enable_trace: bool = True,
-        tt_out_tok: Optional[ttnn.Tensor] = None,
+        tt_out_tok: ttnn.Tensor | None = None,
         skip_precompile: bool = False,
         count_tokens: bool = True,
-    ) -> ttnn.Tensor:
-        """
-        Convenience wrapper that either runs the sampling module directly or
-        replays a captured trace.
+        grammar_bitmask: torch.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
+        """Run eager sampling or replay the trace matching this configuration.
+
+        A non-``None`` packed grammar mask is validated and copied into the
+        persistent trace input before selecting the separate grammar-on trace.
+        Call ``enable_device_grammar`` before any trace capture; grammar-on and
+        grammar-off traces never share mask state.
         """
 
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
+        grammar_on = grammar_bitmask is not None
+
+        if grammar_on:
+            self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
+
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
@@ -451,16 +507,23 @@ class SamplingGenerator:
             tt_out = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
+                grammar_on=grammar_on,
                 tt_out_tok=tt_out_tok,
                 count_tokens=count_tokens,
             )
         else:
-            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+            key, slot = self._trace_slot(
+                penalties_on,
+                log_probs_on,
+                force_argmax,
+                grammar_on,
+            )
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
+                    grammar_bitmask=grammar_bitmask,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)

@@ -5,6 +5,7 @@
 import math
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 
 import torch
 from loguru import logger
@@ -45,6 +46,27 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+
+
+@dataclass(frozen=True)
+class DeferredDecodeSampling:
+    """One-shot decode logits and state captured before late device sampling.
+
+    ``decode_forward(..., defer_device_sampling=True)`` owns the position,
+    reset, token-history, remap, trace, and reload values in this payload.
+    Sampling parameters and an optional grammar mask arrive later through
+    ``sample_decode_on_device`` and cannot override the captured state.
+    """
+
+    tt_logits: object
+    start_pos: list[torch.Tensor]
+    reset_batch: bool
+    prompt_tokens: torch.Tensor | None
+    output_tokens: torch.Tensor | None
+    slot_remap: torch.Tensor | None
+    enable_trace: bool
+    skip_precompile: bool
+    reload_inputs: bool
 
 
 def batched_prefill_padded_batch(batch_size, empty_slots, max_batch_size):
@@ -172,6 +194,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # captured as they are prepared. See _prepare_decode_trace_text for why the decode ordering matters.
         self._defer_trace_recording = False
         self._pending_decode_trace = None
+        self._prepared_device_grammar_decode_traces = []
+        self._pending_deferred_decode_sampling: DeferredDecodeSampling | None = None
+        self._deferred_decode_sampling_failed = False
+        self.device_grammar_enabled = False
+
+        if self.model_capabilities.get("supports_device_grammar", False):
+            samplers = [getattr(model, "sampling", None) for model in self.model]
+            sampling_dp = [getattr(model, "sampling_dp", 1) for model in self.model]
+            self._device_grammar_available = all(sampler is not None for sampler in samplers) and all(
+                value == 1 for value in sampling_dp
+            )
+        else:
+            self._device_grammar_available = False
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses).
     # A subclass dict replaces this one rather than merging into it, so a default
@@ -179,6 +214,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     model_capabilities = {
         "supports_prefix_caching": False,
     }
+
+    def poison_deferred_device_sampling(self) -> None:
+        """Make every later decode fail after a deferred step becomes unsafe."""
+        self._pending_deferred_decode_sampling = None
+        self._deferred_decode_sampling_failed = True
+
+    def enable_device_grammar(self) -> bool:
+        """Allocate grammar state only after the serving runtime selects it."""
+        if not self._device_grammar_available:
+            return False
+        if not self.device_grammar_enabled:
+            if self._any_trace_captured():
+                raise RuntimeError("device grammar must be enabled before any model trace is captured")
+            for model in self.model:
+                model.sampling.enable_device_grammar()
+            self.device_grammar_enabled = True
+        return True
 
     def _any_trace_captured(self):
         """True once any trace has been captured, i.e. once allocations are no longer unconditionally safe.
@@ -219,6 +271,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ret["page_table"] = page_table_warmup
 
         return ret
+
+    def _create_warmup_grammar_bitmask(self, batch_size: int) -> torch.Tensor:
+        """Return an all-allowed packed mask that compiles grammar sampling."""
+        packed_vocab_size = (self.model_args[0].vocab_size + 31) // 32
+        return torch.full(
+            (batch_size, packed_vocab_size),
+            -1,
+            dtype=torch.int32,
+        )
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
         if self.already_warmed_up_prefill:
@@ -437,7 +498,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             logger.info("Vision encoder warmup completed")
 
-    def _prepare_decode_trace_for_warmup(self, kv_cache, page_table, on_device_sampling):
+    def _prepare_decode_trace_for_warmup(
+        self,
+        kv_cache,
+        page_table,
+        on_device_sampling,
+        *,
+        sampling_trace_warmup_params=None,
+        sampling_trace_warmup_device_grammar=False,
+    ):
         """Full decode trace preparation (compile pass + trace inputs), run before any trace is captured.
 
         The model has to be in decode mode for the compile pass to pick the right configs.
@@ -471,6 +540,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table=chunked_page_table,
                 kv_cache=kv_cache,
                 on_device_sampling=on_device_sampling,
+                sampling_trace_warmup_params=sampling_trace_warmup_params,
+                sampling_trace_warmup_device_grammar=(sampling_trace_warmup_device_grammar),
             )
         finally:
             # Restore only the generator's own mode. No switch_mode(Mode.PREFILL): that drives
@@ -531,6 +602,63 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 on_device_sampling=on_device_sampling,
             )
 
+    def prepare_device_grammar_decode_trace_warmup(
+        self,
+        *,
+        kv_cache,
+        max_batch_size: int,
+        num_blocks: int,
+    ) -> bool:
+        """Prepare host/device decode inputs and grammar variants before capture."""
+        if self.trace_ids_decode[True] and self.trace_ids_decode[False]:
+            return True
+        if self._prepared_device_grammar_decode_traces:
+            return True
+        if self._uses_prefetcher():
+            return False
+
+        sampling_params = self._create_sampling_params(
+            can_sample_on_device=True,
+            batch_size=max_batch_size,
+            include_greedy_penalties=True,
+        )
+        _, _, page_table = self._create_decode_warmup_inputs(
+            max_batch_size,
+            num_blocks,
+        )
+        prepared_traces = []
+        if not self.trace_ids_decode[True]:
+            prepared = self._prepare_decode_trace_for_warmup(
+                kv_cache=kv_cache,
+                page_table=page_table,
+                on_device_sampling=True,
+                sampling_trace_warmup_params=sampling_params,
+                sampling_trace_warmup_device_grammar=True,
+            )
+            if prepared is None:
+                return False
+            prepared_traces.append(prepared)
+        if not self.trace_ids_decode[False]:
+            prepared = self._prepare_decode_trace_for_warmup(
+                kv_cache=kv_cache,
+                page_table=page_table,
+                on_device_sampling=False,
+            )
+            if prepared is None:
+                return False
+            prepared_traces.append(prepared)
+        self._prepared_device_grammar_decode_traces = prepared_traces
+        return True
+
+    def capture_prepared_device_grammar_decode_trace(self) -> None:
+        """Capture every decode trace whose allocations were prepared earlier."""
+        prepared_traces, self._prepared_device_grammar_decode_traces = (
+            self._prepared_device_grammar_decode_traces,
+            [],
+        )
+        for prepared in prepared_traces:
+            self._record_prepared_decode_trace(prepared)
+
     def _post_prefill_tail(self, model_id, logits, sampling_enabled):
         """The part of the post-prefill body that runs on already-computed logits."""
         if sampling_enabled:
@@ -557,28 +685,25 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             }
         )
 
-    def _record_pending_traces(self):
-        """Capture the decode trace prepared while recording was deferred.
+    def _record_prepared_decode_trace(self, prepared):
+        on_device_sampling = prepared["on_device_sampling"]
+        previous_mode = self.mode
+        self.mode = Mode.DECODE
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+        try:
+            trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
+        finally:
+            self.mode = previous_mode
+        self.trace_ids_decode[on_device_sampling] = trace_ids
+        self.trace_inputs_decode[on_device_sampling] = device_inputs
+        self.trace_output_decode[on_device_sampling] = tt_out_trace
 
-        Its compile pass, persistent inputs and sampling pre-compile all ran in
-        :meth:`_prepare_decode_trace_text` before this call's prefill captured anything, so this binds only
-        to buffers that already existed and allocates nothing itself.
-        """
+    def _record_pending_traces(self):
+        """Capture the decode trace prepared while recording was deferred."""
         if self._pending_decode_trace is not None:
             prepared, self._pending_decode_trace = self._pending_decode_trace, None
-            on_device_sampling = prepared["on_device_sampling"]
-            previous_mode = self.mode
-            self.mode = Mode.DECODE
-            for i in range(len(self.model)):
-                self.model[i].switch_mode(Mode.DECODE)
-            try:
-                trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
-            finally:
-                # See _prepare_decode_trace_for_warmup: no switch_mode(Mode.PREFILL) here either.
-                self.mode = previous_mode
-            self.trace_ids_decode[on_device_sampling] = trace_ids
-            self.trace_inputs_decode[on_device_sampling] = device_inputs
-            self.trace_output_decode[on_device_sampling] = tt_out_trace
+            self._record_prepared_decode_trace(prepared)
 
     def _prefill_trace_forward(self, prepared, device_inputs):
         """Run the prefill body for a prepared trace variant.
@@ -1802,9 +1927,25 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        grammar_bitmask: torch.Tensor | None = None,
         skip_trace_precompile: bool = False,
         **kwargs,
     ):
+        sampling_trace_warmup_params = kwargs.pop(
+            "sampling_trace_warmup_params",
+            None,
+        )
+        sampling_trace_warmup_device_grammar = bool(kwargs.pop("sampling_trace_warmup_device_grammar", False))
+        if self._deferred_decode_sampling_failed:
+            raise RuntimeError(
+                "a prior deferred device-sampling step failed after decode "
+                "submission; restart the model runner before decoding again"
+            )
+        if self._pending_deferred_decode_sampling is not None:
+            raise RuntimeError(
+                "decode_forward cannot submit another decode before the "
+                "previous deferred device-sampling payload is consumed"
+            )
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
@@ -1880,15 +2021,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
                 if slot_remap is not None:
                     chunk = dev_toks.shape[0]
-                    remap = slot_remap[i * chunk : (i + 1) * chunk]
-                    remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
-                    # slot_remap holds GLOBAL slot indices: the vLLM plugin offsets
-                    # each DP rank's local [0,B) remap by rank*B for the row-sharded
-                    # SeedManager. dev_toks/dev_pos are this rank's *local* size-B
-                    # tensors, so rebase the global indices back to [0,B) before
-                    # gathering -- otherwise rank i>=1 indexes past the end (e.g.
-                    # value 32 into a size-32 tensor).
-                    remap_t = remap_t - i * chunk
+                    remap_t = self._rank_local_slot_remap(slot_remap, i, chunk)
                     dev_toks = dev_toks[remap_t]
                     dev_pos = dev_pos[remap_t]
                 # The device token is authoritative only for slots whose device
@@ -1942,6 +2075,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 **decode_kwargs,
                 reload_inputs=reload_inputs,
                 skip_precompile=skip_trace_precompile,
+                sampling_trace_warmup_params=sampling_trace_warmup_params,
+                sampling_trace_warmup_device_grammar=(sampling_trace_warmup_device_grammar),
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1950,7 +2085,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         # Device deferred
         if defer_device_sampling and on_device_sampling:
-            return tt_decode_output
+            deferred = DeferredDecodeSampling(
+                tt_logits=tt_decode_output,
+                start_pos=start_pos,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                enable_trace=enable_trace,
+                skip_precompile=skip_trace_precompile,
+                reload_inputs=reload_inputs,
+            )
+            self._pending_deferred_decode_sampling = deferred
+            return deferred
+        if not on_device_sampling:
+            self._apply_sampling_slot_remap(slot_remap)
         # Device immediate
         if sampling_params is not None:
             tt_decode_output = self.sample_decode_on_device(
@@ -1964,6 +2113,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 enable_trace=enable_trace,
                 skip_precompile=skip_trace_precompile,
                 reload_inputs=reload_inputs,
+                grammar_bitmask=grammar_bitmask,
             )
         # Host sampling
         if read_from_device:
@@ -2025,6 +2175,69 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return tt_output
 
+    def _set_sampling_trace_warmup_params(self, sampling_params) -> None:
+        """Apply one sampler configuration without advancing request state."""
+        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+        if len(set(sampling_dp_values)) != 1:
+            raise ValueError("all model instances must use one sampling_dp during warmup, " f"got {sampling_dp_values}")
+        sampling_dp = max(self.data_parallel, sampling_dp_values[0])
+        sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
+        if sampling_dp % self.data_parallel != 0:
+            raise ValueError(f"sampling_dp={sampling_dp} is not divisible by " f"data_parallel={self.data_parallel}")
+        chunks_per_model = sampling_dp // self.data_parallel
+        for model_id in range(self.data_parallel):
+            sampling_module = getattr(self.model[model_id], "sampling", None)
+            if sampling_module is None:
+                continue
+            start = model_id * chunks_per_model
+            sampling_module.apply_decode_state(
+                sampling_params_list[start : start + chunks_per_model],
+            )
+
+    @staticmethod
+    def _sampling_params_enable_logprobs(sampling_params) -> bool:
+        enable_log_probs = getattr(sampling_params, "enable_log_probs", False)
+        if isinstance(enable_log_probs, torch.Tensor):
+            return bool(enable_log_probs.any())
+        if isinstance(enable_log_probs, (list, tuple)):
+            return any(enable_log_probs)
+        return bool(enable_log_probs)
+
+    def _precompile_sampling_trace_variants(
+        self,
+        compile_output,
+        device_inputs,
+        sampling_params_variants,
+        *,
+        device_grammar: bool,
+    ) -> None:
+        """Compile all sampler traces before recording the first decode trace."""
+        for sampling_params in sampling_params_variants:
+            if sampling_params is None:
+                continue
+            self._set_sampling_trace_warmup_params(sampling_params)
+            has_logprobs = self._sampling_params_enable_logprobs(sampling_params)
+            for model_id in range(self.data_parallel):
+                sampling_module = getattr(self.model[model_id], "sampling", None)
+                if sampling_module is None:
+                    continue
+                tt_out_tok = self._decode_token_feedback_buffer(
+                    self.model[model_id],
+                    device_inputs[model_id],
+                )
+                sampling_module.precompile(
+                    logits=compile_output[model_id][0],
+                    tt_out_tok=tt_out_tok,
+                    compile_token_update=True,
+                )
+                if device_grammar and not has_logprobs:
+                    sampling_module.precompile(
+                        logits=compile_output[model_id][0],
+                        tt_out_tok=tt_out_tok,
+                        grammar_bitmask=self._create_warmup_grammar_bitmask(sampling_module.tt_sampling.max_batch_size),
+                        compile_token_update=True,
+                    )
+
     def _prepare_decode_trace_text(
         self,
         tokens,
@@ -2033,6 +2246,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         kv_cache=None,
         on_device_sampling=False,
         skip_precompile=False,
+        sampling_trace_warmup_params=None,
+        sampling_trace_warmup_device_grammar=False,
     ):
         """Phase 1 of decode trace setup: run the compile pass and stage the persistent trace inputs.
 
@@ -2071,14 +2286,25 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # SamplingGenerator normally pre-compiles just before capturing, which would allocate with the
         # decode trace already live. Pre-compile here instead, against the compile pass' logits (same spec
         # as the traced output), leaving only the capture for the recording phase.
-        for i in range(self.data_parallel):
-            sampling_module = getattr(self.model[i], "sampling", None)
-            if not on_device_sampling or sampling_module is None or compile_output is None:
-                continue
-            sampling_module.precompile(
-                logits=compile_output[i][0],
-                tt_out_tok=self._decode_token_feedback_buffer(self.model[i], device_inputs[i]),
+        if on_device_sampling and compile_output is not None and sampling_trace_warmup_params is not None:
+            self._precompile_sampling_trace_variants(
+                compile_output,
+                device_inputs,
+                sampling_trace_warmup_params,
+                device_grammar=sampling_trace_warmup_device_grammar,
             )
+        else:
+            for i in range(self.data_parallel):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if not on_device_sampling or sampling_module is None or compile_output is None:
+                    continue
+                sampling_module.precompile(
+                    logits=compile_output[i][0],
+                    tt_out_tok=self._decode_token_feedback_buffer(
+                        self.model[i],
+                        device_inputs[i],
+                    ),
+                )
 
         return {
             "device_inputs": device_inputs,
@@ -2156,6 +2382,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         kv_cache=None,
         on_device_sampling=False,
         skip_precompile=False,
+        sampling_trace_warmup_params=None,
+        sampling_trace_warmup_device_grammar=False,
     ):
         """Prepare and immediately capture the decode trace.
 
@@ -2174,6 +2402,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=kv_cache,
                 on_device_sampling=on_device_sampling,
                 skip_precompile=skip_precompile,
+                sampling_trace_warmup_params=sampling_trace_warmup_params,
+                sampling_trace_warmup_device_grammar=(sampling_trace_warmup_device_grammar),
             )
         )
 
@@ -2186,6 +2416,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         on_device_sampling=False,
         reload_inputs=False,
         skip_precompile=False,
+        sampling_trace_warmup_params=None,
+        sampling_trace_warmup_device_grammar=False,
     ):
         """
         Run decode forward text with tracing
@@ -2202,6 +2434,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=kv_cache,
                 on_device_sampling=on_device_sampling,
                 skip_precompile=skip_precompile,
+                sampling_trace_warmup_params=sampling_trace_warmup_params,
+                sampling_trace_warmup_device_grammar=(sampling_trace_warmup_device_grammar),
             )
             self.trace_ids_decode[on_device_sampling] = trace_ids
             self.trace_inputs_decode[on_device_sampling] = device_inputs
@@ -2257,14 +2491,53 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         enable_trace=False,
         skip_precompile=False,
         reload_inputs=None,
+        grammar_bitmask: torch.Tensor | None = None,
     ):
-        """Sample this decode step's tokens on device.
+        """Sample immediate logits or consume one deferred decode payload.
 
         ``reload_inputs``: host inputs are authoritative, so ``start_pos`` may
         re-anchor the seed counters. ``None`` takes the last decode_forward's
-        value (the deferred path calls this out of band).
+        value. A ``DeferredDecodeSampling`` supplies all lifecycle arguments
+        itself and is accepted exactly once. Stale-payload and caller-override
+        checks happen before consumption; grammar validation and all later
+        failures are terminal because the submitted decode can no longer fall
+        back safely.
         """
-        if reload_inputs is None:
+        if self._deferred_decode_sampling_failed:
+            raise RuntimeError(
+                "a prior deferred device-sampling step failed after decode "
+                "submission; restart the model runner before sampling again"
+            )
+        deferred = tt_logits if isinstance(tt_logits, DeferredDecodeSampling) else None
+        if self._pending_deferred_decode_sampling is not None and deferred is None:
+            raise RuntimeError(
+                "a deferred decode sampling payload is pending and must be " "consumed before direct device sampling"
+            )
+        if deferred is not None:
+            if self._pending_deferred_decode_sampling is not deferred:
+                raise RuntimeError("deferred decode sampling payload is stale or was already consumed")
+            if (
+                start_pos is not None
+                or reset_batch
+                or prompt_tokens is not None
+                or output_tokens is not None
+                or slot_remap is not None
+                or reload_inputs is not None
+            ):
+                raise ValueError(
+                    "deferred decode sampling owns start_pos, reset, token, "
+                    "slot-remap, and reload state; callers must not override it"
+                )
+            tt_logits = deferred.tt_logits
+            start_pos = deferred.start_pos
+            reset_batch = deferred.reset_batch
+            prompt_tokens = deferred.prompt_tokens
+            output_tokens = deferred.output_tokens
+            slot_remap = deferred.slot_remap
+            enable_trace = deferred.enable_trace
+            skip_precompile = deferred.skip_precompile
+            reload_inputs = deferred.reload_inputs
+        elif reload_inputs is None:
             reload_inputs = getattr(self, "_decode_reload_inputs", True)
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
@@ -2278,6 +2551,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # (one is always 1). If a future model needs both DP>1 and row-sharded
         # sampling, this should become data_parallel * sampling_dp_values[0].
         sampling_dp = max(self.data_parallel, sampling_dp_values[0])
+        if grammar_bitmask is not None and sampling_dp != self.data_parallel:
+            raise ValueError(
+                "device grammar sampling does not support row-sharded sampling: "
+                f"data_parallel={self.data_parallel}, sampling_dp={sampling_dp}"
+            )
         sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
         prompt_chunks = (
             torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
@@ -2285,7 +2563,40 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_chunks = (
             torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
         )
+        grammar_chunks: list[torch.Tensor | None] = [None] * self.data_parallel
+        if grammar_bitmask is not None:
+            if not isinstance(grammar_bitmask, torch.Tensor):
+                raise TypeError("grammar_bitmask must be a torch.Tensor, got " f"{type(grammar_bitmask).__name__}")
+            if self.data_parallel == 1:
+                grammar_chunks = [grammar_bitmask]
+            else:
+                per_model_batch = [int(self.model_args[i].max_batch_size) for i in range(self.data_parallel)]
+                expected_rows = sum(per_model_batch)
+                if grammar_bitmask.shape[0] != expected_rows:
+                    raise ValueError(
+                        "multi-model grammar_bitmask must cover every local "
+                        f"slot: got rows={grammar_bitmask.shape[0]}, "
+                        f"per_model_batch={per_model_batch}"
+                    )
+                offset = 0
+                grammar_chunks = []
+                for batch_size in per_model_batch:
+                    grammar_chunks.append(grammar_bitmask[offset : offset + batch_size])
+                    offset += batch_size
 
+        if deferred is not None:
+            # Seed, remap, and device state can mutate below. Consume this
+            # payload terminally and leave the runner fail-stopped on error.
+            self._pending_deferred_decode_sampling = None
+            self._deferred_decode_sampling_failed = True
+        if grammar_bitmask is not None:
+            for i, grammar_chunk in enumerate(grammar_chunks):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if sampling_module is None:
+                    raise RuntimeError(f"model {i} received a grammar bitmask without a device sampler")
+                sampling_module.validate_grammar_bitmask(grammar_chunk)
+
+        self._apply_sampling_slot_remap(slot_remap)
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             assert sampling_module is not None, "Sampling module not found in model for sampling on device."
@@ -2317,11 +2628,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 max_seed_slots = sampling_module.seed_manager.max_batch_size
                 start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
                 active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
-            # Apply slot remap from condense before advancing seeds.
-            if slot_remap is not None:
-                sm_bs = sampling_module.seed_manager.max_batch_size
-                rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
-                sampling_module.seed_manager.apply_slot_remap(rank_remap)
             # Drop seed state of slots no longer live (a request finishing at
             # the batch tail is never vacated by condense), so its ghost seed
             # cannot inflate a later request's salt.
@@ -2371,6 +2677,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             if sampling_module is None:
+                if grammar_chunks[i] is not None:
+                    raise RuntimeError(f"model {i} received a grammar bitmask without a device sampler")
                 sampled_outputs.append(tt_logits[i])
                 continue
             logits_i = tt_logits[i]
@@ -2397,9 +2705,58 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     tt_out_tok=tt_out_tok,
                     enable_trace=sampling_enable_trace,
                     skip_precompile=skip_precompile,
+                    grammar_bitmask=grammar_chunks[i],
                 )
             )
+        if deferred is not None:
+            self._deferred_decode_sampling_failed = False
         return sampled_outputs
+
+    def _apply_sampling_slot_remap(self, slot_remap) -> None:
+        """Move slot-addressed sampler state for an accepted decode."""
+        if slot_remap is None:
+            return
+        if len(slot_remap) % self.data_parallel != 0:
+            raise ValueError(
+                "slot remap must split evenly across model-local samplers: "
+                f"rows={len(slot_remap)}, models={self.data_parallel}"
+            )
+        remap_batch_size = len(slot_remap) // self.data_parallel
+        for i, model in enumerate(self.model):
+            sampling_module = getattr(model, "sampling", None)
+            if sampling_module is None:
+                continue
+            seed_manager = sampling_module.seed_manager
+            if remap_batch_size > seed_manager.max_batch_size:
+                raise ValueError(
+                    "slot remap exceeds the model-local seed capacity: "
+                    f"model={i}, rows={remap_batch_size}, "
+                    f"capacity={seed_manager.max_batch_size}"
+                )
+            rank_remap = self._rank_local_slot_remap(
+                slot_remap,
+                i,
+                remap_batch_size,
+            )
+            seed_manager.apply_slot_remap(rank_remap)
+
+    @staticmethod
+    def _rank_local_slot_remap(slot_remap, model_index: int, batch_size: int) -> torch.Tensor:
+        """Slice a global slot remap and rebase it for one local sampler."""
+        start = model_index * batch_size
+        local_remap = slot_remap[start : start + batch_size]
+        local_remap = torch.as_tensor(local_remap, dtype=torch.long) - start
+        if local_remap.numel() != batch_size:
+            raise ValueError(
+                "slot remap must cover every model-local sampling slot: "
+                f"model={model_index}, rows={local_remap.numel()}, expected={batch_size}"
+            )
+        if torch.any((local_remap < 0) | (local_remap >= batch_size)):
+            raise ValueError(
+                "slot remap references a slot outside its model-local batch: "
+                f"model={model_index}, remap={local_remap.tolist()}"
+            )
+        return local_remap
 
     @staticmethod
     def _decode_token_feedback_buffer(model, device_inputs):

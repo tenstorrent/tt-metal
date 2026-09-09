@@ -40,6 +40,13 @@ FAST_NUM_TRIES = 6
 FAST_NUM_STEPS = 5
 MULTI_DEVICE_MESHES = [1, (4, 8)]
 RING_FABRIC_DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]
+_TRACE_DEVICE_PARAMS = [{"trace_region_size": 23887872}]
+_GRAMMAR_TRACE_DEVICE_PARAMS = [
+    {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        "trace_region_size": 23887872,
+    }
+]
 
 # Lane positions used to sweep the "odd lane out" tests below. The sampling
 # writer kernel reads each user's candidates out of a 32x32 tile where users
@@ -152,23 +159,42 @@ def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
     )
 
 
+def logits_mesh_mapper(mesh_device, args: _SamplingArgs):
+    if mesh_device.get_num_devices() == 1:
+        return None
+    if args.cluster_shape[0] > 1 and args.cluster_shape[1] > 1:
+        dims = (None, 3) if args.sampling_all_gather_axis == 1 else (3, None)
+        return ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=args.cluster_shape)
+    return ttnn.ShardTensorToMesh(mesh_device, dim=3)
+
+
 def make_sharded_logits(torch_logits: torch.Tensor, mesh_device, args: _SamplingArgs):
     """Create device logits with vocab sharded along the sampling all-gather axis."""
-    if mesh_device.get_num_devices() == 1:
-        mesh_mapper = None
-    elif args.cluster_shape[0] > 1 and args.cluster_shape[1] > 1:
-        dims = (None, 3) if args.sampling_all_gather_axis == 1 else (3, None)
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=args.cluster_shape)
-    else:
-        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
     return ttnn.from_torch(
         torch_logits,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=logits_mesh_mapper(mesh_device, args),
     )
+
+
+def refresh_sharded_logits(
+    torch_logits: torch.Tensor,
+    tt_logits,
+    mesh_device,
+    args: _SamplingArgs,
+):
+    """Restore fresh logits without changing the trace-bound device address."""
+    host_logits = ttnn.from_torch(
+        torch_logits,
+        device=None,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=logits_mesh_mapper(mesh_device, args),
+    )
+    ttnn.copy_host_to_device_tensor(host_logits, tt_logits)
 
 
 def infer_effective_batch_size(
@@ -400,6 +426,7 @@ def run_sampling_generator(
     device_idx: int = 0,
     state_setup=None,
     enable_trace: bool = False,
+    grammar_bitmasks: list[torch.Tensor | None] | None = None,
 ) -> list[list[int]]:
     """Run SamplingGenerator for num_steps and return per-step token lists."""
     effective_batch_size = infer_effective_batch_size(torch_logits, batch_size, max_batch_size=BATCH_SIZE)
@@ -412,6 +439,14 @@ def run_sampling_generator(
 
     try:
         sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+        if grammar_bitmasks is not None:
+            if len(grammar_bitmasks) != num_steps:
+                raise ValueError(
+                    "grammar_bitmasks must provide one entry per sampling step: "
+                    f"got {len(grammar_bitmasks)}, expected {num_steps}"
+                )
+            if any(mask is not None for mask in grammar_bitmasks):
+                sg.enable_device_grammar()
         formatted = format_sampling_params(sampling_params, BATCH_SIZE)
         sg.reset_sampling_params(formatted)
 
@@ -454,7 +489,7 @@ def run_sampling_generator(
         if enable_trace:
             tt_input = make_sharded_logits(padded_logits, mesh_device, args)
 
-        for _ in range(num_steps):
+        for step in range(num_steps):
             # SamplingGenerator keeps per-user RNG state in SeedManager.
             if advance_seeds:
                 sg.seed_manager.get_new_values()
@@ -467,8 +502,20 @@ def run_sampling_generator(
                 if tt_input is not None:
                     ttnn.deallocate(tt_input)
                 tt_input = make_sharded_logits(padded_logits, mesh_device, args)
+            elif step > 0:
+                refresh_sharded_logits(
+                    padded_logits,
+                    tt_input,
+                    mesh_device,
+                    args,
+                )
 
-            tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=enable_trace)
+            grammar_bitmask = grammar_bitmasks[step] if grammar_bitmasks is not None else None
+            tt_tokens, tt_log_probs = sg.sample(
+                tt_input,
+                enable_trace=enable_trace,
+                grammar_bitmask=grammar_bitmask,
+            )
             if enable_trace:
                 # ttnn.execute_trace replays with blocking=False, so the output buffer is
                 # only valid once the device has caught up.
@@ -509,6 +556,130 @@ def assert_tokens_in_vocab(tokens: list[int], vocab_size: int = VOCAB_SIZE):
 
 def flatten_steps(outputs: list[list[int]]) -> list[int]:
     return [tok for step in outputs for tok in step]
+
+
+def grammar_mask(
+    args: _SamplingArgs,
+    constrained_tokens: dict[int, list[int]],
+) -> torch.Tensor:
+    """Build a packed vLLM-style mask; omitted rows remain unconstrained."""
+    packed_width = (args.vocab_size + 31) // 32
+    mask = torch.full((BATCH_SIZE, packed_width), -1, dtype=torch.int32)
+    for row, token_ids in constrained_tokens.items():
+        words = torch.zeros(packed_width, dtype=torch.int64)
+        for token_id in token_ids:
+            validate_token_id(token_id, args.vocab_size, field="grammar")
+            words[token_id // 32] |= 1 << (token_id % 32)
+        mask[row] = words.to(torch.int32)
+    return mask
+
+
+# --- Test: grammar-constrained device sampling ---
+
+
+class TestGrammarSampling:
+    @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
+    @pytest.mark.parametrize(
+        "device_params",
+        RING_FABRIC_DEVICE_PARAMS,
+        indirect=True,
+    )
+    def test_eager_mask_targets_selected_rows(
+        self,
+        mesh_device,
+        device_params,
+    ):
+        """Eager masking constrains only the selected batch rows."""
+        args = make_sampling_args(mesh_device)
+        logits = build_hot_logits(args, hot_tokens=[42, 777, 888])
+        params = per_lane_params(0.0, 1, 1.0)
+        mask = grammar_mask(
+            args,
+            {
+                0: [777],
+                15: [888],
+                16: [777],
+                BATCH_SIZE - 1: [888],
+            },
+        )
+
+        tokens = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            params,
+            grammar_bitmasks=[mask],
+        )[0]
+
+        assert tokens[0] == 777
+        assert tokens[15] == 888
+        assert tokens[16] == 777
+        assert tokens[BATCH_SIZE - 1] == 888
+        for row in set(range(BATCH_SIZE)) - {0, 15, 16, BATCH_SIZE - 1}:
+            assert tokens[row] == 42
+
+    @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
+    @pytest.mark.parametrize(
+        "device_params",
+        _GRAMMAR_TRACE_DEVICE_PARAMS,
+        indirect=True,
+    )
+    def test_traced_mask_clears_stale_rows(
+        self,
+        mesh_device,
+        device_params,
+    ):
+        """Trace replay replaces old constraints when requests turn over."""
+        args = make_sampling_args(mesh_device)
+        logits = build_hot_logits(args, hot_tokens=[42, 777, 888])
+        params = per_lane_params(0.0, 1, 1.0)
+        first = grammar_mask(args, {0: [777], 15: [777], 16: [888]})
+        second = grammar_mask(args, {15: [888], BATCH_SIZE - 1: [777]})
+
+        outputs = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=2,
+            enable_trace=True,
+            grammar_bitmasks=[first, second],
+        )
+
+        assert outputs[0][0] == 777
+        assert outputs[0][15] == 777
+        assert outputs[0][16] == 888
+        assert outputs[1][0] == 42
+        assert outputs[1][15] == 888
+        assert outputs[1][16] == 42
+        assert outputs[1][BATCH_SIZE - 1] == 777
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    def test_eager_mask_clears_stale_rows(
+        self,
+        mesh_device,
+    ):
+        """Eager sampling replaces old constraints when requests turn over."""
+        args = make_sampling_args(mesh_device)
+        logits = build_hot_logits(args, hot_tokens=[42, 777, 888])
+        params = per_lane_params(0.0, 1, 1.0)
+        first = grammar_mask(args, {0: [777], 16: [888]})
+        second = grammar_mask(args, {16: [777]})
+
+        outputs = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=2,
+            enable_trace=False,
+            grammar_bitmasks=[first, second],
+        )
+
+        assert outputs[0][0] == 777
+        assert outputs[0][16] == 888
+        assert outputs[1][0] == 42
+        assert outputs[1][16] == 777
 
 
 # --- Test: prefill parameter behavior ---
@@ -1906,6 +2077,7 @@ class TestSingleGreedyLaneInStochasticBatch:
 
 # --- Test: traced sampling path ---
 
+
 # Production decode calls SamplingGenerator.sample(..., enable_trace=True) -- that is the
 # signature default. Every other test in this file runs enable_trace=False, so
 # _trace_slot / capture_trace / _execute_trace / _validate_trace_inputs are otherwise
@@ -1918,9 +2090,6 @@ class TestSingleGreedyLaneInStochasticBatch:
 #     penalties -- which rewrite that tensor in place -- cannot be combined with it.
 # A trace region has to be reserved at device open, hence the device_params override; the
 # rest of the suite opens with none ("No trace region size for 1" in the CI log).
-_TRACE_DEVICE_PARAMS = [{"trace_region_size": 23887872}]
-
-
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @pytest.mark.parametrize("device_params", _TRACE_DEVICE_PARAMS, indirect=True)
 class TestTracedSampling:

@@ -19,7 +19,8 @@
 #   mesh-device, arch, tt-config, additional-server-args, additional-benchmark-args,
 #   additional-structured-output-args, default-chat-template-kwargs, tt-llama-text-ver,
 #   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
-#   coherence-test / structured-output / multimodal / sampling-tests: optional test toggles.
+#   coherence-test / structured-output / device-grammar / multimodal /
+#   sampling-tests: optional test toggles.
 #   sampling-test-filter: -k filter for the sampling test step.
 #   chunked-prefill-budget: enables the chunked-prefill test step and tells it the
 #     served max_num_batched_tokens, which it uses to size prompts that are
@@ -334,10 +335,12 @@
   benchmark-timeout: 10
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"trace_region_size": 76000000}'
+  # Device grammar keeps both host- and device-sampled decode traces resident.
+  tt-config: '{"sample_on_device_mode": "decode_only", "trace_mode": "all", "trace_region_size": 200000000}'
   tt-llama-text-ver: tt_transformers
-  additional-server-args: "--async-scheduling"
+  additional-server-args: "--no-async-scheduling"
   structured-output: true
+  device-grammar: true
   multimodal: false
   skus:
     bh_quietbox_2:

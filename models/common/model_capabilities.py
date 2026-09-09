@@ -37,6 +37,14 @@ class ModelCapabilitiesMixin:
         engine may overlap scheduling with device execution.
     ``supports_sample_on_device`` (bool)
         The full on-device sampling pipeline is implemented.
+    ``supports_device_grammar`` (bool)
+        Decode logits can remain on device until the vLLM TT plugin supplies a
+        packed grammar bitmask at sample time. Requires
+        ``supports_sample_on_device``. The initial contract excludes structured
+        prefill, row-sharded sampling, logprobs, upstream async scheduling, and
+        block-output models. The loaded generator exposes
+        ``device_grammar_enabled`` so runtime sampler or mesh incompatibility
+        can retain host grammar sampling.
     ``supports_chunked_prefill`` (bool)
         One prompt may be prefilled across several engine steps. Independent of
         ``supports_prefix_caching``: both make the scheduler hand the generator a

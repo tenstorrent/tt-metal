@@ -137,6 +137,7 @@ jobs:
       FILE_SERVER_LOG: "./output/vllm_server.log"
       FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
       FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
+      FILE_DEVICE_GRAMMAR_TEST_LOG: "./output/vllm_device_grammar_test.log"
       FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
       FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
@@ -284,7 +285,6 @@ jobs:
           else
             ADDITIONAL_SERVER_ARGS=()
           fi
-
           DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
           if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
             DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
@@ -583,6 +583,32 @@ jobs:
             python3 -c "import json, sys; sys.exit(0 if float(json.load(open('output/vllm_result_structured.json'))['correct_rate(%)']) == 100.0 else 1)" \
               || { echo '❌ Structured output failed (correct_rate(%) != 100.0)'; exit 1; }
             echo '✅ Structured output passed'
+
+      - name: 🧪 Prove device grammar turnover
+        if: ${{ inputs.vllm-source == 'plugin' && matrix.test-group.device-grammar }}
+        timeout-minutes: 15
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_DEVICE_GRAMMAR_TEST_LOG }}
+          run: |
+            BEFORE="$(grep -c "TT device grammar sampling active count=" "${FILE_SERVER_LOG}" || true)"
+            pytest "${PLUGIN_DIR}/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests_first_wave" -v \
+              --tt-server-url=http://localhost:8000 \
+              --tt-model-name=${{ matrix.test-group.model }}
+            AFTER_FIRST="$(grep -c "TT device grammar sampling active count=" "${FILE_SERVER_LOG}" || true)"
+            if [ "${AFTER_FIRST}" -le "${BEFORE}" ]; then
+              echo "❌ First structured/plain wave did not exercise TT device grammar sampling"
+              exit 1
+            fi
+            pytest "${PLUGIN_DIR}/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_reuses_slots_for_second_mixed_wave" -v \
+              --tt-server-url=http://localhost:8000 \
+              --tt-model-name=${{ matrix.test-group.model }}
+            AFTER_SECOND="$(grep -c "TT device grammar sampling active count=" "${FILE_SERVER_LOG}" || true)"
+            if [ "${AFTER_SECOND}" -le "${AFTER_FIRST}" ]; then
+              echo "❌ Turnover wave did not exercise TT device grammar sampling"
+              exit 1
+            fi
+            echo "✅ TT device grammar sampling ran in both structured/plain request waves"
 
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}

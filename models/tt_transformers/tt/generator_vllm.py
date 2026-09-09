@@ -630,6 +630,7 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
         # needs, so a prompt split across engine steps needs no new prefill code.
@@ -719,6 +720,7 @@ class QwenForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
         # needs, so a prompt split across engine steps needs no new prefill code.
@@ -802,6 +804,7 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
         # needs, so a prompt split across engine steps needs no new prefill code.
