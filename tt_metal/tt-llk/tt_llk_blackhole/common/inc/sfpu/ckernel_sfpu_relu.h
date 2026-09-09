@@ -85,6 +85,9 @@ inline void _relu_max_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     VectorType v_threshold;
+    // Only the integer path reads this; the sign of the threshold picks the overflow-safe
+    // compare in _relu_min_impl_.
+    bool threshold_is_negative = false;
     if constexpr (std::is_same_v<T, float>)
     {
         static_assert(
@@ -130,20 +133,89 @@ inline void _relu_max_(T threshold)
 template <typename VecType>
 inline constexpr sfpi::DataLayout relu_dest_layout_v = std::is_same_v<VecType, sfpi::vInt> ? sfpi::DataLayout::SM32 : sfpi::DataLayout::Default;
 
+// threshold_is_negative selects which of the two integer forms below runs. A plain runtime
+// bool rather than a template parameter, because the threshold is a runtime scalar; it is
+// uniform across lanes, so the branch sits outside the loop and costs nothing per element.
+// Unused on the float path, which is why it defaults.
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, VecType threshold)
+inline void _relu_min_impl_(const int iterations, VecType threshold, const bool threshold_is_negative = false)
 {
     constexpr sfpi::DataLayout LAYOUT = relu_dest_layout_v<VecType>;
 
-    for (int d = 0; d < iterations; d++)
+    if constexpr (std::is_same_v<VecType, sfpi::vInt>)
     {
-        VecType a = sfpi::dst_reg[0].mode<LAYOUT>();
-        v_if (a < threshold)
+        // Once SM32 has converted DEST, `a` is a full-range two's-complement int32 -- and a
+        // plain `a < threshold` is then not a safe compare. The SFPU signed compare subtracts
+        // and tests the sign of the result, so it inverts its answer whenever the two operands
+        // are >= 2^31 apart: at threshold -(2^31 - 1) every input >= 1 would be wrongly clamped
+        // down to the threshold, and at a small positive threshold inputs near INT32_MIN would
+        // wrongly pass through. Splitting on the sign of the threshold leaves only same-sign
+        // operands to the subtracting compare, whose difference cannot overflow.
+        //
+        // Wormhole is immune without this: SFPSWAP orders its operands as sign+magnitude
+        // instead of subtracting. metal's relu_clamp_int guards the same way on this arch
+        // (hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_relu.h) and calls the
+        // guard "NOT redundant" for exactly this reason.
+        //
+        // An INT_MIN threshold needs no saturating clamp here, unlike the hand-built
+        // sign+magnitude encoding on Wormhole: DEST cannot represent -2^31 either, so no input
+        // is ever below such a threshold, and with the guard above the clamp correctly never
+        // fires. It is only the overflowing compare that made it look like it clamped
+        // everything.
+        if (threshold_is_negative)
         {
-            sfpi::dst_reg[0].mode<LAYOUT>() = threshold;
+            for (int d = 0; d < iterations; d++)
+            {
+                sfpi::vInt a = sfpi::dst_reg[0].mode<LAYOUT>();
+                // a >= 0 > threshold keeps a, so only the negative lanes can lose, and there
+                // both operands are negative.
+                v_if (a < 0)
+                {
+                    v_if (a < threshold)
+                    {
+                        a = threshold;
+                    }
+                    v_endif;
+                }
+                v_endif;
+                sfpi::dst_reg[0].mode<LAYOUT>() = a;
+                sfpi::dst_reg++;
+            }
         }
-        v_endif;
-        sfpi::dst_reg++;
+        else
+        {
+            for (int d = 0; d < iterations; d++)
+            {
+                sfpi::vInt a = sfpi::dst_reg[0].mode<LAYOUT>();
+                // Lifting the negative lanes to a non-negative threshold first is the whole
+                // answer for them, and it leaves only non-negative operands to the compare.
+                v_if (a < 0)
+                {
+                    a = threshold;
+                }
+                v_endif;
+                v_if (a < threshold)
+                {
+                    a = threshold;
+                }
+                v_endif;
+                sfpi::dst_reg[0].mode<LAYOUT>() = a;
+                sfpi::dst_reg++;
+            }
+        }
+    }
+    else
+    {
+        for (int d = 0; d < iterations; d++)
+        {
+            VecType a = sfpi::dst_reg[0].mode<LAYOUT>();
+            v_if (a < threshold)
+            {
+                sfpi::dst_reg[0].mode<LAYOUT>() = threshold;
+            }
+            v_endif;
+            sfpi::dst_reg++;
+        }
     }
 }
 
@@ -154,6 +226,9 @@ inline void _relu_min_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     VectorType v_threshold;
+    // Only the integer path reads this; the sign of the threshold picks the overflow-safe
+    // compare in _relu_min_impl_.
+    bool threshold_is_negative = false;
     if constexpr (std::is_same_v<T, float>)
     {
         static_assert(
@@ -166,7 +241,9 @@ inline void _relu_min_(T threshold)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
-            v_threshold = static_cast<int>(threshold);
+            const int scalar      = static_cast<int>(threshold);
+            v_threshold           = scalar;
+            threshold_is_negative = scalar < 0;
         }
         else
         {
@@ -178,7 +255,7 @@ inline void _relu_min_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold, threshold_is_negative);
 }
 
 } // namespace sfpu

@@ -149,7 +149,8 @@ inline void _relu_min_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     // The load/store mode the branches below encode the threshold for. Only the integer
-    // datapath needs a non-default mode, and which branch runs is fixed by <T, VectorType>,
+    // datapath needs a non-default mode -- INT32, the non-converting one, for the reason
+    // spelled out in the vInt branch -- and which branch runs is fixed by <T, VectorType>,
     // so this is a compile-time constant rather than a variable the branches assign -- see
     // the note on _relu_min_impl_'s SFPLOAD_INSTR_MOD parameter.
     constexpr InstrModLoadStore SFPLOAD_INSTR_MOD =
@@ -174,18 +175,26 @@ inline void _relu_min_(T threshold)
             // that form before the compare. They get there by different routes, and the two
             // have to agree:
             //
-            //   the input      arrives through SFPLOAD, so the *instruction mode* converts
-            //                  it. InstrModLoadStore::INT32 (SFP format I32) is the mode
-            //                  that translates DEST's two's complement into sign+magnitude
-            //                  on the way in, and back again on the SFPSTORE.
-            //   the threshold  is written straight into LREG2 by _sfpu_load_imm32_, which
-            //                  bypasses any load conversion, so it is re-encoded by hand
-            //                  here to match what the input will look like.
+            //   the input      arrives through SFPLOAD from a DEST that already holds int32
+            //                  as sign+magnitude, so what is wanted is the mode that leaves
+            //                  it alone. InstrModLoadStore::INT32 (SFP format I32, mod0 4)
+            //                  is that mode -- it copies the bits, and the SFPSTORE puts the
+            //                  sign+magnitude result straight back.
+            //   the threshold  is written into LREG2 by _sfpu_load_imm32_, which is not a
+            //                  load from DEST and so passes through no mode at all. It is
+            //                  re-encoded by hand below to match the input.
             //
-            // Selecting INT32_2S_COMP (SFP format SM32) above instead is what tt-metal #55643
-            // was: that mode loads raw, so the input stayed two's complement while the
-            // threshold was sign+magnitude, and SFPSWAP compared two different encodings.
-            // It is the right mode only where DEST already holds sign+magnitude.
+            // Selecting INT32_2S_COMP (SFP format SM32, mod0 12) above instead is what
+            // tt-metal #55643 was. Read those two names carefully, because they are the
+            // opposite way round to the intuition and the inversion is what the original code
+            // walked into: INT32_2S_COMP is the *converting* mode -- it exists to hand an
+            // integer datapath the two's complement it needs, so on load it turns DEST's
+            // sign+magnitude into two's complement and on store turns it back. Under it the
+            // input reached SFPSWAP in two's complement while the threshold was
+            // sign+magnitude, and the compare saw two different encodings. So the fix is to
+            // stop converting, not to start: INT32_2S_COMP is the right mode for the integer
+            // add/sub kernels next door, which do want two's-complement LREGs, and the wrong
+            // one here where SFPSWAP wants sign+magnitude.
             //
             // Scoped to this branch because the re-encoding is only meaningful for an
             // integer threshold -- applying it to a float would reinterpret, not convert.

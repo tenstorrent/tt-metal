@@ -3166,10 +3166,12 @@ class UnarySFPUGolden:
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         if isinstance(x, int):
-            # Integer dst. The kernel takes the vInt branch of _relu_min_, which loads a
-            # hand-encoded sign+magnitude threshold into LREG2 and loads the input under
-            # InstrModLoadStore::INT32, so both operands reach SFPSWAP in sign+magnitude
-            # and the compare is an exact integer max with no float round-trip.
+            # Integer dst. An exact integer max with no float round-trip, and
+            # deliberately blind to how either kernel gets there: Wormhole compares in
+            # sign+magnitude (a hand-encoded threshold in LREG2 against an input loaded
+            # under the non-converting InstrModLoadStore::INT32) and Blackhole compares in
+            # two's complement (DEST read through the converting DataLayout::SM32). Same
+            # answer, so the golden states the answer.
             # Deliberately independent of self.dst_format: for an integer dst the max is
             # exact, so the dest format cannot change the result, and nothing here should
             # imply the golden tracks it.
