@@ -22,6 +22,7 @@ namespace ttnn::operations::experimental::deepseek::mla::program {
 static std::vector<CoreCoord> find_collector_core_coords(
     const CoreCoord& full_grid_size, const std::set<CoreCoord>& dram_cores_set, size_t num_collectors) {
     std::vector<CoreCoord> collector_core_coords;
+    collector_core_coords.reserve(num_collectors);
     for (int32_t y = full_grid_size.y - 1; y >= 0; --y) {
         for (int32_t x = full_grid_size.x - 1; x >= 0; --x) {
             const auto core_coord = CoreCoord(x, y);
@@ -64,6 +65,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
 
     // Convert the collector core coordinates to physical coordinates
     std::vector<uint32_t> collector_core_physical_coords;
+    collector_core_physical_coords.reserve(2 * collector_core_coords.size());
     for (const auto& core_coord : collector_core_coords) {
         const auto physical_core_coord = tensor_args.input_tensor.device()->worker_core_from_logical_core(core_coord);
         collector_core_physical_coords.push_back(physical_core_coord.x);
@@ -220,6 +222,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(2 + tensors.size());
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
     for (const auto& tensor : tensors) {
@@ -227,6 +230,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     }
 
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(dram_bank2core_coords.size());
     uint32_t dram_bank = 0;
     for (auto core : dram_bank2core_coords) {
         uint32_t vchannel = dram_bank & 0x3;

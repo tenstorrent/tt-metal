@@ -23,7 +23,7 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    binary_op_init_common(cb_in_scores, cb_reduce_ones_scalar, cb_out_weights);
+    compute_kernel_hw_startup(cb_in_scores, cb_reduce_ones_scalar, cb_out_weights);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         // Activation over all experts. cb_sigmoid_scores is NOT popped here - the writer pops it after gather.

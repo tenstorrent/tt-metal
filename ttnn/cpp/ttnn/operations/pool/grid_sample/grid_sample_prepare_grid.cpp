@@ -14,6 +14,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::operations::grid_sample {
 
@@ -198,7 +199,7 @@ Tensor convert_grid_tensor(
 
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+    return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
         std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 

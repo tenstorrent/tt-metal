@@ -311,12 +311,13 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
 
     When transpose_a is True the compute kernel transposes in0 tiles via
     transpose_init, which requires the HW srcA unpacker to be
-    configured for in0's data format (bfloat16).  mm_block_init sets srcA
-    to in1's format instead; when in1 is Bfp8_b the resulting format
+    configured for in0's data format (bfloat16).  matmul_block_init sets
+    srcA to in1's format instead; when in1 is Bfp8_b the resulting format
     mismatch caused an LLK assert (issue #35247b).
 
     The fix adds reconfig_data_format_srca before the transpose init and
-    uses mm_block_init_short_with_dt after it.
+    restores the matmul srcA format afterwards via reconfig_data_format_srca
+    followed by matmul_block_init.
     """
     torch.manual_seed(0)
 

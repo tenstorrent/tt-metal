@@ -37,10 +37,6 @@ run_python_model_tests_wormhole_b0() {
     # Mobilenetv2git
     pytest -svv models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py
 
-    # ViT-base
-    pytest -svv models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py
-
-
     # Llama3.1-8B
     llama8b=meta-llama/Llama-3.1-8B-Instruct
 

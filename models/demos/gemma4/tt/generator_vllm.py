@@ -11,9 +11,8 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import (
+    SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
-    _build_vision_state_dict,
-    _vision_encoder_seq_len,
     align_num_cached_tokens_to_sdpa,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
@@ -279,18 +278,40 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     # ``read_decode_output(async_read=True)`` (inherited from ``Generator``).
     # Requires on-device token feedback + position plus_one (non-PLI only;
     # see ``Gemma4Model._tt_vllm_always_refresh_decode_trace_inputs``).
-    # Kill-switch: ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models (E2B/E4B)
-    # force False in ``__init__`` regardless of the env default.
+    #
+    # Default ON for non-PLI. Token-doubling under async is mitigated by
+    # ``merge_async_ahead_decode_tokens`` + vLLM preempt bookkeeping. Kill-switch:
+    # ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models narrow the instance dict
+    # in ``__init__``; that does not reach the platform, so PLI still needs
+    # the kill-switch to disable async_scheduling.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower()
-        not in ("0", "false", "no"),
+        "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
+        # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so Generator
+        # cannot derive the resume offset alignment and must be told it. Same pin
+        # align_num_cached_tokens_to_sdpa applies locally.
+        "resumed_prefill_token_alignment": SDPA_CHUNK_ALIGN,
         "supports_sample_on_device": True,
+        # prefill_forward_text routes a nonzero start_pos to the chunked SDPA and
+        # floors the offset to resumed_prefill_token_alignment, so a prompt split
+        # across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     # vLLM pads decode to the nearest of these (not always max_num_seqs) so B=1
     # recovers the metal demo SDPA/matmul path (~27 tok/s/user vs ~20 at B=32).
+    #
+    # This is the *candidate* set. ``warmup_model_decode`` narrows it in place to
+    # the buckets it actually captured a decode trace for, because the plugin
+    # treats this attribute as the whole contract: padding to a bucket with no
+    # captured trace leaves the device in an undefined state (on Wormhole a
+    # fast-dispatch hang). Do not publish a wider list than what is warmed.
     tt_supported_decode_batch_sizes = SUPPORTED_PREFILL_BATCH_SIZES
+
+    # Set True once ``warmup_model_decode`` has captured its traces. Previously
+    # the presence of ``tt_warmed_decode_batch_sizes`` doubled as this sentinel;
+    # that attribute is gone, so the signal is now explicit.
+    _decode_warmup_complete = False
 
     # Hybrid vLLM kv-cache groups: env-gated via ``GEMMA4_HYBRID_KV_CACHE_GROUPS``
     # (default OFF). Toggle from the tt-inference-server model-spec env so the KV
@@ -347,8 +368,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             _bounded_default = "1" if self._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
             self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
         # PLI models must restage decode inputs from host every step; async lag
-        # would restage a stale token. Force capability off even if env default
-        # is on (platform then disables async_scheduling).
+        # would restage a stale token. Narrow the instance dict so runtime
+        # readers (the decode-sync default below) see False. The vLLM TT plugin
+        # snapshots the class attribute during check_and_update_config, before
+        # this runs, so this does not disable scheduler_config.async_scheduling;
+        # set GEMMA4_SUPPORTS_ASYNC_DECODE=0 for that.
         if model0 is not None and (
             bool(getattr(model0, "hidden_size_per_layer_input", 0))
             or bool(getattr(model0, "_tt_vllm_always_refresh_decode_trace_inputs", False))
@@ -357,11 +381,31 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 **self.model_capabilities,
                 "supports_async_decode": False,
             }
+        # On-device decode sampling only exists when Gemma4Model actually built a
+        # SamplingGenerator. That needs the per-device vocab shard to fit ttnn's
+        # 64k topk width: Gemma4's vocab is 262144, so TP>=4 shards to <=65536 and
+        # works, but TP=2 (WH N300 1x2) shards to 131072 and Gemma4Model leaves
+        # ``self.sampling = None``. Narrow the instance dict so runtime readers
+        # see False. The platform already snapshot the class attribute, so this
+        # does not revise sample_on_device_mode.
+        if model0 is not None and not bool(getattr(model0, "_supports_on_device_sampling", True)):
+            self.model_capabilities = {
+                **self.model_capabilities,
+                "supports_sample_on_device": False,
+            }
+            _tp = getattr(getattr(model0, "mesh_config", None), "tp", "?")
+            logger.info(
+                f"Gemma4: on-device sampling unavailable on this mesh (tp={_tp}, "
+                f"vocab={getattr(model0, 'vocab_size', '?')} shards wider than ttnn topk's 64k); "
+                "advertising supports_sample_on_device=False so decode samples on host."
+            )
         # Host-side TTFT / decode tok/s for metal↔server parity checks.
         # Compare these to demo ``inference_prefill`` / decode tok/s/user logs.
         self._perf_decode_tokens = 0
         self._perf_decode_s = 0.0
         self._perf_log_every = max(1, int(os.environ.get("GEMMA4_VLLM_PERF_LOG_EVERY", "32")))
+        # Batch-keyed decode traces (mixin); must exist before first sample.
+        self._prev_decode_batch = None
         # Extra synchronize_device stalls async overlap (#51186). Default off;
         # set GEMMA4_VLLM_DECODE_SYNC_EVERY=log/1 for sync wall-clock parity.
         _sync_default = "0" if self.model_capabilities.get("supports_async_decode") else "log"
@@ -386,8 +430,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         sizes = [b for b in sizes if b in supported or b == max_b]
         if not sizes:
             sizes = [max_b]
-        # Expose the warmed set so the plugin pads to a captured bucket.
-        self.tt_warmed_decode_batch_sizes = tuple(sizes)
+        # Narrow the declared buckets to exactly what we warm below, so the
+        # plugin never pads to a bucket without a captured decode trace. This
+        # replaces the previous separate ``tt_warmed_decode_batch_sizes``
+        # attribute — an unwarmed bucket is simply not supported (review on
+        # tenstorrent/vllm#455).
+        self.tt_supported_decode_batch_sizes = tuple(sizes)
+        self._decode_warmup_complete = True
         # Smallest → largest so the final batch leaves sampling traces bound to
         # max_batch logits (sampling capture is skipped for smaller buckets).
         for batch in sorted(sizes):
@@ -765,6 +814,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
             ]
             page_table = kwargs.get("page_table")
+            # Hetero *actual* lens OK: per-slot valid_seq_lens caps KV fill.
             can_batch_prefill = (
                 page_table is not None
                 and batch_size > 1
@@ -780,6 +830,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 batch_size=batch_size,
                 prefill_seq_lens=prefill_seq_lens,
                 can_batch_prefill=can_batch_prefill,
+                empty_slots=kwargs.get("empty_slots"),
             )
         return super().prefill_forward_text(*args, enable_trace=enable_trace, **kwargs)
 
@@ -876,17 +927,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if min_bounded_cols is not None:
                 num_blocks = max(num_blocks, min_bounded_cols)
             if page_table.shape[1] < num_blocks:
-                pad = torch.full(
+                pad = torch.zeros(
                     (page_table.shape[0], num_blocks - page_table.shape[1]),
-                    -1,
                     dtype=torch.int32,
                 )
                 page_table = torch.cat([page_table, pad], dim=1)
             page_table = page_table[:, :num_blocks]
             if trace_enabled and page_table.shape[1] < num_blocks:
-                padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                padding = torch.zeros(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32)
                 page_table = torch.cat([page_table, padding], dim=1)
-            padded_page_table = torch.ones(batch_dim, page_table.shape[1], dtype=torch.int32) * -1
+            padded_page_table = torch.zeros(batch_dim, page_table.shape[1], dtype=torch.int32)
             assert user_id is not None
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
@@ -909,7 +959,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if min_bounded_cols is not None:
             num_blocks = max(num_blocks, min_bounded_cols)
         if page_table.shape[1] < num_blocks:
-            padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+            padding = torch.zeros(1, num_blocks - page_table.shape[1], dtype=torch.int32)
             page_table = torch.cat([page_table, padding], dim=1)
         return page_table[:, :num_blocks]
 
@@ -1116,8 +1166,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         tt_data_parallel=1,
         optimizations: str = None,
     ):
-        if optimizations not in (None, "performance"):
-            raise ValueError("Gemma4 TT does not support custom optimization profiles")
+        if optimizations not in (None, "performance", "accuracy"):
+            raise ValueError("Gemma4 TT optimization profiles: None|performance|accuracy " f"(got {optimizations!r})")
+        # ``accuracy`` is accepted for API parity with tt_transformers but must
+        # NOT enable linear HiFi4/fp32 — that caused unicode garbage on LB 12B.
+        # Production GeLU is always Accurate (see ``compute_config.gelu_variant``).
+        if optimizations == "accuracy":
+            logger.info(
+                "Gemma4 optimizations=accuracy: keeping production defaults "
+                "(GeLU=Accurate; no linear HiFi4/fp32 — those regress decode)"
+            )
 
         model_path = hf_config._name_or_path
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
@@ -1258,6 +1316,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if full_idx >= len(kv_cache) or kv_cache[full_idx] is None:
             return super()._chunk_prefill_page_table(page_table, user_id=0, model_id=model_id, kv_cache=kv_cache)
 
+        # Sequential path: legacy page_table is already the 1-row slice but
+        # ``user_id`` is forced to 0 — pick the matching full-attn row.
+        if (
+            isinstance(page_table, torch.Tensor)
+            and page_table.dim() > 1
+            and int(page_table.shape[0]) == 1
+            and int(full_pt.shape[0]) > 1
+        ):
+            row = self._match_page_table_row(page_table, per_layer)
+            if row is not None:
+                full_pt = full_pt[row : row + 1]
+
         cache = kv_cache[full_idx][0]
         attn = model.layers[full_idx].self_attn
         cfg = attn.config
@@ -1293,6 +1363,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         page_table = kwargs.get("page_table")
+        # Same padded bucket is enough: attention/prefill.py caps each slot's
+        # paged_fill with valid_seq_lens (from last_token_idx). Hetero actual
+        # lengths no longer force sequential.
         can_batch_prefill = (
             page_table is not None
             and batch_size > 1
@@ -1412,6 +1485,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
         # Remap the *full* batch first so sliding block IDs stay global. Chunk
         # loops only slice those tables (never re-remap local rows 0..N).
+        # Snapshot ring occupancy *before* the remap: the remap inserts the
+        # request being prefilled into the slot map, so a check made after it
+        # would see a non-empty map even for the very first request and skip
+        # the clear it actually needs (stale warmup KV -> garbage for exactly
+        # that one user).
+        rings_live_before_prefill = len(getattr(self, "_bounded_ring_slot_map", None) or {})
         full_page_tables = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
         full_page_tables = self._pad_sliding_page_tables_for_bounded(full_page_tables, kwargs.get("kv_cache"))
         full_page_tables = self._pad_page_tables_batch_to_max(full_page_tables)
@@ -1419,6 +1498,34 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             sliding_idxs = self._sliding_layer_indices()
             if sliding_idxs and full_page_tables[sliding_idxs[0]] is not None:
                 kwargs["page_table"] = full_page_tables[sliding_idxs[0]]
+            # Bounded rings reuse dense physical blocks [u*W,(u+1)*W) across
+            # requests. Clear only on a fresh prefill (all start_pos == 0).
+            # start_pos may be a list or numpy/torch vector — never use
+            # ``array or []`` (ambiguous truth value for multi-element arrays).
+            if not rings_live_before_prefill:
+                # Fresh wave (no live rings): drop captured decode traces so the
+                # next decode recaptures against this wave's state. Replaying a
+                # decode trace captured before the wave -- in practice the
+                # warmup-captured traces -- corrupts every batch after the first
+                # even when all trace input tensors are restaged each step
+                # (measured on P150x8 / 12B / 32k bounded: batch 1 clean, every
+                # later batch nondeterministic garbage at any concurrency >= 2;
+                # ring fingerprints show prefill hidden states already diverging
+                # for identical inputs). With this release the first serving
+                # wave recaptures once and 16+ consecutive batches across
+                # concurrencies 1..32 and bucket switches replay it cleanly.
+                # Program caches persist, so the one recapture costs seconds.
+                self._release_decode_traces_for_fresh_wave()
+            start_pos_for_clear = kwargs.get("start_pos")
+            if start_pos_for_clear is None:
+                self._clear_bounded_sliding_kv_rings(kwargs.get("kv_cache"), live_before=rings_live_before_prefill)
+            else:
+                try:
+                    start_vals = [int(p) for p in list(start_pos_for_clear)]
+                except TypeError:
+                    start_vals = [int(start_pos_for_clear)]
+                if all(p == 0 for p in start_vals):
+                    self._clear_bounded_sliding_kv_rings(kwargs.get("kv_cache"), live_before=rings_live_before_prefill)
 
         # Align vLLM chunked-prefill continuations to SDPA q_chunk_size (128).
         # tokens[:, :prompt_lens] still holds the full prefix, so aligning
@@ -1428,11 +1535,110 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             kwargs["start_pos"] = align_num_cached_tokens_to_sdpa([int(n) for n in start_pos])
 
         t0 = time.perf_counter()
+
+        # B>4 true-batched prefill hangs on P150x8 after the first all_gather.
+        # Micro-batching with remapped local slots (0..chunk) also breaks decode:
+        # KV lands in the right physical blocks but per-slot decode state does not.
+        # Force the proven per-user prefill loop (global empty_slots) instead.
+        force_sequential = chunk_users is not None
+        if force_sequential:
+            logger.info(
+                "Gemma4 vLLM: sequential prefill for batch_size={} " "(true-batched B>{} hangs on P150x8; user_cap={})",
+                batch_size,
+                max_batched_prefill_users(),
+                max_batched_prefill_users(),
+            )
+
+        # Decide if this call will truly batch (same *padded* bucket; hetero
+        # actual OK via per-slot valid_seq_lens). Sequential keeps per-layer
+        # tables and slices to the active row (see mixin
+        # ``_activate_sequential_per_layer_row``).
+        prompt_lens_list = prompt_lens
+        if prompt_lens_list is not None and not isinstance(prompt_lens_list, list):
+            prompt_lens_list = list(prompt_lens_list)
+        start_pos_for_plan = kwargs.get("start_pos")
+        num_cached_for_plan = (
+            [int(n) for n in start_pos_for_plan]
+            if start_pos_for_plan is not None
+            else ([0] * len(prompt_lens_list) if prompt_lens_list is not None else [0])
+        )
+        if prompt_lens_list is not None:
+            prefill_seq_lens_plan = [
+                get_padded_prefill_len(int(seq_len) - num_cached)
+                for seq_len, num_cached in zip(prompt_lens_list, num_cached_for_plan)
+            ]
+            padded_lens_equal = len(set(prefill_seq_lens_plan)) == 1
+        else:
+            prefill_seq_lens_plan = None
+            padded_lens_equal = True
+        will_batch = (
+            batch_size > 1
+            and not force_sequential
+            and kwargs.get("page_table") is not None
+            and self.data_parallel == 1
+            and not getattr(self.model_args[0], "disable_batched_prefill", False)
+            and padded_lens_equal
+            and all(n == 0 for n in num_cached_for_plan)
+            # Batched prefill is opt-in via G4_FORCE_BATCH_PREFILL=1: it works
+            # under BOTH unbounded and bounded sliding since the 2026-09 fixes
+            # (identity-gated, byte-equal vs the sequential/B=1 references):
+            #  - per-layer page tables scattered local->slot rows (below) — the
+            #    non-identity empty_slots KV misplacement, debt #1 bug A;
+            #  - boot-time batched-shape warmup captures (generator_trace) — the
+            #    runtime cold-capture replay corruption, debt #1 bug B;
+            #  - bounded per-slot ring fills deferred after lm_head, full-length
+            #    under modulo, wrap-boundary merged (attention/prefill.py).
+            # Historic exclusion rationales ("per-slot decode state", "deferred
+            # lm-head extraction") are retired — the extraction was always
+            # correct. Default-off pending the open conc32 small-ISL
+            # wave-boundary corruption (~1-3/32 after a prior wave, prefill-mode
+            # independent; repro: wave_smoke) and per-quadrant memory budgets
+            # (see GEMMA4_MAX_BATCHED_PREFILL_USERS / GEMMA4_TAIL_POOL_SLOTS).
+            and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
+        )
+        use_sequential = batch_size > 1 and not will_batch
+
+        if will_batch:
+            slots = kwargs.get("empty_slots")
+            slots = [int(s) for s in slots] if slots is not None else None
+            if slots is not None and slots != list(range(len(slots))):
+                # Batched prefill places tokens at their device slots
+                # (``prefill_ids[slot] ← user i``) and the per-layer KV fill
+                # indexes tables by slot (``paged_fill_cache(batch_idx=slot)``),
+                # but the plugin's per-layer tables arrive in *local* prefill
+                # order (row i = user i). With non-identity ``empty_slots`` —
+                # exactly when another request is mid-decode — user i's KV was
+                # written through table row ``slot_i`` of a local-ordered
+                # table: each user's KV landed in the next user's blocks and
+                # the first user's blocks were never written (debt #1's single
+                # corrupted user). Scatter local rows to slot rows, mirroring
+                # ``_get_prefill_user_page_table``'s legacy scatter.
+                scattered = []
+                for pt in full_page_tables or []:
+                    if pt is None or not isinstance(pt, torch.Tensor) or pt.dim() < 2:
+                        scattered.append(pt)
+                        continue
+                    out = torch.zeros_like(pt)
+                    for i, slot in enumerate(slots):
+                        if i < pt.shape[0] and slot < out.shape[0]:
+                            out[slot] = pt[i]
+                    scattered.append(out)
+                full_page_tables = scattered
+
+        # Always install per-layer tables when available. Under bounded sliding
+        # kwargs["page_table"] is the remapped *sliding* table; clearing the
+        # per-layer stash makes full-attention layers inherit it (empty thought
+        # / ~10% GPQA). Sequential tt_transformers still slices a 1-row legacy
+        # page_table and forces user_id=0 — Gemma4Model slices the multi-row
+        # per-layer stash down to that active row (see ttnn_prefill_forward).
         per_submesh = self._chunk_page_tables_per_dp(full_page_tables)
         if per_submesh is not None:
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
-
+        else:
+            for m in self.model:
+                if hasattr(m, "_active_page_tables_per_layer"):
+                    del m._active_page_tables_per_layer
         # Multimodal branch: when vision inputs are present (``pixel_values`` +
         # ``image_position_ids`` forwarded by the plugin), run the per-user
         # on-device merge path (``_prefill_multimodal_batch``). The per-layer
@@ -1462,34 +1668,30 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             self._perf_decode_tokens = 0
             self._perf_decode_s = 0.0
             return out
-
-        # B>4 true-batched prefill hangs on P150x8 after the first all_gather.
-        # Micro-batching with remapped local slots (0..chunk) also breaks decode:
-        # KV lands in the right physical blocks but per-slot decode state does not.
-        # Force the proven per-user prefill loop (global empty_slots) instead.
-        force_sequential = chunk_users is not None
-        if force_sequential:
+ 
+        if use_sequential:
             logger.info(
-                "Gemma4 vLLM: sequential prefill for batch_size={} " "(true-batched B>{} hangs on P150x8; user_cap={})",
+                "Gemma4 vLLM: sequential per-user prefill for batch_size={} "
+                "(per-layer page tables kept for hybrid/bounded full-attn)",
                 batch_size,
-                max_batched_prefill_users(),
-                max_batched_prefill_users(),
             )
 
         if prefill_seq_len is not None:
             prefill_seq_lens = [prefill_seq_len]
+        elif prefill_seq_lens_plan is not None:
+            prefill_seq_lens = prefill_seq_lens_plan
         elif seq_len is not None:
             prefill_seq_lens = [get_padded_prefill_len(seq_len)]
         elif tokens is not None:
             prefill_seq_lens = [get_padded_prefill_len(int(tokens.shape[1]))]
         else:
             prefill_seq_lens = [128]
-        can_batch = (not force_sequential) and batch_size > 1 and kwargs.get("page_table") is not None
+        can_batch = will_batch
         enable_trace = resolve_gemma4_prefill_trace_enable(
             enable_trace,
             self.model[0],
             self.model_args[0],
-            batch_size=1 if force_sequential else batch_size,
+            batch_size=1 if use_sequential else batch_size,
             prefill_seq_lens=prefill_seq_lens,
             can_batch_prefill=can_batch,
         )
@@ -1497,14 +1699,24 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
         args0 = self.model_args[0]
         prev_disable = getattr(args0, "disable_batched_prefill", False)
-        if force_sequential:
+        if use_sequential:
             args0.disable_batched_prefill = True
+        # Arm the gemma4-owned batched-consumption trace hygiene (per-slot slice
+        # dealloc + RM return + retire list in process_logits_after_prefill_trace)
+        # only when this call truly batches; the single-user path must keep the
+        # original contract (persistent trace output input, TILE return).
+        for m in self.model:
+            m._g4_batched_prefill_consumption = will_batch
+
         try:
             with self._route_per_layer_page_tables(per_submesh):
                 out = super().prefill_forward_text(**kwargs)
         finally:
-            if force_sequential:
+            if use_sequential:
                 args0.disable_batched_prefill = prev_disable
+            for m in self.model:
+                m._g4_batched_prefill_consumption = False
+            self._clear_sequential_batch_page_tables()
 
         # Device work is synchronous after the TT forward returns — same
         # wall clock the metal demo attributes to ``inference_prefill`` / TTFT.
@@ -1528,8 +1740,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return out
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # Free tensors retired by the last batched-prefill consumption BEFORE
+        # this step's trace replay (the retired list is host-consumed already;
+        # leaving the final entry alive across the replay violates the
+        # trace-safety contract in process_logits_after_prefill_trace).
+        for m in self.model:
+            scavenge = getattr(m, "_g4_retire_scavenge", None)
+            if scavenge is not None:
+                scavenge()
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
-        page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
+        page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(
+            page_tables_per_layer, kwargs.get("kv_cache"), authoritative=True
+        )
         # Do *not* pad decode page tables to max_batch — keep the plugin's
         # nearest-bucket batch so B=1 uses the B=1 decode trace / SDPA grid.
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
@@ -1543,7 +1765,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # a prior step is still in flight rebinds buffers the pending read
         # still references (#51186).
         if any(getattr(m, "_invalidate_decode_traces_after_page_table_realloc", False) for m in self.model):
-            after_warmup = bool(getattr(self, "tt_warmed_decode_batch_sizes", None))
+            after_warmup = bool(getattr(self, "_decode_warmup_complete", False))
             self.trace_ids_decode = defaultdict(lambda: None)
             self.trace_inputs_decode = defaultdict(lambda: None)
             self.trace_output_decode = defaultdict(lambda: None)
@@ -1558,14 +1780,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             )
         t0 = time.perf_counter()
         with self._route_per_layer_page_tables(per_submesh):
-            # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
-            # NotImplementedError placeholder; route to ``Generator``'s
-            # actual decode implementation. ``decode_forward_text`` was
-            # renamed to ``decode_forward`` in tt_transformers/generator.py
-            # (commit 72217c1af4f, 2026-03-26); calling the old name now
-            # raises AttributeError as soon as decode warmup runs. Use
-            # the same skip pattern as the GptOssForCausalLM sibling.
-            out = super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+            # Route through ``ChunkedPrefillPageTableGuardMixin.decode_forward``
+            # (Gemma4-safe async-ahead merge). Do not call
+            # ``super(HybridAttentionForCausalLM, ...)`` — that skips the mixin
+            # and hits shared ``Generator.decode_forward`` (OOB slot_remap /
+            # bucket IndexError under concurrent vLLM). Also avoid plain
+            # ``HybridAttentionForCausalLM.decode_forward`` (NotImplementedError).
+            out = super().decode_forward(*args, **kwargs)
         self._perf_decode_tokens += 1
         do_log = self._perf_decode_tokens % self._perf_log_every == 0
         # Sync only when measuring (or GEMMA4_VLLM_DECODE_SYNC_EVERY=1); token
@@ -1628,6 +1849,88 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
         max_batch = int(self.model_args[0].max_batch_size)
         return (int(sliding_window) // block_size) * max_batch
+
+    def _release_decode_traces_for_fresh_wave(self) -> None:
+        """Release captured decode traces (see fresh-wave comment at call site)."""
+        released = 0
+        try:
+            for _key, tids in list(self.trace_ids_decode.items()):
+                if not tids:
+                    continue
+                for mid, tid in tids.items():
+                    ttnn.release_trace(self.model_args[mid].mesh_device, tid)
+                    released += 1
+        except Exception as exc:
+            logger.warning("Gemma4 bounded: decode trace release failed: {}", exc)
+        if released:
+            self.trace_ids_decode = defaultdict(lambda: None)
+            self.trace_inputs_decode = defaultdict(lambda: None)
+            self.trace_output_decode = defaultdict(lambda: None)
+            self._prev_decode_batch = None
+            self.prev_page_table = None
+            logger.info("Gemma4 bounded: released {} decode trace(s) at fresh wave", released)
+
+    def _clear_bounded_sliding_kv_rings(self, kv_cache, live_before: int = 0) -> None:
+        """Zero sliding-layer paged KV buffers before a fresh prefill.
+
+        Bounded mode remaps every user onto a fixed physical ring; those
+        buffers are not freshly allocated per request. Stale contents from
+        warmup or a prior generate corrupt short-prompt next-token logits
+        (notably closing the gemma4 thought channel immediately).
+
+        This zeroes the *whole* sliding pool, i.e. every user's ring. Under
+        concurrent serving each arriving request is itself a "fresh prefill"
+        (``start_pos == 0``), so doing that unconditionally wipes the KV of
+        every request currently decoding — measured as garbage output from
+        concurrency 2 upward. ``live_before`` is the ring occupancy sampled
+        *before* this prefill's own remap, so the serving path skips the clear
+        only when some *other* request still holds a ring; the arriving request
+        is handed a ring no live request owns, and SDPA reads only
+        ``[cur_pos-W+1, cur_pos]``, which its own prefill has just written, so
+        any stale tail left by a finished request is never attended to.
+        """
+        if not self._bounded_sliding_kv_cache or kv_cache is None:
+            return
+        if live_before:
+            logger.debug(
+                "Gemma4 bounded: skipping sliding-ring clear, {} live ring(s) in flight",
+                live_before,
+            )
+            return
+        sliding_idxs = set(self._sliding_layer_indices())
+        if not sliding_idxs:
+            return
+        # kv_cache: [submesh][layer] -> [k, v] (or layer -> [k, v] when undped).
+        submeshes = kv_cache if isinstance(kv_cache, (list, tuple)) else [kv_cache]
+        cleared = 0
+        for sub in submeshes:
+            if sub is None:
+                continue
+            layers = sub if isinstance(sub, (list, tuple)) else [sub]
+            for li, layer_kv in enumerate(layers):
+                if li not in sliding_idxs or layer_kv is None:
+                    continue
+                pair = layer_kv if isinstance(layer_kv, (list, tuple)) else (layer_kv,)
+                for cache_t in pair:
+                    if cache_t is None:
+                        continue
+                    try:
+                        z = ttnn.zeros_like(cache_t)
+                        ttnn.copy(z, cache_t)
+                        z.deallocate(True)
+                        cleared += 1
+                    except Exception as e:
+                        logger.warning(
+                            "Gemma4 vLLM: failed to clear bounded sliding KV "
+                            "(layer={}, err={}) — stale ring may remain",
+                            li,
+                            e,
+                        )
+        if cleared:
+            logger.info(
+                "Gemma4 vLLM: cleared {} bounded sliding KV buffers before prefill",
+                cleared,
+            )
 
     def _shrink_bounded_sliding_kv_specs(self, per_layer_specs):
         """Rewrite sliding-layer ``num_blocks`` to the bounded physical pool."""
@@ -1778,7 +2081,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         Decode warmup captures Metal traces against persistent buffers sized
         at max batch. Prefill often passes B=1 or B=31; padding here makes
         the first allocation (and every subsequent copy) match that width so
-        we never grow/orphan trace addresses. Unused rows are filled with -1.
+        we never grow/orphan trace addresses. Unused rows are filled with 0
+        (vLLM null block).
         """
         if not page_tables_per_layer:
             return page_tables_per_layer
@@ -1792,12 +2096,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if int(pt2.shape[0]) >= max_b:
                 out.append(pt2)
                 continue
-            padded = torch.full((max_b, int(pt2.shape[1])), -1, dtype=torch.int32)
+            padded = torch.zeros((max_b, int(pt2.shape[1])), dtype=torch.int32)
             padded[: pt2.shape[0], :] = pt2.to(dtype=torch.int32)
             out.append(padded)
         return out
 
-    def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache):
+    def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache, authoritative=False):
         """Remap sliding-layer page tables onto the bounded physical pool.
 
         With hybrid groups OFF, vLLM hands every layer the same full-ISL
@@ -1849,22 +2153,36 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return page_tables_per_layer
         target_cols = int(sliding_window) // block_size
 
-        # Dense sliding IDs depend only on (batch, W) — cache across decode
-        # steps so we don't rebuild 50 layer tables every token.
-        batch = None
+        # Ring slots must follow the *request*, not its row in the current
+        # page-table tensor. The plugin compacts decode rows onto the occupied
+        # requests (``block_tables_for_rows(req_indices, ...)``) and picks the
+        # decode bucket from the request *count*, so a live request's row index
+        # shifts whenever the running set changes while its KV stays put.
+        # Keying dense block IDs on the row index therefore hands a running
+        # request a different physical ring between steps and it reads another
+        # user's KV (nondeterministic garbage from concurrency 2 upward). Key on
+        # vLLM's own global block ID instead: stable for the request's lifetime,
+        # and unique while prefix caching is off (Gemma4 declares it off).
+        max_slots = int(getattr(self.model_args[0], "max_batch_size", 0) or 0)
+
+        # Derive the identity from a full-attention row when one is available.
+        # vLLM substitutes its reserved null block (ID 0) for blocks it has
+        # evicted, which for a *sliding* group can zero the very entry used as
+        # the key; a full-attention row keeps every block for the request's
+        # lifetime. Under hybrid-groups-off both rows are the same table, so
+        # this only matters if hybrid groups are turned on later.
+        ref = None
         for i, pt in enumerate(page_tables_per_layer):
-            if (
-                pt is not None
-                and i < len(layer_types)
-                and layer_types[i] == "sliding_attention"
-                and isinstance(pt, torch.Tensor)
-            ):
-                batch = int(pt.shape[0])
+            if not isinstance(pt, torch.Tensor) or i >= len(layer_types):
+                continue
+            if layer_types[i] != "sliding_attention":
+                ref = pt
                 break
-        cache = getattr(self, "_bounded_sliding_pt_cache", None)
-        cached_row = None
-        if cache is not None and cache[0] == batch and cache[1] == target_cols:
-            cached_row = cache[2]
+            if ref is None:
+                ref = pt
+        slots_by_row = (
+            self._bounded_ring_slots(ref, max_slots or int(ref.shape[0]), authoritative) if ref is not None else None
+        )
 
         out = []
         for i, pt in enumerate(page_tables_per_layer):
@@ -1878,16 +2196,106 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 out.append(pt)
                 continue
             batch = int(pt.shape[0])
-            if cached_row is not None and cached_row.shape[0] == batch:
-                out.append(cached_row)
-                continue
+            if slots_by_row is not None and len(slots_by_row) == batch:
+                slots = slots_by_row
+            else:
+                # Per-layer fallback: keys derive from THIS layer's table. Under
+                # hybrid-groups-off every layer shares one table so this equals
+                # slots_by_row; with hybrid groups on, a sliding row whose block-0
+                # was nulled by vLLM could key a different slot than the
+                # full-attention reference — if the fallback ever fires alongside
+                # a computed reference, surface it instead of diverging silently.
+                if slots_by_row is not None and not getattr(self, "_g4_ring_fallback_warned", False):
+                    self._g4_ring_fallback_warned = True
+                    logger.warning(
+                        f"gemma4 bounded ring: layer {i} page table has {batch} rows but the shared "
+                        f"slot reference has {len(slots_by_row)} — falling back to per-layer slot "
+                        "derivation. Rings can diverge across layers if row identities differ."
+                    )
+                slots = self._bounded_ring_slots(pt, max_slots or batch, False)
             # Always W columns (demo layout). Keeping vLLM's full-ISL width
             # here thrash-reallocates persistent buffers vs short prefill
             # tables and is unused under cache_position_modulo.
-            remapped = torch.empty((batch, target_cols), dtype=torch.int32)
-            for u in range(batch):
-                remapped[u] = torch.arange(u * target_cols, (u + 1) * target_cols, dtype=torch.int32)
-            self._bounded_sliding_pt_cache = (batch, target_cols, remapped)
-            cached_row = remapped
+            remapped = torch.zeros((batch, target_cols), dtype=torch.int32)
+            for u, slot in enumerate(slots):
+                if slot is None:
+                    continue  # padded gap row; its position is -1 so it is never read
+                remapped[u] = torch.arange(slot * target_cols, (slot + 1) * target_cols, dtype=torch.int32)
             out.append(remapped)
         return out
+
+    @staticmethod
+    def _bounded_row_key(row):
+        """Stable per-request identity for one page-table row.
+
+        vLLM's global block IDs live as long as the request (Gemma4 runs with
+        prefix caching off, so blocks are not shared between requests), which
+        makes the first block ID an identity that survives the row index
+        moving. An all-zero row is a padded decode gap, not a request.
+        """
+        if int(row.max()) == 0:
+            return None
+        return int(row[0])
+
+    def _bounded_ring_slots(self, pt, max_slots, authoritative):
+        """Assign each page-table row a persistent bounded-ring slot.
+
+        ``authoritative`` must be set only by the decode path: a decode step
+        sees the whole running set, so slots for departed requests can be
+        reclaimed there. A prefill call carries just the arriving request, so
+        releasing on it would drop every live request's slot and re-hand them
+        different rings — the exact corruption this mapping exists to prevent.
+        """
+        slot_map = getattr(self, "_bounded_ring_slot_map", None)
+        if slot_map is None:
+            slot_map = {}
+            self._bounded_ring_slot_map = slot_map
+        keys = [self._bounded_row_key(pt[u]) for u in range(int(pt.shape[0]))]
+        # Do NOT release a slot merely because its key is missing from this
+        # batch. vLLM does not necessarily schedule every running request in
+        # every decode step, so an absent key is not proof the request ended;
+        # freeing it there hands a live request's ring to a new arrival. Keep
+        # entries until the map is actually full and recycle least-recently-used
+        # instead — a request that really finished stops being touched and ages
+        # out naturally. ``authoritative`` now only marks a call whose key set
+        # is a true running set, which is what refreshes recency.
+        if authoritative:
+            for k in keys:
+                if k is not None and k in slot_map:
+                    slot_map[k] = slot_map.pop(k)  # move to end = most recent
+            # Remember the last true running set: eviction must prefer keys
+            # absent from it — LRU order alone can front a LIVE request that
+            # simply was not scheduled in recent decode steps.
+            self._g4_last_authoritative_keys = {k for k in keys if k is not None}
+        used = set(slot_map.values())
+        slots = []
+        for k in keys:
+            if k is None:
+                slots.append(None)
+                continue
+            slot = slot_map.get(k)
+            if slot is None:
+                slot = next((s for s in range(max_slots) if s not in used), None)
+                if slot is None:
+                    # Slots are reclaimed on decode steps, so a batch that
+                    # drains completely leaves its keys behind until the next
+                    # decode runs. A prefill arriving in that window can find
+                    # the map full; the scheduler caps concurrency at
+                    # ``max_slots``, so the oldest entry is necessarily a
+                    # departed request. Evict it rather than colliding on 0.
+                    last_auth = getattr(self, "_g4_last_authoritative_keys", None)
+                    victim = next(
+                        (vk for vk in slot_map if last_auth is not None and vk not in last_auth),
+                        next(iter(slot_map)),
+                    )
+                    slot = slot_map.pop(victim)
+                    logger.warning(
+                        "Gemma4 bounded: ring slot map full (max_slots={}); recycling "
+                        "least-recently-used key {} to admit a new request",
+                        max_slots,
+                        victim,
+                    )
+                slot_map[k] = slot
+                used.add(slot)
+            slots.append(slot)
+        return slots

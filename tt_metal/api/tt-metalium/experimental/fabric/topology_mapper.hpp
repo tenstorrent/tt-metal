@@ -97,17 +97,16 @@ public:
         const LocalMeshBinding& local_mesh_binding,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
 
-    // Construct a TopologyMapper with fixed ASIC-position pinnings.
-    // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
-    // For one-to-one pinnings, use a vector with a single position.
-    // These pins must reference devices on the current host; if infeasible, construction will throw with details.
+    // Construct a TopologyMapper with many-to-many ASIC pinning groups (MGD AsicPinningGroup shape).
+    // Each group lists fabric nodes and allowed ASIC positions; any node in the group may map to any
+    // position in the group (solver enforces a bijection). A single-node group is 1:many.
     TopologyMapper(
         const tt::Cluster& cluster,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
+        const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinning_groups,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
@@ -404,7 +403,7 @@ private:
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
-    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings_;
+    const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups_;
     bool generate_mapping_locally_ = false;
     std::chrono::duration<float> topology_mapping_timeout_;
 

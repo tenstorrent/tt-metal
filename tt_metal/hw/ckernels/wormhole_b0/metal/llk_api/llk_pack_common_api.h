@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "internal/circular_buffer_interface.h"
+#include "llk_assert.h"
+#include "llk_fp32_dest_acc.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
@@ -15,11 +19,14 @@
  *************************************************************************/
 
 /**
- * Enable or disable FP32 accumulation in the packer destination register.
+ * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * @param enable When true, the packer treats the destination register as FP32 accumulated.
+ * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL),
+ * then STALLWAITs.
+ *
+ * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
+inline void llk_pack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(); }
 
 /**
  * Configure the packer hardware for the given output operand.
@@ -40,6 +47,15 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
+    SAN_HOOK(configure(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+        StateDiscard<std::uint32_t>(tile_size)));
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -127,10 +143,10 @@ inline void llk_pack_dest_section_done() {
  *
  * @tparam pack_mode   Packer program mode.
  * @tparam diagonal    Whether to use diagonal packing.
- * @param  pack_output Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output Output circular buffer / operand index.
  */
 template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
-inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
+inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
@@ -145,10 +161,10 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam pack_mode           Packer program mode.
- * @param  pack_output         Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output         Output circular buffer / operand index.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
+inline void llk_pack_dest_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
@@ -173,6 +189,15 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+        StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],

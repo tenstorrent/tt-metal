@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
+#include <tt_stl/assert.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
 #include <map>
@@ -38,10 +39,29 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
+// Returns whether a declared torus axis realizes a distinct wrap edge. Use bare
+// has_flag only for declared intent, never to decide realized routing topology.
+inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh_shape, uint32_t axis) {
+    TT_FATAL(mesh_shape.dims() == 2, "Genuine torus-axis query requires a 2D mesh shape, got {}", mesh_shape);
+    TT_FATAL(axis < mesh_shape.dims(), "Torus axis must be within mesh shape {}, got {}", mesh_shape, axis);
+    return has_flag(fabric_type, torus_flag_for_axis(axis)) && is_genuine_torus_dim(mesh_shape[axis]);
+}
+
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
-// mesh_shape: [rows, cols] - used to detect edge cases where 2-row/2-col torus is equivalent to mesh
+// mesh_shape: [rows, cols], used to compare realized per-axis torus connectivity.
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
+
+// True when the fabric config (not the descriptor's declared dim_types) is the origin of a torus on
+// this axis. On a genuine torus axis the wrap cables physically consume every port of that axis;
+// smaller extents leave those ports open, but they still belong to the torus by convention: deadlock
+// avoidance is derived per direction from the fabric config, so an inter-mesh link placed on such a
+// port can face a peer that labels the axis differently and hang (issue #54650). Edge ports of a
+// config-driven torus axis are therefore reserved (excluded from inter-mesh use); an axis the
+// descriptor itself declares as RING keeps its boundary ports.
+inline bool is_config_driven_torus_axis(FabricType requested_type, FabricType declared_type, uint32_t axis) {
+    return has_flag(requested_type, torus_flag_for_axis(axis)) && !has_flag(declared_type, torus_flag_for_axis(axis));
+}
 
 // Compute maximum 1D hops across all meshes in topology
 // Returns max(rows-1, cols-1) across all meshes, representing longest linear path

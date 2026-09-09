@@ -28,7 +28,6 @@ void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
-    TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout", name);
 }
 
 ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
@@ -47,6 +46,8 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
 
 PerTokenCastToFp8DeviceOperation::program_factory_t PerTokenCastToFp8DeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
+    // Single factory for both layouts; create() branches on input.layout(). ROW_MAJOR/TILE stay separate
+    // program-cache entries because compute_program_hash hashes input.layout().
     return PerTokenCastToFp8ProgramFactory{};
 }
 
@@ -66,7 +67,14 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
         static_cast<int>(input.dtype()));
-    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+    const auto& tile = input.tensor_spec().tile();
+    // The compute kernels build cb_in with the default, non-transposed tile descriptor and
+    // compute_program_hash only records tile/face shapes. A transposed tile would be unpacked with the
+    // wrong face ordering and silently produce incorrect scales and FP8 values, so reject it here.
+    TT_FATAL(
+        !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "per_token_cast_to_fp8: transposed TILE inputs are not supported");
+    const auto tile_shape = tile.get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
     // Row-major circular-buffer pages still use one logical tile. The quantization kernels then stream
@@ -156,6 +164,7 @@ ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
         attrs,
         input.dtype(),
+        input.layout(),  // ROW_MAJOR and TILE select different program factories
         input.memory_config(),
         input.logical_shape(),
         tile_shape[0],

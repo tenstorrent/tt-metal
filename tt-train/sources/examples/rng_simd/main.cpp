@@ -214,6 +214,7 @@ void benchmark_distribution(
     uint32_t seed = 42;
 
     std::vector<BenchmarkResult> results;
+    results.reserve(4);
 
     auto func_seq = [&](std::vector<T>& data) { ttml::core::sequential_generate(std::span{data}, dist_factory, seed); };
     results.push_back(run_benchmark<T>("MT19937 (Sequential)", type_name, params.name, func_seq, size));

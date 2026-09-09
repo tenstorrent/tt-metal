@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "sfpi.h"
 
 namespace ckernel
@@ -93,7 +95,54 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     v_endif;
 
     // Set newly denormalized exponent to result exponent field
-    return setexp(result, new_exp);
+    sfpi::vFloat out = sfpi::setexp(result, new_exp);
+
+    // Pole guard for in == 0, which the exponent-difference arithmetic above misses: it lands
+    // on 126 - exexp(0) = 254, a finite 1.7e38, where an infinity needs 255. The
+    // v_if(new_exp < 0) block guards only the opposite, underflow end. Issue #52930.
+    //
+    // Two constraints on the form. It has to run after the setexp, which would otherwise
+    // overwrite the exponent field that makes the value an infinity. And it has to compare
+    // setsgn(in, 0) rather than a bare in == 0.0F, because SFPSETCC is not specified for
+    // negative zero (VectorUnit.md) and leaves -0.0 at 1.7e38; clearing the sign is what
+    // brings -0.0 into the guard. The guard yields +inf for either zero, so 1/-0 = -inf comes
+    // from the sign restore in _reciprocal_compat_signed_ below (SFPSETSGN), not from here. A
+    // caller that takes the bare primitive keeps |1/in| and so gets +inf for both zeros.
+    v_if (sfpi::setsgn(in, 0) == 0.0F)
+    {
+        out = std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+    return out;
+}
+
+// 1/in, carrying the sign that _reciprocal_compat_ drops.
+//
+// The primitive above forces the sign bit and so returns |1/in|; it is only half of a reciprocal,
+// and every caller that wants 1/in owes it the sign restore below. Spelled out at each call site
+// that step is easy to leave out, and leaving it out is silent -- the result stays correct for
+// positive inputs and is wrong only in sign for negative ones. Prefer this wrapper; take the bare
+// primitive only where the magnitude is the intent.
+//
+// SFPSETSGN (sfpi::copysgn) rather than v_if(in < 0.0) { out = -out; }. The comparison form is
+// what this wrapper replaced, and it works: measured on Blackhole silicon it does fire on a
+// delivered -0.0, so reciprocal_compat(-0.0) is -inf either way, and the two forms are
+// bit-identical over the SDPA and compat-unary suites -- the two that reach this wrapper.
+// (test_sfpu_sampling is untouched by either form: sampling_recip_value calls the bare
+// primitive, so it is the control proving the refactor did not leak into that consumer, not a
+// comparison of the two restores.) But SFPSETCC is specified only
+// "provided that VC is neither negative zero nor any kind of NaN" (VectorUnit.md), so that
+// agreement is behaviour outside the contract and not a property to rest a documented 1/in on --
+// note the pole guard above needs setsgn(in, 0) precisely because the *equality* comparison does
+// NOT admit -0.0. Moving the sign bit needs no comparison at all, which sidesteps both, and costs
+// one instruction where the predicated negate cost three (SFPSETCC/SFPMOV/SFPENCC): measured
+// -32 to -64 cycles/tile across the swept ReciprocalCompat and RsqrtCompat perf variants.
+//
+// test_reciprocal_compat_negative_zero_regression in the LLK suite is what holds the pole down.
+template <int max_iter = 3>
+sfpi_inline sfpi::vFloat _reciprocal_compat_signed_(const sfpi::vFloat in)
+{
+    return sfpi::copysgn(_reciprocal_compat_<max_iter>(in), in);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
@@ -104,12 +153,7 @@ inline void _calculate_rsqrt_compat_(const int iterations)
     {
         sfpi::dst_reg[0] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
         sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
+        sfpi::vFloat out = _reciprocal_compat_signed_<APPROXIMATION_MODE ? 2 : 3>(in);
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
@@ -137,12 +181,7 @@ inline void _calculate_reciprocal_compat_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
+        sfpi::vFloat out = _reciprocal_compat_signed_<APPROXIMATION_MODE ? 2 : 3>(in);
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);

@@ -42,16 +42,17 @@ void kernel_main() {
     DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
     DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
 
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
+        reconfig_data_format(cb_bcast, cb_bcast);
+        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);

@@ -67,12 +67,16 @@ Optional:
     --skip-validation                       Skip validation, only run tt-smi reset
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before recovery (see minimum versions in utils/host_utils.sh)
+    --skip-mpi-stress-test                  Skip the MPI packet stress test run before recovery
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
     --mpi-if <interface>                    Network interface for MPI TCP transport
                                             (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
+    --docker-args <args>                    Extra arguments passed verbatim to 'docker run' (quoted string).
+                                            Only used with --use-docker.
+                                            e.g. --docker-args "--cap-add=SYS_PTRACE --shm-size=2g"
     --output <directory>                    Output directory for logs and validation artifacts
                                             (default: "<comma-separated-hosts>-<timestamp>").
                                             Passed to run_cluster_validation as --output-path so the
@@ -125,13 +129,14 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260721-30-g9dca5ec435f"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 SLEEP_DURATION=5
 SKIP_RESET=false
 SKIP_VALIDATION=false
 SKIP_VERSION_CHECK=false
+SKIP_MPI_STRESS_TEST=false
 SEND_TRAFFIC=true
 CHECK=false
 MPI_IF=""
@@ -140,6 +145,7 @@ MPI_EXTRA_ARGS=()
 OUTPUT_DIR=""  # default computed after --hosts is known: "<comma-separated-hosts>-<timestamp>"
 RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
+DOCKER_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
@@ -243,6 +249,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_VERSION_CHECK=true
             shift
             ;;
+        --skip-mpi-stress-test)
+            SKIP_MPI_STRESS_TEST=true
+            shift
+            ;;
         --no-send-traffic)
             SEND_TRAFFIC=false
             shift
@@ -267,6 +277,15 @@ while [[ $# -gt 0 ]]; do
             fi
             read -ra _extra <<< "$2"
             MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
+        --docker-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --docker-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            DOCKER_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
         --output)
@@ -432,6 +451,12 @@ else
     DESCRIPTOR_ARGS+=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
 fi
 
+# Expand --docker-args tokens into repeatable --docker-arg flags for mpi-docker.
+DOCKER_ARG_FLAGS=()
+for _darg in "${DOCKER_EXTRA_ARGS[@]}"; do
+    DOCKER_ARG_FLAGS+=(--docker-arg "$_darg")
+done
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -459,6 +484,7 @@ echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
+echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
 echo "Rerun on retrain: $RERUN_ON_RETRAIN"
@@ -479,6 +505,42 @@ if [[ "$SKIP_VERSION_CHECK" == false ]]; then
     fi
 else
     echo "Skipping version check (--skip-version-check)"
+    echo ""
+fi
+
+# Step 0.5: MPI packet stress test — validates MPI transport between all hosts before recovery.
+if [[ "$SKIP_VALIDATION" == true ]]; then
+    echo "Skipping MPI stress test (--skip-validation)"
+    echo ""
+elif [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
+    echo "Running MPI stress test (1000 iterations, 1048576 bytes/message)..."
+    MPI_STRESS_BIN="./build/tools/scaleout/run_mpi_stress_test"
+    if [[ -n "$DOCKER_IMAGE" ]]; then
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            "${DOCKER_ARG_FLAGS[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            --map-by ppr:1:node \
+            --bind-to none \
+            --timeout 3600 \
+            "$MPI_STRESS_BIN" 1000 1048576
+    else
+        timeout --signal=TERM --kill-after=30s 1h mpirun \
+            --host "$HOSTS" \
+            --map-by ppr:1:node \
+            --bind-to none \
+            --mca btl self,vader,tcp \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            "$MPI_STRESS_BIN" 1000 1048576
+    fi
+    echo "MPI stress test passed."
+    echo ""
+else
+    echo "Skipping MPI stress test (--skip-mpi-stress-test)"
     echo ""
 fi
 
@@ -578,6 +640,7 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
                 --tag-host \
                 --mpi-interface "$MPI_IF" \
                 --volume /data/scaleout_configs \
+                "${DOCKER_ARG_FLAGS[@]}" \
                 "${MPI_EXTRA_ARGS[@]}" \
                 --host "$HOSTS" \
                 ./build/tools/scaleout/run_cluster_validation \
@@ -668,6 +731,7 @@ if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
                     --empty-entrypoint \
                     --mpi-interface "$MPI_IF" \
                     "${REGEN_VOLUMES[@]}" \
+                    "${DOCKER_ARG_FLAGS[@]}" \
                     --host "$FIRST_HOST" -np 1 \
                     ./build/tools/scaleout/run_regen_descriptors \
                     "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"

@@ -54,7 +54,6 @@ def run_strided_all_gather_impl(
         dim,
         mem_config_ag,
         num_devices,
-        num_links,
         ag_input_dtype,
         layout,
         tile,

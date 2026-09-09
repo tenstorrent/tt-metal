@@ -1034,7 +1034,7 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         h2d_feeder.join();
     }
 
-    Synchronize(mesh_device_.get(), std::nullopt);
+    Synchronize(*mesh_device_, std::nullopt);
     ctx->barrier();  // [B2]
 }
 
@@ -1245,7 +1245,7 @@ void run_forward_chain_stress(
         h2d_feeder.join();
     }
 
-    Synchronize(mesh_device_.get(), std::nullopt);
+    Synchronize(*mesh_device_, std::nullopt);
     ctx->barrier();  // [B2]
 }
 

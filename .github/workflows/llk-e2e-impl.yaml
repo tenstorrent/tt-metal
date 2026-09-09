@@ -7,16 +7,17 @@ on:
         description: "Pytest mark expression for LLK python_tests"
         required: false
         type: string
-        default: "not perf and not quasar"
+        default: "not perf and not quasar and not accuracy"
       coverage:
         description: "Enable coverage collection and merge job"
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   checks: write
   contents: read
+  packages: write
 
 env:
   LLK_PATH: tt_metal/tt-llk

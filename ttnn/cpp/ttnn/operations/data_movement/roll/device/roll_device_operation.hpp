@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/roll/device/roll_device_operation_types.hpp"

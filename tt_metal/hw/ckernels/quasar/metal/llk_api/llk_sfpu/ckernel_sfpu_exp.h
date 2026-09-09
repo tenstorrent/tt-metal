@@ -29,6 +29,22 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 }
 
 /*
+ * Branch-free float->int32 conversion for the 21f exp construction, taken from the Blackhole kernel of
+ * the same name. Requires 0 <= val < 128.0f and assumes val was already divided by 2^23, so the result
+ * is scaled by 2^23 (otherwise the shift would have to be exp - 23).
+ *
+ * Safe on Quasar: the exponent is non-negative over that range, so the shift amount reads the same in
+ * sign-magnitude and two's complement.
+ */
+sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
+    sfpi::vInt exp = sfpi::exexp(val);
+    sfpi::vInt man =
+        sfpi::exman(val, sfpi::MantissaMode::ImplicitOne);  // get mantissa with implicit bit (man in [1; 2])
+    man = sfpi::shft(man, exp, sfpi::ShiftMode::Logical);
+    return man;
+}
+
+/*
  * The _sfpu_exp_fp32_accurate_ code is derived from code by Norbert Juffa.
  *
  * Copyright (c) 2015-2021, Norbert Juffa

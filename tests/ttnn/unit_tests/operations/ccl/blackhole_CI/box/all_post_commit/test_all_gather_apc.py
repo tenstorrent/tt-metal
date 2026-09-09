@@ -104,7 +104,6 @@ def test_all_gather_subcore_grid(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
         sub_core_grids=sub_core_grids,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -187,7 +186,6 @@ def test_all_gather_2D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -261,7 +259,6 @@ def test_all_gather_4D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -335,7 +332,6 @@ def test_all_gather_ring(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -407,7 +403,6 @@ def test_all_gather_8D_vertical(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -490,14 +485,12 @@ def test_all_gather_failing_shapes(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
-@pytest.mark.parametrize("num_devices", [4])
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout",
@@ -542,8 +535,8 @@ def test_all_gather_failing_shapes(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 150000}, ttnn.Topology.Linear),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 150000}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 160000}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 160000}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
     ids=["fabric_linear", "fabric_ring"],
@@ -561,8 +554,7 @@ def test_all_gather_failing_shapes(
     ),
 )
 def test_all_gather_experimental(
-    bh_2d_mesh_device,
-    num_devices,
+    bh_1d_mesh_device,
     ag_output_shape,
     dim,
     num_links,
@@ -575,12 +567,14 @@ def test_all_gather_experimental(
     num_iters,
     sub_core_grids,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    num_devices = bh_1d_mesh_device.shape[0]
+    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
 
-    # Composite path doesn't support sub core grids
-    if layout == ttnn.ROW_MAJOR_LAYOUT:
+    # Composite path doesn't support sub core grids.
+    # Composite path is selected for RM tensors and padded tiles on gather dim.
+    if layout == ttnn.ROW_MAJOR_LAYOUT or (ag_output_shape[dim] // num_devices) % ttnn.TILE_SIZE != 0:
         sub_core_grids = None
 
     run_all_gather_impl(

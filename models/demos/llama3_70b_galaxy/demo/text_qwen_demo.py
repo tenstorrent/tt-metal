@@ -1,35 +1,31 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-from datetime import datetime
 import json
 import math
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
 
+import pytest
+import torch
+from loguru import logger
+from transformers import AutoTokenizer
+
+import ttnn
+from models.common.utility_functions import comp_pcc
+from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
-from models.demos.utils.device_sku import get_current_device_sku_name
-from models.demos.utils.llm_demo_utils import verify_perf, verify_accuracy
-from models.demos.utils.model_targets import resolve_perf_targets, resolve_accuracy_targets
-from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from transformers import AutoTokenizer
-from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
-
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_accuracy, verify_perf
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 # Use common functions from demo_common.py
 # load_and_cache_context and load_inputs are now imported from demo_common
@@ -75,16 +71,20 @@ class TokenAccuracy:
 
 def get_accuracy_thresholds(model_args, seq_len, batch_size=1):
     """Resolve token accuracy thresholds from the centralized model targets."""
+    # Use the runtime cluster SKU (e.g. wh_galaxy_perf / bh_galaxy_perf) so Wormhole and
+    # Blackhole Galaxy resolve their own targets. model_args.device_name only encodes device
+    # count ("TG" for any 32-chip mesh) and would collapse Blackhole onto the Wormhole entry.
+    sku = get_current_device_sku_name()
     centralized_targets = resolve_accuracy_targets(
         model_name="qwen3-32b-galaxy",
-        sku=model_args.device_name,
+        sku=sku,
         batch_size=batch_size,
         seq_len=seq_len,
     )
     if not centralized_targets or "top1" not in centralized_targets or "top5" not in centralized_targets:
         raise ValueError(
             "Could not find centralized accuracy targets for qwen3-32b-galaxy on "
-            f"{model_args.device_name} (batch_size={batch_size}, seq_len={seq_len})"
+            f"{sku} (batch_size={batch_size}, seq_len={seq_len})"
         )
 
     # Preserve previous behavior for integer-rounded CI checks.
@@ -136,6 +136,13 @@ def create_tt_qwen_model(
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
+    # NOTE: the warm-ttnn-cache HF-load skip is intentionally DISABLED for qwen3-32b-galaxy.
+    # Qwen attention builds its q_norm/k_norm RMSNorms without a weight_cache_path
+    # (llama_attention.py), so those norms are materialized straight from the state_dict with
+    # cache_file_name=None -- i.e. NOT loaded from a .tensorbin. A dataless placeholder would feed
+    # uninitialized (garbage) q_norm/k_norm weights and corrupt accuracy while still passing.
+    # Load the real weights until those norms are cache-backed or captured in a host sidecar.
+    # (llama3.3-70b-galaxy has no q_norm/k_norm and keeps the skip.) (#45400)
     state_dict = tt_model_args.load_state_dict()
     page_table = None
     paged_attention_config = None
@@ -483,7 +490,7 @@ def create_tt_qwen_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
-            "fabric_config": True,
+            "fabric_config": _FABRIC_CONFIG,
         }
     ],
     indirect=True,
@@ -551,7 +558,11 @@ def test_qwen_demo_text(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
 
     stop_at_eos = False  # Default to False
     if request.config.getoption("--stop_at_eos") in [

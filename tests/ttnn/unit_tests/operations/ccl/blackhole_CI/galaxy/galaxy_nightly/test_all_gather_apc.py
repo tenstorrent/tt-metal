@@ -88,7 +88,6 @@ def test_all_gather_2D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -160,7 +159,6 @@ def test_all_gather_4D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -236,6 +234,5 @@ def test_all_gather_everything_ring(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

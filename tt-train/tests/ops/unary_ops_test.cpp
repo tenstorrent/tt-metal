@@ -13,6 +13,7 @@
 #include <random>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -21,6 +22,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "xtensor/core/xmath.hpp"
 
 namespace ttml::ops::tests {
 
@@ -60,6 +62,37 @@ void load_random_data_from_os(std::span<float> data) {
         const auto normalized = static_cast<float>(random_uint32) / static_cast<float>(max_uint32);
         return normalized * 2.0F - 1.0F;
     });
+}
+
+// GELU-related constants (compare to the ones in sfpu kernels)
+constexpr float kSqrt2 = 1.41421356237309504880F;
+constexpr float kInvSqrt2Pi = 0.3989422804014327F;   // 1 / sqrt(2 * pi)
+constexpr float kSqrt2OverPi = 0.7978845608028654F;  // sqrt(2 / pi)
+constexpr float kGeluTanhK = 0.044715F;
+
+// Exact GELU: 0.5 * x * (1 + erf(x / sqrt(2)))
+xt::xarray<float> gelu_exact_reference(const xt::xarray<float>& x) {
+    return 0.5F * x * (1.0F + xt::erf(x / kSqrt2));
+}
+
+// d/dx of exact GELU: Phi(x) + x * phi(x)
+xt::xarray<float> gelu_exact_grad_reference(const xt::xarray<float>& x) {
+    xt::xarray<float> phi_cdf = 0.5F * (1.0F + xt::erf(x / kSqrt2));
+    xt::xarray<float> phi_pdf = kInvSqrt2Pi * xt::exp(-0.5F * x * x);
+    return phi_cdf + x * phi_pdf;
+}
+
+// Hendrycks tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+xt::xarray<float> gelu_tanh_reference(const xt::xarray<float>& x) {
+    constexpr float kSqrt2OverPi = 0.7978845608028654F;  // sqrt(2 / pi)
+    xt::xarray<float> t = xt::tanh(kSqrt2OverPi * (x + 0.044715F * x * x * x));
+    return 0.5F * x * (1.0F + t);
+}
+
+// d/dx of the tanh approximation: 0.5*(1 + t) + 0.5*x*(1 - t^2)*sqrt(2/pi)*(1 + 3*0.044715*x^2)
+xt::xarray<float> gelu_tanh_grad_reference(const xt::xarray<float>& x) {
+    xt::xarray<float> t = xt::tanh(kSqrt2OverPi * (x + kGeluTanhK * x * x * x));
+    return 0.5F * (1.0F + t) + 0.5F * x * (1.0F - t * t) * kSqrt2OverPi * (1.0F + 3.0F * kGeluTanhK * x * x);
 }
 
 }  // namespace
@@ -199,6 +232,46 @@ TEST_F(UnaryOpsTest, Silu) {
     auto grad_kernel = core::to_xtensor(a_kernel->get_grad());
     auto grad_composite = core::to_xtensor(a_composite->get_grad());
     EXPECT_TRUE(xt::allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F));
+}
+
+TEST_F(UnaryOpsTest, Gelu) {
+    auto* device = &autograd::ctx().get_device();
+
+    auto N = 4;
+    auto C = 1;
+    auto H = 20;
+    auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
+
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+    auto result = gelu(tensor_ptr);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_exact_reference(data), 8e-3F, 2e-2F));
+
+    result->backward();
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_exact_grad_reference(data), 8e-3F, 2e-2F));
+}
+
+TEST_F(UnaryOpsTest, GeluTanh) {
+    auto* device = &autograd::ctx().get_device();
+
+    auto N = 4;
+    auto C = 1;
+    auto H = 20;
+    auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
+
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+    auto result = gelu(tensor_ptr, GeluVariant::TANH);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_tanh_reference(data), 8e-3F, 2e-2F));
+
+    result->backward();
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_tanh_grad_reference(data), 8e-3F, 3e-2F));
 }
 
 }  // namespace ttml::ops::tests

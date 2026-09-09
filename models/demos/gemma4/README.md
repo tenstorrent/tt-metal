@@ -46,9 +46,9 @@ Legend: 🟢 fully supported · 🟡 supported with known issues / limitations �
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | E2B     | 🟢 | 🟢 | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | E4B     | 🟢 | 🟡 [^e4b-n300] | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 12B     | 🟡 [^gemma4-12b-wh] | 🔴 | — | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 26B-A4B | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 31B     | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
+| 12B     | 🟡 [^gemma4-12b-wh] | 🟢 [^gemma4-wh-lc] | 🟢 [^gemma4-wh-lc] | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
+| 26B-A4B | 🔴 | 🔴 [^gemma4-wh-nofit] | 🟡 [^gemma4-wh-lc] | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
+| 31B     | 🔴 | 🔴 [^gemma4-wh-nofit] | 🟢 [^gemma4-wh-lc] | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 
 [^e4b-n300]: E4B on N300 is exercised by the test suite locally but the CI entry is commented out due to runner availability. See `tests/pipeline_reorg/models_{unit,e2e}_tests.yaml`.
 [^gemma4-12b-wh]: 12B on Wormhole N150 is short-context only (does not fit long-context KV).
@@ -57,7 +57,11 @@ Legend: 🟢 fully supported · 🟡 supported with known issues / limitations �
 [^gemma4-lc]: Long-context via `models/demos/gemma4/demo/text_demo_v2.py` (`-k long-context-{4k,32k,64k,128k,256k}`) — reports **TTFT and decode tok/s** (long-context `text_demo.py` only logs TTFT). Same `GEMMA4_LONG_CONTEXT_POLICY` in both demos. **Coherence target on QB2 + LoudBox for 12B and 31B: 4k–128k** (256k may allocate; 31B/26B quality not a target). QB2 — E2B/E4B unbounded through 256k; 12B/26B-A4B unbounded through 128k, bounded(+chunked) at 256k; 31B bounded from 64k (chunk=2048 at ≥128k). LoudBox / P150x8 — E2B/E4B/12B unbounded through 256k; **31B/26B-A4B auto-bounded at 128k** with chunk=2048. Defaults: `GEMMA4_HOST_SAMPLE=1`; do not set `GEMMA4_DEMO_SINGLE_CHUNK=1`.
 [^galaxy]: Galaxy (4×8) is not wired for Gemma4 yet; BH Galaxy e2e is disabled pending fabric / ethernet bring-up.
 
-The 26B-A4B and 31B variants are too large for single-device N150/P150 or N300. Prefer Blackhole QB2 (TP=4, 128 GB GDDR) or LoudBox (TP=8, 256 GB GDDR) for long-context serve; Wormhole T3K (TP=8, ~12 GB/ASIC) remains the supported WH multi-chip path (vLLM on WH-T3K serves 31B at `max_model_len=16384` with chunked prefill=2048 — do not mirror BH 256k). On single **P150**, run E2B / E4B / 12B through 256k (12B uses bounded+chunked automatically).
+[^gemma4-wh-lc]: Wormhole long context, measured batch-1 on a real T3K with `text_demo_v2.py` (`GEMMA4_LONG_CONTEXT_POLICY` T3K/N300 entries; bounded sliding + multi-chunk prefill **2048** above 8–32k — WH carries 12 GB per ASIC vs Blackhole P150's 32 GB). **12B**: N300 (1×2, 24 GB) through **128k** (4k 11.4 s / 12.0 tok/s → 128k 171 s / 11.7 tok/s; 256k OOMs), T3K (1×8) through the **full 256k** (4k 9.9 s / 24.0 tok/s → 256k 468 s / 14.3 tok/s). **31B**: T3K through the **full 256k** (4k 8.5 s / 15.7 tok/s, 32k 55 s / 14.8 tok/s, 128k 188 s / 12.9 tok/s, 256k 564 s / 10.1 tok/s). **26B-A4B**: T3K functional through 128k but marked 🟡 — MoE prefill on WH is far slower than the dense 31B (TTFT 449 s @32k and 1506 s @128k), so ~32k is the practical serving ceiling.
+
+[^gemma4-wh-nofit]: 26B-A4B and 31B do not fit a single N300 (1×2, 24 GB) at any ISL — both OOM during weight/KV allocation even at 4k. Use T3K (1×8) on Wormhole.
+
+The 26B-A4B and 31B variants are too large for single-device N150/P150 or N300. Prefer Blackhole QB2 (TP=4, 128 GB GDDR) or LoudBox (TP=8, 256 GB GDDR) for long-context serve; Wormhole T3K (TP=8, ~12 GB/ASIC) remains the supported WH multi-chip path — metal Direct reaches the full 256k ISL for 12B and 31B there with bounded sliding + chunked prefill=2048, though TTFT is long (~8–9 min at 256k). **12B is the only variant that fits a single N300** (1×2, 24 GB), and only through 128k. Server specs stay well below the Blackhole 256k / 32-user shape: `workflows/model_specs/dev/llm.yaml` serves WH at `max_concurrency: 1` (12B T3K 256k, 12B N300 128k, 31B T3K 128k, 26B-A4B T3K 32k). On single **P150**, run E2B / E4B / 12B through 256k (12B uses bounded+chunked automatically).
 
 ## Prerequisites
 

@@ -4,6 +4,11 @@
 
 #pragma once
 
+// NOTE: A Metal 2.0 fork of this header lives beside it, as
+// generate_bcast_scalar_metal2.hpp. Kernels ported to Metal 2.0 include the fork, which takes a
+// DataflowBuffer; this file serves the consumers still on the legacy API. Until the last of them
+// migrates and this file is retired, changes here likely belong in the fork too.
+
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 

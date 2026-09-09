@@ -4,7 +4,7 @@
 
 #include "ttnn/cluster.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/internal/cluster.hpp>
+#include <internal/cluster.hpp>
 
 namespace ttnn {
 

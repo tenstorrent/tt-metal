@@ -109,8 +109,8 @@ void kernel_main() {
     DataflowBuffer pre_tilize_dfb(pre_tilize_cb_id);
     DataflowBuffer fast_tilize_dfb(fast_tilize_cb_id);
 
-    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb);
+    compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, tilize_untilize_cb);
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
 
     pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb);
 

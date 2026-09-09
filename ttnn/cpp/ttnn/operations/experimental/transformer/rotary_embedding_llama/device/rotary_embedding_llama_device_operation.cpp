@@ -8,6 +8,8 @@
 #include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/device_operation.hpp"  // ttnn::device_operation::launch
+#include "ttnn/operation.hpp"         // tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::experimental::prim {
@@ -235,7 +237,7 @@ ttnn::Tensor rotary_embedding_llama(
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 

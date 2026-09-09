@@ -587,7 +587,7 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_mesh_workload(
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
 
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> sub_device_ids = {sd_id};
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, sub_device_ids);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, sub_device_ids);
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(

@@ -121,7 +121,10 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .compile_time_args = make_cta(/*is_reader=*/1),
-        .hw_config = ttnn::create_writer_datamovement_config(input.device().arch()),
+        // Quasar: reader/writer co-write the borrowed SRC0/DST0 DFBs with sub-tile stick copies; implicit
+        // sync mis-credits per NOC op and stalls (reader NARW / writer WFW). Revert to explicit credits.
+        .hw_config =
+            ttnn::create_writer_datamovement_config(input.device().arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec reader{
@@ -134,7 +137,8 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .compile_time_args = make_cta(/*is_reader=*/0),
-        .hw_config = ttnn::create_reader_datamovement_config(input.device().arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(input.device().arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Assemble the spec ----

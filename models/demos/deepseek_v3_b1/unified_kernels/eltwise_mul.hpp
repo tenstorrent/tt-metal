@@ -16,8 +16,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
+#include "api/compute/experimental/eltwise_mul_scalar.h"
+#include "api/compute/experimental/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #endif
 
@@ -191,10 +191,10 @@ struct EltwiseMul {
                     deepseek_compute_kernel_hw_startup<CTArgs::fp32_dest_acc_en>(
                         CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
                 } else {
-                    reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_in0, CTArgs::cb_scalar);
+                    reconfig_full_operand(CTArgs::cb_in0, CTArgs::cb_scalar);
                     pack_reconfig_data_format<true>(CTArgs::cb_out);
                 }
-                deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
+                deepseek_mul_bcast_scalar_init(CTArgs::cb_in0, CTArgs::cb_scalar);
                 tile_regs_acquire();
 
                 // Step 1: in0[idx] * scalar[e] -> dest[idx] (idx = e*num_tiles + i)
@@ -215,9 +215,9 @@ struct EltwiseMul {
                 }
             } else {
                 // ---- Simple binary multiply: in0 * in1 -> dest ----
-                reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_in0, CTArgs::cb_in1);
+                reconfig_full_operand(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
-                mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
+                mul_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
                 tile_regs_acquire();
 

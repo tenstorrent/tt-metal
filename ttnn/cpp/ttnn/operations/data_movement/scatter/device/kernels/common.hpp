@@ -108,11 +108,14 @@ std::array<uint32_t, N> from_id(int32_t id, const std::array<uint32_t, N>& dims)
     return coord;
 }
 
+// Reads N shape extents starting at vararg index C. The per-dimension shape blocks have no
+// stable per-element names (their count varies with tensor rank across instantiations), so they
+// are delivered as runtime varargs and read positionally.
 template <uint32_t N>
 std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
     std::array<uint32_t, N> ret{};
     for (uint32_t i = C; i < C + N; ++i) {
-        ret[i - C] = get_arg_val<uint32_t>(i);
+        ret[i - C] = get_vararg(i);
     }
 
     return ret;
@@ -133,12 +136,10 @@ FORCE_INLINE void load_to_dfb(
     const uint32_t l1_write_address = dfb_exp.get_write_ptr();
 
     noc.async_read(
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         CoreLocalMem<uint32_t>(l1_write_address),
         chunk_size_bytes,
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(source_noc_address),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(source_noc_address),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(source_noc_address)},
+        {.noc_addr = source_noc_address},
         {.offset_bytes = 0});
     noc.async_read_barrier();
 
@@ -161,12 +162,10 @@ FORCE_INLINE void write_to_output(
 
     noc.async_write(
         CoreLocalMem<uint32_t>(l1_read_address),
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         chunk_size_bytes,
         {.offset_bytes = 0},
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(destination_noc_address),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(destination_noc_address),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(destination_noc_address)});
+        {.noc_addr = destination_noc_address});
     noc.async_write_barrier();
 
     dfb_exp.pop_front(ONE_PAGE);

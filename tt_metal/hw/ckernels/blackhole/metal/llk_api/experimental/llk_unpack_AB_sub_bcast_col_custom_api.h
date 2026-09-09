@@ -12,7 +12,10 @@
  * LLK UNPACK AB SUB BCAST COL CUSTOM - SDPA specialized blocked sub path
  *************************************************************************/
 
-inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {
+// operandB is accepted for cross-arch API parity (Quasar programs a SrcB buffer descriptor at init);
+// on Blackhole the SrcB descriptor is not programmed here, so it is unused.
+inline void llk_unpack_AB_sub_bcast_col_init_custom(
+    const std::uint32_t operandA, [[maybe_unused]] const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
     _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);

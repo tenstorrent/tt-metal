@@ -113,7 +113,6 @@ def test_all_gather_linear_2D_nightly(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -197,7 +196,6 @@ def test_all_gather_linear_4D_nightly(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -280,9 +278,138 @@ def test_all_gather_ring_nightly(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim",
+    [
+        (2, [1, 1, 256, 256], 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_input_dtype, layout",
+    [
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        # (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),  # insufficient infra support (Issue #43909)
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),  # sanity RM test
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
+        (ttnn.uint32, ttnn.TILE_LAYOUT),
+        (ttnn.uint16, ttnn.TILE_LAYOUT),
+        (ttnn.uint8, ttnn.TILE_LAYOUT),
+        (ttnn.int32, ttnn.TILE_LAYOUT),
+    ],
+    ids=[
+        "float32_tile",
+        # "fp8_e4m3_rm",
+        "bfloat16_tile",
+        "bfloat16_rm",
+        "bfloat8_b_tile",
+        "bfloat4_b_tile",
+        "uint32_tile",
+        "uint16_tile",
+        "uint8_tile",
+        "int32_tile",
+    ],
+)
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("cluster_axis", [0])
+def test_all_gather_dtype(
+    bh_1d_mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    cluster_axis,
+):
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    if cluster_axis == 0:
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=3,
+        cluster_axis=cluster_axis,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(7)
+@pytest.mark.parametrize("ag_output_shape", [[1, 1, 128, 128]])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+    ],
+)
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
+    ],
+    indirect=True,
+)
+def test_all_gather_training_shapes(
+    bh_2d_mesh_device,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    num_iters,
+):
+    num_devices = bh_2d_mesh_device.shape[0]
+    cluster_axis = 0
+
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+
+    run_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+    )
 
 
 @skip_for_wormhole_b0()

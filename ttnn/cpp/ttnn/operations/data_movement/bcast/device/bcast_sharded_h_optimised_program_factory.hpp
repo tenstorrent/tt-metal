@@ -6,12 +6,12 @@
 
 #include "bcast_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
 struct BcastShardedHOptimisedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const BcastParams& operation_attributes, const BcastInputs& tensor_args, Tensor& tensor_return_value);
 };
 

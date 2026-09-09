@@ -5,15 +5,11 @@
 from typing import List
 
 import torch
+from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
-from fuser.fused_operation import FusedOperation
-from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
-from helpers.golden_generators import (
-    UnarySFPUGolden,
-    get_golden_generator,
-)
 from helpers.llk_params import (
     ApproximationMode,
     MathOperation,
@@ -49,60 +45,49 @@ class UnarySfpu(Sfpu):
     def golden(
         self,
         tensor: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        format_input = config.sentinel.golden_math_format
-        format_output = config.sentinel.golden_math_format
-        dest_acc = config.dest_acc
-
-        generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)
-
-        return generate_sfpu_golden(
-            self.operation,
-            tensor,
-            format_output,
-            dest_acc,
-            format_input,
-            batch_dims,
-            self.iterations,
-            self.dest_idx,
-            self.fill_const_value,
-            skip_tilize=True,
+        return self.unary_sfpu_golden(
+            tensor, config, operation, compute_unit, batch_dims
         )
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         op = f"SfpuType::{self.operation.cpp_enum_value}"
-
+        en_32bit_dest = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
         return (
-            f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"    _llk_math_eltwise_sfpu_init_();\n"
-            f"    test_utils::init_unary_sfpu_operation_quasar<{op}>();\n"
+            f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
+            f"_llk_math_eltwise_sfpu_init_();\n"
+            f"test_utils::init_unary_sfpu_operation_quasar<{op}, {en_32bit_dest}, {approx_mode}>();\n"
         )
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         op = f"SfpuType::{self.operation.cpp_enum_value}"
+        dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         sfpu_format = config.sentinel._math_format.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
+        quasar_iterations = self.iterations // 4
         return (
-            f"    test_utils::call_unary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}, {self.iterations}"
+            f"test_utils::call_unary_sfpu_operation_quasar<"
+            f"{op}, {dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
             f">({self.dest_idx}, {sfpu_format});\n"
         )
 

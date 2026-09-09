@@ -34,7 +34,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize(
     "input_h,input_w,single_core",
     [

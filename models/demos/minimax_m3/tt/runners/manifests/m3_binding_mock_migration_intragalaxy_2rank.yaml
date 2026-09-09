@@ -1,0 +1,40 @@
+# MiniMax-M3 — pipeline Gate P1 (merged mock migration): 2-stage intra-galaxy pipeline on one 8x4 BH
+# galaxy carved into two Z-connected [4,4] sub-meshes (30 layers per stage), REQUEST mode. No migration
+# endpoint/worker; prefill_producer reads the merged table back device-lessly and PCCs vs the golden.
+#
+# Launch:
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/minimax_m3/tt/runners/manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml $HOST:2
+#
+# TT_VISIBLE_DEVICES: two 2x4 slices per mesh, ordered into a contiguous 4x4 (same values as
+# topology_configuration/pipeline_prefill_request_intragalaxy_2rank.yaml); other splits fail topology_mapper.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "28,29,24,25,0,4,5,1,31,26,27,30,6,7,2,3"}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "18,22,23,19,14,15,10,11,20,16,17,21,9,8,13,12"}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "10240"
+  PREFILL_H2D_SERVICE_ID: "m3_prefill"
+  PREFILL_NUM_USERS: "2"
+  PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+  # Only 12B of metadata transits the queue; the default 64KB clashes with the MoE FFN L1 allocation.
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
+
+  PREFILL_ENABLE_MIGRATION: "1"
+  PREFILL_MOCK_MIGRATION: "1"
+  # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.
+  PREFILL_MIGRATION_TABLE_PATH: "/data/philei/tmp/m3_kv_chunk_table_pp.pb"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
+  # The producer's only barrier before it reads the KV back; without it the read races the device.
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_USE_TRACE: "1"
+
+  LOGURU_LEVEL: "INFO"

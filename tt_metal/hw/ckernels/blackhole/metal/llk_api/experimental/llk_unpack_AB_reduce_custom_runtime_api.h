@@ -47,7 +47,7 @@ using namespace ckernel::unpacker;
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
     std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape& tensor_shape) {
     _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape);

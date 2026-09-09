@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
+import shlex
 import subprocess
+import tempfile
 from collections import namedtuple
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +21,8 @@ from .tile_constants import (
     DEFAULT_TILE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
+
+TEMP_DIR = Path(tempfile.gettempdir())
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 
@@ -99,6 +103,44 @@ tolerances = {
 # rounding noise stays below it while any real signal stays above.
 PCC_SIGNAL_FLOOR = 1e-6
 
+# Relative accumulation error the LoFi MVMUL adds per K-tile, as a fraction of the mean
+# accumulated magnitude. Calibrated across formats on Blackhole (worst observed ~0.0034 at
+# kt=16, bfp2/bfp0), rounded up for headroom.
+MATMUL_ACC_REL_ERR_PER_KT = 0.005
+
+
+def matmul_acc_atol(
+    golden_tensor,
+    kt_dim: int,
+    output_data_format: DataFormat = DataFormat.Float16_b,
+) -> float:
+    """K-aware atol floor for a LoFi matmul golden, to pass to ``passed_test``.
+
+    A single LoFi MVMUL accumulates the whole K-deep sum in a bf16 DEST, so noise grows
+    ~linearly in the number of K-tiles — more than the format's flat atol allows on small
+    outputs at large kt. Scale the floor by ``kt_dim * mean|nonzero golden|``, never below
+    the format default, and leave rtol alone; PCC stays the real gate.
+
+    Why not simply ``tolerances[fmt].atol * kt_dim``: that scales the wrong quantity. The
+    error this floor covers is a *relative* accumulation error, so it tracks the magnitude
+    of the accumulated sum, which itself grows with K -- while ``tolerances[fmt].atol`` is a
+    fixed absolute number tuned for single-element ops and says nothing about the golden's
+    scale. For a uniform[0, 1] stimuli matmul at kt=16 the golden entries average ~1e2, so
+    the real error is O(1) while ``0.05 * 16 == 0.8`` still under-covers it; on a golden of
+    small magnitude the same product is far too loose. Two separate axes -- the format's
+    flat floor and the K-scaled one -- hence the ``max`` rather than a product.
+
+    The mean excludes zeros so a golden carrying structural zeros -- the bfp0 "zero tile"
+    of the compressed matmuls -- cannot deflate it.
+    """
+    active = golden_tensor.abs().flatten()
+    active = active[active > 0]
+    mean_active = active.mean().item() if active.numel() else 0.0
+    return max(
+        tolerances[output_data_format].atol,
+        MATMUL_ACC_REL_ERR_PER_KT * kt_dim * mean_active,
+    )
+
 
 def print_faces(operand1, tile_shape=None):
     if tile_shape is None:
@@ -144,12 +186,19 @@ def print_faces(operand1, tile_shape=None):
 
 
 def run_shell_command(
-    command: str, cwd: str | None = None, stdin_data: str | bytes = None, text=True
+    command: str | Sequence[str],
+    cwd: str | None = None,
+    stdin_data: str | bytes = None,
+    text=True,
 ):
+    """Run a command. A string uses ``shell=True`` (legacy). A sequence is
+    executed with ``shell=False`` so path arguments are not re-split.
+    """
+    use_shell = isinstance(command, str)
     result = subprocess.run(
         command,
         cwd=cwd,
-        shell=True,
+        shell=use_shell,
         text=text,
         input=stdin_data,
         stdout=subprocess.DEVNULL,
@@ -157,7 +206,12 @@ def run_shell_command(
     )
 
     if result.returncode != 0:
-        raise RuntimeError(f"Command:\n{command}\n\nCommand's stderr:\n{result.stderr}")
+        pretty = (
+            command
+            if use_shell
+            else " ".join(shlex.quote(str(part)) for part in command)
+        )
+        raise RuntimeError(f"Command:\n{pretty}\n\nCommand's stderr:\n{result.stderr}")
     return result
 
 
@@ -264,7 +318,11 @@ def _bfp_block_aware_compare(
     After quantization, treat differences up to ``max_ulp_diff`` steps as acceptable.
 
     ``mantissa_bits`` is the number of mantissa bits the format reconstructs
-    per element (3 for Bfp4_b, 1 for Bfp2_b).
+    per element (7 for Bfp8_b, 3 for Bfp4_b, 1 for Bfp2_b).
+
+    The lattice applies only where both sides are finite. Non-finite lanes are
+    accepted on exact agreement -- both NaN, or both infinite with the same sign --
+    and rejected otherwise, including a block that is entirely non-finite.
 
     Golden and result must already be in the same flat buffer order (tilized
     layout as produced by the tests).  We do not re-tilize here: inputs are
@@ -276,49 +334,73 @@ def _bfp_block_aware_compare(
     r_flat = result.float().flatten()
     n = g_flat.numel()
 
-    is_valid = torch.ones(n, dtype=torch.bool)
+    if n == 0:
+        return torch.ones(0, dtype=torch.bool)
 
-    for blk_start in range(0, n, BLOCK):
-        blk_end = min(blk_start + BLOCK, n)
-        g_blk = g_flat[blk_start:blk_end]
-        r_blk = r_flat[blk_start:blk_end]
+    # Batch over 16-element blocks (zero-pad a partial tail block; padded zeros never
+    # raise a block's max, so the real lanes are sized off the same ULP as before, and
+    # they are trimmed off the verdict below). Vectorised rather than looped: a [128, 256]
+    # result is ~2048 blocks, and _mxint_block_aware_compare already batches this way.
+    num_blocks = (n + BLOCK - 1) // BLOCK
+    pad = num_blocks * BLOCK - n
+    if pad:
+        g_flat = torch.cat([g_flat, g_flat.new_zeros(pad)])
+        r_flat = torch.cat([r_flat, r_flat.new_zeros(pad)])
+    g_blk = g_flat.reshape(num_blocks, BLOCK)
+    r_blk = r_flat.reshape(num_blocks, BLOCK)
 
-        both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+    # Non-finite lanes sit outside the lattice and cannot be judged by it: inf and
+    # NaN have no ULP, and the differences they produce defeat the check in both
+    # directions -- inf - inf is NaN and inf - (-inf) is inf, and neither compares
+    # <= anything, so even a matching pair of infinities fails. Judge them by exact
+    # agreement instead, and keep them out of the finite-lane verdict so a block that
+    # is entirely non-finite is not waved through: +inf against -inf, or NaN against
+    # inf, are mismatches, and the PCC pass that follows masks non-finite values too.
+    both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+    nonfinite_ok = both_nan | (
+        torch.isinf(g_blk)
+        & torch.isinf(r_blk)
+        & (torch.signbit(g_blk) == torch.signbit(r_blk))
+    )
+    g_finite = torch.isfinite(g_blk)
+    r_finite = torch.isfinite(r_blk)
+    both_finite = g_finite & r_finite
 
-        finite_vals = torch.cat(
-            [
-                g_blk[torch.isfinite(g_blk)].abs(),
-                r_blk[torch.isfinite(r_blk)].abs(),
-            ]
+    # Per-block max over the finite lanes of *either* side (a lane finite on one side
+    # only still sizes the block, as it did when the two sides were concatenated).
+    block_max = torch.maximum(
+        torch.where(g_finite, g_blk.abs(), torch.zeros_like(g_blk)).amax(dim=1),
+        torch.where(r_finite, r_blk.abs(), torch.zeros_like(r_blk)).amax(dim=1),
+    )
+    # A block with no finite lane at all, and an all-zero block, both land on max 0 and
+    # so on ULP 0: the first has no finite lane to judge, and in the second every finite
+    # lane is exactly 0, which `tiny_ok` accepts on absolute closeness below.
+    nonzero = block_max > 0
+    # log2 in float64 so floor() lands on the same integer math.log2 gave per block;
+    # in float32 an exact power of two can come back a hair under and floor a step early.
+    safe_max = torch.where(nonzero, block_max, torch.ones_like(block_max)).double()
+    one_ulp = (
+        torch.where(
+            nonzero,
+            torch.exp2(torch.floor(torch.log2(safe_max)) - (mantissa_bits - 1)),
+            torch.zeros_like(safe_max),
         )
-        if finite_vals.numel() == 0:
-            is_valid[blk_start:blk_end] = True
-            continue
+        .float()
+        .unsqueeze(1)
+    )
 
-        block_max = finite_vals.max().item()
-        if block_max == 0:
-            is_valid[blk_start:blk_end] = (
-                torch.isclose(g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True)
-                | both_nan
-            )
-            continue
-
-        block_exp = math.floor(math.log2(block_max))
-        one_ulp = 2.0 ** (block_exp - mantissa_bits + 1)
-
-        diff = (g_blk - r_blk).abs()
-        ulp_ok = diff <= max_ulp_diff * one_ulp
-        # Padding / zero lanes can disagree slightly after pack-unpack while still
-        # printing as 0.00; ULP sizing from a large value elsewhere in the block
-        # can make those tiny residuals look like multi-ULP failures. Accept when
-        # both sides are negligible magnitude and close in absolute terms.
-        max_abs = torch.maximum(g_blk.abs(), r_blk.abs())
-        tiny_ok = (max_abs < 1e-4) & torch.isclose(
-            g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True
-        )
-        is_valid[blk_start:blk_end] = ulp_ok | both_nan | tiny_ok
-
-    return is_valid
+    diff = (g_blk - r_blk).abs()
+    ulp_ok = diff <= max_ulp_diff * one_ulp
+    # Padding / zero lanes can disagree slightly after pack-unpack while still
+    # printing as 0.00; ULP sizing from a large value elsewhere in the block
+    # can make those tiny residuals look like multi-ULP failures. Accept when
+    # both sides are negligible magnitude and close in absolute terms.
+    max_abs = torch.maximum(g_blk.abs(), r_blk.abs())
+    tiny_ok = (max_abs < 1e-4) & torch.isclose(
+        g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True
+    )
+    is_valid = torch.where(both_finite, ulp_ok | tiny_ok, nonfinite_ok)
+    return is_valid.reshape(-1)[:n]
 
 
 # Per-format params for _mxint_block_aware_compare: (elem_scale, max_ulp_steps).
@@ -437,15 +519,16 @@ def _mxint_block_aware_compare(
 
 _RECORD_TEST_ORDER: bool = False
 
-# Per-format params for _mxfp_block_aware_compare: (mantissa_bits, max_steps).
+# Per-format params for _mxfp_block_aware_compare:
+# (mantissa_bits, max_steps, max_normal, min_subnormal).
 #   mantissa_bits of the SxEyMz element -> local step = 2^(floor(log2|v|) - mantissa_bits).
 #   max_steps = accepted adjacent-representable steps (same role as MxInt's
-#     max_ulp_steps). HW flushes subnormals to 0, so the smallest representable
-#     magnitude is the min normal and the a==0 branch handles flushed values.
+#     max_ulp_steps). max_normal and min_subnormal define the element lattice
+#     used with each block's inferred E8M0 scale.
 _MXFP_COMPARE_PARAMS = {
-    DataFormat.MxFp4: (1, 2),  # E2M1
-    DataFormat.MxFp8R: (2, 2),  # E5M2
-    DataFormat.MxFp8P: (3, 2),  # E4M3
+    DataFormat.MxFp4: (1, 2, 6.0, 2.0**-1),  # E2M1
+    DataFormat.MxFp8R: (2, 2, 57344.0, 2.0**-16),  # E5M2
+    DataFormat.MxFp8P: (3, 2, 448.0, 2.0**-9),  # E4M3
 }
 
 
@@ -454,6 +537,8 @@ def _mxfp_block_aware_compare(
     result: torch.Tensor,
     mantissa_bits: int,
     max_steps: int = 2,
+    element_max_normal: float = 1.0,
+    element_min_subnormal: float = 0.0,
 ) -> torch.Tensor:
     """Compare two MX-float tensors allowing small representable-adjacency diffs.
 
@@ -467,8 +552,10 @@ def _mxfp_block_aware_compare(
     `max_steps` such local steps (golden and HW within `max_steps` adjacent
     representable values). Sign flips and larger jumps still fail.
 
-    HW flushes subnormals to 0, so a flushed value is 0 on both sides and is
-    caught by the a==0 branch (exact match) -- no separate subnormal handling.
+    The normal-value formula underestimates the step for FP8 subnormals. Infer
+    each 32-element block's E8M0 scale from its largest decoded value and clamp
+    the local step to the scaled element-format minimum subnormal. This makes
+    zero and the smallest nonzero subnormal adjacent values, as they are in MX.
     """
     g = golden.float().flatten()
     r = result.float().flatten()
@@ -488,6 +575,20 @@ def _mxfp_block_aware_compare(
     local_ulp = torch.where(
         safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(a)
     )
+
+    block_size = 32
+    block_max = torch.stack(
+        [a[start : start + block_size].max() for start in range(0, n, block_size)]
+    )
+    has_nonzero = block_max > 0
+    scale_exp = torch.zeros_like(block_max)
+    scale_exp[has_nonzero] = torch.ceil(
+        torch.log2(block_max[has_nonzero] / element_max_normal)
+    )
+    block_min_ulp = (
+        torch.pow(2.0, scale_exp) * element_min_subnormal
+    ).repeat_interleave(block_size)[:n]
+    local_ulp = torch.where(safe, torch.maximum(local_ulp, block_min_ulp), local_ulp)
 
     diff = (g - r).abs()
     # Relative float32-rounding guard (~1 ULP at the comparison magnitude) instead of a
@@ -535,7 +636,27 @@ def passed_test(
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
-    if output_data_format == DataFormat.Bfp4_b:
+    if output_data_format == DataFormat.Bfp8_b:
+        # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
+        # magnitude range the small elements quantize toward zero and a flat atol reads
+        # that as a mismatch. But Bfp8_b's lattice is fine enough that one step can be
+        # tighter than the SFPU's own approximation error, so the lattice check cannot
+        # replace the tolerance check either. Quantization dominates far below the block
+        # max, approximation error near it — accept a result satisfying either one.
+        is_close = torch.isclose(
+            golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
+        )
+        is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
+        is_valid = is_close | is_nan
+        # `|` does not short-circuit, so only reach for the lattice when the tolerance
+        # check has actually rejected something. Near-exact suites (test_unary_datacopy,
+        # test_eltwise_binary_sfpu_float) accept every element here and would otherwise pay for a
+        # second full-tensor compare that cannot change the verdict.
+        if not torch.all(is_valid):
+            is_valid = is_valid | _bfp_block_aware_compare(
+                golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
+            )
+    elif output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
         is_valid = _bfp_block_aware_compare(
             golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
@@ -559,14 +680,21 @@ def passed_test(
     elif output_data_format.is_mx_fp_format():
         # Non-uniform float lattice (E2M1 / E5M2 / E4M3): per-element adjacency
         # check instead of a fixed ULP. Replaces the loose torch.isclose +
-        # count fallback; per-format (mantissa_bits, max_steps) in
+        # count fallback; per-format lattice parameters live in
         # _MXFP_COMPARE_PARAMS.
-        mantissa_bits, max_steps = _MXFP_COMPARE_PARAMS[output_data_format]
+        (
+            mantissa_bits,
+            max_steps,
+            element_max_normal,
+            element_min_subnormal,
+        ) = _MXFP_COMPARE_PARAMS[output_data_format]
         is_valid = _mxfp_block_aware_compare(
             golden_tensor,
             res_tensor,
             mantissa_bits=mantissa_bits,
             max_steps=max_steps,
+            element_max_normal=element_max_normal,
+            element_min_subnormal=element_min_subnormal,
         )
     else:
         is_close = torch.isclose(
@@ -708,7 +836,7 @@ def create_directories(dirs: list[Path]):
         return
 
     # Acquire lock and create using os.makedirs (more robust than pathlib.mkdir)
-    lock = FileLock("/tmp/tt-llk-build.lock")
+    lock = FileLock(TEMP_DIR / "tt-llk-build.lock")
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)

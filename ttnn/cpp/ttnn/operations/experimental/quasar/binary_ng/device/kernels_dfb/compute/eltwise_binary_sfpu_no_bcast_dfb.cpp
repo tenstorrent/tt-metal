@@ -8,7 +8,7 @@
 // CB->DFB swap. Handles the SFPU binary ops (int add/sub/mul, compares, bitwise/shift, div/remainder,
 // quant, gcd/lcm, xlogy, atan2, isclose, max/min, …) using the same define machinery the descriptor
 // factory builds: BINARY_SFPU_OP / BINARY_SFPU_INIT, HAS_ACTIVATIONS / PREPROCESS /
-// PROCESS_POST_ACTIVATIONS, ISCLOSE_* runtime args. Operand ids come from DFBAccessor's
+// PROCESS_POST_ACTIVATIONS, ISCLOSE_* runtime args. Operand ids come from DFBBindingToken's
 // `operator uint32_t()`. Layout-agnostic (reader/writer absorb sharded/interleaved/mixed).
 
 #include <cstdint>
@@ -72,21 +72,22 @@ FORCE_INLINE void process_sfpu_tiles(
 
     tile_regs_acquire();
 #ifdef ARCH_QUASAR
-    // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-    // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-    // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-    // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-    copy_tile_to_dst_init_short(dfb_post_lhs_id);
+    // On Quasar the data-format reconfig is a no-op, so copy_init alone reprograms the unpacker
+    // descriptor to point at each operand before its copy_tile loop. matches_metal_v2_slice requires
+    // lhs and rhs to share a data format, so no SrcA data-format reconfig is needed here.
+    copy_init(dfb_post_lhs_id);
 #else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
+    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+    copy_init(dfb_post_lhs_id);
 #endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
 #ifdef ARCH_QUASAR
-    copy_tile_to_dst_init_short(dfb_post_rhs_id);
+    copy_init(dfb_post_rhs_id);
 #else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+    reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+    copy_init(dfb_post_rhs_id);
 #endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
@@ -141,9 +142,10 @@ void kernel_main() {
     constexpr uint32_t dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

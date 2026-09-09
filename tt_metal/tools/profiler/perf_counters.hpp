@@ -440,7 +440,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
 }
 
 void read_perf_counters() {
-    if (kernel_profiler::get_profiler_zone_valid()) {
+    if (kernel_profiler::get_profiler_zone_invalid()) {
         return;
     }
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU

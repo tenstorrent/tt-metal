@@ -94,8 +94,8 @@ void kernel_main() {
     DataflowBuffer scalar_dfb_2(in_scalar_cb_id2);
     DataflowBuffer out_dfb(out_cb_id);
 
-    tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
-        tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id);
+    compute_kernel_hw_startup(tilize_reduce_cb_0, in_scalar_cb_id1, out_cb_id);
+    tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id); /* face geometry comes from out_cb metadata */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
         DataflowBuffer cur_in_dfb = (i % 2 == 0) ? tilize_reduce_dfb0 : tilize_reduce_dfb1;

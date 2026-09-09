@@ -21,6 +21,7 @@ namespace {
 template <typename OutputDataType, typename InputDataType>
 std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
+    converted_data.reserve(data_to_convert.size());
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
             converted_data.push_back(static_cast<float>(datum));

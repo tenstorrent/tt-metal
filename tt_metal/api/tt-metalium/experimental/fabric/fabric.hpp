@@ -122,6 +122,8 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
+std::vector<FabricType> get_all_mgd_fabric_types();
+
 tt::tt_fabric::Topology get_fabric_topology();
 
 struct FabricEriscDatamoverKernelConfig {
@@ -139,7 +141,7 @@ struct FabricEriscDatamoverKernelConfig {
 tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**
- * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Call before creating unit meshes to enable fabric with the specified number of routing planes.
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the
@@ -170,6 +172,10 @@ void SetFabricConfig(
 FabricConfig GetFabricConfig();
 
 namespace experimental {
+
+// How many ethernet links the weakest hop along one row or column can open. Planes held back for
+// dispatch do not count. `cluster_axis` picks the direction: 0 runs down a column, 1 runs along a
+// row. `row_or_col` picks which one of them. Returns 0 if no hop could be measured.
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
 }

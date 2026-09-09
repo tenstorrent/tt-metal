@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <mesh_buffer.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
@@ -85,6 +86,41 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
+MeshWorkloadImpl::FinalizedMetadata& MeshWorkloadImpl::get_finalized_metadata() {
+    TT_ASSERT(finalized_metadata_.has_value());
+    return *finalized_metadata_;
+}
+
+void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB) {
+    TT_ASSERT(!is_finalized());
+    FinalizedMetadata metadata{.max_program_kernels_sizeB = max_program_kernels_sizeB};
+    for (auto& [device_range, program] : programs_) {
+        auto& program_impl = program.impl();
+        metadata.num_program_devices += device_range.shape().mesh_size();
+        metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
+        metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
+
+        const auto& program_config_sizes = program_impl.get_program_config_sizes();
+        if (metadata.program_config_sizes.empty()) {
+            metadata.program_config_sizes = program_config_sizes;
+        } else {
+            TT_FATAL(
+                metadata.program_config_sizes.size() == program_config_sizes.size(),
+                "Expected config sizes to be identical across all programs in a MeshWorkload.");
+            for (size_t i = 0; i < metadata.program_config_sizes.size(); i++) {
+                TT_FATAL(
+                    metadata.program_config_sizes[i] == program_config_sizes[i],
+                    "Expected config sizes to be identical across all programs in a MeshWorkload.");
+            }
+        }
+
+        if (!program_impl.get_per_core_cross_node_dfbs().empty()) {
+            metadata.cross_node_program_ids.push_back(program_impl.get_id());
+        }
+    }
+    finalized_metadata_ = std::move(metadata);
+}
+
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     TT_FATAL(!is_finalized(), "Cannot add programs to a MeshWorkload after it has been finalized.");
     auto potential_intersection = find_intersection(programs_, device_range);
@@ -107,9 +143,15 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
-    if (programs_.size() == 1) {
+    // This runs on every enqueue, not just the first. Once the workload has been finalized its
+    // programs are already compiled and laid out, so compile_program is a flag check per program;
+    // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
+    // first compile of a multi-program workload does enough to be worth parallelizing.
+    if (programs_.size() == 1 || this->is_finalized()) {
         // Compile from main thread for homogeneous workloads
-        this->compile_program(programs_.begin()->first, mesh_device);
+        for (auto& [device_range, _] : programs_) {
+            this->compile_program(device_range, mesh_device);
+        }
     } else {
         for (auto& [device_range, _] : programs_) {
             // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
@@ -161,6 +203,14 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,
             };
+            // Cache hits normally reuse an initialized workload, but initialization is lazy: a cached workload whose
+            // first enqueue did not reach this point can still allocate its kernel binary buffer on a later hit. Tag
+            // the allocation at its source so program-cache filtering does not depend on which dispatch path got here.
+            // Preserve the richer op-specific context installed by TTNN on the normal cache-miss path.
+            std::optional<AllocationContextGuard> program_cache_context;
+            if (!current_allocation_context().starts_with("program_cache:")) {
+                program_cache_context.emplace("program_cache: kernel binaries");
+            }
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
@@ -203,7 +253,13 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
 }
 
 void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
-    program_binary_status_[mesh_id] = status;
+    // Enqueue re-commits the status on every launch, but the Inspector record describes a
+    // transition and writing one costs a mutex and a YAML append. Report only real changes.
+    const auto [entry, inserted] = program_binary_status_.try_emplace(mesh_id, status);
+    if (!inserted && entry->second == status) {
+        return;
+    }
+    entry->second = status;
     Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
 }
 
@@ -212,11 +268,10 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto* mesh_device = mesh_cq.device();
-    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
+    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map().ringbuffer_size();
 
-    bool use_prefetcher_cache =
-        this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
+    const uint32_t max_program_kernels_sizeB = get_finalized_metadata().max_program_kernels_sizeB;
+    bool use_prefetcher_cache = max_program_kernels_sizeB and max_program_kernels_sizeB <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {
         program.impl().generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
@@ -224,23 +279,11 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 }
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
-    // Return true if any program in the MeshWorkload runs on cores
-    // that can be multicasted to
-    bool ret = false;
-    for (auto& [device_range, program] : programs_) {
-        ret = ret || (program.impl().runs_on_noc_multicast_only_cores());
-    }
-    return ret;
+    return get_finalized_metadata().runs_on_noc_multicast_only_cores;
 }
 
 bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    // Return true if any program in the MeshWorkload runs on cores
-    // that can only be unicasted to
-    bool ret = false;
-    for (auto& [device_range, program] : programs_) {
-        ret = ret || (program.impl().runs_on_noc_unicast_only_cores());
-    }
-    return ret;
+    return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
@@ -287,33 +330,25 @@ std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     return semaphores_;
 }
 
-std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
-    // Get the config sizes for all L1 Program Data Structures
-    std::vector<uint32_t> global_program_config_sizes;
-    for (auto& program_on_grid : programs_) {
-        if (!global_program_config_sizes.empty()) {
-            for (int i = 0; i < global_program_config_sizes.size(); i++) {
-                TT_FATAL(
-                    global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
-                    "Expected config sizes to be identical across all programs in a MeshWorkload.");
-            }
-        } else {
-            global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
-        }
-    }
-    return global_program_config_sizes;
+const std::vector<uint32_t>& MeshWorkloadImpl::get_program_config_sizes() {
+    return get_finalized_metadata().program_config_sizes;
 }
 
-std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
-    // Get the sub device ids for all program across all devices in the Workload
-    std::unordered_set<SubDeviceId> sub_devices_;
-    for (auto& [device_range, program] : programs_) {
-        auto sub_devs_for_program = program.impl().determine_sub_device_ids(mesh_device);
-        for (auto& sub_dev : sub_devs_for_program) {
-            sub_devices_.insert(sub_dev);
+const std::vector<uint64_t>& MeshWorkloadImpl::get_cross_node_program_ids() {
+    return get_finalized_metadata().cross_node_program_ids;
+}
+
+const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
+    auto& sub_device_ids_by_manager = sub_device_ids_by_mesh_and_manager_[mesh_device->id()];
+    auto [entry, inserted] = sub_device_ids_by_manager.try_emplace(*mesh_device->get_active_sub_device_manager_id());
+    auto& sub_device_ids = entry->second;
+    if (inserted) {
+        for (auto& [device_range, program] : programs_) {
+            auto sub_devices_for_program = program.impl().determine_sub_device_ids(mesh_device);
+            sub_device_ids.insert(sub_devices_for_program.begin(), sub_devices_for_program.end());
         }
     }
-    return sub_devices_;
+    return sub_device_ids;
 }
 
 ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
@@ -328,10 +363,13 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
-ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
+ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
+    TT_FATAL(!programs_.empty(), "Program Configs can only be queried if a MeshWorkload is populated.");
+    const bool requires_finalized_config =
+        MetalContext::instance().rtoptions().get_fast_dispatch() && !is_service_workload_.value_or(false);
     TT_FATAL(
-        !using_fast_dispatch or (!programs_.empty() and is_finalized()),
-        "Program Configs can only be queried if a MeshWorkload is populated and finalized.");
+        !requires_finalized_config || is_finalized(),
+        "Program Configs on a fast-dispatch MeshWorkload can only be queried after finalization.");
     return programs_.begin()->second.impl().get_program_config(index);
 }
 
@@ -340,10 +378,9 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(
-                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
-                           .sem_offset;
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .sem_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_sem_size(
@@ -366,10 +403,9 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(
-                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
-                           .cb_offset;
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .cb_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_cb_size(
@@ -411,7 +447,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     }
     ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
-    this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+    const uint32_t max_program_kernels_sizeB = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         extract_context_id(mesh_device),
         mesh_device,
         kernels_getter,
@@ -419,7 +455,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         semaphores_getter,
         programs);
 
-    set_finalized();
+    set_finalized(max_program_kernels_sizeB);
 }
 
 // MeshWorkload PIMPL Implementation

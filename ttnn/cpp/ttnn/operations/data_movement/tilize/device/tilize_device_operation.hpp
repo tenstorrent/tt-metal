@@ -14,8 +14,6 @@
 #include "tilize_multi_core_retile_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/distributed/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -40,23 +38,17 @@ struct TilizeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses)
-    // from the same factory the miss path picks. See the .cpp.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
+
+// Re-point slot 0 of every core's args for one kernel. Shared by the tilize factories' cache-hit
+// hooks so the slot layout the factories all bake has a single home.
+void patch_tilize_kernel_slot0(tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t address);
 
 ttnn::Tensor tilize(
     const Tensor& input_tensors,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
     const tt::tt_metal::Tile& tile,

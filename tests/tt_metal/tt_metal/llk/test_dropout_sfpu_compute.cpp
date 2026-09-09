@@ -115,22 +115,17 @@ bool test_dropout_standalone(
         Program program = CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto* const device = mesh_device->get_devices()[0];
 
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;
         constexpr uint32_t num_tiles = 128;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-
-        std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-
-        std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+        distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
+        auto src0_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
 
         /*
          * Use circular buffers to set input and output buffers that the
@@ -191,7 +186,7 @@ bool test_dropout_standalone(
          */
         std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_size, const_bias);
 
-        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
 
         /*
          * Configure program and runtime kernel arguments, then execute.
@@ -222,7 +217,7 @@ bool test_dropout_standalone(
          * and teardown.
          */
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
         auto transform_identity = [](const bfloat16& a) { return a; };
 

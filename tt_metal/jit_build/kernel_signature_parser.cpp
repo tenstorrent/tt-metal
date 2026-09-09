@@ -230,7 +230,9 @@ std::vector<std::string> extract_param_names(const std::string& list_body, const
     if (trim(list_body) == "void") {
         return names;
     }
-    for (const std::string& piece : split_top_level_commas(list_body)) {
+    const std::vector<std::string> pieces = split_top_level_commas(list_body);
+    names.reserve(pieces.size());
+    for (const std::string& piece : pieces) {
         if (trim(piece).empty()) {
             continue;  // empty list, or a trailing comma
         }

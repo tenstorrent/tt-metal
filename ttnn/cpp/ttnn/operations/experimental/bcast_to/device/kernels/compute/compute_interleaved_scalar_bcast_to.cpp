@@ -27,7 +27,8 @@ void kernel_main() {
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
     CircularBuffer cb_src(cb_id_src);
     CircularBuffer cb_dst(cb_id_dst);
-    unary_bcast_init<BroadcastType::SCALAR>(cb_id_src, cb_id_dst);
+    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
+    unary_bcast_init<BroadcastType::SCALAR>(cb_id_src);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;

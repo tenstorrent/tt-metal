@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // #define DEBUG
 #ifdef DEBUG
@@ -17,27 +18,23 @@
 
 void kernel_main() {
     // READER RUNTIME ARGS
-    uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(0);
-    uint32_t in0_tensor_addr = get_arg_val<uint32_t>(1);
-    bool split_last_dim = (bool)get_arg_val<uint32_t>(2);
+    uint32_t in0_tensor_tile_id = get_arg(args::in0_tensor_tile_id);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t z = get_compile_time_arg_val(0);
-    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(1);
-    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(2);
-    constexpr uint32_t z_stride = get_compile_time_arg_val(3);
-    constexpr uint32_t y_stride = get_compile_time_arg_val(4);
-    constexpr auto in0_tensor_args = TensorAccessorArgs<5>();
+    constexpr auto z = get_arg(args::z);
+    constexpr auto out_num_tiles_per_tensor_y = get_arg(args::out_num_tiles_per_tensor_y);
+    constexpr auto out_num_tiles_per_tensor_x = get_arg(args::out_num_tiles_per_tensor_x);
+    constexpr auto z_stride = get_arg(args::z_stride);
+    constexpr auto y_stride = get_arg(args::y_stride);
 
     constexpr uint32_t out_num_tensors = 1;
-    constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(tensor::in0);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in0(dfb::src0);
     const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;

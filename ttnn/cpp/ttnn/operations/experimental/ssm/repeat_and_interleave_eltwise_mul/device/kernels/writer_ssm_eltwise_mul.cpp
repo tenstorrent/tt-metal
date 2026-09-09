@@ -4,40 +4,37 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t out_num_blocks_w_per_core = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-    uint32_t out_num_blocks_h = get_arg_val<uint32_t>(3);
-    uint32_t out_total_blocks_w = get_arg_val<uint32_t>(4);
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    uint32_t out_num_blocks_w_per_core = get_arg(args::out_num_blocks_w_per_core);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t out_num_blocks_h = get_arg(args::out_num_blocks_h);
+    uint32_t out_total_blocks_w = get_arg(args::out_total_blocks_w);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_out(dfb::out);
+    const uint32_t tile_bytes = dfb_out.get_tile_size();
 
     for (uint32_t block_h_id = 0; block_h_id < out_num_blocks_h; block_h_id++) {
         uint32_t end_id = start_id + out_num_blocks_w_per_core;
         for (uint32_t i = start_id; i < end_id; ++i) {
-            cb_out.wait_front(onetile);
+            dfb_out.wait_front(onetile);
             noc.async_write(
-                cb_out,
+                dfb_out,
                 s,
                 tile_bytes,
                 {.offset_bytes = 0},
                 {.page_id = (block_h_id * out_total_blocks_w) + i, .offset_bytes = 0});
             noc.async_write_barrier();
-            cb_out.pop_front(onetile);
+            dfb_out.pop_front(onetile);
         }
     }
 }

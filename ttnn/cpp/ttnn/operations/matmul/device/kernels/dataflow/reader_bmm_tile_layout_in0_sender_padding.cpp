@@ -12,7 +12,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -98,6 +98,16 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
+    // Indexed/gather mode: iterate only the num_active selected sparse groups (the ids the caller
+    // passed in the `indices` operand). Every iterated batch is valid -- no sparsity scan, no skip,
+    // no validity multicast -- so this sender never has to look at the id list itself: A is either
+    // broadcast (bcast_A) or already compact and advanced sequentially per iteration (!bcast_A).
+    // Every factory that builds this kernel passes "num_active"; only the sparse matmul factory ever
+    // sets it non-zero. 0 means not indexed, i.e. the unchanged dense sparsity-scan path.
+    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
+    constexpr bool use_indices = num_active > 0;
+    constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
+
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
         fused_op_receiver = MatmulOpReceiver(
@@ -108,8 +118,8 @@ void kernel_main() {
         );
     }
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
     // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
     // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
@@ -123,7 +133,7 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(15));
     Semaphore<> receiver_sem(get_compile_time_arg_val(16));
 
@@ -137,10 +147,10 @@ void kernel_main() {
 
     uint32_t noc_shard_read_start_addr = 0;
     if constexpr (extract_shard_sub_blocks) {
-        constexpr uint32_t cb_id_in2 =
+        constexpr uint32_t dfb_id_in2 =
             get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
-        CircularBuffer cb_in2(cb_id_in2);
-        noc_shard_read_start_addr = cb_in2.get_read_ptr();
+        DataflowBuffer dfb_in2(dfb_id_in2);
+        noc_shard_read_start_addr = dfb_in2.get_read_ptr();
     }
 
 #else
@@ -148,8 +158,8 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 
     // sparsity accessor
-    constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
-    CircularBuffer cb_sparsity(cb_id_sparsity);
+    constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
+    DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
@@ -159,14 +169,14 @@ void kernel_main() {
     // to receive the mcast
 
 #ifdef IN0_SHARDED
-    uint32_t in0_start_address = cb_in0.get_write_ptr();
+    uint32_t in0_start_address = dfb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0) {
-        cb_sparsity.reserve_back(1);
-        l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
+    if constexpr (batchB > 0 && !use_indices) {
+        dfb_sparsity.reserve_back(1);
+        l1_write_addr_sparsity = dfb_sparsity.get_write_ptr();
     }
 
     // Counts the in0 multicasts actually issued (one per non-zero sparsity entry). Used to validate
@@ -174,13 +184,13 @@ void kernel_main() {
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
     for (uint32_t b = 0; b < in0_B; ++b) {
-        if constexpr (batchB > 0) {
-            noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
+        if constexpr (batchB > 0 && !use_indices) {
+            noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
-        for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
-            if constexpr (batchB > 0) {
+        for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+            if constexpr (batchB > 0 && !use_indices) {
                 volatile auto is_batch_valid =
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
@@ -242,15 +252,15 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
-                        cb_in0.reserve_back(in0_block_num_tiles);
+                        dfb_in0.reserve_back(in0_block_num_tiles);
 #ifndef IN0_SHARDED
 
                         uint32_t in0_write_offset = 0;
 
 #ifndef SKIP_MCAST
                         uint32_t in0_start_address =
-                            cb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
-#endif                                               // SKIP_MCAST
+                            dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
+#endif                                                // SKIP_MCAST
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
@@ -260,7 +270,7 @@ void kernel_main() {
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
                                     noc.async_read(
                                         s0,
-                                        cb_in0,
+                                        dfb_in0,
                                         in0_single_tile_size_bytes,
                                         {.page_id = in0_tensor_tile_id},
                                         {.offset_bytes = in0_write_offset});
@@ -270,17 +280,17 @@ void kernel_main() {
                                 if constexpr (in0_last_ktile_w > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                         noc.async_read_barrier();
-                                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(
-                                            cb_in0.get_write_ptr() + in0_write_offset);
+                                            dfb_in0.get_write_ptr() + in0_write_offset);
                                     }
                                 }
                                 if constexpr (in0_last_ktile_h > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                         noc.async_read_barrier();
-                                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
                                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
-                                            cb_in0.get_write_ptr() + in0_write_offset);
+                                            dfb_in0.get_write_ptr() + in0_write_offset);
                                     }
                                 }
 
@@ -295,7 +305,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #else
                         if constexpr (extract_shard_sub_blocks) {
-                            uint32_t l1_write_addr_in0 = cb_in0.get_write_ptr();
+                            uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
 
 #ifndef SKIP_MCAST
                             in0_start_address =
@@ -322,8 +332,8 @@ void kernel_main() {
                         }
 
                         {
-                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                            uint32_t in0_pad_base_addr = cb_in0.get_write_ptr();
+                            constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                            uint32_t in0_pad_base_addr = dfb_in0.get_write_ptr();
                             if constexpr (in0_last_ktile_w > 0) {
                                 if ((block == num_blocks_inner_dim - 1)) {
                                     for (uint32_t h = 0; h < in0_block_h; ++h) {
@@ -389,7 +399,7 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                         // Common for sharded and interleaved paths
-                        cb_in0.push_back(in0_block_num_tiles);
+                        dfb_in0.push_back(in0_block_num_tiles);
                     }
                 }
 #ifdef IN0_SHARDED
@@ -415,8 +425,8 @@ void kernel_main() {
         if (in0_reuse_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
-                    cb_in0.reserve_back(in0_block_num_tiles);
-                    cb_in0.push_back(in0_block_num_tiles);
+                    dfb_in0.reserve_back(in0_block_num_tiles);
+                    dfb_in0.push_back(in0_block_num_tiles);
                 }
             }
         }
@@ -427,14 +437,16 @@ void kernel_main() {
     // If we issued fewer multicasts than that (count_nonzero(sparsity) < num_batch_compute), those
     // kernels are now waiting on multicasts that will never arrive and the device would deadlock.
     // Fail loudly instead. See https://github.com/tenstorrent/tt-metal/issues/45943.
-    if constexpr (!get_batch_from_reader && batchB > 0) {
+    // (Indexed/gather mode never counts: it multicasts exactly num_batch_compute == num_active times
+    // by construction, since every iterated group is active.)
+    if constexpr (!get_batch_from_reader && batchB > 0 && !use_indices) {
         ASSERT(num_valid_batches == num_batch_compute);
     }
 
     // For completeness, we empty the sparsity CB if it was reserved earlier
-    if constexpr (batchB > 0) {
-        cb_sparsity.push_back(1);
-        cb_sparsity.wait_front(1);
-        cb_sparsity.pop_front(1);
+    if constexpr (batchB > 0 && !use_indices) {
+        dfb_sparsity.push_back(1);
+        dfb_sparsity.wait_front(1);
+        dfb_sparsity.pop_front(1);
     }
 }

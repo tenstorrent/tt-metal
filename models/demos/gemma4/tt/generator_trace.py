@@ -11,6 +11,7 @@ from loguru import logger
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
+    batched_prefill_padded_batch,
     max_prefill_chunk_size_cutoff,
 )
 
@@ -24,15 +25,17 @@ from models.tt_transformers.tt.generator import (
 # directly shrinks the required ``trace_region_size``. The override drives both
 # warmup capture (``patch_gemma4_trace_model_args``) and runtime eligibility
 # (``can_gemma4_enable_prefill_trace``) so they stay consistent.
-# Omit 4096 by default: vLLM ``enable_chunked_prefill`` + ``max_num_batched_tokens=4096``
-# runs the first scheduler chunk through a *traced* 4k prefill, but continuations
-# are eager (``num_cached_tokens>0``). Traced replay does not refresh Python-side
-# sliding K/V tails, so a remnant chunk shorter than ``sliding_window`` (1024)
-# drops prior-window context — LB 12B ~9k garbage (#51186). Keeping 4k eager
-# lets the single-chunk sliding-tail stash in ``attention/prefill.py`` stay live
-# across vLLM chunk boundaries. Override with ``GEMMA4_TRACE_PREFILL_SEQ_LENS``
-# if a deployment needs traced 4k and does not use token-chunked prefill.
-_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048]
+# Include 4096 so cold single-chunk / first scheduler grant ≤4k can replay a
+# prefill device trace (TTFT). Continuations (``num_cached_tokens>0`` — APC hits
+# and vLLM chunked-prefill remnants) always stay eager: Gemma4 sliding layers
+# carry a mutable in-memory tail that diverges compile vs capture (TT_FATAL
+# unwarmed ``ttnn.concat`` / ``ttnn.copy``). ``GEMMA4_CHUNKED_PREFILL_TRACE=1``
+# only enables the *generator* long-ISL multi-chunk replay path (seeded
+# ``sp0_mc``/``sp1_mc``), not JIT ``sp1`` via ``can_enable_trace``. Sliding-tail
+# stash + persistent rebind in ``attention/prefill.py`` keep eager remnant
+# chunks coherent across vLLM chunk boundaries (#51186). Trim via
+# ``GEMMA4_TRACE_PREFILL_SEQ_LENS``.
+_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
 
 
 def _resolve_trace_prefill_seq_lens() -> list[int]:
@@ -51,15 +54,52 @@ GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 # rather than one full-length op, so it neither wedges the fetch queue (#49083)
 # nor OOMs a whole-length trace.
 GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
-GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
+
+
+def _resolve_max_trace_batched_prefill_tokens() -> int:
+    """Virtual-token ceiling above which batched prefill drops to eager.
+
+    Aligned with the shared planner's ``_MAX_BATCHED_PREFILL_TOKENS`` (128Ki in
+    models/common/llm_runtime/prefill/plan.py). Gemma4 previously used 32Ki --
+    4x tighter than the shared value, and a batch x seq gate no peer model has
+    at all (tt_transformers ``can_enable_trace`` gates on seq_len only, per
+    (model, device), via ``trace_prefill_supported_seq_lens``).
+
+    That divergence was costly, not protective. Measured on P150x8 / 12B at
+    conc=32, isl=2048: crossing 32Ki sent batch-32 prefill down the eager path
+    at ~322 tok/s versus ~5817 tok/s traced -- an 18x regression, not the
+    "no perf gain" the original comment assumed. Eager wide prefill also mixes
+    with traced batch-1 at the same seq_len, which precedes the P150x8 wedge:
+    at budget 65536 the device stalled at 0 tok/s, while the same width kept
+    traced ran clean (TTFT 29278 -> 8555 ms, TPOT 281.3 -> 34.8 ms, 240k ISL
+    unchanged).
+
+    The trace region holds command buffers; the wide prefill's activation
+    (~63 MB/chip for 32x2048 on 12B) lives in DRAM (3.98 GiB/bank x 8 on
+    Blackhole), so the original OOM rationale did not apply to this region.
+
+    Wormhole stays protected by the seq_len gate rather than this cap: its
+    ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` is pinned to [128] on the T3K nightly,
+    so 2048-wide prefills are never trace-eligible there regardless of batch.
+    """
+    raw = os.environ.get("GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS")
+    if raw is None:
+        return 128 * 1024
+    val = int(raw)
+    return val if val > 0 else 10**9
+
+
+GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = _resolve_max_trace_batched_prefill_tokens()
 
 
 def chunked_prefill_trace_enabled() -> bool:
-    """True when long-ISL multi-chunk should replay captured 4k prefill traces.
+    """True when long-ISL *generator* multi-chunk should replay 4k prefill traces.
 
     Set ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` to measure / enable. Each generator
-    chunk (default 4096) replays the matching ``sp0``/``sp1`` prefill trace
-    instead of an eager ``ttnn_prefill_forward``.
+    chunk (default 4096) replays the matching ``sp0_mc``/``sp1_mc`` prefill
+    trace instead of an eager ``ttnn_prefill_forward``. Does **not** authorize
+    vLLM APC / remnant JIT ``sp1`` captures — those stay eager via
+    :func:`can_gemma4_enable_prefill_trace`.
     """
     return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
 
@@ -116,6 +156,14 @@ _QB2 = "P150x4"
 _QB2_ALIASES = frozenset({"P150x4", "P300x2", "P300X2"})
 _CHUNK = GEMMA4_DEFAULT_PREFILL_CHUNK
 
+# SKU names ``determine_device_name`` returns, split by architecture. A policy
+# entry measured on one arch must never be reused on the other: Wormhole carries
+# 12 GB per ASIC against Blackhole's 32 GB, so a Blackhole entry's DRAM headroom
+# (e.g. QB2 "unbounded KV through 128k") silently OOMs a WH board. See
+# ``get_gemma4_long_context_policy`` for how the fallback is gated.
+_WH_DEVICES = frozenset({"N150", "N300", "N150x4", "T3K", "TG"})
+_BH_DEVICES = frozenset({"P100", "P150", "P300", "P150x4", "P150x8", "P300x2", "P300X2", "BHGLX"})
+
 GEMMA4_LONG_CONTEXT_POLICY = {
     # Dense 31B — measured on QB2 (isl_sweep_logs + llm.yaml max_context=49152 serve).
     "31B": {
@@ -151,13 +199,20 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         # full-length KV + full-ISL prefill scratch OOM at max_model_len=32768
         # (vLLM nightly run 30291376571: banks ~full, chunk=32768). Keep multi-
         # chunk=2048 and auto-bound earlier than BH; serve ≤16k until hybrid KV.
+        # Validated on a real WH T3K on this branch: 4k (TTFT ~8.5 s, 15.7 tok/s),
+        # 32k bounded+chunk2048 (TTFT ~55 s, 14.8 tok/s) and 128k (TTFT ~188 s,
+        # 12.9 tok/s) all PASS. The inferred cutovers held, so this is promoted
+        # from "inferred" to "measured".
         "T3K": {
-            "unbounded_isl_max": 16384,
-            "bounded_isl_min": 32768,
-            "chunked_bounded_isl_min": 32768,
+            # Unbounded measured through 32768. bounded_isl_min sits above it so
+            # concurrent serving never enters the bounded sliding remap, which is
+            # broken for >1 request (see the 12B/T3K entry for the mechanism).
+            "unbounded_isl_max": 32768,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 65536,
             "prefill_chunk": 2048,
             "prefill_chunk_by_isl": [],
-            "source": "inferred",
+            "source": "measured",
         },
     },
     # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
@@ -188,6 +243,38 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # WH T3K (1x8, ~96 GB). Measured unbounded through 131072 (32k / 64k /
+        # 128k all PASS on this branch); bounded + multi-chunk 2048 additionally
+        # reaches the full 256k ISL at batch-1 (TTFT ~468 s, 14.3 tok/s).
+        #
+        # bounded_isl_min is deliberately set ABOVE the measured unbounded
+        # ceiling so normal serving never enters bounded mode. Bounded sliding
+        # remaps sliding page tables to dense per-row block IDs
+        # (``_pad_sliding_page_tables_for_bounded``) keyed on the row index of
+        # the current page-table tensor rather than the request's persistent KV
+        # slot, so with more than one concurrent request a request's sliding
+        # blocks move between steps and it reads another user's KV — measured as
+        # nondeterministic garbage from concurrency 2 upward. Unbounded at the
+        # same context is clean at concurrency 32 (32/32 correct). Lower this
+        # again once that remap is keyed on a stable slot.
+        "T3K": {
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": 2048,
+            "source": "measured",
+        },
+        # WH N300 (1x2, 24 GB): the only Gemma4 variant that fits a single WH
+        # card. Measured — 4k unbounded PASS; 32k unbounded OOMs (DRAM); bounded
+        # + chunk 2048 PASSES 32k / 64k / 128k; 256k OOMs on KV allocation.
+        # Serve at most 128k here.
+        "N300": {
+            "unbounded_isl_max": 8192,
+            "bounded_isl_min": 16384,
+            "chunked_bounded_isl_min": 16384,
+            "prefill_chunk": 2048,
+            "source": "measured",
+        },
     },
     # MoE 26B-A4B — HF max_pos=256k. QB2: unbounded 64k PASSED (after instruct-clip
     # trim fix); 128k allocated/ran (no OOM, prior 1800s timeout); unbounded 256k OOM.
@@ -212,6 +299,20 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk_by_isl": [
                 {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
             ],
+            "source": "measured",
+        },
+        # WH T3K (1x8): measured — bounded + chunk 2048 PASSES 4k / 32k / 128k
+        # and stays coherent. Functional ceiling is 128k, but MoE prefill on
+        # Wormhole is far slower than the dense 31B (TTFT ~449 s @32k and
+        # ~1506 s @128k vs 31B's ~55 s @32k), so serve specs should stay at
+        # 32k — this table only bounds what fits, not what is fast.
+        "T3K": {
+            # Unbounded measured through 32768; bounded kept out of the serving
+            # range (multi-request sliding remap bug — see 12B/T3K).
+            "unbounded_isl_max": 32768,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 65536,
+            "prefill_chunk": 2048,
             "source": "measured",
         },
     },
@@ -271,6 +372,20 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     },
 }
 
+# Wormhole board with no measured (model, device) entry. Deliberately
+# conservative: bound the sliding KV early and keep the prefill chunk small,
+# because WH carries 12 GB per ASIC (N300 1x2 = 24 GB, T3K 1x8 = 96 GB) against
+# Blackhole QB2's 128 GB / LoudBox's 256 GB. ``source`` starts with "inferred"
+# so ``resolve_gemma4_prefill_chunk_size`` still honours ``prefill_chunk``
+# instead of degrading to a single full-length chunk.
+_WH_DEFAULT_LONG_CONTEXT_POLICY = {
+    "unbounded_isl_max": 8192,
+    "bounded_isl_min": 16384,
+    "chunked_bounded_isl_min": 16384,
+    "prefill_chunk": 2048,
+    "source": "inferred_wormhole_default",
+}
+
 # Unknown model: do not force 31B's aggressive bounded cutover.
 _DEFAULT_LONG_CONTEXT_POLICY = {
     "unbounded_isl_max": 131072,
@@ -311,14 +426,43 @@ def _device_name(mesh_device) -> str | None:
         return None
 
 
+def _host_is_wormhole() -> bool:
+    """True when the running host is Wormhole. Best-effort / never raises.
+
+    Used only to disambiguate the historical ``MESH_DEVICE=N150`` tag, which
+    older Blackhole sweeps used for a single P150. Unknown arch behaves as
+    before (Blackhole), so this cannot change Blackhole resolution.
+    """
+    try:
+        import ttnn
+
+        return "wormhole" in str(ttnn.get_arch_name()).lower()
+    except Exception:
+        return False
+
+
+def _device_arch_family(device: str | None) -> str | None:
+    """``"wh"`` / ``"bh"`` for a known SKU name, else ``None``."""
+    if device is None:
+        return None
+    if device in _WH_DEVICES:
+        return "wh"
+    if device in _BH_DEVICES:
+        return "bh"
+    return None
+
+
 def _canonical_device_name(device: str | None) -> str | None:
     """Map device aliases onto canonical policy keys (QB2 / single P150)."""
     if device is None:
         return None
     if device in _QB2_ALIASES:
         return _QB2
-    # Historical WH tag; this host is Blackhole P150.
-    if device in ("N150", "n150"):
+    # Historical Blackhole sweeps tagged the single P150 as "N150" via
+    # MESH_DEVICE. Only honour that alias on a Blackhole host — on Wormhole,
+    # "N150" is a real 1x1 WH board (determine_device_name returns it) and must
+    # not inherit Blackhole DRAM headroom.
+    if device in ("N150", "n150") and not _host_is_wormhole():
         return "P150"
     return device
 
@@ -330,14 +474,27 @@ def get_gemma4_long_context_policy(mesh_device=None, model_name_or_path=None) ->
     # resolution (before mesh open) still picks the right board entry.
     device = _canonical_device_name(_device_name(mesh_device) or os.environ.get("MESH_DEVICE")) or _QB2
     by_model = GEMMA4_LONG_CONTEXT_POLICY.get(model_key)
+    family = _device_arch_family(device)
     if by_model is not None:
         if device in by_model:
             return dict(by_model[device])
-        # Fall back to QB2 entry for this model if present.
-        if _QB2 in by_model:
+        # Fall back to the QB2 entry for this model, but only on Blackhole.
+        # Reusing a Blackhole entry on Wormhole hands a 24 GB N300 / 96 GB T3K
+        # the 128 GB QB2 headroom (unbounded KV through 128k) and OOMs on
+        # allocation, so WH takes the conservative WH default instead.
+        if _QB2 in by_model and family != "wh":
             policy = dict(by_model[_QB2])
             policy["source"] = f"{policy.get('source', 'inferred')}_device_fallback"
             return policy
+    if family == "wh":
+        policy = dict(_WH_DEFAULT_LONG_CONTEXT_POLICY)
+        logger.warning(
+            f"No measured Gemma4 long-context policy for model={model_key} on {device}; "
+            f"using conservative Wormhole defaults (bounded_isl_min={policy['bounded_isl_min']}, "
+            f"prefill_chunk={policy['prefill_chunk']}). Set GEMMA4_BOUNDED_SLIDING / "
+            f"GEMMA4_GEN_PREFILL_CHUNK to override."
+        )
+        return policy
     policy = dict(_DEFAULT_LONG_CONTEXT_POLICY)
     if model_key == "unknown":
         logger.warning(
@@ -508,13 +665,20 @@ def can_gemma4_enable_prefill_trace(
 ) -> bool:
     """Return True when Gemma4 prefill device trace may be captured or replayed.
 
-    ``num_cached_tokens > 0`` (sp1 / APC / multi-chunk middle) is allowed only
-    when ``GEMMA4_CHUNKED_PREFILL_TRACE`` is on — cold single-chunk traces stay
-    sp0-only.
+    Cold single-chunk / first scheduler grant only (``num_cached_tokens == 0``).
+    APC hits and vLLM chunked-prefill remnants (``num_cached_tokens > 0``) stay
+    eager — same posture as tt_transformers #32056 and required for Gemma4
+    hybrid sliding tails (compile/capture graph must not depend on mutable
+    ``sliding_tail_in`` / persistent ring state). Long-ISL traced multi-chunk
+    bypasses this gate via :func:`chunked_prefill_trace_enabled` inside the
+    generator chunk loop.
     """
     if uses_pli:
         return False
-    if num_cached_tokens != 0 and not chunked_prefill_trace_enabled():
+    # Never JIT-capture / replay sp1 through the shared can_enable_trace path.
+    # Remnant / APC continuations are eager; generator multi-chunk uses its own
+    # seeded sp0_mc/sp1_mc path when GEMMA4_CHUNKED_PREFILL_TRACE=1.
+    if num_cached_tokens != 0:
         return False
     if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
         return False
@@ -571,6 +735,7 @@ def resolve_gemma4_prefill_trace_enable(
     batch_size: int,
     prefill_seq_lens: list[int],
     can_batch_prefill: bool,
+    empty_slots=None,
 ) -> bool:
     """Resolve whether prefill trace stays enabled for this batch/prefill shape."""
     # Bounded sliding: TRACE capture uses get_last_token=-1 so attention takes the
@@ -589,10 +754,9 @@ def resolve_gemma4_prefill_trace_enable(
         return False
     trace_batch_size = batch_size
     if can_batch_prefill:
-        trace_batch_size = next(
-            (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-            model_args.max_batch_size,
-        )
+        # Must match the padded_batch the batched prefill will actually run, which
+        # spans the physical slots rather than just the request count.
+        trace_batch_size = batched_prefill_padded_batch(batch_size, empty_slots, model_args.max_batch_size)
     return apply_gemma4_prefill_trace_policy(
         enable_trace,
         prefill_seq_lens[0],
@@ -677,10 +841,14 @@ def warmup_gemma4_batched_prefill_traces(
 ) -> None:
     """Capture prefill traces for MoE models across batch sizes and trace ISLs.
 
-    Sweeps ``SUPPORTED_PREFILL_BATCH_SIZES`` × ``trace_prefill_supported_seq_lens``,
-    skipping combinations that meet or exceed ``MAX_BATCHED_PREFILL_SEQ_LEN`` (128k).
-    Caller must set ``generator.already_warmed_up_prefill`` before calling if needed,
-    or this function sets it on entry.
+    Matches tt_transformers ``Generator.warmup_model_prefill``: warm **batch=1**
+    only for each trace-eligible ISL ≤ chunk (≤4096). Runtime may still pack
+    multiple users into one prefill step; that path does not need a dedicated
+    B>1 warmup capture. Longer prompts are covered by generator / vLLM
+    chunked prefill (same chunk size), not by warming every batch×ISL combo.
+
+    Override with ``GEMMA4_WARMUP_PREFILL_BATCHES=1,2,4`` only if a demo needs
+    explicit B>1 trace capture (not the server product path).
 
     ``prefill_forward_fn`` selects the entry point used for each capture. It
     defaults to ``generator.prefill_forward_text`` (demo / uniform-page-table
@@ -691,6 +859,12 @@ def warmup_gemma4_batched_prefill_traces(
     warmup (before any traced decode) keeps runtime prefills to trace *replay*,
     avoiding the #49083 cold-eager-capture fetch-queue wedge.
     """
+    # Two-phase note: the plugin's warmup calls this twice (enable_trace=False
+    # compile pass, then enable_trace=True capture pass) and RESETS
+    # already_warmed_up_prefill between the phases (tt model_runner), so the
+    # early-return below does not suppress the capture pass in serving. The
+    # sp1 chunked capture in warmup_gemma4_model_prefill is gated on
+    # enable_trace so it cannot capture during the compile pass.
     if generator.already_warmed_up_prefill:
         return
     generator.already_warmed_up_prefill = True
@@ -705,14 +879,53 @@ def warmup_gemma4_batched_prefill_traces(
     from models.demos.gemma4.tt.generator import max_batched_prefill_users
 
     user_cap = max_batched_prefill_users()
-    warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= max_batch_size and b <= user_cap)
+    override = os.environ.get("GEMMA4_WARMUP_PREFILL_BATCHES")
+    if override:
+        warmup_batch_sizes = tuple(
+            b
+            for b in sorted({int(x) for x in override.split(",") if x.strip()})
+            if 1 <= b <= max_batch_size and b <= user_cap and b in SUPPORTED_PREFILL_BATCH_SIZES
+        )
+        if not warmup_batch_sizes:
+            warmup_batch_sizes = (1,)
+    else:
+        # Same as tt_transformers: batch-1-only traced prefill warmup.
+        warmup_batch_sizes = (1,)
+        batched_runtime_enabled = (
+            not getattr(model_args, "disable_batched_prefill", False)
+            and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
+            # Bounded is allowed since the ring-fill fixes (batched prefill runs
+            # EAGER there — the trace policy blocks bounded batched captures —
+            # so the sweep below compiles the batch-N kernels in the safe boot
+            # window instead of at the first live group).
+        )
+        if batched_runtime_enabled:
+            # Runtime batched prefill REPLAYS need boot-time captures. A cold
+            # capture at runtime allocates its persistent trace inputs and
+            # compile scratch while every decode/prefill trace is already
+            # live, so those traces' replays clobber them afterwards (#30187
+            # class): the first batched group is clean (it consumes the
+            # capture run's output) and every replayed group after returns
+            # garbage. Warm each supported batched shape (≤ user_cap) inside
+            # the boot safe window instead — runtime groups pad to these
+            # sizes (batched_prefill_padded_batch) and hit the warmed keys.
+            warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= min(user_cap, max_batch_size))
 
-    logger.info(
-        "Gemma4 batched prefill trace warmup: batch sizes {} x trace ISLs {} (user_cap={})",
-        warmup_batch_sizes,
-        sorted(trace_isls),
-        user_cap,
-    )
+    if warmup_batch_sizes == (1,):
+        logger.info(
+            "Using batch-1-only traced prefill warmup; runtime batched prefill "
+            "remains enabled. Trace ISLs={} (user_cap={})",
+            sorted(trace_isls),
+            user_cap,
+        )
+    else:
+        logger.info(
+            "Gemma4 traced prefill warmup (GEMMA4_WARMUP_PREFILL_BATCHES override): "
+            "batches={} x trace ISLs {} (user_cap={})",
+            warmup_batch_sizes,
+            sorted(trace_isls),
+            user_cap,
+        )
 
     skip_sequence_lengths = False
     sampling_parameters_sweeped = False
@@ -749,9 +962,17 @@ def warmup_gemma4_batched_prefill_traces(
                     break
 
                 if not sampling_parameters_sweeped:
+                    # Single-user prefill all-gathers logits to the full vocab
+                    # before sampling (process_output_prefill contract), while
+                    # the penalties masks stay vocab-sharded per device — so
+                    # penalty-bearing params are only shape-valid on the
+                    # batched-prefill path (sharded logits). Sweeping them at
+                    # batch_size==1 dies in binary_ng ("Invalid subtile
+                    # broadcast type": logits [B, vocab] vs mask [B, vocab/tp]).
+                    # Greedy (no-penalty) warmup is the only valid b=1 sweep.
                     sampling_params = generator._create_sampling_params(
                         can_sample_on_device=can_sample_on_device,
-                        greedy_only=greedy_only,
+                        greedy_only=greedy_only or batch_size == 1,
                         batch_size=batch_size,
                     )
                 else:
@@ -789,7 +1010,13 @@ def warmup_gemma4_batched_prefill_traces(
                         sampling_params=param,
                     )
 
-                sampling_parameters_sweeped = True
+                # The b=1 iteration is forced greedy-only (penalty masks are only
+                # shape-valid on the batched sharded-logits path), so it must not
+                # complete the sweep: a batch-N iteration (or an explicitly
+                # greedy-only warmup) does, otherwise the penalty/log-prob
+                # variants first-compile at runtime under live traces.
+                if greedy_only or batch_size > 1:
+                    sampling_parameters_sweeped = True
 
             if skip_sequence_lengths:
                 break
@@ -837,146 +1064,51 @@ def warmup_gemma4_model_prefill(
     long-ISL request.
     """
     enable_trace = maybe_disable_pli_prefill_trace(enable_trace, generator.model[0])
-    if enable_trace:
-        warmup_gemma4_batched_prefill_traces(
-            generator,
-            kv_cache,
-            enable_trace=enable_trace,
-            can_sample_on_device=can_sample_on_device,
-            greedy_only=greedy_only,
-            prefill_forward_fn=prefill_forward_fn,
-        )
-        # Once-only: tt_transformers calls warmup_model_prefill on *every*
-        # prefill (warmup_prefill=True). The batched helper early-returns via
-        # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
-        # and add ~1.4s to every request TTFT.
-        if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
-            chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
-            chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
-            if chunk > 0:
-                # Two chunks → captures/replays sp0 then captures sp1 at ``chunk``.
-                multi_len = chunk * 2
-                logger.info(
-                    "Warming up traced multi-chunk prefill (sp1): {} tokens in {}-token chunks",
-                    multi_len,
-                    chunk,
-                )
-                prefill_forward = (
-                    prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
-                )
-                warmup_args = generator._mock_tokens(1, multi_len, kv_cache, 0)
-                prefill_forward(
-                    **warmup_args,
-                    kv_cache=kv_cache,
-                    enable_trace=True,
-                    model_id_warmup=0,
-                    sampling_params=None,
-                    warmup_prefill=False,
-                )
-            generator._warmed_chunked_prefill_sp1 = True
-        return
-
-    # Eager (non-traced) warmup for long-ISL demos (prefill trace gated off).
-    # Skip the stock 32/128/512/1024/2048/4096 sweep — it only matters for
-    # trace capture. Warm a short length (+ chunk size) once.
-    #
-    # Important: do NOT run the chunk-sized prefill with on-device SamplingParams.
-    # Stock Generator only compiles sampling on the first short bucket, then uses
-    # sampling_params=None for longer lengths. Pairing SamplingParams with the
-    # 4096 eager warmup hung indefinitely on 31B/P150x8 (256k bounded).
-    #
-    # Also warm max_batch×128 (no SamplingParams) when max_batch>1. Otherwise
-    # demos that gate off prefill-trace (e.g. former batch-32 @ max_seq_len=4096)
-    # only compile B=1 and wedge on the first real batched prefill CCL.
-    if getattr(generator, "already_warmed_up_prefill", False):
-        return
-    generator.already_warmed_up_prefill = True
-
-    chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
-    max_seq = int(getattr(generator.model_args[0], "max_seq_len", chunk) or chunk)
-    # Never warm a length whose padded prefill bucket exceeds max_seq_len.
-    # e.g. chunk=49152 → get_padded_prefill_len=65536 > pool → RoPE slice FATAL.
-    from models.tt_transformers.tt.common import get_padded_prefill_len
-
-    chunk = min(chunk, max_seq)
-    if chunk > 0 and get_padded_prefill_len(chunk) > max_seq:
-        chunk = 1 << max(max_seq.bit_length() - 1, 11)
-        chunk = min(chunk, max_seq)
-    # GEMMA4_TRACE_PREFILL_SEQ_LENS historically only trimmed the *traced* bucket
-    # set. PLI / full-ISL single-chunk boots take this eager path instead, and
-    # would otherwise warm max_prefill_chunk_size (== max_seq_len, e.g. 131072)
-    # which exceeds practical server boot timeouts. Honor the same override here
-    # so nightly's GEMMA4_TRACE_PREFILL_SEQ_LENS=128 actually shortens boot.
-    override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
-    if override is not None:
-        lengths = []
-        for raw in override.split(","):
-            raw = raw.strip()
-            if not raw:
-                continue
-            length = int(raw)
-            if length > 0 and length <= max_seq and length not in lengths:
-                lengths.append(length)
-        if not lengths:
-            lengths = [min(128, max_seq)]
-    else:
-        lengths = []
-        for length in (128, chunk):
-            if length > 0 and length <= max_seq and length not in lengths:
-                lengths.append(length)
-
-    sampling_params_short = None
-    if can_sample_on_device:
-        params = generator._create_sampling_params(
-            can_sample_on_device=True,
-            batch_size=1,
-            greedy_only=greedy_only,
-        )
-        sampling_params_short = params[0] if params else None
-
-    prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
-    logger.info(
-        "Eager prefill warmup (no trace): lengths={} sampling_on_short={}",
-        lengths,
-        sampling_params_short is not None,
+    # Run the sweep in BOTH warmup phases, not only the capture phase. The
+    # plugin's two-phase warmup calls this first with enable_trace=False (the
+    # compile pass) and then with enable_trace=True (the capture pass). Gating
+    # the sweep on enable_trace skipped the compile pass for every batched
+    # combo, so batch-N consumption kernels (per-slot hidden/logits slices)
+    # first-compiled DURING the capture phase — program-cache allocations made
+    # while traces are live, the llama3_70b_galaxy #30187 corruption class. At
+    # runtime the same first-compile fired mid-serving and corrupted the
+    # concurrently-decoding user. TT_METAL_TRACE_ALLOC_TRACKING=1 catches it at
+    # boot; with this change the traceless pass compiles every variant first.
+    warmup_gemma4_batched_prefill_traces(
+        generator,
+        kv_cache,
+        enable_trace=enable_trace,
+        can_sample_on_device=can_sample_on_device,
+        greedy_only=greedy_only,
+        prefill_forward_fn=prefill_forward_fn,
     )
-    for i, length in enumerate(lengths):
-        # Match stock: sampling compile on the first/short bucket only.
-        sampling_params = sampling_params_short if i == 0 else None
-        logger.info(
-            "Warming up eager prefill seq_len={} sampling={}",
-            length,
-            sampling_params is not None,
-        )
-        warmup_args = generator._mock_tokens(1, length, kv_cache, 0)
-        prefill_forward(
-            **warmup_args,
-            kv_cache=kv_cache,
-            enable_trace=False,
-            model_id_warmup=0,
-            sampling_params=sampling_params,
-            warmup_prefill=False,
-        )
-        logger.info("Finished eager prefill warmup seq_len={}", length)
-
-    from models.demos.gemma4.tt.generator import max_batched_prefill_users
-
-    max_batch = int(getattr(generator.model_args[0], "max_batch_size", 1) or 1)
-    warm_batch = min(max_batch, max_batched_prefill_users())
-    # Largest supported size ≤ warm_batch (matches runtime chunk padding).
-    warm_batch = max((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= warm_batch), default=1)
-    if warm_batch > 1 and 128 * warm_batch < MAX_BATCHED_PREFILL_SEQ_LEN:
-        logger.info(
-            "Warming up eager batched prefill batch_size={} seq_len=128 (no sampling)",
-            warm_batch,
-        )
-        warmup_args = generator._mock_tokens(warm_batch, 128, kv_cache, 0)
-        prefill_forward(
-            **warmup_args,
-            kv_cache=kv_cache,
-            enable_trace=False,
-            model_id_warmup=0,
-            sampling_params=None,
-            warmup_prefill=False,
-        )
-        logger.info("Finished eager batched prefill warmup batch_size={}", warm_batch)
+    # Once-only: tt_transformers calls warmup_model_prefill on *every*
+    # prefill (warmup_prefill=True). The batched helper early-returns via
+    # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
+    # and add ~1.4s to every request TTFT.
+    if (
+        enable_trace
+        and chunked_prefill_trace_enabled()
+        and not getattr(generator, "_warmed_chunked_prefill_sp1", False)
+    ):
+        chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+        chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
+        if chunk > 0:
+            # Two chunks → captures/replays sp0 then captures sp1 at ``chunk``.
+            multi_len = chunk * 2
+            logger.info(
+                "Warming up traced multi-chunk prefill (sp1): {} tokens in {}-token chunks",
+                multi_len,
+                chunk,
+            )
+            prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+            warmup_args = generator._mock_tokens(1, multi_len, kv_cache, 0)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=True,
+                model_id_warmup=0,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
+        generator._warmed_chunked_prefill_sp1 = True

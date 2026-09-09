@@ -65,12 +65,13 @@ ALWI void fmod_int32_tile_init() { MATH((SFPU_BINARY_INIT_FN(fmod_int32, sfpu::f
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fmod_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_binary_fmod,
-        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst0,
         idst1,
         odst,

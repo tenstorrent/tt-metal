@@ -51,10 +51,9 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // If the input tensor is not sharded and on DRAM and logical shape != padded shape, then unpad the input tensor.
+    // If the input tensor is not sharded and logical shape != padded shape, then unpad the input tensor.
     // conv op_slicing logic requires the padding information to be present in the input tensor.
-    if (!input_tensor.is_sharded() && input_tensor.memory_config().is_dram() &&
-        input_tensor.logical_shape() != input_tensor.padded_shape()) {
+    if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
         ttnn::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.logical_shape().rank(), 0));
         int logical_rank = input_tensor.logical_shape().rank();
         for (int index = -1; index >= -logical_rank; --index) {
@@ -72,10 +71,7 @@ ttnn::Tensor untilize(
     uint32_t output_single_tile_size = input_single_tile_size;
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
@@ -89,7 +85,6 @@ ttnn::Tensor untilize(
             use_multicore,
             fp32_dest_acc_en,
             sub_core_grids,
-            enough_space_width,
             enough_space_height,
             pf_type);
     };

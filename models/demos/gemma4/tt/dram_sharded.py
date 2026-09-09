@@ -8,7 +8,9 @@ per-device weight shard across all DRAM banks and running the DRAM-sharded
 matmul kernel cuts the per-token weight-read time. Prefill (M>32) reuses the
 same width-sharded weight through a 2D matmul program config.
 
-Ported/adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
+Decode program / activation grids follow tt_transformers + mlp_1d
+(``find_grid_k_n``, ``per_core_N = ceil(n/(tile*cores))``). Prefill 2D progcfg
+helpers are adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 """
 
 import math
@@ -20,13 +22,18 @@ from models.common.utility_functions import is_blackhole
 TILE_SIZE = 32
 # P150 Blackhole DRAM bank count. Wormhole meshes differ — can_dram_shard is
 # BH-only so this constant is never applied on WH (wrong bank count → garbage).
-DRAM_CORES = 8
+# Override with GEMMA4_DRAM_CORES only when also rebuilding .ws weight caches —
+# a mismatched bank count reuses stale WIDTH_SHARDED bins and produces garbage.
+# Matches tt_transformers: WH forces 8; BH uses device dram_grid_size.x (7/8).
+DRAM_CORES = max(1, int(os.environ.get("GEMMA4_DRAM_CORES", "8")))
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
 # BH QuietBox / P150 usable L1 for statically allocated CBs.
 _L1_MAX_BYTES = 1_572_864
 _L1_HEADROOM_BYTES = 64_000
-# Cap decode in0_block_w: unbounded divisors (e.g. 6) blow L1 on 31B gate_up bf16.
-_DECODE_IN0_BLOCK_W_MAX = 2
+# Optional upper bound on decode in0_block_w (tt_transformers / mlp_1d default
+# to find_largest_divisor(..., 8)). Prefer L1-aware shrinking below over a hard
+# empirical cap — set GEMMA4_DECODE_IN0_BLOCK_W_MAX only for sweeps.
+_DECODE_IN0_BLOCK_W_MAX = max(1, int(os.environ.get("GEMMA4_DECODE_IN0_BLOCK_W_MAX", "8")))
 
 
 def _roundup(a, b):
@@ -52,6 +59,40 @@ def _find_grid(n_tiles, target=32):
                 if cols <= max_c:
                     return rows, cols
     raise ValueError(f"Cannot find grid for {n_tiles} tiles")
+
+
+def _find_grid_k_n(k_tiles, n_tiles, max_rows=8, max_cols=8):
+    """Core grid that evenly divides both K and N tile counts.
+
+    Same contract as ``tt_transformers.ModelArgs.find_grid_k_n`` /
+    ``models.common.modules.mlp.mlp_1d._find_grid_k_n``. A K-only grid with
+    ``per_core_N = n_tiles // num_cores`` silently truncates N when
+    ``n_tiles % num_cores != 0`` — tt_transformers documents this as bad PCC
+    (``dram_shard_grid_width`` comment). Prefer the largest feasible core count.
+    """
+    max_cores = max_rows * max_cols
+    possible = [c for c in range(1, max_cores + 1) if k_tiles % c == 0 and n_tiles % c == 0]
+    possible.sort(reverse=True)
+    for cores in possible:
+        for rows in range(1, max_rows + 1):
+            if cores % rows == 0:
+                cols = cores // rows
+                if cols <= max_cols:
+                    return rows, cols
+    raise ValueError(f"Cannot find grid for K={k_tiles}, N={n_tiles} tiles")
+
+
+def _padded_n_tiles(n):
+    """N tiles after DRAM-bank width padding (weight shard layout)."""
+    return _roundup(n, TILE_SIZE * DRAM_CORES) // TILE_SIZE
+
+
+def _decode_core_grid(k, n):
+    """Compute-core grid for decode DRAM-sharded matmul + matching act shard."""
+    k_tiles = k // TILE_SIZE
+    n_tiles = _padded_n_tiles(n)
+    rows, cols = _find_grid_k_n(k_tiles, n_tiles)
+    return rows, cols, rows * cols
 
 
 def prefill_grid_default():
@@ -99,32 +140,59 @@ def weight_memcfg(k, n):
     )
 
 
-def decode_progcfg(m, k, n):
-    """DRAM-sharded matmul program config for decode (small M)."""
-    k_tiles = math.ceil(k / TILE_SIZE)
-    n_padded = _roundup(n, TILE_SIZE * DRAM_CORES)
-    n_tiles = n_padded // TILE_SIZE
-    rows, cols = _find_grid(k_tiles)
-    num_cores = rows * cols
-    k_tiles_per_core = k_tiles // num_cores
-    if k_tiles_per_core == 0:
-        k_tiles_per_core = k_tiles
-        num_cores = 1
-    in0_block_w = _find_largest_divisor(k_tiles_per_core, max_div=_DECODE_IN0_BLOCK_W_MAX)
-    per_core_N = n_tiles // num_cores if n_tiles >= num_cores else 1
+def _tile_size_bytes(dtype=None):
+    """Approximate single-tile footprint for L1 CB budgeting."""
+    if dtype in (ttnn.bfloat8_b, getattr(ttnn, "bfloat4_b", None)):
+        return 1088
+    return 2048  # bfloat16 / unknown — conservative
+
+
+def _estimate_decode_l1_bytes_for_in0(n_tiles, in0_block_w, dtype=None):
+    """Rough static-CB estimate for the DRAM-sharded decode kernel (in1-dominated)."""
+    tile_aligned = _roundup(_tile_size_bytes(dtype), 64)
+    # in1 triple-buffer × padded-N/DRAM_CORES × in0_block_w (factory layout).
+    in1 = math.ceil(n_tiles / DRAM_CORES) * in0_block_w * 3 * tile_aligned
+    # in0 / out / interm / reshard overhead (order-of-magnitude pad).
+    return in1 + 200_000
+
+
+def _decode_in0_block_w(k, n, num_cores, dtype=None):
+    """Largest in0_block_w that divides K/core and fits the L1 CB budget.
+
+    Mirrors ``tt_transformers.dram_matmul_config`` /
+    ``mlp_1d._dram_matmul_config`` (``find_largest_divisor(k/(tile*cores))``),
+    then shrinks when the in1 triple-buffer estimate would overflow L1 — the
+    generic replacement for a hard-coded in0 cap of 2.
+    """
+    k_tiles_per_core = max(1, (k // TILE_SIZE) // num_cores)
+    n_tiles = _padded_n_tiles(n)
+    budget = _L1_MAX_BYTES - _L1_HEADROOM_BYTES
+    in0 = _find_largest_divisor(k_tiles_per_core, max_div=_DECODE_IN0_BLOCK_W_MAX)
+    while in0 > 1 and _estimate_decode_l1_bytes_for_in0(n_tiles, in0, dtype) > budget:
+        in0 = _find_largest_divisor(k_tiles_per_core, max_div=in0 - 1)
+    return in0
+
+
+def decode_progcfg(m, k, n, dtype=None):
+    """DRAM-sharded matmul program config for decode (small M).
+
+    Matches tt_transformers / mlp_1d:
+      * core grid divides both K and N tiles (``find_grid_k_n``)
+      * ``per_core_N = ceil(n / (tile * num_cores))`` — never floor-truncate
+      * ``in0_block_w`` from K/core, L1-shrunk when needed
+    """
+    _rows, _cols, num_cores = _decode_core_grid(k, n)
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=in0_block_w,
+        in0_block_w=_decode_in0_block_w(k, n, num_cores, dtype=dtype),
         per_core_M=math.ceil(m / TILE_SIZE),
-        per_core_N=per_core_N,
+        per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
         fused_activation=None,
     )
 
 
-def activation_memcfg(k):
-    """WIDTH_SHARDED L1 activation config for a [*, k] activation."""
-    k_tiles = k // TILE_SIZE
-    rows, cols = _find_grid(k_tiles)
-    num_cores = rows * cols
+def activation_memcfg(k, n):
+    """WIDTH_SHARDED L1 activation config matching ``decode_progcfg``'s core grid."""
+    rows, cols, num_cores = _decode_core_grid(k, n)
     return ttnn.create_sharded_memory_config(
         shape=(TILE_SIZE, k // num_cores),
         core_grid=ttnn.CoreGrid(x=cols, y=rows),
@@ -134,47 +202,37 @@ def activation_memcfg(k):
     )
 
 
-def _tile_size_bytes(dtype=None):
-    """Approximate single-tile footprint for L1 CB budgeting."""
-    if dtype in (ttnn.bfloat8_b, getattr(ttnn, "bfloat4_b", None)):
-        return 1088
-    return 2048  # bfloat16 / unknown — conservative
-
-
 def _estimate_decode_l1_bytes(k, n, dtype=None):
-    """Rough static-CB estimate for the DRAM-sharded decode kernel (in1-dominated)."""
-    k_tiles = k // TILE_SIZE
-    n_padded = _roundup(n, TILE_SIZE * DRAM_CORES)
-    n_tiles = n_padded // TILE_SIZE
-    rows, cols = _find_grid(k_tiles)
-    num_cores = rows * cols
-    k_tiles_per_core = max(1, k_tiles // num_cores)
-    in0_block_w = _find_largest_divisor(k_tiles_per_core, max_div=_DECODE_IN0_BLOCK_W_MAX)
-    tile_aligned = _roundup(_tile_size_bytes(dtype), 64)
-    # in1 triple-buffer × padded-N/DRAM_CORES × in0_block_w (factory layout).
-    in1 = math.ceil(n_tiles / DRAM_CORES) * in0_block_w * 3 * tile_aligned
-    # in0 / out / interm / reshard overhead (order-of-magnitude pad).
-    return in1 + 200_000
+    """L1 estimate using the same grid/in0 selection as ``decode_progcfg``."""
+    try:
+        _rows, _cols, num_cores = _decode_core_grid(k, n)
+    except ValueError:
+        return float("inf")
+    in0 = _decode_in0_block_w(k, n, num_cores, dtype=dtype)
+    return _estimate_decode_l1_bytes_for_in0(_padded_n_tiles(n), in0, dtype)
 
 
 def can_dram_shard(k, n, dtype=None):
     """True if a [k, n] weight shard is safe for the DRAM-sharded decode path.
 
     Blackhole-only: ``DRAM_CORES`` matches P150; Wormhole bank counts differ and
-    produce garbage (CI PCC ~0). Also rejects shapes that would overflow L1 CBs
-    (e.g. 31B fused gate_up @ TP=4 with bf16).
+    produce garbage (CI PCC ~0). Requires a compute grid that evenly divides
+    both K and N tiles (same as tt_transformers) and an in0_block_w that fits
+    L1 after shrinking.
     """
     if not is_blackhole():
         return False
     if k % TILE_SIZE != 0 or n <= 0:
         return False
     try:
-        rows, cols = _find_grid(k // TILE_SIZE)
+        rows, cols, num_cores = _decode_core_grid(k, n)
     except ValueError:
         return False
-    num_cores = rows * cols
     # Activation width-shard needs k evenly split across the core grid.
     if (k // TILE_SIZE) % num_cores != 0 or (k // num_cores) % TILE_SIZE != 0:
+        return False
+    # N must also land evenly so per_core_N * num_cores covers the padded shard.
+    if _padded_n_tiles(n) % num_cores != 0:
         return False
     if _estimate_decode_l1_bytes(k, n, dtype) > _L1_MAX_BYTES - _L1_HEADROOM_BYTES:
         return False
@@ -249,6 +307,7 @@ class DramShardedLinear:
     def __init__(self, weight_torch, mesh_device, mesh_mapper, k, n, dtype, cache_file_name):
         self.k = k
         self.n = n
+        self._dtype = dtype
         self._prefill_max_cols = prefill_max_cols_default(mesh_device)
         self.weight = ttnn.as_tensor(
             weight_torch,
@@ -259,8 +318,9 @@ class DramShardedLinear:
             cache_file_name=cache_file_name,
             memory_config=weight_memcfg(k, n),
         )
-        self._act_memcfg = activation_memcfg(k)
-        self._decode_pc = decode_progcfg(TILE_SIZE, k, n)
+        # Act shard grid must match decode_progcfg (K and N), not a K-only grid.
+        self._act_memcfg = activation_memcfg(k, n)
+        self._decode_pc = decode_progcfg(TILE_SIZE, k, n, dtype=dtype)
 
     def _prefill_pc(self, m):
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)

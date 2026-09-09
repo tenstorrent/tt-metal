@@ -33,7 +33,7 @@ void kernel_main() {
     CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
     CircularBuffer cb_intermediate(intermediate_cb);
 
-    binary_op_init_common(input_cb, input_cb, intermediate_cb);
+    compute_kernel_hw_startup(input_cb, input_cb, intermediate_cb);
 
     for (uint32_t tile_row_num = 0; tile_row_num < num_tile_rows_to_process; tile_row_num++) {
         /*
@@ -45,7 +45,7 @@ void kernel_main() {
         // Disable L1 accumulation when starting a new row
         PACK((llk_pack_reconfig_l1_acc(0)));
 
-        mul_tiles_init(input_cb, input_cb);
+        mul_init(input_cb, input_cb);
         cb_intermediate.reserve_back(onetile);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             cb_input.wait_front(block_size);

@@ -12,13 +12,13 @@ export TT_METAL_HOME=/path/to/tt-metal
 cd $TT_METAL_HOME
 
 # Full light tier (snapshot + tt-smi -r + eth_link_up gtest, ~75s)
-./tools/scaleout/exabox/healt_check_test_suite/run_diag.sh light
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light
 
 # Snapshot-only smoke (fastest iteration)
-./tools/scaleout/exabox/healt_check_test_suite/run_diag.sh light --skip-reset --skip-tests
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light --skip-reset --skip-tests
 
 # Offline / dev iteration against a stored snapshot
-./tools/scaleout/exabox/healt_check_test_suite/run_diag.sh light --dry-run \
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light --dry-run \
     --input-snapshot snap.json --output /tmp/diag_report.json
 ```
 
@@ -26,11 +26,11 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 
 ## Tiers
 
-| Tier | Resets | Gtests | Duration | Use when |
+| Tier | Resets | Tests | Duration | Use when |
 |---|---|---|---|---|
 | `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | ~75 s   | Smoke check on every new unit |
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`          | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | ~5 min  | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2      | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests)   | ~15 min | Final deploy gate |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2      | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | ~18 min | Final deploy gate |
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -43,8 +43,21 @@ which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles.
 (Filters without the index wildcard match zero tests, so gtest exits 0 and the
 check is silently recorded as PASS without running — avoid that form.)
 
-The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` in
-`diag_runner.py`.
+The deploy tier also runs `didt_matmul_galaxy`, a pytest-based dI/dt stress
+test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
+re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
+(mostly cold bring-up + the 20 output readbacks); bump
+`--didt-workload-iterations` when triaging a suspect unit — a marginal chip
+that passed 1000 iterations failed under a 5000-iteration soak. `--timeout
+1200` overrides the repo-wide 300 s pytest-timeout (too short for this run)
+while still bounding a wedged run in standalone invocations, and
+zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
+filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
+on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
+or fabric mesh mapping fails.
+
+The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
+`PYTESTS` in `diag_runner.py`.
 
 ## Flags
 
@@ -75,6 +88,11 @@ Per-rev hardware expectations (Confluence SYS-4055):
 | RevC   | `00000473…` | `16G` | Gen5 |
 
 The detected rev is also recorded at the top of the JSON report as `detected_board_rev`.
+
+### Host
+| Check | Rule | On fail |
+|---|---|---|
+| `host_fru_info` | Store-only: BMC FRU inventory via `sudo -n ipmitool fru print`. UBB tray serials in the details; full field set in `data.devices`. | never alerts — **SKIP** when ipmitool/sudo/BMC is unavailable |
 
 ### PCIe
 | Check | Rule | On fail |
@@ -187,8 +205,27 @@ ninja -C build_Release unit_tests_deployment
 ## Repo layout
 
 ```
-tools/scaleout/exabox/healt_check_test_suite/
-├── run_diag.sh        # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
-├── diag_runner.py     # Python orchestrator (this is where all check logic lives)
-└── HEALTH_CHECK.md     # this file
+tools/scaleout/exabox/health_check_test_suite/
+├── run_diag.sh         # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
+├── diag_runner.py      # Python orchestrator (all check logic lives here). Also exposes run_diag() as a
+│                       #   programmatic entry point returning (exit_code, report_dict).
+├── HEALTH_CHECK.md     # this file
+└── test_infrastructure/  # scheduled/CI harness around the diag suite
+    ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
+    ├── analyze_health_check_results.py  # diag_report.json -> runs/checks CSVs (Superset)
+    ├── requirements.txt                 # runtime deps (requests, paramiko, prometheus_client)
+    └── utils/                           # supporting modules
+        ├── diag_execution.py            # invoke diag_runner.py as a subprocess (timeout/kill aware)
+        ├── system_info.py               # tt-smi / kmd / fw version discovery
+        ├── telemetry.py                 # tt-telemetry (Prometheus) collection + formatting
+        ├── report.py                    # post-reset normalization + actionable-failure verdict
+        ├── jira_client.py               # JIRA ticket create / update / close / attach
+        ├── sftp_upload.py               # CSV upload to the Data-team SFTP endpoint
+        ├── secrets_loader.py            # JIRA / SFTP credential-file parsing
+        └── health_check_models.py       # Pydantic schema for the CSV output
 ```
+
+The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
+spun up a nested Docker container to run the diag suite. Now that the harness ships
+in the same image as the diag suite, `run_health_check.py` invokes `diag_runner.py`
+directly as a subprocess (see `diag_execution.py`) instead of via docker-in-docker.

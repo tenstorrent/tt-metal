@@ -205,8 +205,9 @@ def infer_unpack_out(
         return DataFormat.Float16  # Tilize to Float16
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        # Unpack-to-SrcS cannot convert fp16 to TF32 (Tensix Formats conversion table).
         if input_format in (DataFormat.Float16, DataFormat.Float16_b):
-            return DataFormat.Tf32
+            return input_format
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
@@ -246,6 +247,10 @@ def infer_pack_in(
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
 
     if is_quasar:
+        if unpacking_to_srcs:
+            # PACK1 reads SrcS; dest_acc does not widen pack_in.
+            return unpack_out
+
         if output_format.is_32_bit() and is_fp32_dest_acc_en == DestAccumulation.No:
             # When the dest register is in 32-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is valid
             # because pack_in=pack_out=Fp32, which is a supported packer conversion.
@@ -262,11 +267,11 @@ def infer_pack_in(
                 and is_fp32_dest_acc_en == DestAccumulation.Yes
                 and not unpacking_to_dest
             ):
-                # Int16 cannot reach a 32-bit Dest through the FPU datacopy:
-                # the 16-bit datum never lands in the 32-bit Dest. But unpack-to-Dest path can --
-                # UNPACR_DEST writes the 16-bit datum straight into the 32-bit Dest
+                # Int16 cannot reach a 32-bit Dest through FPU datacopy. Typecast
+                # remains valid because it uses the direct Unpack-to-Dest path,
+                # where SFPU overwrites the narrow representation with Int32.
                 raise ValueError(
-                    f"If the input format is Int16, 32-bit dest is not supported and the packer input format must be Int16"
+                    "Quasar does not support Int16 to 32-bit Dest through the FPU path"
                 )
             # When the dest register is in 32-bit mode, the packer input format is 32-bit
             return (
@@ -411,18 +416,18 @@ def infer_data_formats(
     # encoding, Int16 -- the unpacker, the SrcA/SrcB/dest register files, and the packer all lack a
     # UInt16 encoding, so UInt16 is pass-through as Int16 across the whole unpack/math/pack datapath.
     # The unsigned-16 semantics exist only as an SFPU access mode (sfpmem::UINT16), so we carry the
-    # real UInt16 intent in sfpu_math to still test SFPU support for it.
-    sfpu_math_override = None
+    # real UInt16 intent in sfpu_src to still test SFPU support for it.
+    sfpu_src_override = None
     if chip_arch == ChipArchitecture.QUASAR:
         if input_format == DataFormat.UInt16:
             input_format = DataFormat.Int16
-            sfpu_math_override = DataFormat.UInt16
+            sfpu_src_override = DataFormat.UInt16
         if input_format_B == DataFormat.UInt16:
             input_format_B = DataFormat.Int16
-            sfpu_math_override = DataFormat.UInt16
+            sfpu_src_override = DataFormat.UInt16
         if output_format == DataFormat.UInt16:
             output_format = DataFormat.Int16
-            sfpu_math_override = DataFormat.UInt16
+            sfpu_src_override = DataFormat.UInt16
 
     # Determine the intermediate formats
     unpack_out_A = infer_unpack_out(
@@ -468,10 +473,10 @@ def infer_data_formats(
     if math == DataFormat.Fp8_e4m3:
         math = DataFormat.Float16
 
-    # SFPU-side math format: same as math unless the SFPU operates in a format with no Tensix HW
+    # SFPU source format: same as math unless the SFPU operates in a format with no Tensix HW
     # encoding (UInt16 on Quasar), in which case the unpack/math/pack datapath was defaulted to Int16
-    # above and only sfpu_math retains the UInt16 intent (via the sfpmem::UINT16 SFPU access mode).
-    sfpu_math = sfpu_math_override if sfpu_math_override is not None else math
+    # above and only sfpu_src retains the UInt16 intent (via the sfpmem::UINT16 SFPU access mode).
+    sfpu_src = sfpu_src_override if sfpu_src_override is not None else math
 
     pack_in = infer_pack_in(
         input_format,
@@ -518,7 +523,7 @@ def infer_data_formats(
         pack_src=pack_in,
         pack_dst=output_format,
         math=math,
-        sfpu_math=sfpu_math,
+        sfpu_src=sfpu_src,
         same_src_format=same_src_format,
         unpack_B_src=input_format_B,
         unpack_B_dst=unpack_out_B,
@@ -641,8 +646,8 @@ def data_formats(
 
         # Even with inference disabled, UInt16 must ride the Int16 data path on Quasar: there is no
         # UInt16 HW encoding in the unpacker, the register files/dest, or the packer, so the whole
-        # datapath defaults to Int16 and only sfpu_math keeps the UInt16 intent. See infer_data_formats.
-        sfpu_math_format = math_format
+        # datapath defaults to Int16 and only sfpu_src keeps the UInt16 intent. See infer_data_formats.
+        sfpu_src_format = math_format
         resolved_arch = chip_arch if chip_arch is not None else get_chip_architecture()
         if (
             resolved_arch == ChipArchitecture.QUASAR
@@ -651,7 +656,7 @@ def data_formats(
             unpack_dst = DataFormat.Int16
             math_format = DataFormat.Int16
             pack_src_format = DataFormat.Int16
-            sfpu_math_format = DataFormat.UInt16
+            sfpu_src_format = DataFormat.UInt16
             input_format = DataFormat.Int16
             output_format = (
                 DataFormat.Int16
@@ -680,7 +685,7 @@ def data_formats(
                 pack_src=pack_src_format,
                 pack_dst=output_format,
                 math=math_format,
-                sfpu_math=sfpu_math_format,
+                sfpu_src=sfpu_src_format,
                 same_src_format=same_src_format,
                 unpack_B_src=unpack_B_src_val,
                 unpack_B_dst=unpack_B_dst_val,

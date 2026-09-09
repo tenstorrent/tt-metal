@@ -31,6 +31,7 @@ constexpr auto BFLOAT8_B = "Unsupported type: BFLOAT8_B";
 constexpr auto BFLOAT4_B = "Unsupported type: BFLOAT4_B";
 constexpr auto UINT8 = "Unsupported type: UINT8";
 constexpr auto UINT16 = "Unsupported type: UINT16";
+constexpr auto INT8 = "Unsupported type: INT8";
 constexpr auto INVALID = "Unsupported type: INVALID";
 constexpr auto UNKNOWN = "Unsupported type: unknown";
 constexpr auto COMPLEX = "Unsupported type: Complex";
@@ -53,6 +54,7 @@ constexpr bool is_supported_datatype(tt::tt_metal::DataType dt) {
             NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
         case tt::tt_metal::DataType::UINT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
         case tt::tt_metal::DataType::UINT16: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
+        case tt::tt_metal::DataType::INT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INT8);
         case tt::tt_metal::DataType::INVALID: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
         default: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
     }
@@ -317,13 +319,14 @@ nb::object make_numpy_tensor(
 
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
         const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
-        const auto cpu_tensor_strides = cpu_tensor.strides();
+        const bool logical_matches_physical = cpu_tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                                              cpu_tensor_spec.logical_2d_shape() == cpu_tensor_spec.physical_shape();
 
-        if (tt::tt_metal::logical_matches_physical(cpu_tensor_spec)) {
+        if (logical_matches_physical) {
             return make_numpy_tensor_from_data.template operator()<NumpyType>(cpu_tensor_data, cpu_tensor_spec);
         }
 
-        const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(cpu_tensor_data, cpu_tensor_spec);
+        const auto decoded_data = cpu_tensor.host_tensor().to_vector<MetalType>();
         return make_numpy_tensor_from_data.template operator()<NumpyType>(decoded_data, cpu_tensor_spec);
     };
 
@@ -488,6 +491,7 @@ ttnn::Tensor make_metal_tensor(
     nb::object shape_obj = numpy_data_obj.attr("shape");
     nb::tuple shape_tuple = nb::cast<nb::tuple>(shape_obj);
     std::vector<size_t> shape_from_python;
+    shape_from_python.reserve(rank);
     for (size_t i = 0; i < rank; ++i) {
         shape_from_python.push_back(nb::cast<size_t>(shape_tuple[i]));
     }

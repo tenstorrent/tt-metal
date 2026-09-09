@@ -40,7 +40,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
     // Synchronize all devices before dispatching neighbor_pad programs.
     // This ensures all previous fabric-initiated writes (from prior ops) have completed.
     auto* mesh_device = tensor_args.input_tensor.device();
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
 
     // Create programs for each coordinate in tensor_coords
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -378,6 +378,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             is_last_w_device);
 
         // W fabric core coordinates (placed after H fabric cores in first row)
+        w_fabric_logical_cores.reserve(num_w_fabric_cores);
+        w_fabric_virtual_cores.reserve(num_w_fabric_cores);
         for (uint32_t i = 0; i < num_w_fabric_cores; i++) {
             CoreCoord wc = {num_h_fabric_cores + i, 0};
             w_fabric_logical_cores.push_back(wc);
@@ -660,6 +662,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             uint32_t a_offset = 0;
 
             uint32_t unit_offset = 0;
+            local_copy_core_coords.reserve(num_local_cores);
             for (uint32_t i = 0; i < num_local_cores; ++i) {
                 const uint32_t units_for_core = base + (i < rem ? 1u : 0u);
                 const uint32_t a_count = a_base + (i < a_rem ? 1u : 0u);

@@ -11,6 +11,9 @@ namespace tt::tt_metal::hal_1xx {
 
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
+    // Upper bound: PROCESSOR_INDEX, ENABLE_L1_DATA_CACHE, at most 4 from the core type switch
+    // (ACTIVE_ETH), and PROGRAMMABLE_CORE_TYPE.
+    defines.reserve(7);
     const auto& l1_cache_enable_processors =
         params.rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
     auto processor_index = hal_.get_processor_index(params.core_type, params.processor_class, params.processor_id);

@@ -19,8 +19,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
+#include "api/compute/experimental/compressed_custom_mm.h"
 using namespace ckernel;
 #endif
 
@@ -171,7 +171,7 @@ struct MatmulExpertCompressedSRAM {
                 reinterpret_cast<const volatile uint32_t*>(CTArgs::sram_base_addrs_l1_addr);
             const volatile uint32_t* fmt_base = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr_base);
 
-            reconfig_data_format<SrcOrder::Reverse, true>(cb_in0, cb_in1);
+            reconfig_full_operand<SrcOrder::Reverse>(cb_in0, cb_in1);
             pack_reconfig_data_format<true>(cb_out);
             // cb_in0 metadata always advances by the full num_active_experts ×
             // num_tiles_k pages per iter (producer pads if data is compact). This

@@ -28,12 +28,13 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -317,6 +318,8 @@ void kernel_main() {
             // Wait to receive in0 block
             if (block == 0) {
                 input0_cb.reserve_back(in0_block_num_tiles);
+                // Requires Quasar pack-side drain
+                dummy_pack(input0_cb_id);
                 input0_cb.push_back(in0_block_num_tiles);
             }
             input0_cb.wait_front(in0_block_num_tiles);
@@ -414,7 +417,7 @@ void kernel_main() {
                         if constexpr (untilize_out) {
                             pack_untilize_dest<out_subblock_num_tiles>(mm_out_cb_id);
                         } else {
-                            pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                            pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
                         }
 
                         tile_regs_release();
@@ -438,7 +441,7 @@ void kernel_main() {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                        pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
                         mm_partials_cb.push_back(out_subblock_num_tiles);
@@ -454,6 +457,10 @@ void kernel_main() {
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
                 mm_partials_cb.wait_front(out_block_num_tiles);
+                // a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES can
+                // retire before the WAIT_TILES it follows). dummy_unpack() orders POP after WAIT via an
+                // UNPACR_NOP (required on Quasar, no-op on WH/BH); it reads nothing.
+                dummy_unpack(mm_partials_cb_id);
                 mm_partials_cb.pop_front(out_block_num_tiles);
             }
             if (block == num_blocks - 2 && spill) {
@@ -478,6 +485,8 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         // Release in1
         sync_buf.reserve_back(1);
+        // Requires Quasar pack-side drain
+        dummy_pack(sync_cb);
         sync_buf.push_back(1);
         UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
         UNPACK((update_rd_ptr_to_ring_index(

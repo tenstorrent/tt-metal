@@ -1,0 +1,13 @@
+# Paths excluded from Cycode SAST as false positives. Keep entries file-scoped.
+
+# llk-audit: a local-only developer audit tool, never built or shipped. Cycode
+# reports "unsanitized dynamic input in file path" on the os.path.join/open calls
+# built from argparse arguments, and "unsanitized user input in OS command" on a
+# subprocess.run that is passed a list with shell=False. Every path comes from an
+# argument an engineer typed or a build log they produced; the file opens are
+# read-only and already guarded by try/except OSError. The rule's remediation
+# cannot apply to capture.py: confining paths under the repo root would break it,
+# because JIT kernel build dirs live at $HOME/.cache/tt-metal-cache and are its input.
+tt_metal/tt-llk/.claude/tools/llk-audit/kernel_tier/capture.py
+tt_metal/tt-llk/.claude/tools/llk-audit/llkaudit/cli.py
+tt_metal/tt-llk/.claude/tools/llk-audit/llkaudit/registry.py

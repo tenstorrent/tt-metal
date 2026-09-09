@@ -139,7 +139,7 @@ class CCLManager:
         self._barrier_semaphores = []
         for _ in range(2):
             self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
-            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)])
+            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
             self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
         ttnn.synchronize_device(mesh_device)
 
@@ -158,7 +158,7 @@ class CCLManager:
         return sems
 
     def get_ag_semaphore(self):
-        """Returns list of 2 semaphores for all_gather (cycles double-buffer)."""
+        """Returns list of 3 semaphores for all_gather (cycles double-buffer)."""
         sems = self._ag_semaphores[self._ag_idx]
         self._ag_idx = (self._ag_idx + 1) % 2
         return sems
@@ -298,11 +298,11 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
+    # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
+    # Fabric / cluster_axis supply those defaults (same as sync all_gather).
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=tp_axis,
-        num_links=ccl_manager.num_links,
-        topology=topology,
         memory_config=memory_config,
     )
     tensor.deallocate(True)

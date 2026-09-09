@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -26,6 +27,16 @@
 #include "ttnn/types.hpp"
 
 namespace ttml::ttnn_fixed {
+
+namespace {
+
+// The inverse Gumbel CDF, -log(-log(u)), is finite only for u in (0, 1).
+// Half of the 31-bit RNG step is a natural strictly-positive lower endpoint;
+// ttnn::rand's half-open contract keeps the upper endpoint strictly below 1.
+constexpr float gumbel_uniform_lower_bound = 0x1p-32F;
+constexpr float gumbel_uniform_upper_bound = 1.0F;
+
+}  // namespace
 
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
     return sum_moreh(t, dim, /* keepdim */ true);
@@ -195,11 +206,11 @@ ttnn::Tensor sample(
             rand = ttnn::rand(
                 /* size */ global_shape,
                 /* device */ *device,
-                /* dtype */ out.dtype(),
-                /* layout */ out.layout(),
+                /* dtype */ ttnn::DataType::FLOAT32,
+                /* layout */ ttnn::Layout::TILE,
                 /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ 0.00001F,
-                /* to */ 0.99F,
+                /* from */ gumbel_uniform_lower_bound,
+                /* to */ gumbel_uniform_upper_bound,
                 /* seed */ seed,
                 /* mesh_mapper */ mapper);
         } else {
@@ -208,17 +219,23 @@ ttnn::Tensor sample(
             rand = ttnn::rand(
                 /* size */ local_shape,
                 /* device */ *device,
-                /* dtype */ out.dtype(),
-                /* layout */ out.layout(),
+                /* dtype */ ttnn::DataType::FLOAT32,
+                /* layout */ ttnn::Layout::TILE,
                 /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ 0.00001F,
-                /* to */ 0.99F,
+                /* from */ gumbel_uniform_lower_bound,
+                /* to */ gumbel_uniform_upper_bound,
                 /* seed */ seed);
         }
 
         // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
         // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
         rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
+        if (rand.dtype() != out.dtype()) {
+            rand = ttnn::typecast(rand, out.dtype());
+        }
+        if (rand.layout() != out.layout()) {
+            rand = ttnn::to_layout(rand, out.layout());
+        }
         out = ttnn::mul_sfpu(out, 1.0F / temperature);
         out = ttnn::add(out, rand);
     }

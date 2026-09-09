@@ -12,6 +12,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 using namespace tt::tt_metal;
 
@@ -28,15 +29,12 @@ Tensor create_ghost_tensor(const Tensor& input_tensor) {
     const auto& mesh_buffer = input_tensor.mesh_buffer();
     auto ghost_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         mesh_buffer.global_config(), mesh_buffer.device_local_config(), mesh_buffer.device(), mesh_buffer.address());
-    return Tensor(MeshTensor::from_buffer(
+    return Tensor(mesh_tensor_from_buffer_with_topology(
         std::move(*ghost_mesh_buffer), input_tensor.tensor_spec(), input_tensor.tensor_topology()));
 }
 
 inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    const auto& input_mem_config = input_tensor.memory_config();
-    auto input_address = input_tensor.buffer()->address();
-    tt::tt_metal::TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     // Construct a ghost tensor so we can pass an deallocated tensor through the TTNN infrastructure.
     auto ghost_input_tensor = create_ghost_tensor(input_tensor);
@@ -45,6 +43,10 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
         // TODO: Should this throw error?
         return input_tensor;
     }
+
+    auto input_address = ghost_input_tensor.buffer()->address();
+    tt::tt_metal::TensorSpec output_tensor_spec = ghost_input_tensor.tensor_spec();
+    const auto& input_mem_config = ghost_input_tensor.memory_config();
 
     if (mem_config) {
         output_tensor_spec = tt::tt_metal::TensorSpec(
@@ -120,8 +122,6 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
 inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
-    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    auto shard_spec = input_tensor.shard_spec().value();
 
     // Construct a ghost tensor so we can pass an deallocated tensor through the TTNN infrastructure.
     auto ghost_input_tensor = create_ghost_tensor(input_tensor);
@@ -135,6 +135,9 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         // TODO: Should this throw error?
         return {input_tensor};
     }
+
+    [[maybe_unused]] auto input_address = ghost_input_tensor.buffer()->address();
+    auto shard_spec = ghost_input_tensor.shard_spec().value();
 
     auto output_tensor_spec = ghost_input_tensor.tensor_spec();
     if (mem_config) {

@@ -20,11 +20,10 @@ struct ZeroPadTokenRange {
 // Validation guarantees that [valid_global, ceil_pad(valid_global)) remains in one block-cyclic slab.
 // Intersect that window with this chip's contiguous slice of the slab, then map the intersection to the
 // chip-local cache rows. Both TILE and ROW_MAJOR paths derive their native page ranges from this result.
-inline ZeroPadTokenRange zero_pad_compute_token_range() {
+inline ZeroPadTokenRange zero_pad_compute_token_range(uint32_t valid_global) {
     const uint32_t my = get_common_arg_val<uint32_t>(0);
     const uint32_t sp = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local = get_common_arg_val<uint32_t>(2);
-    const uint32_t valid_global = get_common_arg_val<uint32_t>(3);
     const uint32_t pad_align = get_common_arg_val<uint32_t>(4);
 
     const uint32_t pad_end = ((valid_global + pad_align - 1) / pad_align) * pad_align;
@@ -54,15 +53,18 @@ struct ZeroPadChipWork {
     uint32_t batch_page_base;  // page offset of this (slot,layer) batch slot in the cache
 };
 
-inline ZeroPadChipWork zero_pad_compute_chip_work() {
+// Core derivation, taking the two per-call values (slot_idx, valid_global=v) as parameters. The
+// metadata path reads them on-device from the metadata tensor and calls this; the scalar path reads
+// common args 9/3 via the no-arg overload below. All other inputs (incl valid_global for the window
+// math, via zero_pad_compute_token_range) are structural common args.
+inline ZeroPadChipWork zero_pad_compute_chip_work(uint32_t slot, uint32_t v) {
     const uint32_t layer = get_common_arg_val<uint32_t>(5);
     const uint32_t num_layers = get_common_arg_val<uint32_t>(6);
     const uint32_t Wt = get_common_arg_val<uint32_t>(7);
     const uint32_t cache_CHtWt = get_common_arg_val<uint32_t>(8);
-    const uint32_t slot = get_common_arg_val<uint32_t>(9);
 
     ZeroPadChipWork w{0, 0, 0, 0, Wt, (slot * num_layers + layer) * cache_CHtWt};
-    const ZeroPadTokenRange range = zero_pad_compute_token_range();
+    const ZeroPadTokenRange range = zero_pad_compute_token_range(v);
     if (range.count == 0) {
         return w;
     }
@@ -75,10 +77,16 @@ inline ZeroPadChipWork zero_pad_compute_chip_work() {
     return w;
 }
 
+// Scalar path (TILE): read the two per-call values from common args (slot_idx = 9, valid_global = 3).
+// The metadata (per-element-tensor) path is TILE-only; ROW_MAJOR uses the scalar signature.
+inline ZeroPadChipWork zero_pad_compute_chip_work() {
+    return zero_pad_compute_chip_work(get_common_arg_val<uint32_t>(9), get_common_arg_val<uint32_t>(3));
+}
+
 // ROW_MAJOR counterpart: one page is one token row, so the exact window [valid_global, pad_end) can
 // be zeroed without reading or masking a boundary tile. Validation keeps the window within one
 // block-cyclic slab; therefore each chip's owned rows form one contiguous local page range even when
-// the global window crosses a chip boundary.
+// the global window crosses a chip boundary. ROW_MAJOR is scalar-only: valid_global is common arg 3.
 struct ZeroPadRowMajorChipWork {
     uint32_t count;
     uint32_t base_local_row;
@@ -91,6 +99,6 @@ inline ZeroPadRowMajorChipWork zero_pad_compute_row_major_chip_work() {
     const uint32_t cache_CH_pages = get_common_arg_val<uint32_t>(8);
     const uint32_t slot = get_common_arg_val<uint32_t>(9);
 
-    const ZeroPadTokenRange range = zero_pad_compute_token_range();
+    const ZeroPadTokenRange range = zero_pad_compute_token_range(get_common_arg_val<uint32_t>(3));
     return {range.count, range.base_local_token, (slot * num_layers + layer) * cache_CH_pages};
 }

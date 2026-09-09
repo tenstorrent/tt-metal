@@ -27,7 +27,7 @@
  * Use the standard llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * llk_math_reduce() calls in a loop for general-purpose block reduction.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
     _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
 }
@@ -47,9 +47,9 @@ inline void llk_math_reduce_block_max_row_init(const ckernel::TensorShape& tenso
  * Use the standard llk_math_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void llk_math_reduce_block_max_row(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
+inline void llk_math_reduce_block_max_row(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape) {
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     _llk_math_reduce_block_max_row_<block_ct_dim, is_fp32_dest_acc_en>(dst_index, tensor_shape);
 }

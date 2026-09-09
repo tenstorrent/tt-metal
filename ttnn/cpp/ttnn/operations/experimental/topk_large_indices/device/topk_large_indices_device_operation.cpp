@@ -60,10 +60,12 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
         input_row_bytes);
 
     // Optional bounded search width: top-k scans only the first valid_length columns of each row (the rest
-    // of the physically-wider row is ignored, not read). Must hold at least k values and fit within the row.
+    // of the physically-wider row is ignored, not read).  A short valid prefix is legal: inactive lanes
+    // are already represented as -inf by the TopK XL tail path and are materialized as 0xFFFFFFFF indices.
+    // This keeps a fixed worst-case k/output shape while a serving cache grows through its early prefixes.
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
-        TT_FATAL(valid_length >= attrs.k, "topk_large_indices valid_length {} must be >= k {}", valid_length, attrs.k);
+        TT_FATAL(valid_length > 0, "topk_large_indices valid_length must be > 0");
         TT_FATAL(
             valid_length <= n,
             "topk_large_indices valid_length {} must be <= the input last dimension {}",
@@ -97,7 +99,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
         grid.x,
-        grid.y);
+        grid.y,
+        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

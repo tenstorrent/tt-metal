@@ -28,6 +28,12 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "dit_rmsnorm_scalar_setup.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -44,8 +50,8 @@ constexpr uint32_t max_rounds = get_compile_time_arg_val(8);              // pag
 constexpr uint32_t stick_bytes = get_compile_time_arg_val(9);             // 128
 constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(10);  // num_forwarders*max_rounds
 // Shared packet CB (created on the whole core grid -> uniform L1 addr, so this
-// worker's get_write_ptr(packet_cb) == the forwarder core's packet base) and
-// grid-uniform sync sem ids.
+// worker's CircularBuffer(packet_cb).get_write_ptr() == the forwarder core's
+// packet base) and grid-uniform sync sem ids.
 constexpr uint32_t packet_cb = get_compile_time_arg_val(11);
 constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);
 constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);
@@ -87,18 +93,26 @@ void kernel_main() {
     const uint32_t my_forwarder_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
 
-    // Grid-uniform: my own packet_cb base == the forwarder's packet base; sem
-    // addrs are the same on me and the forwarder.
-    const uint32_t fwd_packet_buf_addr = get_write_ptr(packet_cb);
-    const uint32_t packet_slot_bytes = get_tile_size(packet_cb);  // unit_packet_bytes (per round%2 slot)
-    const uint32_t fwd_arrival_sem_addr = get_semaphore(arrival_sem_id);
-    const uint32_t go_sem_addr = get_semaphore(go_sem_id);
+    Noc noc;
 
-    const uint32_t output_tile_bytes = get_tile_size(output_cb);
+    CircularBuffer cb_packet(packet_cb);
+    CircularBuffer cb_output(output_cb);
+    CircularBuffer cb_stats_local(stats_transposed_local_cb);
+    CircularBuffer cb_stats_gathered(stats_transposed_gathered_cb);
+
+    // Grid-uniform: my own packet_cb base == the forwarder's packet base, and both
+    // semaphores resolve to the same L1 offset on me and on the forwarder.
+    const uint32_t fwd_packet_buf_addr = cb_packet.get_write_ptr();
+    const uint32_t packet_slot_bytes = cb_packet.get_tile_size();  // unit_packet_bytes (per round%2 slot)
+    Semaphore<> fwd_arrival_sem(arrival_sem_id);
+    Semaphore<> go_sem(go_sem_id);
+
+    const uint32_t output_tile_bytes = cb_output.get_tile_size();
     const auto output_accessor = TensorAccessor(output_args, output_addr);
+    const uint32_t output_page_bytes = output_accessor.get_aligned_page_size();
     const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
-    const uint32_t gathered_tile_bytes = get_tile_size(stats_transposed_gathered_cb);
-    const uint32_t stat_tile_bytes = get_tile_size(stats_transposed_local_cb);
+    const uint32_t gathered_tile_bytes = cb_stats_gathered.get_tile_size();
+    const uint32_t stat_tile_bytes = cb_stats_local.get_tile_size();
 
     // Populate compute's scalar/eps/trans_mat CBs before anything else.
     dit_rmsnorm_generate_scalars_and_transmat<
@@ -109,9 +123,6 @@ void kernel_main() {
         w_reduce_factor,
         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
 
-    volatile tt_l1_ptr uint32_t* go_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_sem_addr);
-    const uint64_t fwd_arrival_noc = safe_get_noc_addr(fwd_x, fwd_y, fwd_arrival_sem_addr, 0);
-
     uint32_t go_target = 0;
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         const uint32_t round = tile_row - tile_row_start;
@@ -121,51 +132,74 @@ void kernel_main() {
         // LayerNorm); the worker contributes one slot (my_slot*stick_bytes) regardless.
         {
             DeviceZoneScopedN("W_PUSH");
-            cb_wait_front(stats_transposed_local_cb, num_stats);
-            const uint32_t src0 = get_read_ptr(stats_transposed_local_cb);
+            cb_stats_local.wait_front(num_stats);
+            const uint32_t src0 = cb_stats_local.get_read_ptr();
             const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
+            // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
+            UnicastEndpoint fwd_core;
             for (uint32_t s = 0; s < num_stats; s++) {
                 const uint32_t src = src0 + s * stat_tile_bytes;
                 const uint32_t sub = dst + s * kStatBytes;
-                const uint64_t dst_noc0 = safe_get_noc_addr(fwd_x, fwd_y, sub, 0);
-                const uint64_t dst_noc1 = safe_get_noc_addr(fwd_x, fwd_y, sub + kFaceRowBytes, 0);
-                noc_async_write(src, dst_noc0, kFaceRowBytes);               // face_00 row0
-                noc_async_write(src + kFace01Off, dst_noc1, kFaceRowBytes);  // face_01 row0
+                noc.async_write(  // face_00 row0
+                    CoreLocalMem<uint32_t>(src),
+                    fwd_core,
+                    kFaceRowBytes,
+                    {},
+                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
+                noc.async_write(  // face_01 row0
+                    CoreLocalMem<uint32_t>(src + kFace01Off),
+                    fwd_core,
+                    kFaceRowBytes,
+                    {},
+                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
             }
-            noc_async_write_barrier();
-            noc_semaphore_inc(fwd_arrival_noc, 1);
-            noc_async_atomic_barrier();
-            cb_pop_front(stats_transposed_local_cb, num_stats);
+            noc.async_write_barrier();
+            // Arrival handshake: the stick must be visible in the forwarder's packet buffer
+            // *before* the forwarder sees the count go up, hence the write barrier above and
+            // the atomic barrier below.
+            fwd_arrival_sem.up(noc, fwd_x, fwd_y, 1);
+            noc.async_atomic_barrier();
+            cb_stats_local.pop_front(num_stats);
         }
 
         // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
         {
             DeviceZoneScopedN("W_AGWAIT");
             go_target += 1;
-            noc_semaphore_wait_min(go_sem_ptr, go_target);
+            go_sem.wait_min(go_target);
         }
 
         // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
         // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
         // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
-        cb_reserve_back(stats_transposed_gathered_cb, num_stats * ring_size);
-        const uint32_t gbase = get_write_ptr(stats_transposed_gathered_cb);
+        cb_stats_gathered.reserve_back(num_stats * ring_size);
+        const uint32_t gbase = cb_stats_gathered.get_write_ptr();
         for (uint32_t d = 0; d < ring_size; d++) {
             const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
             for (uint32_t s = 0; s < num_stats; s++) {
                 const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
-                const uint64_t src = stats_dram.get_noc_addr(page_idx, my_slot * stick_bytes + s * kStatBytes);
-                noc_async_read(src, tile_dst, kFaceRowBytes);                               // -> face_00 row0
-                noc_async_read(src + kFaceRowBytes, tile_dst + kFace01Off, kFaceRowBytes);  // -> face_01 row0
+                const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
+                noc.async_read(  // -> face_00 row0
+                    stats_dram,
+                    CoreLocalMem<uint32_t>(tile_dst),
+                    kFaceRowBytes,
+                    {.page_id = page_idx, .offset_bytes = src_off},
+                    {});
+                noc.async_read(  // -> face_01 row0
+                    stats_dram,
+                    CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
+                    kFaceRowBytes,
+                    {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
+                    {});
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(stats_transposed_gathered_cb, num_stats * ring_size);
+        noc.async_read_barrier();
+        cb_stats_gathered.push_back(num_stats * ring_size);
 
         // ---- 4. drain this row's output_cb tiles ----
         // Per-block wait + pop (NOT a cumulative wait with a single end-of-row pop):
         // under block_major_post the factory sizes output_cb to just 2*block_size
-        // (block-local), NOT the whole row, so a cumulative cb_wait_front(output_cb,
+        // (block-local), NOT the whole row, so a cumulative output_cb.wait_front(
         // 3*block_size...) could never be satisfied — compute can't push a 3rd block
         // into a 2-block CB it never popped → deadlock (this is why is_tp_1 wide, which
         // uses the per-block drain-only writer, worked while TP>1 wide hung). Compute
@@ -176,22 +210,26 @@ void kernel_main() {
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                cb_wait_front(output_cb, block_size);
-                uint32_t rd = get_read_ptr(output_cb);
+                cb_output.wait_front(block_size);
+                uint32_t rd = cb_output.get_read_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t c = col_tile + i;
                     const uint32_t h = c / head_dim_tiles;
                     const uint32_t t_col = c - h * head_dim_tiles;
                     const uint32_t out_idx =
                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
-                    noc_async_write_page(out_idx, output_accessor, rd);
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
                     rd += output_tile_bytes;
                 }
-                noc_async_writes_flushed();
-                cb_pop_front(output_cb, block_size);
+                noc.async_writes_flushed();
+                cb_output.pop_front(block_size);
             }
         }
     }
-    noc_async_write_barrier();
-    noc_semaphore_set(go_sem_ptr, 0);
+    noc.async_write_barrier();
+    // Reset the go-sem for the next invocation. Trace replay re-runs this kernel without
+    // re-running host-side semaphore init, so leaving a stale non-zero count here would let
+    // the next replay's very first go_sem.wait_min(1) fall straight through.
+    go_sem.set(0);
 }

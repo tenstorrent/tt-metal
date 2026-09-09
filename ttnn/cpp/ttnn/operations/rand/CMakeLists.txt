@@ -32,7 +32,14 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_rand PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_rand PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_rand
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Uniform
+)
 
 install(TARGETS ttnn_op_rand FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
 

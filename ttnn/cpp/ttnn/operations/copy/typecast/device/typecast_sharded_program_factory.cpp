@@ -9,12 +9,15 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_program_artifacts(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -23,11 +26,11 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     const auto& input_dtype = args.input_dtype;
     const auto& output_dtype = args.output_dtype;
 
-    tt::tt_metal::ProgramDescriptor desc;
-
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
+
+    const auto* device = input.device();
 
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(
@@ -77,42 +80,43 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
         num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
     }
 
-    const uint8_t in_cb_id = tt::CBIndex::c_0;
-    uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
+    // ---- Resource names ----
+    const DFBSpecName IN_DFB{"in"};    // legacy CBIndex::c_0
+    const DFBSpecName OUT_DFB{"out"};  // legacy CBIndex::c_2
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    // Input DFB: built on the input shard's own L1 memory (borrowed), so the data is already resident.
+    uint32_t buffering_factor = 1;  // data is already fully buffered in the DFBs since its sharded
     uint32_t aligned_input_tile_nbytes =
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = in_cb_pagesize * in_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = in_cb_id,
-            .data_format = act_df,
-            .page_size = in_cb_pagesize,
-        }}},
-        .buffer = input.buffer(),
-    });
+    const DataflowBufferSpec in_dfb{
+        .unique_id = IN_DFB,
+        .entry_size = in_cb_pagesize,
+        .num_entries = in_cb_npages,
+        .data_format_metadata = act_df,
+        .borrowed_from = INPUT,
+    };
 
-    // output sharded CB
-    const uint8_t out_cb_id = tt::CBIndex::c_2;
+    // output sharded DFB: borrowed from the output shard buffer — the result is left resident there
     uint32_t aligned_output_tile_nbytes =
         round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = out_cb_pagesize * out_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = out_cb_id,
-            .data_format = out_df,
-            .page_size = out_cb_pagesize,
-        }}},
-        .buffer = output.buffer(),
-    });
+    const DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = out_cb_pagesize,
+        .num_entries = out_cb_npages,
+        .data_format_metadata = out_df,
+        .borrowed_from = OUTPUT,
+    };
 
-    log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(tt::LogOp, "out_cb_id: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
+    log_debug(tt::LogOp, "input_dfb: {}, npages: {}, pagesize: {}", IN_DFB.get(), in_cb_npages, in_cb_pagesize);
+    log_debug(tt::LogOp, "out_dfb: {}, npages: {}, pagesize: {}", OUT_DFB.get(), out_cb_npages, out_cb_pagesize);
     log_debug(tt::LogOp, "input_tile_size: {}, output_tile_size: {}", input_tile_size, output_tile_size);
     log_debug(
         tt::LogOp,
@@ -137,71 +141,97 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
-    std::vector<uint32_t> reader_compile_time_args = {
-        in_cb_id,
-    };
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
-    std::map<std::string, std::string> kernel_defines;
-    tt::tt_metal::KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
-    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    for (const auto& [name, value] : kernel_defines) {
-        reader_desc.defines.emplace_back(name, value);
-    }
-    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
+    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        1,                  // per_core_block_cnt
-        num_tile_per_core,  // per_core_block_size
-        in_cb_id,
-        out_cb_id};
+    const KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    KernelSpec::CompilerOptions::Defines unary_defines;
+    unary_defines.emplace(
+        "TYPECAST_LLK_INIT",
+        fmt::format(
+            "typecast_tile_init<{0}u, {1}u>",
+            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
+    unary_defines.emplace(
+        "TYPECAST_LLK",
+        fmt::format(
+            "typecast_tile<{0}u, {1}u>",
+            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
+
+    // Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision and left
+    // every other CB at Default; the named equivalent is an UnpackToDest entry for the input DFB.
+    ComputeUnpackModes unpack_modes;
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[in_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+    } else if (args.fp32_dest_acc_en && act_df == tt::DataFormat::Float32) {
+        // Metal 2.0 requires an explicit entry for a consumed Float32 DFB under a 32-bit Dest, where
+        // legacy silently defaulted. UnpackToSrc is that legacy default.
+        unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+    }
+    if (args.fp32_dest_acc_en && out_df == tt::DataFormat::Float32) {
+        // The output DFB is self-looped on this kernel (compute is its only toucher), which makes
+        // compute a *consumer* of it too — so the same required-entry rule applies. Legacy left this
+        // CB's unpack mode at Default, i.e. UnpackToSrc.
+        unpack_modes.emplace(OUT_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
     }
 
-    bool math_approx_mode = false;
+    // Field values carried over from the legacy ComputeConfigDescriptor: math_fidelity=HiFi4,
+    // fp32_dest_acc_en, bfp8_pack_precise, math_approx_mode=false. dst_full_sync_en was left at its
+    // legacy default (false) = double_buffer_dest true, which is also the Metal 2.0 default.
+    const KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
+        .compiler_options = {.defines = std::move(unary_defines), .opt_level = KernelBuildOptLevel::O3},
+        // The output DFB has no other toucher — no writer kernel drains it, the borrowed output
+        // buffer *is* the result — so compute binds it as both PRODUCER and CONSUMER (self-loop).
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compile_time_args = {{"per_core_block_cnt", 1u}, {"per_core_block_dim", num_tile_per_core}},
+        .hw_config = ComputeHardwareConfig{ComputeGen1Config{
+            .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+            .bfp_pack_precision_mode =
+                args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
+            .enable_32_bit_dest = args.fp32_dest_acc_en,
+            .unpack_modes = std::move(unpack_modes),
+        }},
+    };
 
-    std::map<std::string, std::string> unary_defines;
-    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
-        "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-    unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-
-    tt::tt_metal::KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
-    compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = compute_kernel_args_group_1;
-    for (const auto& [name, value] : unary_defines) {
-        compute_desc.defines.emplace_back(name, value);
-    }
-    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = args.fp32_dest_acc_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
-        .bfp8_pack_precise = args.bfp8_pack_precise,
-        .math_approx_mode = math_approx_mode};
-
+    KernelRunArgs reader_run_args{.kernel = READER};
     for (const CoreCoord& core : corerange_to_cores(all_cores)) {
-        reader_desc.runtime_args.emplace_back(core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{num_tile_per_core});
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"num_tiles_per_core", num_tile_per_core}});
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramSpec spec{
+        .name = "typecast_sharded",
+        .kernels = {reader, compute},
+        .dataflow_buffers = {in_dfb, out_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {WorkUnitSpec{
+            .name = "typecast_sharded", .kernels = {READER, COMPUTE}, .target_nodes = all_cores}},
+    };
 
-    return desc;
+    // The compute kernel has no runtime args, so it needs no KernelRunArgs entry.
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args)};
+    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

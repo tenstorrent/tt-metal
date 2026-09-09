@@ -20,11 +20,7 @@ void generate_bcast_scaler() {
     constexpr uint32_t onetile = 1;
     dfb1.reserve_back(onetile);
     // Local L1 fill of the reserved entry (data peek — not a NOC transfer endpoint).
-#ifdef ARCH_QUASAR
-    auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
-#else
     auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr());
-#endif
     for (int j = 0; j < 1024; j++) {
         ptr[j] = uint16_t(0);
     }

@@ -257,6 +257,12 @@ def load_demo_prompt(target_bucket, instruct=True):
     if "context" in entry:
         max_chars = entry.get("max_length")
         context = _load_and_cache_context(entry["context"], max_chars=max_chars)
+        # Honor repeat_context like text_demo_v2: the 256k prompt file repeats
+        # its ~117k-token book to reach the bucket. Ignoring it made this
+        # path's "256k" rows silently pad-run at 131072 (undertesting 2x).
+        repeat_context = int(entry.get("repeat_context", 1))
+        if repeat_context > 1:
+            context = "\n\n".join([context] * repeat_context)
         prompt = "```" + context + "```\n\n" + prompt if instruct else context
     return prompt
 
@@ -653,8 +659,8 @@ def _run_generation_via_generator(
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
 
-    # Default host sample — see text_demo_v2 (device sample + decode trace hazard).
-    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    # Default on-device sample (product parity). Opt into host with GEMMA4_HOST_SAMPLE=1.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     # Generator long-context path is greedy-only today.
     device_sampling_params = build_device_sampling_params({"temperature": 0}, can_sample=can_sample)

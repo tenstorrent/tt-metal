@@ -49,11 +49,20 @@ def parse_artifacts(artifacts_dir: str) -> dict:
 
     # Aggregate results
     pass_count = sum(1 for t in tests if t.get("status") == "pass")
-    fail_count = sum(1 for t in tests if str(t.get("status", "")).startswith("fail"))
+    # Mirror push_sweep_results._is_failure(): fail* AND xpass.
+    fail_count = sum(
+        1
+        for t in tests
+        if str(t.get("status", "")).lower().startswith("fail") or str(t.get("status", "")).lower() == "xpass"
+    )
     test_count = len(tests)
 
-    # Calculate pass rate
-    pass_pct = round(pass_count * 100.0 / test_count, 2) if test_count > 0 else 0
+    # Of EXECUTED, not of total. This is the fallback the action runs when the DB query fails
+    # (action.yaml: if steps.query-db.outcome == 'failure'), so without the same denominator a
+    # database outage would reintroduce the very false pass-rate drop the DB path now avoids:
+    # test_count includes vectors the infra classifiers marked NOT_RUN, which never ran an op.
+    executed = pass_count + fail_count
+    pass_pct = round(pass_count * 100.0 / executed, 2) if executed > 0 else 0
 
     # Extract unique models
     models_tested = sorted(set(t.get("model_name") for t in tests if t.get("model_name")))

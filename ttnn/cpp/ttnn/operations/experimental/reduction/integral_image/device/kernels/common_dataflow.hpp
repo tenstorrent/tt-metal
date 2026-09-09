@@ -5,7 +5,8 @@
 #pragma once
 
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #include "common.hpp"
 
@@ -15,7 +16,7 @@ FORCE_INLINE void write_to_dram(
     ReadCBGuard read_guard{cb, num_tiles};
 
     Noc noc;
-    CircularBuffer cb_obj{cb};
+    DataflowBuffer cb_obj(cb);
     noc.async_write(
         cb_obj,
         addr_gtor,
@@ -31,7 +32,7 @@ FORCE_INLINE void load_from_dram(
     WriteCBGuard write_guard{cb, num_tiles};
 
     Noc noc;
-    CircularBuffer cb_obj{cb};
+    DataflowBuffer cb_obj(cb);
     noc.async_read(
         addr_gtor,
         cb_obj,
@@ -41,18 +42,10 @@ FORCE_INLINE void load_from_dram(
     noc.async_read_barrier();
 }
 
-template <typename InputAccessorArgs, typename OutputAccessorArgs>
+// The nine scalar CTAs shared by the reader / writer (and compute). The DFB indices that used to sit in this
+// struct are now Metal 2.0 DFB bindings, referenced as dfb::<name> at the call sites; the input/output
+// TensorAccessorArgs blocks are now TensorParameter/TensorBinding, referenced as tensor::input / tensor::output.
 struct IntImgCTAs {
-    const uint32_t start_cb;
-    const uint32_t input_cb;
-    const uint32_t acc_cb;
-    const uint32_t cumsum_stage_0_cb;
-    const uint32_t cumsum_stage_1_cb;
-    const uint32_t cumsum_stage_2_cb;
-    const uint32_t output_cb;
-    const uint32_t axis_2_buffer_cb;    // covers entire propagation
-    const uint32_t axis_3_buffer_cb;    // each tile is spawned from broadcasting the last row of
-                                        // upper block across all rows of a given tile
     const uint32_t tile_height;
     const uint32_t tile_width;
     const uint32_t block_depth;
@@ -62,33 +55,18 @@ struct IntImgCTAs {
     const uint32_t num_batches;   // axis 1/4
     const uint32_t cores_x;
     const uint32_t cores_y;
-    const InputAccessorArgs input_args;
-    const OutputAccessorArgs output_args;  // reused for reading upper block for propagation.
 };
 
-FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<18>();
-    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    return IntImgCTAs<decltype(input_args), decltype(output_args)>{
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
-        input_args,
-        output_args,
+FORCE_INLINE constexpr IntImgCTAs get_ctas() {
+    return IntImgCTAs{
+        get_arg(args::tile_height),
+        get_arg(args::tile_width),
+        get_arg(args::block_depth),
+        get_arg(args::num_channels),
+        get_arg(args::input_height),
+        get_arg(args::input_depth),
+        get_arg(args::num_batches),
+        get_arg(args::cores_x),
+        get_arg(args::cores_y),
     };
 }

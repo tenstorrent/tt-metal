@@ -34,6 +34,7 @@ struct DeepseekMoEReduceScatterParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(4);
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);

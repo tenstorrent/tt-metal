@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_sfpu_common.h"
+#include <cstdint>
 #include "ckernel_sfpu_binary_max_min.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 
 namespace ckernel {
 
@@ -26,29 +26,57 @@ inline void llk_math_eltwise_binary_sfpu_binary_max_min_int32_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max(
     std::uint32_t dst_index0, std::uint32_t dst_index1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, true>, dst_index0, dst_index1, odst, vector_mode);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min,
+        (DataFormat::Float32, true),
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_int32(
     std::uint32_t dst_index0, std::uint32_t dst_index1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, true>, dst_index0, dst_index1, odst, vector_mode);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min,
+        (DataFormat::Int32, true),
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min(
     std::uint32_t dst_index0, std::uint32_t dst_index1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, false>, dst_index0, dst_index1, odst, vector_mode);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min,
+        (DataFormat::Float32, false),
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min_int32(
     std::uint32_t dst_index0, std::uint32_t dst_index1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, false>, dst_index0, dst_index1, odst, vector_mode);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min,
+        (DataFormat::Int32, false),
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
 }
 
 }  // namespace ckernel

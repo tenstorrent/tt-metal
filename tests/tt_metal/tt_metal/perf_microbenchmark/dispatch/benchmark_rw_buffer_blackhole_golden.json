@@ -1,11 +1,11 @@
 {
   "context": {
-    "date": "2026-05-15T17:48:36+00:00",
-    "host_name": "e6f5436f6b39",
+    "date": "2026-08-01T05:10:01+00:00",
+    "host_name": "6cf1919c015d",
     "executable": "./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer",
-    "num_cpus": 32,
-    "mhz_per_cpu": 400,
-    "cpu_scaling_enabled": false,
+    "num_cpus": 12,
+    "mhz_per_cpu": 5453,
+    "cpu_scaling_enabled": true,
     "caches": [
       {
         "type": "Data",
@@ -28,14 +28,14 @@
       {
         "type": "Unified",
         "level": 3,
-        "size": 100663296,
-        "num_sharing": 16
+        "size": 33554432,
+        "num_sharing": 12
       }
     ],
     "load_avg": [
-      0.827637,
-      0.336426,
-      0.125
+      0.666992,
+      0.299805,
+      0.224121
     ],
     "library_version": "v1.9.1",
     "library_build_type": "release",
@@ -47,308 +47,308 @@
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 915087238.7249177
+      "bytes_per_second": 1316138686.414627
     },
     {
       "name": "Write/page_size:64/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 1829739034.7646437
+      "bytes_per_second": 2627446650.445785
     },
     {
       "name": "Write/page_size:128/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 3642504597.2446823
+      "bytes_per_second": 5223644759.10701
     },
     {
       "name": "Write/page_size:256/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 7218128535.620046
+      "bytes_per_second": 10234034576.7531
     },
     {
       "name": "Write/page_size:512/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14167016366.682096
+      "bytes_per_second": 19800357977.837353
     },
     {
       "name": "Write/page_size:1024/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 22704981575.925365
+      "bytes_per_second": 21481735063.050835
     },
     {
       "name": "Write/page_size:2048/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 22669504651.83079
+      "bytes_per_second": 21479735275.470493
     },
     {
       "name": "Write/page_size:32/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 845155122.1138369
+      "bytes_per_second": 1375218753.351641
     },
     {
       "name": "Write/page_size:64/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 1686535971.067312
+      "bytes_per_second": 2732492477.5702043
     },
     {
       "name": "Write/page_size:128/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 3358116495.7644606
+      "bytes_per_second": 5395462305.320002
     },
     {
       "name": "Write/page_size:256/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 6656410309.137891
+      "bytes_per_second": 10531969704.661175
     },
     {
       "name": "Write/page_size:512/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 13031140132.47672
+      "bytes_per_second": 20535240660.22773
     },
     {
       "name": "Write/page_size:1024/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 22603103634.966278
+      "bytes_per_second": 21448133696.34343
     },
     {
       "name": "Write/page_size:2048/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 22643011949.53998
+      "bytes_per_second": 21466503694.588814
     },
     {
       "name": "Read/page_size:32/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 1100174721.0784
+      "bytes_per_second": 1097463107.6661196
     },
     {
       "name": "Read/page_size:64/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 2199537706.8732033
+      "bytes_per_second": 2187960074.984833
     },
     {
       "name": "Read/page_size:128/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 4260169567.9850526
+      "bytes_per_second": 4210652132.8758063
     },
     {
       "name": "Read/page_size:256/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 8011339194.797826
+      "bytes_per_second": 7855570403.504386
     },
     {
       "name": "Read/page_size:512/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 13490662673.186476
+      "bytes_per_second": 13639788269.000965
     },
     {
       "name": "Read/page_size:1024/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14368525591.70974
+      "bytes_per_second": 14389222182.801176
     },
     {
       "name": "Read/page_size:2048/size:67108864/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14658990171.84644
+      "bytes_per_second": 14548937618.289997
     },
     {
       "name": "Read/page_size:32/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 989826875.0890255
+      "bytes_per_second": 987959269.915374
     },
     {
       "name": "Read/page_size:64/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 1951143482.2538536
+      "bytes_per_second": 1951135182.1861637
     },
     {
       "name": "Read/page_size:128/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 3792258876.048175
+      "bytes_per_second": 3751458430.2339354
     },
     {
       "name": "Read/page_size:256/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 7180655418.663877
+      "bytes_per_second": 7046063567.566767
     },
     {
       "name": "Read/page_size:512/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 12859566871.22672
+      "bytes_per_second": 12519681855.399189
     },
     {
       "name": "Read/page_size:1024/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14445942322.33753
+      "bytes_per_second": 14544828712.726818
     },
     {
       "name": "Read/page_size:2048/size:67108864/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14577116792.772358
+      "bytes_per_second": 14586349429.814745
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:1/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 10767802654.09666
+      "bytes_per_second": 10934631196.96694
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:2/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 11722785202.920542
+      "bytes_per_second": 11469360965.683254
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:4/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 13857250880.647783
+      "bytes_per_second": 13608939974.235361
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:8/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14205821350.235512
+      "bytes_per_second": 13829851487.409443
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:16/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 16272002225.348337
+      "bytes_per_second": 16295722840.073313
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:32/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 19698484979.185265
+      "bytes_per_second": 19601038128.50214
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:64/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 20704031609.281914
+      "bytes_per_second": 20057077539.2085
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:128/type:0/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 21252525508.72159
+      "bytes_per_second": 20006330955.05304
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:1/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 10907228199.338032
+      "bytes_per_second": 11056805167.581146
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:2/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 12864921829.408455
+      "bytes_per_second": 12237681925.457663
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:4/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 13933205598.103354
+      "bytes_per_second": 13491602782.596375
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:8/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 14168249648.95961
+      "bytes_per_second": 13602792627.128883
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:16/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 18090939569.90725
+      "bytes_per_second": 16215195606.22946
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:32/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 20218994851.002907
+      "bytes_per_second": 18701153095.98964
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:64/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 20885489893.941273
+      "bytes_per_second": 19658295589.36407
     },
     {
       "name": "WriteSharded/size:67108864/contiguity:128/type:1/device:0/real_time_median",
       "run_type": "aggregate",
       "repetitions": 11,
       "aggregate_name": "median",
-      "bytes_per_second": 20244933207.487553
+      "bytes_per_second": 17881351835.517895
     }
   ]
 }

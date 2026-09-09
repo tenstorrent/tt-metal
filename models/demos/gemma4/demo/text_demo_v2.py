@@ -14,11 +14,10 @@ mirroring how Gemma3 / tt_transformers models are run:
 Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
-  * Host sampling by default (``GEMMA4_HOST_SAMPLE=1``) so decode Metal Trace
-    stays coherent — on-device sample can allocate after an active decode
-    trace and corrupt generation. Opt into device sampling with
-    ``GEMMA4_HOST_SAMPLE=0`` once sampling buffers are captured before
-    decode-trace (TP>1, vocab shard ≤64K).
+  * On-device sampling by default (``GEMMA4_HOST_SAMPLE=0``) — matches product
+    ``decode_only`` (force-argmax AG). Set ``GEMMA4_HOST_SAMPLE=1`` for the
+    slower host path (full 262k vocab AG each step; useful if device-sample +
+    decode-trace misbehaves).
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -32,8 +31,8 @@ Usage:
     HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 pytest \
         models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv
 
-    # Long-context (defaults pick bounded/chunk for coherency):
-    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \
+    # Long-context (defaults pick bounded/chunk for coherency; device sample):
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-12B-it pytest \
         models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k" -s --timeout 1800
 
     # Override prompts / lengths from the CLI:
@@ -194,16 +193,23 @@ def _host_sample(logits, temperature, top_p):
 
 
 def _default_ccl_packet_bytes():
-    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages (4×page).
+    """Leave Fabric's default packet size.
 
-    Matches ``validate_packet_size`` guidance: 31B pages are 1344 B → 5376;
-    12B pages are 960 B → 3840. Other models leave Fabric's default.
+    This used to return 4x the CCL page width (5376 for 31B, 3840 for 12B) to
+    satisfy the ``validate_packet_size`` "suboptimal packet size" warning. That
+    warning optimises single-op page packing, but measured end-to-end it costs
+    both TTFT and decode on P150x8 -- the tuned values are *slower* than the
+    Fabric default:
+
+        12B / P150x8 / long-context-4k, batch-1
+          packet 3840 (old default) : TTFT 543.7 ms, 44.62 tok/s/user
+          Fabric default (4352)     : TTFT 461.6 ms, 46.86 tok/s/user
+
+    Gains hold across ISLs (4k/32k/128k) on 12B and 31B. Blackhole-only path;
+    Wormhole already used the Fabric default and is unaffected. Set
+    ``GEMMA4_CCL_PACKET_BYTES`` to pin a value (e.g. to reproduce the old
+    behaviour or re-sweep).
     """
-    model = os.environ.get("HF_MODEL", "").lower()
-    if "31b" in model:
-        return 5376
-    if "12b" in model:
-        return 3840
     return None
 
 
@@ -237,10 +243,12 @@ def _device_params():
         # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
         "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
     }
-    if is_blackhole():
-        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-    else:
-        params["trace_region_size"] = 30_000_000
+    # Wormhole has 12 GB/ASIC vs Blackhole's 32 GB, so the trace budget is much
+    # tighter, but 30 MB is not enough for the 31B/26B decode+prefill traces on
+    # T3K (WH-T3K nightly EngineCore OOM). Honour GEMMA4_TRACE_REGION_SIZE on
+    # both arches; only the default differs.
+    default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
     pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
     if pkt_env is None:
@@ -289,9 +297,11 @@ def _device_params():
             True,
         ),
         (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling).
-            # max_seq_len=1024 (short prompts; matches batch-8). Prefill is micro-
-            # batched at ≤4 users (GEMMA4_MAX_BATCHED_PREFILL_USERS): true B≥8
-            # wedges on P150x8 after the first all_gather. See generator.py.
+            # max_seq_len=4096 (short prompts). True-batched B≥8 wedges on P150x8
+            # after the first all_gather — Gemma4Generator microbatches at ≤4
+            # users. Hetero actual lengths in one pad bucket are OK: per-slot
+            # valid_seq_lens cap KV fill so pad rows are not written (see
+            # attention/prefill.py).
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             4096,
@@ -514,18 +524,26 @@ def test_demo_text(
     block_size = page_params["page_block_size"]
     needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
     configured_blocks = page_params.get("page_max_num_blocks")
-    if batch_size <= 1 or configured_blocks is None:
-        page_max_num_blocks = needed_blocks
-    else:
-        page_max_num_blocks = configured_blocks
-    paged_attention_config = (
-        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
-    )
 
     # Sliding-cache + prefill chunk from GEMMA4_LONG_CONTEXT_POLICY (model × device).
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
+
+    if batch_size <= 1 or configured_blocks is None:
+        page_max_num_blocks = needed_blocks
+    elif bounded_sliding:
+        # ``build_hybrid_page_tables`` gives each user its own full-attention
+        # range [u*ceil(max_seq_len/block), (u+1)*...), so the pool must hold
+        # batch * ceil(max_seq_len/block). The tuned value is a *shared* pool
+        # that the non-hybrid ``create_tt_page_table`` partitions across users;
+        # using it with hybrid tables puts users 1..B-1 past the end of the pool.
+        page_max_num_blocks = max(int(configured_blocks), needed_blocks)
+    else:
+        page_max_num_blocks = configured_blocks
+    paged_attention_config = (
+        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
+    )
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
@@ -564,6 +582,22 @@ def test_demo_text(
             sliding_window=model_args.sliding_window,
         )
         generator.model[0]._active_page_tables_per_layer = per_layer_pts
+        # Sequential prefill forces ``user_id=0``, so the generator recovers each
+        # user's row by matching the legacy ``page_table`` against the per-layer
+        # stash. ``create_tt_page_table`` builds block IDs independently of
+        # ``build_hybrid_page_tables``, so that match always failed and every
+        # user fell through to row 0. Point the legacy table at a
+        # *full-attention* per-layer table: it is the table full-attn layers
+        # already address, so semantics are unchanged and the match succeeds.
+        # (Using a sliding table here instead breaks full-attn addressing.)
+        full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+        if full_idxs:
+            page_table = per_layer_pts[full_idxs[0]]
+        else:
+            # Reduced all-sliding models (GEMMA4_NUM_LAYERS <= 5) have no
+            # full-attention table; match against the first sliding table —
+            # with no full layers there is nothing it can mis-address.
+            page_table = per_layer_pts[0]
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────
@@ -581,9 +615,9 @@ def test_demo_text(
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
-    # Default host sample: device sample + decode Metal Trace can allocate
-    # mid-trace and corrupt tokens. Opt in with GEMMA4_HOST_SAMPLE=0.
-    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    # Default on-device sample (product decode_only parity). Opt into host with
+    # GEMMA4_HOST_SAMPLE=1 if device-sample + decode-trace misbehaves.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
     greedy_only = temperature <= 0

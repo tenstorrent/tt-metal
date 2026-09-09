@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -21,28 +22,48 @@ from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdap
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
+    STEADY_STATE_LTX_PROMPT,
+    STEADY_STATE_REPLAY_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
-# Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
-# s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
-# l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
-# whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
-# OOMs the vocoder. 32 KB matches the audio component tests.
-ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
-line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+from .ltx_mesh_params import (
+    LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
+    LTX_DISTILLED_I2V_MESH_PARAMS_DL,
+    LTX_DISTILLED_MESH_PARAMS_DL,
+)
 
 
-# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
-# (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
-# "young woman with a guitar sings Doo-be-doo" clip the audio tests use), so e2e and audio stay aligned.
+def _ltx_checkpoint_cached(filename: str) -> bool:
+    """True if the LTX checkpoint is available -- either a real local file (LTX_CHECKPOINT / flat
+    ~/.cache/ltx-checkpoints) OR already in the HF hub cache. The old guard checked
+    os.path.exists(default_ltx_checkpoint(...)), but when the checkpoint resolves from the hub that
+    returns a "repo:file" string (never a path), so it always skipped in CI even with the weights
+    cached. Checking the hub cache too (local_files_only) lets the offline CI run actually execute."""
+    ref = default_ltx_checkpoint(filename)
+    if os.path.exists(ref):
+        return True
+    if ":" in ref:  # "repo_id:filename" -> resolvable from the local hub cache without a network call
+        repo_id, fname = ref.split(":", 1)
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
+
+        try:
+            hf_hub_download(repo_id=repo_id, filename=fname, local_files_only=True)
+            return True
+        except (LocalEntryNotFoundError, EntryNotFoundError, FileNotFoundError):
+            return False
+    return False
+
+
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -50,35 +71,12 @@ line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4. l1_small_size: the audio vocoder's conv2d needs an L1_SMALL scratch pool
-        # (default 0 → OOM in decode).
-        [(2, 4), (2, 4), 1, 0, 2, True, {**line_params, "l1_small_size": 32768}, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
-        [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
-        # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
-    ],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    LTX_DISTILLED_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled(
     mesh_device,
-    mesh_shape,
     sp_axis,
     tp_axis,
     num_links,
@@ -88,10 +86,12 @@ def test_pipeline_distilled(
     no_prompt,
 ):
     """LTX-2.3 distilled 2-stage AV pipeline."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     gemma = default_ltx_gemma()
 
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     # Stage-2 output target: 1080p @ 24fps, ~6s. Constraints from the pipeline:
@@ -139,6 +139,12 @@ def test_pipeline_distilled(
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    # Gen #1 is the steady-state measurement, and on console every request encodes a prompt the
+    # cache has never seen — so it gets its own prompt to keep the encoder in the measured path.
+    # Under dynamic_load the encoder is coresident-excluded with the DiT: a second encode would
+    # evict the DiT and clobber the captured traces, so that path reuses the cached embedding.
+    steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
+    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -180,7 +186,9 @@ def test_pipeline_distilled(
             "subject_consistency": 0.92,
             "background_consistency": 0.93,
             "motion_smoothness": 0.955,
-            "dynamic_degree": 1.0,
+            # Averaged over VBENCH_SEEDS clips: dynamic_degree is near-binary per clip and this content
+            # sits at ~0.8-1.0, so the floor requires ~4/5 seeds dynamic (1.0 would demand every seed).
+            "dynamic_degree": 0.8,
             "imaging_quality": 0.645,
         },
     }
@@ -198,16 +206,46 @@ def test_pipeline_distilled(
     if run_clip:
         pytest.importorskip("decord", reason="RUN_CLIP=1 but decord not installed (set RUN_CLIP=0)")
 
-    def check_output_with_vbench(prompt, number):
+    def check_output_with_vbench(prompt, number, seed=None):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
-        if int(ttnn.distributed_context_get_rank()) == 0:
-            thresholds = vbench_thresholds_by_height.get(height)
-            if thresholds is None:
-                pytest.skip(f"no VBench thresholds calibrated for height {height}")
+        if int(ttnn.distributed_context_get_rank()) != 0:
+            return
+        thresholds = vbench_thresholds_by_height.get(height)
+        if thresholds is None:
+            pytest.skip(f"no VBench thresholds calibrated for height {height}")
+
+        # Gate on the average of VBENCH_SEEDS traced replays (default 5): a single clip's VBench score
+        # is too noisy to gate on — dynamic_degree is near-binary per clip — so score the set together
+        # (VBench averages over a directory). The primary clip (`number`, `seed`) is already rendered;
+        # the rest are cheap warm replays. A single-clip caller (no seed) or OUTPUT_PATH (one pinned
+        # filename) keeps the one-clip path.
+        num_seeds = int(os.environ.get("VBENCH_SEEDS", "5"))
+        if seed is None or num_seeds <= 1 or os.environ.get("OUTPUT_PATH"):
             output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+            return
+
+        cwd = os.path.abspath(os.getcwd())
+
+        with tempfile.TemporaryDirectory() as vbench_dir:
+
+            def _link(idx: int, mp4_number: int) -> None:
+                # The render always lands directly in CWD; resolve the path and confirm it stays there so
+                # the number threaded into the filename can't escape it, and give the link a plain integer
+                # name so nothing dynamic reaches the destination path either.
+                src = os.path.abspath(os.path.join(cwd, f"ltx_av_fast_{width}x{height}_{mp4_number}.mp4"))
+                if os.path.dirname(src) != cwd:
+                    raise ValueError(f"render path escaped the working dir: {src!r}")
+                os.symlink(src, os.path.join(vbench_dir, f"seed_{idx}.mp4"))
+
+            _link(0, number)
+            for k in range(1, num_seeds):
+                run(prompt=prompt, number=1000 + k, seed=seed + k)
+                _link(k, 1000 + k)
+            logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
+            assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
@@ -257,13 +295,19 @@ def test_pipeline_distilled(
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
-        # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
-        # replay — its Stage 1/2 denoise times are the steady-state measurement.
+        # Traced: gen #0 captures the denoise/VAE/audio traces (lazily, on first step of each stage).
         if traced:
-            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
-            run(prompt=prompt, number=1, seed=seed)
-            check_output_with_clip(prompt, 1)
-            check_output_with_vbench(prompt, 1)
+            # Gen #1 captures the encode trace (the pipeline opens that gate once its own captures
+            # are done), so gen #2 is the first pass where every trace replays — the one whose
+            # timings are the steady state.
+            logger.info("=== gen #1: encode trace capture ===")
+            run(prompt=steady_state_prompt, number=1, seed=seed)
+            logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
+            run(prompt=replay_prompt, number=2, seed=seed)
+            # Gate gen #2: a corrupted full-replay pass is the failure this structure exists to
+            # catch, and gen #1 still has a capture in it.
+            check_output_with_clip(replay_prompt, 2)
+            check_output_with_vbench(replay_prompt, 2, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
@@ -360,26 +404,15 @@ def _temporal_seam_score(path):
 
 
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # 4x8 Galaxy (ring): the full-res 1088x1920 latent shards unevenly on the 4x8 mesh
-        # (s1 cond latent 17x30, full 34x60), so the VAE encoder fold + even-shard padding must
-        # handle non-mesh-aligned dims here. The 2x4 loudbox shards evenly and never hits this.
-        # The id stays out of the bh_*/wh_* namespace so a bare `-k bh_4x8sp1tp0_ring` (run_ltx's
-        # canonical t2v/i2v launcher) never collides into this gated test.
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
-    ],
-    ids=["bh_2x4sp1tp0", "i2v_4x8sp1tp0_ring"],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    LTX_DISTILLED_I2V_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_distilled_i2v(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
-):
+def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path):
     """E2E chained t2v->i2v: generate a t2v clip, then i2v continuing from its LAST frame
     (same DEFAULT_LTX_PROMPT), and splice both into one continuous ~12s clip. Asserts the
     I2V output (a) reproduces the conditioning frame at frame-0 (conditioning works) and
@@ -390,8 +423,11 @@ def test_pipeline_distilled_i2v(
 
     from PIL import Image
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
@@ -546,25 +582,24 @@ def test_pipeline_distilled_i2v(
 
 
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
-    ],
-    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
-def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
+def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
     """Just the audio section of the AV pipeline: real checkpoint weights, real girl-clip
     latent shape (num_frames -> als.frames), no transformer/gemma (decode_audio never
     encodes prompts). Profiles cold (weight load + compile) vs warm (steady-state per-gen)
     decode wall. LTX_TRACED=1 traces the main vocoder (cold/warm timing only — the eager
     torch-oracle quality block is skipped under trace; run LTX_TRACED=0 for the stats)."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))  # ~6.04s @ 24fps

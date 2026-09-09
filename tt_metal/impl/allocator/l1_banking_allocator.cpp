@@ -66,6 +66,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     // Define the bank assignment here.
     std::vector<uint32_t> shuffled_bank_id = {};
+    shuffled_bank_id.reserve(num_l1_banks);
     if (not config_->l1_bank_remap.empty()) {
         TT_ASSERT(
             num_l1_banks == config_->l1_bank_remap.size(),

@@ -30,6 +30,17 @@ inline std::vector<OptionalAddr> collect_io_tensor_addresses(const std::vector<T
     return addrs;
 }
 
+/// Resolve either form of CB backing used by ProgramDescriptor factories.
+inline tt::tt_metal::Buffer* get_cb_backing_buffer(const tt::tt_metal::CBDescriptor& descriptor) {
+    if (descriptor.buffer != nullptr) {
+        return descriptor.buffer;
+    }
+    if (descriptor.tensor != nullptr) {
+        return descriptor.tensor->mesh_buffer().get_reference_buffer();
+    }
+    return nullptr;
+}
+
 /// Find the first IO tensor whose address matches *value*, or nullopt.
 inline std::optional<std::uint32_t> find_io_tensor_index(std::uint32_t value, const std::vector<OptionalAddr>& addrs) {
     for (size_t i = 0; i < addrs.size(); ++i) {
@@ -40,12 +51,13 @@ inline std::optional<std::uint32_t> find_io_tensor_index(std::uint32_t value, co
     return std::nullopt;
 }
 
-/// For each CBDescriptor with a buffer, match its address against *tensor_addrs*.
+/// For each backed CBDescriptor, match its address against *tensor_addrs*.
 inline std::vector<std::pair<uint32_t, uint32_t>> compute_cb_io_tensor_map(
     const tt::tt_metal::ProgramDescriptor& desc, const std::vector<OptionalAddr>& tensor_addrs) {
     std::vector<std::pair<uint32_t, uint32_t>> result;
+    result.reserve(desc.cbs.size());
     for (size_t ci = 0; ci < desc.cbs.size(); ++ci) {
-        const auto* buf = desc.cbs[ci].buffer;
+        const auto* buf = get_cb_backing_buffer(desc.cbs[ci]);
         if (buf != nullptr) {
             if (auto ti = find_io_tensor_index(buf->address(), tensor_addrs)) {
                 result.emplace_back(static_cast<uint32_t>(ci), *ti);
@@ -175,19 +187,24 @@ inline void patch_stale_descriptor(
         }
     }
     for (const auto& slot : slots.cb_slots) {
+        desc.cbs[slot.cb_idx].tensor = nullptr;
         desc.cbs[slot.cb_idx].buffer = io_tensors[slot.io_tensor_index].buffer();
     }
 }
 
 /// Patch barrier semaphore L1 addresses in a ProgramDescriptor's runtime args.
-/// Called before each dispatch with freshly-allocated semaphore addresses so
-/// that semaphore buffers can be ephemeral (allocated before dispatch, freed
-/// after dispatch completes via command queue ordering).
+/// Called before each dispatch with addresses from a fresh command-lifetime
+/// semaphore bank.
 inline void patch_semaphore_addresses(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<SemaphoreRTArgSlot>& slots,
     const std::vector<std::uint32_t>& sem_addresses) {
     for (const auto& slot : slots) {
+        TT_FATAL(
+            slot.sem_index < sem_addresses.size(),
+            "Fusion semaphore slot index {} exceeds address count {}",
+            slot.sem_index,
+            sem_addresses.size());
         auto& rt_args = desc.kernels[slot.kernel_idx].runtime_args;
         for (auto& [core, args] : rt_args) {
             if (core == slot.core) {

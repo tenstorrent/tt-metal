@@ -7,6 +7,7 @@
 #include "interleaved_to_sharded_partial_op_types.hpp"
 #include "interleaved_to_sharded_partial_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
