@@ -26,13 +26,17 @@ def update_model_config(config, batch_size, sequence_size):
         grid_y = 8
         grid_x = 8
     else:
+        # grid_x must divide 36 (1152/32 classifier tiles) and stay <= 11 to fit
+        # the harvested P150's 110 L1 banks. 9 -> 10x9 = 90 cores.
         grid_y = 10
-        grid_x = 12
+        grid_x = 9
         should_reallocate_in_attention = True
 
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
-    core_grid_12x10 = ttnn.CoreGrid(y=10, x=12)
+    # 10x8 = 80 cores. grid_x=8 divides every supported dim_t (16,32,48,72)
+    # for block-sharded encoder input, and fits within 110 L1 banks (P150).
+    core_grid_10x8 = ttnn.CoreGrid(y=10, x=8)
 
     # INPUTS
     TILE_HEIGHT = 32
@@ -41,13 +45,18 @@ def update_model_config(config, batch_size, sequence_size):
     head_num = config.num_attention_heads  # 16
 
     # BLOCK SHARDED
-    # x = 8 for now to avoid padding the hidden_size;
-    # y = 8 for now to avoid padding the SeqL;
-    # core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=8)
+    # Constraints:
+    #   - x must divide hidden_size/32 (block-shard divisibility)
+    #   - hidden_size/(32*x) <= 8 (subblock_w hardware cap)
+    #   - x <= 11 on harvested P150 (only 11 logical worker columns;
+    #     col 11 is reserved for dispatch). Original code used x=12 for
+    #     hidden_size > 1024, which placed kernels on a dispatch core.
     if config.hidden_size <= 1024:
-        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=8)
-    else:
-        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=12)
+        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=8)  # dim_t/x <= 4
+    elif config.hidden_size <= 1536:
+        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=8)  # 48/8 = 6
+    else:  # 2304
+        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=9)  # 72/9 = 8
 
     # SPLIT HEADS SHARDED
     # ttnn.transformer.split_query_key_value_and_split_heads
@@ -71,8 +80,8 @@ def update_model_config(config, batch_size, sequence_size):
         core_grid_HEIGHT_SHARDED.x * core_grid_HEIGHT_SHARDED.y
     )  # 64, 128, 192
     head_size_t = dim_t // head_num  # 1, 2, 3, 4
-    # 1000 classes padded to 1152
-    class__x = (1152 // TILE_HEIGHT) // core_grid.x  #   3
+    # 1000 classes padded to 1152 -> 36 tiles. With grid_x=8 (batch=1) -> 4; grid_x=9 (batch>1) -> 4.
+    class__x = (1152 // TILE_HEIGHT) // core_grid.x
     class_subb_w = class__x
     if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
         if class_subb_w % 3 == 0:
@@ -201,7 +210,7 @@ def update_model_config(config, batch_size, sequence_size):
             **(config.to_dict() | properties),
             core_grid=core_grid,
             core_grid_8x8=core_grid_8x8,
-            core_grid_12x10=core_grid_12x10,
+            core_grid_10x8=core_grid_10x8,
             core_grid_HEIGHT_SHARDED=core_grid_HEIGHT_SHARDED,
             core_grid_BLOCK_SHARDED=core_grid_BLOCK_SHARDED,
             core_grid_SPLIT_HEADS_SHARDED=core_grid_SPLIT_HEADS_SHARDED,
@@ -305,7 +314,7 @@ def vit_attention(
     value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(config.core_grid_12x10.x, config.core_grid_12x10.y),
+        compute_with_storage_grid_size=(config.core_grid_10x8.x, config.core_grid_10x8.y),
         q_chunk_size=256,
         k_chunk_size=256,
         exp_approx_mode=False,  # NOTE: False is more correct
@@ -474,7 +483,7 @@ def vit_encoder(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
             [emb_N, emb_S, emb_D],
-            core_grid=config.core_grid_12x10,
+            core_grid=config.core_grid_10x8,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
