@@ -44,6 +44,7 @@ Example (N150, Talker prefill 64):
     tt-perf-report --start-signpost start --end-signpost stop $CSV
 """
 
+import contextlib
 import os
 
 import pytest
@@ -241,14 +242,46 @@ def _rope(device, seq_len, head_dim, rope_theta, positions=None):
     return cos, sin, trans
 
 
+# Signpost names and warmup behaviour for the windows below. The defaults reproduce
+# the historical behaviour exactly — signposts named start/stop, a compile pass before
+# the measured one — so every test in this file is unchanged. ``profile_window``
+# overrides them for callers that compose several windows into ONE Tracy capture; see
+# models/demos/qwen3_tts/tests/perf.
+_WINDOW_START, _WINDOW_STOP, _WINDOW_WARMUP = "start", "stop", True
+
+
+@contextlib.contextmanager
+def profile_window(start: str, stop: str, warmup: bool = True):
+    """Rename this window's signposts, and optionally skip its compile pass.
+
+    Composing windows into one capture needs both. Distinct names, so the sub-windows
+    can be sliced apart afterwards — with every window emitting ``start``/``stop``,
+    ``tt-perf-report`` takes the first ``start`` to the first ``stop`` and silently
+    reports only the first window. And ``warmup=False`` on the measured pass, because
+    ``_profile_forward``'s compile run is NOT signposted, so inside an enclosing
+    ``start``/``stop`` it would land in the enclosing window and roughly double it.
+
+    The intended shape is therefore two passes: one to compile (warmup on, throwaway
+    names), then the measured one inside the outer signposts.
+    """
+    global _WINDOW_START, _WINDOW_STOP, _WINDOW_WARMUP
+    prev = (_WINDOW_START, _WINDOW_STOP, _WINDOW_WARMUP)
+    _WINDOW_START, _WINDOW_STOP, _WINDOW_WARMUP = start, stop, warmup
+    try:
+        yield
+    finally:
+        _WINDOW_START, _WINDOW_STOP, _WINDOW_WARMUP = prev
+
+
 def _profile_forward(device, fn):
-    """Compile once, then measure one warm forward between start/stop."""
+    """Compile once, then measure one warm forward between the window's signposts."""
+    if _WINDOW_WARMUP:
+        fn()
+        ttnn.synchronize_device(device)
+    signpost(_WINDOW_START)
     fn()
     ttnn.synchronize_device(device)
-    signpost("start")
-    fn()
-    ttnn.synchronize_device(device)
-    signpost("stop")
+    signpost(_WINDOW_STOP)
 
 
 def _enable_traced_device_conv(enc):
@@ -273,10 +306,10 @@ def _profile_traced_forward(device, fn):
     finally:
         ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
-    signpost("start")
+    signpost(_WINDOW_START)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
-    signpost("stop")
+    signpost(_WINDOW_STOP)
 
 
 def _run_talker_prefill(device, talker_layer, seq_len: int):
