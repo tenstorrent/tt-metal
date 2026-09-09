@@ -157,12 +157,9 @@ def compute_metrics(v: CounterView) -> dict:
     fpu_utilization = safe_div(fpu_instruction, fpu_cycles)
     compute_utilization = safe_div(fpu_or_sfpu, fpu_cycles)
 
-    stalls_0 = v.count("INSTRN_THREAD", "THREAD_STALLS_0")
-    stalls_1 = v.count("INSTRN_THREAD", "THREAD_STALLS_1")
-    stalls_2 = v.count("INSTRN_THREAD", "THREAD_STALLS_2")
-    unpack_thread_stall = safe_div(stalls_0, instrn_cycles)
-    math_thread_stall = safe_div(stalls_1, instrn_cycles)
-    pack_thread_stall = safe_div(stalls_2, instrn_cycles)
+    unpack_thread_stall = _instrn_rate("THREAD_STALLS_0")
+    math_thread_stall = _instrn_rate("THREAD_STALLS_1")
+    pack_thread_stall = _instrn_rate("THREAD_STALLS_2")
 
     math_sem_wait = _instrn_rate("WAITING_FOR_NONZERO_SEM_1")
     pack_sem_wait = _instrn_rate("WAITING_FOR_NONZERO_SEM_2")

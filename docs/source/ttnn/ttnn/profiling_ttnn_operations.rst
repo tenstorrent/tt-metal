@@ -247,7 +247,7 @@ These metrics depend on per-pack-engine hardware signals that don't exist on Bla
 
 *Additional Idle Waits*
 
-- **MMIO/SFPU/THCON/MOVE Idle Wait T0/T1 (%)**: Fraction of total cycles each thread spent waiting for specific hardware units.
+- **CFG/SFPU/THCON/MOVE Idle Wait T0/T1 (%)**: Fraction of total cycles each thread spent waiting for specific hardware units.
 
 *Composite Metrics*
 

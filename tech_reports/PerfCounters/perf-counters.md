@@ -499,7 +499,7 @@ SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ * 10
 
 ### Additional Idle Waits
 
-**21. MMIO/SFPU/THCON/MOVE Idle Wait**
+**21. CFG/SFPU/THCON/MOVE Idle Wait**
 
 Fraction of total cycles each thread spent waiting for specific hardware units.
 
@@ -509,14 +509,14 @@ Fraction of total cycles each thread spent waiting for specific hardware units.
 | **Counter group** | INSTRN |
 
 ```
-MMIO Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
+CFG Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / ref_cnt * 100
 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / ref_cnt * 100
 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 ```
 
 - **High value (>5%)**: Significant time spent waiting for this unit. MOVE Idle Wait at 2.8% for tilize is expected.
-- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and MMIO are typically ~0%.
+- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and CFG are typically ~0%.
 
 **Use case:** Absolute (not relative) measure of time lost to each hardware unit. Unlike the stall breakdown metrics which show percentage of stalls, these show percentage of total time.
 

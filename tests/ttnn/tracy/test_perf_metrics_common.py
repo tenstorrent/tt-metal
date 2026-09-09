@@ -148,6 +148,7 @@ def test_instrn_wait_rates_need_their_counter():
     out = mc.compute_metrics(_View({"THREAD_STALLS_0": 100.0, "THREAD_INSTRUCTIONS_0": 900.0}))
     for key in (
         "math_wait_srca_pct",
+        "math_thread_stall_pct",
         "math_sem_wait_pct",
         "pack_sem_wait_pct",
         "any_thread_stall_pct",
