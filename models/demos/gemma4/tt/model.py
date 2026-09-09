@@ -24,6 +24,7 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.attention.decode import _rope_expand_gather_enabled, _rope_expanded_broadcast
 from models.demos.gemma4.tt.attention.operations import prefill_tilize_memcfg
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm, maybe_interleave
@@ -1003,15 +1004,58 @@ class Gemma4Model:
         # gathered [1, 1, batch_pad, head_dim] tensors are passed down with
         # rope_presliced=True and freed after the layer loop. Only taken on the
         # internal-cache decode path (rope_mats override paths keep their behavior).
+        #
+        # This IS the real per-token decode path every layer actually takes
+        # (DFlash's batch-alias verify included) — GEMMA4_ROPE_EXPAND_GATHER's
+        # per-layer win (see attention/decode.py:_rope_expand_gather_enabled)
+        # is a no-op unless applied HERE: once presliced, decode_forward has no
+        # access to the original 2D table and cannot redo the gather itself,
+        # so when the flag is on this gathers directly at Q's (widest local)
+        # head count instead of batch width, for every layer of that type to
+        # share — decode_forward derives the same num_local_heads/num_local_kv
+        # from (config, weights, tp) and slices this down for K.
         decode_rope_presliced = {}
         if is_decode and rope_mats is None and self.rope_caches_2d and position_idx is not None:
             used_types = {self.hf_config.layer_types[i] for i in range(len(self.layers))}
+            # position_idx is ALWAYS padded to 32 for the embedding lookup (see
+            # ttnn_verify_forward's docstring: "[1,32] uint32 padded positions
+            # (first K = p+1..p+K)"); the true batch lives in the FIRST
+            # ``real_batch`` entries. The plain per-layer-type gather below
+            # tolerates the padding because decode_forward's non-expand-gather
+            # branch re-slices to ``tt_q.shape[1]`` (the real, per-layer batch)
+            # right before use. _rope_expanded_broadcast has no such downstream
+            # slice — it must be handed the exact real batch up front, or the
+            # gathered [1, batch_pad, heads, head_dim] tensor silently
+            # mismatches tt_q's real [1, real_batch, heads, head_dim] shape.
+            # position_idx_cache carries that real (unpadded) count already
+            # (decode_forward's own cache_pos falls back to it identically);
+            # without it there is no reliable unpadded count here, so the
+            # expand-gather path only activates when it's present.
+            expand_gather = _rope_expand_gather_enabled() and position_idx_cache is not None
+            print(
+                f"[GEMMA4_ROPE_EXPAND_GATHER DIAG] env={os.environ.get('GEMMA4_ROPE_EXPAND_GATHER')!r} "
+                f"flag_enabled={_rope_expand_gather_enabled()} position_idx_cache_given={position_idx_cache is not None} "
+                f"=> expand_gather={expand_gather}",
+                flush=True,
+            )
+            tp = self.mesh_config.tp if self.mesh_config is not None else 1
             for lt in used_types:
                 if lt not in self.rope_caches_2d:
                     continue
                 cos_2d, sin_2d = self.rope_caches_2d[lt]
-                cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
-                sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
+                if expand_gather:
+                    rep_idx = next(i for i in range(len(self.layers)) if self.hf_config.layer_types[i] == lt)
+                    num_local_heads = Gemma4AttentionConfig(self.hf_config, rep_idx).num_attention_heads // tp
+                    real_batch = int(position_idx_cache.shape[-1])
+                    pos_idx_real = (
+                        position_idx[:, :real_batch] if len(position_idx.shape) > 1 else position_idx[:real_batch]
+                    )
+                    cos_pos, sin_pos = _rope_expanded_broadcast(
+                        pos_idx_real, cos_2d, sin_2d, real_batch, num_local_heads
+                    )
+                else:
+                    cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
+                    sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
         # Explicit argument wins; otherwise fall back to an instance attribute, so
