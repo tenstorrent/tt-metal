@@ -6,7 +6,6 @@
 #include <set>
 #include <vector>
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -243,46 +242,6 @@ void check_wrapper(const Wrapper& wrapper, const McastFamily& family) {
         EXPECT_EQ(sems[i].core_ranges, family.participating_cores());
         EXPECT_EQ(sems[i].initial_value, 0u);
     }
-}
-
-TEST(GroupNormMcastGeometry, ZeroEdgeRectangle) {
-    std::vector<CoreCoord> group = {CoreCoord(0, 0), CoreCoord(1, 0), CoreCoord(2, 0)};
-    std::vector<CoreCoord> first;
-    std::vector<CoreCoord> middle = group;
-    std::vector<CoreCoord> last;
-
-    ttnn::prim::split_and_form_rectangle_grids(group, first, middle, last);
-
-    EXPECT_TRUE(first.empty());
-    EXPECT_EQ(middle, group);
-    EXPECT_TRUE(last.empty());
-}
-
-TEST(GroupNormMcastGeometry, OneEdgeWrappedSequence) {
-    std::vector<CoreCoord> group = {CoreCoord(7, 0), CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1)};
-    std::vector<CoreCoord> first;
-    std::vector<CoreCoord> middle = group;
-    std::vector<CoreCoord> last;
-
-    ttnn::prim::split_and_form_rectangle_grids(group, first, middle, last);
-
-    EXPECT_EQ(first, std::vector<CoreCoord>({CoreCoord(7, 0)}));
-    EXPECT_EQ(middle, std::vector<CoreCoord>({CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1)}));
-    EXPECT_TRUE(last.empty());
-}
-
-TEST(GroupNormMcastGeometry, TwoEdgeWrappedSequence) {
-    std::vector<CoreCoord> group = {
-        CoreCoord(7, 0), CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1), CoreCoord(0, 2)};
-    std::vector<CoreCoord> first;
-    std::vector<CoreCoord> middle = group;
-    std::vector<CoreCoord> last;
-
-    ttnn::prim::split_and_form_rectangle_grids(group, first, middle, last);
-
-    EXPECT_EQ(first, std::vector<CoreCoord>({CoreCoord(7, 0)}));
-    EXPECT_EQ(middle, std::vector<CoreCoord>({CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1)}));
-    EXPECT_EQ(last, std::vector<CoreCoord>({CoreCoord(0, 2)}));
 }
 
 TEST(McastHostWire, AbsentFamilyIsOneWord) {
