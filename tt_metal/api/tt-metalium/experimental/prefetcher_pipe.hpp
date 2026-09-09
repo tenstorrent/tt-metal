@@ -155,7 +155,7 @@ uint8_t AttachPrefetcherPipe(
 //
 // Consumers are unchanged from an ordinary PrefetcherPipe: the consumer program calls
 // AttachPrefetcherPipe on each pipe's receiver cores and its kernels use the device-side
-// experimental::PrefetcherPipe (wait_front / get_read_ptr / pop_front). Only the producer side
+// experimental::PrefetcherPipe (wait_front / scoped_read_lock / pop_front). Only the producer side
 // differs, and it is owned by the prefetcher.
 
 // The PrefetcherPipes driving one DRAM bank's receivers.
