@@ -3864,8 +3864,8 @@ def report_board_over_clamp(label: str = "") -> bool:
         if cur <= limit:
             return False
         print(
-            "  [thermal-watch] %s: board at %.1fC, above this board's clamp threshold %.1fC -- work in "
-            "flight is holding it there" % (label or "device subprocess", cur, limit),
+            "  [thermal-watch] %s: board at %.1fC, above this board's clamp threshold %.1fC"
+            % (label or "device subprocess", cur, limit),
             file=sys.stderr,
             flush=True,
         )
