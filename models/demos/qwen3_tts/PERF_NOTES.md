@@ -1508,6 +1508,69 @@ the SiLU-multiply. Do not retry.
 
 ---
 
+## 3.ac Speaker encoder: `SE_TRACE=1` changes the audio, and why the conv fidelity had to go up
+
+**Symptom.** After `465387bd10d` made `QWEN3_TTS_SE_TRACE=1` the demo default, the output WAV
+changed, and at the demo's default seed the text regressed: an inserted article
+("with **a** bright sun"), WER 4.3 %.
+
+**It is not the trace.** `capture_forward_trace` forces
+`_se_host_fuse = _se_device_asp = _se_device_conv = True` for the capture region, because a
+host conv cannot round-trip through the host inside a Metal trace. So enabling the trace
+silently swaps the k>1 convs from **torch on host** to **device im2col + matmul**. Measured
+on the 2048-d embedding:
+
+| comparison | cosine |
+|---|--:|
+| host-conv (eager) vs traced device-conv | 0.99924 |
+| **traced device-conv vs EAGER device-conv** | **1.00000036** |
+
+The second row is the proof: the trace is faithful to 3e-7. Every bit of the difference is
+host-vs-device convolution, and it **cannot be removed** — fp32 `torch.conv1d` and a bf16
+im2col matmul are different computations. The audio will never match the untraced path.
+
+**What was fixable was the fidelity.** Those conv matmuls run through
+`SpeakerEncoder._compute_kernel_config`, which was **LoFi**. Raising it to **HiFi4** (now
+hardcoded, no flag):
+
+| | LoFi | HiFi4 |
+|---|--:|--:|
+| embedding cosine vs host-conv | 0.99924 | **0.99979** (3.6x closer) |
+| isolated matmul `384x192x64` | 7.66 us | 7.68 us |
+| speaker embedding, mean of 5 demo seeds | 6.9 ms | **6.3 ms** |
+
+So LoFi bought **nothing** — these convs are not math-bound (3.3 % of DRAM, 2.8 % of FLOPs)
+— and cost accuracy.
+
+**WER, three arms x five seeds** (N300, isolated single card, same text and reference):
+
+| seed | trace OFF (host conv) | trace ON, LoFi | trace ON, **HiFi4** |
+|---|--:|--:|--:|
+| **42** (demo default) | 0.0 % | **4.3 %** (ins 1) | **0.0 %** |
+| 1 | 0.0 % | 0.0 % | 0.0 % |
+| 7 | 0.0 % | 0.0 % | 0.0 % |
+| 123 | 0.0 % | 0.0 % | 0.0 % |
+| 2024 | 0.0 % | 0.0 % | 0.0 % |
+| | 0/5 | **1/5** | **0/5** |
+
+Also verified on N150 (seed 42, WER 0.0 %, SIM 0.9360), and the default path reproduces the
+HiFi4 md5s exactly on both SKUs.
+
+**Read the statistics honestly.** 1/5 against 0/5 is *not* a distinguishable rate, so LoFi was
+not a systematic text-fidelity regression. What it was is a **deterministic failure at one
+seed** — seed 42 reproduces md5 `9b786d9d` and WER 4.3 % every time, and that seed is the
+demo default, which is why it was noticed. HiFi4 turns that same seed into md5 `8899731e`
+and WER 0.0 %. The load-bearing justification for HiFi4 is therefore the *embedding cosine*
+(deterministic, no sampler in the loop), with the seed-42 repair as confirmation -- not a
+claimed change in population WER.
+
+`fp32_dest_acc_en` would attack the residual 2.1e-4 at its root (accumulation, not fidelity)
+but is **blocked**: it halves the DEST budget and the existing SE program configs then
+violate `out_subblock_h * out_subblock_w <= 4`. Retuning those subblocks is the next lever
+if the embedding ever needs to be closer.
+
+---
+
 ## 4. Measurement methodology — read before comparing reports
 
 **A per-op ratio identifies a candidate; only a frame measurement prices it.** Two
