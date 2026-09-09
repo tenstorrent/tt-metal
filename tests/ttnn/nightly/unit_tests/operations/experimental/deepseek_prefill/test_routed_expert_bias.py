@@ -414,10 +414,10 @@ def test_gptoss_bias_torch_reference_smoke():
 def test_clamped_silu_glu_biases_rejected(mesh_device, device_params, expect_error):
     """Biased experts are refused for ClampedSiluGlu.
 
-    The kernel's bias branch is outside every activation variant #if, so it would serve
-    DeepSeek-V4 as-is; the refusal is because V4's experts carry no biases. The assertion is on
-    the Python guard because TtRoutedExpert is the only caller of unified_routed_expert_moe and
-    rejects the combination before the device op's matching TT_FATAL can run.
+    DeepSeek-V4's experts are bias-free, so the combination is not enabled even though the
+    kernel's bias branch would serve it. The assertion is on the Python guard because
+    TtRoutedExpert is the only caller of unified_routed_expert_moe and rejects the combination
+    before the device op's matching TT_FATAL can run.
     """
     # Rejected before any weight is converted, so the shapes only have to be tile-aligned.
     emb = hidden = 32
@@ -438,7 +438,7 @@ def test_clamped_silu_glu_biases_rejected(mesh_device, device_params, expect_err
         dtype=ttnn.uint32,
     )
 
-    with expect_error(ValueError, "expert biases require a fused binary activation"):
+    with expect_error(ValueError, "expert biases are enabled only for"):
         TtRoutedExpert(
             mesh_device=mesh_device,
             experts_per_chip=1,

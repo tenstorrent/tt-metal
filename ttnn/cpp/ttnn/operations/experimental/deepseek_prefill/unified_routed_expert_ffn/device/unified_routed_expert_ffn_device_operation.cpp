@@ -313,13 +313,11 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                     t.gate_biases[e].dtype() == t.gate_biases[0].dtype(),
                 "all gate/up/down biases must share one dtype");
         }
-        // Bias fusion lives in the kernel's shared binary-activation phase and is
-        // activation-agnostic, so every fused binary activation supports it. Only the SiLU
-        // path has no bias branch.
+        // ClampedSiluGlu is excluded because DeepSeek-V4's experts are bias-free, not
+        // because the kernel lacks a bias branch.
         TT_FATAL(
             op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu,
-            "unified_routed_expert_moe: expert biases require a fused binary activation "
-            "(SwiGluOai or SituGlu); the SiLU path has no bias branch.");
+            "unified_routed_expert_moe: expert biases are enabled only for SwiGluOai and SituGlu.");
     }
 }
 
