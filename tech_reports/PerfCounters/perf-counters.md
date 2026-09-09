@@ -68,11 +68,7 @@ export TT_METAL_PROFILE_PERF_COUNTERS=11   # FPU | PACK | L1 bank 0
 
 ### Architecture Summary
 
-| | Wormhole | Blackhole |
-|---|---|---|
-| Tensix counters read (sum of the per-group tables) | 130 | 173 |
-
-The derived-metric catalogue (106 metrics, below) is shared between architectures; a metric whose counters exist on only one architecture reports N/A on the other.
+The per-architecture inventory is the set of `hw_counters.h` tables (`tt_metal/hw/inc/internal/tt-1xx/<arch>/`); the derived-metric catalogue below is shared, and a metric whose counters exist on only one architecture reports N/A on the other.
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
@@ -110,7 +106,6 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
 | Data Hazard Stall Rate (%) | `data_hazard_stall_pct` | `1 - MATH_NOT_D2S_STALLED / MATH_INSTRN_AVAILABLE` | MOVD2A data-hazard stall rate (counter counts not-stalled cycles). |
-| Math Dest Write Port Stall Rate (%) | `math_dest_wr_port_stall_pct` | `1 - MATH_NOT_STALLED_DEST_WR_PORT / MATH_INSTRN_AVAILABLE` | Dest write-port stalls. N/A when the pack group was not captured. |
 | Math Scoreboard Stall Rate (%) | `math_scoreboard_stall_pct` | `1 - MATH_NOT_SCOREBOARD_STALLED / MATH_INSTRN_AVAILABLE` | Scoreboard stalls. N/A when the pack group was not captured. |
 
 ### Unpacker
@@ -131,8 +126,8 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | SrcB Write Port Blocked Rate (%) | `srcb_write_port_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE` | srcB writes blocked on the write port. |
 | Unpacker0 T1 Share (%) | `unpack0_thread1_share_pct` | `UNPACK0_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-0 busy cycles driven by the math thread. |
 | Unpacker1 T1 Share (%) | `unpack1_thread1_share_pct` | `UNPACK1_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-1 busy cycles driven by the math thread. |
-| SrcA Write T0 Share (%) | `srca_write_thread0_share_pct` | `SRCA_WRITE_THREAD0 / (thread0 + thread1 writes)` | srcA writes issued from thread 0. |
-| SrcB Write T0 Share (%) | `srcb_write_thread0_share_pct` | `SRCB_WRITE_THREAD0 / (thread0 + thread1 writes)` | srcB writes issued from thread 0. |
+| SrcA Write Even-TID Share (%) | `srca_write_even_tid_share_pct` | `SRCA_WRITE_TID_EVEN / (even + odd writes)` | srcA writes from even thread ids (the counter tests thread-id bit 0, lane 0). |
+| SrcB Write Even-TID Share (%) | `srcb_write_even_tid_share_pct` | `SRCB_WRITE_TID_EVEN / (even + odd writes)` | srcB writes from even thread ids (same split). |
 
 ### Packer
 
@@ -208,9 +203,10 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 |---|---|---|---|
 | L1 Unpacker Port Util (%) | `l1_unpacker_util_pct` | `L1_0_UNPACKER_0 / l1 cycles` | Unpacker-0 L1 port utilization. |
 | L1 Port 1 Util (%) | `l1_port1_util_pct` | `L1_0_UNPACKER_1_ECC_PACK1 / l1 cycles` | L1_0 port 1: pack1+ECC on Wormhole, unpacker1+ECC on Blackhole. |
-| L1 TDMA Packer Port Util (%) | `l1_tdma_packer2_util_pct` | `L1_1_TDMA_PACKER_2 / l1 cycles` | L1_1 port 8: TDMA packer 2 on both arches (Blackhole used to misname it RISC core). |
+| L1 Packer Port 8 Util (%) | `l1_packer_port8_util_pct` | `L1_1_TDMA_PACKER_2 (Wormhole) or L1_1_PACKER_IF_0 (Blackhole) / l1 cycles` | L1_1 port 8, the packer's L1 write interface (interface 0 on Blackhole). |
 | L1 TDMA Bundle Util (%) | `l1_tdma_bundle_util_pct` | `mean over the two L1_0_TDMA_BUNDLE ports / l1 cycles` | RISC and TRISC TDMA bundle traffic. |
-| L1 Ext Unpacker Util (%) | `l1_ext_unpacker_util_pct` | `mean over the extended unpacker ports (L1_1 ext 1-3; plus L1_2 ext 4-7 on Blackhole)` | Extended unpacker interfaces. |
+| L1 Unpacker1 Ext Util (%) | `l1_unpacker1_ext_util_pct` | `mean over unpacker 1's extended read ports (L1_1 ports 9-11; plus L1_2 ports 16-19 on Blackhole)` | On Blackhole these ports also carry the packer L1-to-L1 read. |
+| L1 Unpacker0 Ext Util (%) | `l1_unpacker0_ext_util_pct` | `mean over unpacker 0's extended read ports (L1_4 ports 35-39, L1_5 ports 40-41)` | Blackhole only; N/A on Wormhole. |
 | L1 Ext Packer Util (%) | `l1_ext_pack_util_pct` | `mean over L1_3_EXT_PACKER_2-5 and L1_4_EXT_PACKER_6-7` | Blackhole only; N/A on Wormhole. |
 | L1 Tag Search Util (%) | `l1_tag_search_util_pct` | `L1_4_TAG_SEARCH_PACKER_1 / l1 cycles` | Blackhole only; N/A on Wormhole. |
 | L1 Mean Client Util (%) | `l1_mean_client_util_pct` | `mean busy/ref over every present L1 client port` | One number for overall L1 client pressure. |
@@ -231,7 +227,8 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | NOC Ring 1 Outgoing Backpressure (%) | `noc_ring1_out_backpressure_pct` | `1 - grants / requests over the primary ring-1 outgoing pair` | L1 not ready for outgoing ring-1 traffic. |
 | NOC Ring 1 Incoming Backpressure (%) | `noc_ring1_in_backpressure_pct` | `1 - grants / requests over the primary ring-1 incoming pair` | L1 not ready for incoming ring-1 traffic. |
 | NOC Ring 1 Grant Efficiency (%) | `noc_ring1_grant_eff_pct` | `sum of ring-1 grant counters / sum of ring-1 request counters` | Ring-1 requests that were granted. |
-| L1 Ext Unpacker Backpressure (%) | `l1_ext_unpacker_backpressure_pct` | `1 - grants / requests over the extended unpacker ports` | Extended unpacker contention. |
+| L1 Unpacker1 Ext Backpressure (%) | `l1_unpacker1_ext_backpressure_pct` | `1 - grants / requests over unpacker 1's extended read ports` | Contention on unpacker 1's extended interfaces. |
+| L1 Unpacker0 Ext Backpressure (%) | `l1_unpacker0_ext_backpressure_pct` | `1 - grants / requests over unpacker 0's extended read ports` | Blackhole only; N/A on Wormhole. |
 | L1 Ext Packer Backpressure (%) | `l1_ext_pack_backpressure_pct` | `1 - grants / requests over the extended packer ports` | Blackhole only; N/A on Wormhole. |
 | L1 Tag Search Backpressure (%) | `l1_tag_search_backpressure_pct` | `1 - L1_4_TAG_SEARCH_PACKER_1_GRANT / L1_4_TAG_SEARCH_PACKER_1` | Blackhole only; N/A on Wormhole. |
 
@@ -285,4 +282,4 @@ Because the software must toggle bit [16] and re-read to get both `req` and `gra
 
 Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter exposed via the `hw_counters.h` arrays is driven by a real RTL signal — signals that are hardwired to a constant, or whose grant/req line is an alias of another counter we already expose, are omitted from the arrays entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
-Some counters will still be 0 for a given workload. For example, `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU. These are workload-dependent zeros, not dead counters.
+Some counters are live wires that no tt-metal op has exercised so far. In a sweep of every selector over 22 Blackhole ops these read 0 throughout: the TRISC1 unpack path (`UNPACK0/1_BUSY_THREAD1`, `SRCA/SRCB_WRITE_TID_ODD`), the MOVE class, `THCON_INSTRN_AVAILABLE_1`, `UNPACK_INSTRN_AVAILABLE_1/2`, `PACK_INSTRN_AVAILABLE_0/1`, `WAITING_FOR_SRCA/SRCB_CLEAR` and the per-thread waits a thread never performs (for example `WAITING_FOR_SFPU_IDLE_0`). They stay in the tables because other kernels can drive them (the LLK perf suite does hit `WAITING_FOR_SRCA_CLEAR`); metrics built on them read 0%, not N/A.

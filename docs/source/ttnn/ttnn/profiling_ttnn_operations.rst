@@ -146,8 +146,8 @@ Available counter groups:
 - ``fpu`` — compute utilization (FPU, SFPU, math counters)
 - ``pack`` — packer activity (dest read, packer busy, scoreboard)
 - ``unpack`` — unpacker activity, math pipeline stalls, source register writes
-- ``l1_0`` — L1 memory ports 0-7 (unpacker, packer, TDMA, NOC Ring 0)
-- ``l1_1`` — L1 memory ports 8-15 (extended unpacker, NOC Ring 1)
+- ``l1_0``: L1 memory ports 0-7 (unpackers, TDMA bundles, NOC Ring 0; port 1 also carries the packer on Wormhole)
+- ``l1_1``: L1 memory ports 8-15 (packer port 8, unpacker 1's extended read interfaces, NOC Ring 1)
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
 - ``all``: the architecture's full set (needs multiple passes, see below)
 
