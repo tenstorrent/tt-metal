@@ -1338,6 +1338,14 @@ class BatchedLinearDecode(DeepSeekV4Module):
             return ttnn.experimental.matmul_decode(x, self.packed_weight_tensor, packed_weight=self.packed_weight_spec)
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
+        elif x.layout == ttnn.ROW_MAJOR_LAYOUT:
+            # The batched factory reads a ROW_MAJOR A as 1x32 tiles, so a decode activation can
+            # reach it untilized. It still has to be width-sharded: matmul_decode reads a
+            # ROW_MAJOR HEIGHT_SHARDED A as its replicated-A path, which is full-width only and
+            # rejects a batched weight.
+            row_major_input_config = self.get_input_memory_config(m, tile_height=1)
+            if x.memory_config() != row_major_input_config:
+                x = ttnn.to_memory_config(x, row_major_input_config)
         if self.use_prefetcher:
             # Exactly one queued request per matmul, as in LinearDecode.forward: a missing
             # request hangs it and a doubled one desynchronises the GCB pointers.

@@ -1599,19 +1599,24 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         hidden features per rank, and gathers the final hidden state.
         """
         # SDPA-decode hands back its output in Q's layout, so a ROW_MAJOR q leaves ``attn``
-        # untilized. o_a is fed the head fold of this tensor, and a fold that is neither tiled
-        # nor a one-replica-per-core height shard is a layout ``matmul_decode`` gets wrong
-        # (measured: ~0.58 PCC on the attention block, correct as soon as this is tiled). Tilize
-        # once here and the whole epilogue -- o_a, o_b and the fold between them -- runs on the
-        # layout it was written for. Everything ahead of this point stays ROW_MAJOR.
-        print(f"attn: {attn.shape}, {attn.layout}, {attn.memory_config()}")
-        attn = ttnn.to_layout(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
+        # untilized and height-sharded on the B user cores. Its shard is the whole of that
+        # user's ``H*Dh`` run, so the group fold is a pure metadata view and o_a can consume the
+        # result straight from L1: the batched factory reads A as 1x32 tiles, and
+        # ``BatchedLinearDecode.forward`` reshards the view to the width-sharded A layout it
+        # needs. What the fold must not stay is HEIGHT_SHARDED -- ``matmul_decode`` reads a
+        # ROW_MAJOR height-sharded A as its replicated-A path, which is full-width only and
+        # rejects a batched weight. A tiled ``attn`` has no such view (the [H, Dh] and [g, K]
+        # tilings differ) and still folds through DRAM.
         _, m, h, dh = attn.shape
         groups = self.local_o_groups
         in_per_group = (h * dh) // groups
         assert not self.sequential_o_a, "decode o_a is batched (M == 1); sequential is not wired"
         assert m == 1, f"batched o_a is decode-only (M == 1), got M={m}"
-        x = ttnn.reshape(attn, [1, groups, 1, in_per_group])
+        # if attn.layout == ttnn.ROW_MAJOR_LAYOUT:
+        attn.layout == ttnn.ROW_MAJOR_LAYOUT
+        x = ttnn.experimental.view(attn, [1, groups, 1, in_per_group])
+        # else:
+        #     x = ttnn.reshape(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), [1, groups, 1, in_per_group])
         y = self.o_a_proj(x)  # DRAM-interleaved [1, g, 1, N]
         y = ttnn.reshape(y, [1, 1, 1, groups * self.o_lora_rank])
         if self.tp_size > 1 and not self.row_parallel_o_b:
