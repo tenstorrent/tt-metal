@@ -412,7 +412,35 @@ SUPPORTED = {
 #     every other height (32, 8, 4, 2, 1), on four different shapes —
 #     probes/probe_038.py. Nothing on the host side reaches that MOP: the
 #     geometry IS the output tile the caller asked for.
+#   * `uint16` / `uint8` INPUT x `pad_value=negative` (added by Refinement 5) —
+#     an unsigned dtype has no negative domain, so "the pad region holds exactly
+#     the fill value" has no satisfiable reading. The op CAN write the fill: it
+#     encodes it as a two's-complement bit_cast at the element width
+#     (`pad_fill_word`), which is the only thing an N-bit unsigned datum can
+#     carry. What is unsatisfiable is the CONTRACT: a uint16 datum widened to a
+#     signed comparison type is always >= 0, so `65536 - N` can never read back
+#     as `-N`; and at 8 bits the expectation cannot even be BUILT (torch refuses
+#     `F.pad(uint8_tensor, value=-3)` — "value cannot be converted to type
+#     uint8_t without overflow").
+#
+#     `uint32` is deliberately NOT excluded, and the asymmetry is the point
+#     rather than an oversight: at 32 bits the reference comparison reinterprets
+#     at the SAME width, so the two's-complement bits the op writes are read back
+#     as the negative value asked for and the cell is verifiably correct. The
+#     refusal is scoped to where the op cannot be shown right, not to a whole
+#     signedness family on principle.
+#
+#   * `rank == 0` x block-float OUTPUT (added by Refinement 5) — a rank-0 input
+#     has ONE logical element, and a one-element tensor has no correlation to
+#     measure. The reference comparison says so itself: `get_atol_rtol_pcc`
+#     falls back from PCC to `torch.allclose(..., atol=1e-4)` at `numel() == 1`,
+#     and block float's quantization step is ~1e-2 — two orders larger. The cell
+#     is therefore unmeasurable rather than wrong (the value IS correct to
+#     within the format: measured max_abs 0.0039 into bfp8, 0.0117 into bfp4),
+#     and NO implementation can pass it. Rank 1 is unaffected: it carries a whole
+#     row of elements, so the PCC is real and the same pair passes there.
 _RETILE_HEIGHTS = list(LEGAL_TILE_HEIGHTS)
+_NARROW_UNSIGNED = [ttnn.uint16, ttnn.uint8]
 _BFP_OUTPUTS = [ttnn.bfloat8_b, ttnn.bfloat4_b]
 _PARTIAL_FULL_FACE_HEIGHT = 16
 _CAST_PAIRS = [(d, o) for d in SUPPORTED["dtype"] for o in SUPPORTED["output_dtype"] if d != o]
@@ -421,6 +449,8 @@ EXCLUSIONS = (
     + [{"in_tile_height": h, "pad_mode": mode} for h in _RETILE_HEIGHTS for mode in ("auto", "explicit")]
     + [{"in_tile_height": h, "dtype": d, "output_dtype": o} for h in _RETILE_HEIGHTS for (d, o) in _CAST_PAIRS]
     + [{"tile_height": _PARTIAL_FULL_FACE_HEIGHT, "output_dtype": o} for o in _BFP_OUTPUTS]
+    + [{"dtype": d, "pad_value": "negative"} for d in _NARROW_UNSIGNED]
+    + [{"rank": 0, "output_dtype": o} for o in _BFP_OUTPUTS]
 )
 
 
