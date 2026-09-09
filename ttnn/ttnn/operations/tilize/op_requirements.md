@@ -629,10 +629,26 @@ identical totals to the pre-fix run). Bullet 2 — `tests/.../tilize/` 607 passe
 verifier categories: `xpass_drift 0`, `xfail_wrong_mode 0`,
 `supported_marked_xfail 0`, `invalid_unexpected 0`; `supported_fail 1` is the
 documented `bfloat4_b` PCC near-miss, deliberately left failing rather than
-silenced with an `EXCLUSIONS` entry (it rotated from the `BFLOAT16` to the
-`FLOAT32` input on this re-run, which is the run-to-run flakiness Refinement 5
-characterized at depth in probes 042/043 — the residual gap is in the device
-packer's bfp4 mantissa rounding and is not reachable from this op). The 4
+silenced with an `EXCLUSIONS` entry — a precision near-miss is the next phase's
+baseline, not something to hide.
+
+**Sharper attribution for that cell than Refinement 5 had** (free, from two
+back-to-back full runs): the failing set rotates between 1 and 2 cells, but every
+member has the SAME signature — `output_dtype=bfloat4_b` x `pad_mode=auto` x
+`alignment=hw_non_aligned` (observed: `1x1x50x50` under `BFLOAT16` then
+`FLOAT32`, and rank-1 `64`). That is not generic packer rounding, which would
+scatter across unpadded cells too. It is **block float sharing an exponent with
+the pad fill**: bfp4 groups 16 elements under one exponent, so at W=50 the block
+spanning columns 48-63 holds 2 real columns and 14 pad columns, and a
+`pad_value=negative` of larger magnitude than the data SETS that block's exponent
+and crushes the two real mantissas. 2 bad columns in 50 lands PCC at ~0.978
+against the suite's 0.98 floor — which is why it sits exactly ON the line and why
+random per-run data flips it either way. Inherent to block float + padding rather
+than a kernel defect (no packer rounding mode changes which exponent a mixed
+block must share), so the lever a future phase would want is not
+`bfp8_pack_precise` — it is the pad fill's magnitude relative to the block, i.e.
+a contract question about what a block-float pad should even mean. Recorded, not
+queued. The 4
 `ERRORS` are a pre-existing golden-suite infrastructure issue
 (`use_module_device` × `parametrize("device_params")` in
 `test_golden_main_tests.py` / `test_golden_main_trace.py`), constant at 4 in

@@ -850,10 +850,25 @@
   PCC near-miss on `1x1x50x50` `pad_auto` + `pad_value=negative` (0.9788 against
   the suite's 0.98 bfp4 floor); it rotated from the `BFLOAT16` to the `FLOAT32`
   input across the two runs, which is precisely the run-to-run flakiness
-  Refinement 5 characterized in probes 042/043 (a ~0.009 gap in the DEVICE
-  packer's bfp4 mantissa rounding, not reachable from this op). Left FAILING on
-  purpose rather than silenced with an `EXCLUSIONS` entry — a precision near-miss
-  is the next phase's baseline, not something to hide.
+  Refinement 5 characterized in probes 042/043. Left FAILING on purpose rather
+  than silenced with an `EXCLUSIONS` entry — a precision near-miss is the next
+  phase's baseline, not something to hide.
+
+  Two back-to-back full runs sharpen the attribution beyond Refinement 5's
+  "device packer bfp4 mantissa rounding": the failing set rotates between 1 and 2
+  cells, and every member shares one signature — `output_dtype=bfloat4_b` x
+  `pad_mode=auto` x `alignment=hw_non_aligned`. Generic rounding would scatter
+  across unpadded cells too; this is **block float sharing an exponent with the
+  pad fill**. bfp4 groups 16 elements under one exponent, so at W=50 the block
+  spanning columns 48-63 carries 2 real columns and 14 pad columns, and a
+  negative fill of larger magnitude than the data sets that block's exponent and
+  crushes the two real mantissas — 2 bad columns in 50 puts PCC at ~0.978 against
+  a 0.98 floor, i.e. exactly ON the line, which is why random per-run data flips
+  it either way. Inherent to block float + padding, not a kernel defect: no
+  packer rounding mode changes which exponent a mixed block must share. So the
+  lever a future phase would want is NOT `bfp8_pack_precise` (measured at <2e-4
+  in Refinement 5) but the pad fill's magnitude relative to the block — a
+  contract question about what a block-float pad should mean.
 - Golden test progress: **678/715 responsible cells = 94.8%** (was 678/907 =
   74.75%), **0 regressions** against `golden_refinement_4`'s 183 prior-passing
   cells, **0 hangs**. Loud verifier categories: `xpass_drift 0`,
