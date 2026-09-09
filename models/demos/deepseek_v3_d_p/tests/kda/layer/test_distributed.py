@@ -27,11 +27,17 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
     pytest.mark.parametrize(
-        "device_params",
-        [fabric2d_device_params()],
-        indirect=True,
+        "mesh_device,device_params",
+        [
+            pytest.param(
+                (2, 4),
+                fabric2d_device_params(),
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+                id="fabric2d-mesh-2x4",
+            )
+        ],
+        indirect=["mesh_device", "device_params"],
     ),
 ]
 

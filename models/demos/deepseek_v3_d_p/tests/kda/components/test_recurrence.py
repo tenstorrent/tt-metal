@@ -301,11 +301,17 @@ def _run_distributed_recurrence(
     return output, new_state
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "device_params",
-    [fabric2d_device_params()],
-    indirect=True,
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 def test_distributed_recurrence_matches_serial_and_is_deterministic(
@@ -337,11 +343,17 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     assert_accurate(expected_state, actual_state, name=f"{label} state")
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "device_params",
-    [fabric2d_device_params()],
-    indirect=True,
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 def test_distributed_recurrence_trace_replay_matches_eager(

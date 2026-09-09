@@ -13,7 +13,11 @@ import pytest
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
@@ -35,15 +39,17 @@ _PCC_THRESHOLD = 0.9995
         pytest.param(
             (1, 8),
             1,
-            fabric2d_device_params(),
+            torus_x_device_params(),
             128,
-            id="SP1xTP8-fabric-2d",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="SP1xTP8-torus-x",
         ),
         pytest.param(
             (2, 4),
             1,
             fabric2d_device_params(),
             _SEQUENCE,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4-fabric-2d",
         ),
         pytest.param(
@@ -51,6 +57,7 @@ _PCC_THRESHOLD = 0.9995
             0,
             fabric2d_device_params(),
             128,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP4xTP2-fabric-2d",
         ),
         pytest.param(
@@ -133,16 +140,37 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
-        pytest.param((1, 8), 1, fabric2d_device_params(), 128, id="SP1xTP8-fabric-2d"),
-        pytest.param((2, 4), 1, fabric2d_device_params(), 128, id="SP2xTP4-fabric-2d"),
-        pytest.param((2, 4), 0, fabric2d_device_params(), 128, id="SP4xTP2-fabric-2d"),
+        pytest.param(
+            (1, 8),
+            1,
+            torus_x_device_params(),
+            128,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="SP1xTP8-torus-x",
+        ),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric2d_device_params(),
+            128,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP2xTP4-fabric-2d",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric2d_device_params(),
+            128,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP4xTP2-fabric-2d",
+        ),
         pytest.param(
             (8, 4),
             1,
             torus_xy_device_params(),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="SP8xTP4",
+            id="SP8xTP4-torus-xy",
         ),
     ],
     indirect=["mesh_device", "device_params"],

@@ -23,7 +23,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
@@ -48,13 +52,15 @@ _PCC_THRESHOLD = 0.9995
 _CPU_REFERENCE_CACHE_VERSION = 4
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# Fabric2D calibration at da25439f8c3 on bh-lb-42 (2026-09-04): median of
+# SP1xTP8 retains the TP-ring regression target calibrated at 350413d7a98e
+# (2026-08-31). The TorusX Fabric2D profile restores that physical topology;
+# recalibrate only after measuring it across independent hardware sessions.
+# Unwrapped Fabric2D calibration at da25439f8c3 on bh-lb-42 (2026-09-04):
 # five independent process/device sessions, each containing five 10-replay samples.
-# Session medians: SP1xTP8=[11.067, 11.057, 11.051, 11.059, 11.048],
-# SP2xTP4=[9.922, 9.921, 9.925, 9.920, 9.915],
+# Session medians: SP2xTP4=[9.922, 9.921, 9.925, 9.920, 9.915],
 # SP4xTP2=[10.259, 10.261, 10.257, 10.255, 10.251].
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 11.057,
+    "SP1xTP8": 9.597,
     "SP2xTP4": 9.921,
     "SP4xTP2": 10.257,
 }
@@ -396,17 +402,31 @@ def _trace_wall_samples_ms(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis",
-    [((1, 8), 1), ((2, 4), 1), ((2, 4), 0)],
-    indirect=["mesh_device"],
-    ids=["SP1xTP8", "SP2xTP4", "SP4xTP2"],
-)
-@pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param(fabric2d_device_params(), id="fabric_2d"),
+        pytest.param(
+            (1, 8),
+            1,
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="SP1xTP8-torus-x",
+        ),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP2xTP4-fabric-2d",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP4xTP2-fabric-2d",
+        ),
     ],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 def test_kimi_k3_layer_1_perf(
     mesh_device: ttnn.MeshDevice,
@@ -509,9 +529,27 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((1, 8), 1, fabric2d_device_params(), id="SP1xTP8-fabric-2d"),
-        pytest.param((2, 4), 1, fabric2d_device_params(), id="SP2xTP4-fabric-2d"),
-        pytest.param((2, 4), 0, fabric2d_device_params(), id="SP4xTP2-fabric-2d"),
+        pytest.param(
+            (1, 8),
+            1,
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="SP1xTP8-torus-x",
+        ),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP2xTP4-fabric-2d",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP4xTP2-fabric-2d",
+        ),
         pytest.param(
             (8, 4),
             1,

@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
@@ -30,18 +30,31 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis",
+    "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((1, 8), 1, id="tp8-1d"),
-        pytest.param((2, 4), 0, id="tp2-axis0"),
-        pytest.param((2, 4), 1, id="tp4-axis1"),
+        pytest.param(
+            (1, 8),
+            1,
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="tp8-torus-x",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="tp2-axis0-fabric-2d",
+        ),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="tp4-axis1-fabric-2d",
+        ),
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [fabric2d_device_params()],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 def test_device_weight_placement(
     mesh_device: ttnn.MeshDevice,
@@ -132,11 +145,17 @@ def test_device_weight_placement(
             )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "device_params",
-    [fabric2d_device_params()],
-    indirect=True,
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (1, 8),
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="tp8-torus-x",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
     config = KDAConfig(
