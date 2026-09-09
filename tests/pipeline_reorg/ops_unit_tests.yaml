@@ -21,3 +21,12 @@
   owner_id: U05ACKAJTHS
   team: ttnn
   category: data_movement
+
+- name: gather-55847-exact-bf16
+  cmd: bash tests/ttnn/perf_tests/gather_55847/run.sh exact
+  skus:
+    bh_p150b_civ2:
+      timeout: 50
+  owner_id: U05ACKAJTHS
+  team: ttnn
+  category: gather_exact
