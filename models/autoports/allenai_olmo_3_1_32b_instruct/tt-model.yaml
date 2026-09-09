@@ -27,6 +27,7 @@ runtime:
   plugin:
     path: /home/jashan/olmo3-bringup/third_party/vllm-tt-plugin
   extra_models_dir: models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle
+  lock: requirements.lock
   overrides:
   - numpy>=1.24.4,<2
   - opencv-python-headless==4.11.0.86
