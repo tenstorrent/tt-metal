@@ -1834,16 +1834,15 @@ static void collect_kernels(
                 // but differing in Blaze RT names or layout alias in the JIT and disk caches
                 // and load a stale descriptor layout (the .so then reads runtime args from
                 // the wrong slots). Typed CT args bypass named_compile_args, so serialize them too.
+                // Both namespace maps have a fixed iteration order: namespaces are sorted
+                // and entries retain declaration order. Names cannot contain the ':', '=',
+                // or ',' separators used below.
                 for (const auto& [ns, entries] : named_ct_arg_namespaces) {
                     key += ":bctns:" + ns;
                     for (const auto& [field, value] : entries) {
                         key += ":bct:" + field + "=" + std::to_string(value);
                     }
                 }
-                // Determinism: NamedRuntimeArgNamespaces is a std::map (sorted ns order) of
-                // declaration-ordered vectors, so this iteration order is fixed; ns/field are
-                // validated C++ identifiers (alnum + '_'), so they cannot contain the
-                // ':'/'='/',' separators and the serialization is unambiguous.
                 for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
                     key += ":brtns:" + ns;
                     for (const auto& entry : entries) {
