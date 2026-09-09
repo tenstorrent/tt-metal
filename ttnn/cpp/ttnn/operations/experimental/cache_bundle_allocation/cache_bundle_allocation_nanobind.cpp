@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cache_bundle_allocation_nanobind.hpp"
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "cache_bundle_allocation.hpp"
@@ -37,8 +38,14 @@ and scalar validation errors raise. Tensor contents are not copied to the host.
 Initialize metadata on the host and replicate all four tensors across the mesh.
 Every replica must execute identical requests in identical order; no CCL is used.
 Serialize calls sharing a pool, finish prior slot accesses before reset, and
-order consumers after this update before accessing new pages. Scalars are captured
-by traces; changing a request requires a fresh invocation outside that trace.
+order consumers after this update before accessing new pages.
+
+slot_id, actual_start, and actual_end each accept a scalar or a UINT32 [1, 1]
+row-major interleaved DRAM tensor on the same device. For trace replay, update
+these tensors in place on the same command queue before replay; their addresses
+remain fixed. Replicate request values across the mesh. Scalars and page_size
+remain fixed within a trace. Tensor request values must satisfy the same range
+constraints as scalars; the caller ensures this without host readback.
 
 The kernel stages one table row, the counter rows, and at most 4 KiB of a
 free-list row, with a 512 KiB total scratch limit. Pools may

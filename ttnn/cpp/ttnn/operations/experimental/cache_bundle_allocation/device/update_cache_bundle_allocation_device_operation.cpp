@@ -21,6 +21,17 @@ constexpr uint32_t kMaxScratchBytes = 512 * 1024;
 std::array<const Tensor*, 4> metadata(const CacheBundleAllocationInputs& t) {
     return {&t.page_table, &t.allocated_pages, &t.free_list, &t.free_count};
 }
+std::array<const std::optional<Tensor>*, 3> requests(const CacheBundleAllocationInputs& t) {
+    return {&t.slot_id, &t.actual_start, &t.actual_end};
+}
+
+std::variant<uint32_t, Buffer*> request_arg(const std::optional<Tensor>& tensor, uint32_t scalar) {
+    if (tensor) {
+        return tensor->buffer();
+    }
+    return scalar;
+}
+
 std::array<uint32_t, 4> scratch_sizes(const CacheBundleAllocationInputs& t) {
     const auto tensors = metadata(t);
     std::array<uint32_t, 4> sizes{};
@@ -46,10 +57,18 @@ void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_hit(
         }
     }
     TT_FATAL(a.page_size > 0, "page_size must be positive");
-    TT_FATAL(a.slot_id < t.page_table.logical_shape()[0], "slot_id is out of range");
-    TT_FATAL(a.actual_start <= a.actual_end, "actual_start must not exceed actual_end");
+    for (const auto* request : requests(t)) {
+        if (*request) {
+            TT_FATAL(
+                (*request)->storage_type() == StorageType::DEVICE && (*request)->buffer(), "Request must be on device");
+            TT_FATAL((*request)->device() == t.page_table.device(), "Request must use the same device");
+        }
+    }
+    TT_FATAL(t.slot_id || a.slot_id < t.page_table.logical_shape()[0], "slot_id is out of range");
     TT_FATAL(
-        uint64_t(a.actual_end) <= uint64_t(t.page_table.logical_shape()[1]) * a.page_size,
+        t.actual_start || t.actual_end || a.actual_start <= a.actual_end, "actual_start must not exceed actual_end");
+    TT_FATAL(
+        t.actual_end || uint64_t(a.actual_end) <= uint64_t(t.page_table.logical_shape()[1]) * a.page_size,
         "actual_end exceeds page_table capacity");
 }
 
@@ -68,6 +87,15 @@ void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_miss(
             tensor.buffer()->aligned_page_size() <= std::numeric_limits<uint32_t>::max(),
             "Metadata row exceeds the 32-bit NoC byte-offset range");
     }
+    for (const auto* request : requests(t)) {
+        if (*request) {
+            const auto& tensor = **request;
+            TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Request must be ROW_MAJOR");
+            TT_FATAL(tensor.memory_config() == DRAM_MEMORY_CONFIG, "Request must be interleaved DRAM");
+            TT_FATAL(tensor.dtype() == DataType::UINT32, "Request must be UINT32");
+            TT_FATAL(tensor.logical_shape() == ttnn::Shape({1, 1}), "Request must have shape [1, 1]");
+        }
+    }
     const auto& pt = t.page_table.logical_shape();
     const auto& fl = t.free_list.logical_shape();
     TT_FATAL(pt[0] > 0 && pt[1] > 0, "page_table dimensions must be positive");
@@ -76,7 +104,7 @@ void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_miss(
         t.allocated_pages.logical_shape() == ttnn::Shape({1, pt[0]}), "allocated_pages must have shape [1, slots]");
     TT_FATAL(t.free_count.logical_shape() == ttnn::Shape({1, fl[0]}), "free_count must have shape [1, SP]");
     // One table row, two counter rows, and a bounded free-list window.
-    uint64_t scratch_bytes = 0;
+    uint64_t scratch_bytes = (t.slot_id || t.actual_start || t.actual_end) ? 32 : 0;
     for (const auto bytes : scratch_sizes(t)) {
         scratch_bytes += bytes;
     }
@@ -117,8 +145,25 @@ ProgramDescriptor CacheBundleAllocationProgramFactory::create_descriptor(
             .format_descriptors = {
                 {CBFormatDescriptor{.buffer_index = i, .data_format = tt::DataFormat::UInt32, .page_size = bytes}}}});
     }
+    const auto request_tensors = requests(t);
+    uint32_t request_mask = 0;
+    for (size_t i = 0; i < request_tensors.size(); ++i) {
+        request_mask |= uint32_t(request_tensors[i]->has_value()) << i;
+    }
+    ct.push_back(request_mask);
+    if (request_mask != 0) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 32,
+            .core_ranges = cores,
+            .format_descriptors = {
+                {CBFormatDescriptor{.buffer_index = 4, .data_format = tt::DataFormat::UInt32, .page_size = 32}}}});
+    }
     for (const auto* tensor : tensors) {
         TensorAccessorArgs(tensor->buffer()).append_to(ct);
+    }
+    // Unused accessors share the table descriptor; scalar paths never read them.
+    for (const auto* request : request_tensors) {
+        TensorAccessorArgs(*request ? (*request)->buffer() : t.page_table.buffer()).append_to(ct);
     }
     KernelDescriptor kernel;
     kernel.kernel_source =
@@ -134,9 +179,9 @@ ProgramDescriptor CacheBundleAllocationProgramFactory::create_descriptor(
          t.allocated_pages.buffer(),
          t.free_list.buffer(),
          t.free_count.buffer(),
-         a.slot_id,
-         a.actual_start,
-         a.actual_end});
+         request_arg(t.slot_id, a.slot_id),
+         request_arg(t.actual_start, a.actual_start),
+         request_arg(t.actual_end, a.actual_end)});
     desc.kernels.push_back(std::move(kernel));
     return desc;
 }
@@ -152,9 +197,9 @@ void CacheBundleAllocationProgramFactory::override_runtime_arguments(
     for (size_t i = 0; i < tensors.size(); ++i) {
         args[i] = tensors[i]->buffer()->address();
     }
-    args[4] = a.slot_id;
-    args[5] = a.actual_start;
-    args[6] = a.actual_end;
+    args[4] = t.slot_id ? t.slot_id->buffer()->address() : a.slot_id;
+    args[5] = t.actual_start ? t.actual_start->buffer()->address() : a.actual_start;
+    args[6] = t.actual_end ? t.actual_end->buffer()->address() : a.actual_end;
 }
 }  // namespace ttnn::experimental::prim
 
@@ -164,13 +209,29 @@ Tensor update_cache_bundle_allocation(
     const Tensor& allocated_pages,
     const Tensor& free_list,
     const Tensor& free_count,
-    uint32_t slot_id,
-    uint32_t actual_start,
-    uint32_t actual_end,
+    const std::variant<uint32_t, Tensor>& slot_id,
+    const std::variant<uint32_t, Tensor>& actual_start,
+    const std::variant<uint32_t, Tensor>& actual_end,
     uint32_t page_size) {
     using Op = prim::UpdateCacheBundleAllocationDeviceOperation;
+    const auto scalar = [](const auto& value) {
+        return std::holds_alternative<uint32_t>(value) ? std::get<uint32_t>(value) : 0u;
+    };
+    const auto tensor = [](const auto& value) -> std::optional<Tensor> {
+        if (const auto* t = std::get_if<Tensor>(&value)) {
+            return *t;
+        }
+        return std::nullopt;
+    };
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{slot_id, actual_start, actual_end, page_size},
-        Op::tensor_args_t{page_table, allocated_pages, free_list, free_count});
+        Op::operation_attributes_t{scalar(slot_id), scalar(actual_start), scalar(actual_end), page_size},
+        Op::tensor_args_t{
+            page_table,
+            allocated_pages,
+            free_list,
+            free_count,
+            tensor(slot_id),
+            tensor(actual_start),
+            tensor(actual_end)});
 }
 }  // namespace ttnn::experimental
