@@ -240,6 +240,10 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
     }
 }
 
+// The helpers below launch every program with the non-blocking `LaunchProgramAsync` and only wait afterwards, so all
+// programs are co-resident regardless of dispatch mode. This is why they need no per-device thread, unlike
+// `launch_on_eth_pair` in tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp, which uses the blocking
+// `LaunchProgram` under slow dispatch.
 [[maybe_unused]]
 static void wait_to_finish_eth_timeout_cores(
     std::span<struct core_setup> cores,
