@@ -33,9 +33,13 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<10>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     auto input = TensorAccessor(input_args, input_buffer_src_addr);
-    auto weights = TensorAccessor(weights_args, weight_buffer_src_addr + weight_offset);
+    // `weight_offset` is this core's column slice of each weight row (non-zero only for width-/
+    // block-sharded output). It is applied as a per-read offset below, not folded into the
+    // accessor base, so both accessors sit on their buffers' clean base addresses.
+    auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
-    prepare_local_cache(noc, cb_id_in2, weights, weight_block_size, /*pad_token_arg_idx=*/6);
+    prepare_local_cache(
+        noc, cb_id_in2, weights, weight_block_size, /*pad_token_arg_idx=*/6, /*weight_col_offset_bytes=*/weight_offset);
 
     CircularBuffer cb_in0(cb_id_in0);
     CircularBuffer cb_in1(cb_id_in1);
@@ -73,7 +77,8 @@ void kernel_main() {
 
             for (uint32_t k = 0; k < tile_height; ++k) {
                 input_token_t token = input_l1_ptr[k];
-                read_token_async(noc, token, weights, l1_write_addr, weight_chunk_size, weight_chunk_offset);
+                read_token_async(
+                    noc, token, weights, l1_write_addr, weight_chunk_size, weight_chunk_offset, weight_offset);
                 l1_write_addr += weight_chunk_size;
             }
             noc.async_read_barrier();
