@@ -379,3 +379,32 @@ boundary checks passed (`reduce-migration-kw3an9hl`). The complete available
 sanity suite then passed **61/61**, without skips or failures
 (`reduce-migration-y7lizu94`). Test bodies retain all numerical checks and
 thresholds. Another fresh review and the full 178-group regression remain due.
+
+## Fifth Claude review: Welford shared-reader correction
+
+Fresh Opus 5/high round 5 verified the earlier corrections and found one missed
+host/kernel contract. The distributed post-all-gather reader always decoded an
+auxiliary recipe, but the Welford factory had not supplied one. The existing
+explicitly enabled disabled C++ case reproduced the reader's zero-tile-count
+compile assertion (`reduce-migration-6w24bcee`). The Welford factory now defines
+USE_WELFORD and the shared reader skips its unused auxiliary initialization,
+matching the pre-all-gather path. Removed the dead reader scalar argument from
+both post factories. This corrects the earlier audit's Welford exemption: only
+the DiT Welford host factory remains unchanged among the inventory candidates.
+
+Eight new single-device post-Welford tests construct the required mean/variance
+statistics directly, check numerical output twice and assert one program-cache
+entry. All eight passed (`reduce-migration-yedaglif`). Existing T036 cases passed
+99 with 102 upstream skips (`reduce-migration-5fcqrnv3`), and both pre-Welford
+checks passed all 10 cases (`reduce-migration-1y4ikhq1`). Native build passed in
+`/tmp/reduce-review5-welford-build-v3-20260909.log`; its earlier cleanup build's
+unused-variable error was fixed before these tests. The expanded N300 sanity
+then passed **62/62**, with no skips or failures (`reduce-migration-839b7bv3`).
+
+SM076 adds the shared reader's Welford variant; SM011 now accurately credits its
+non-Welford factories. Current counts: **178 full groups, 999 definitions, 18,852
+known cases; 76 sanity cases (61 Python/15 C++), 62 available on N300**. Kernel
+entry coverage is unchanged. See `review_round_05.md` for all resolutions,
+including the documented pre-existing RMSNorm 2D dispatch follow-up and the
+unverified DiT Welford numerical impact. No existing test tolerance or skip was
+weakened. A fresh review and the full prepared regression remain due.

@@ -136,6 +136,8 @@ def test_moreh_layer_norm_backward_reduce_boundaries(device, shape, fp32_dest_ac
             fp32_dest_acc_en,
         )
         if fp32_dest_acc_en:
+            # Long sums use both bounds: errors above atol can still satisfy
+            # rtol for larger gradients. The fixed seed and logged maxima expose this.
             torch.testing.assert_close(actual, expected, rtol=0.1, atol=0.5)
         else:
             # Long BF16 sums contain cancellation. The legacy kernel also

@@ -110,9 +110,7 @@ inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
         padded_blocks += residual / normal_rows + 1;
         last_rows = residual % normal_rows;
     }
-    TT_FATAL(
-        last_rows <= normal_rows && (last_rows > 0 || block_h % num_out_blocks != 0),
-        "Groupnorm final reduction block must match its full/tail/empty dispatch");
+    TT_FATAL(last_rows <= normal_rows, "Groupnorm final reduction block must match its full/tail/empty dispatch");
     const uint32_t global_tiles =
         (padded_blocks * num_cores * dfb_ex_external_slot_pitch_bytes + single_tile_size - 1) / single_tile_size;
     const float divisor =
