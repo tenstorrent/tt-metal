@@ -202,7 +202,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             out for one transport is laid out for the other.
 
             Consumers Attach the returned object and read it through the device-side PrefetcherPipe
-            (wait_front / get_read_ptr / pop_front). Keep the returned object alive for as long as
+            (wait_front / scoped_read_lock / pop_front). Keep the returned object alive for as long as
             any program uses it: destroying it frees the durable rings and their config.
 
             Args:
