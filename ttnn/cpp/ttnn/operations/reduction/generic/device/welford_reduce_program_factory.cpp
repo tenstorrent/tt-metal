@@ -309,8 +309,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         // Welford processes one column at a time (SFPU can only track one running
         // mean/M2 state), so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
-        // enable_fp32_sfpu=0: Welford never uses the fp32-SFPU reduce path (use_welford=1 forces
-        // row_chunk=1). The arg keeps this reader's CT-arg set in lockstep with the reduce factories.
+        // The reduce_output_tiles argument below fixes the reader's row_chunk to one.
+        // Legacy flags remain in the shared reader's compile-time argument set.
         reader_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";

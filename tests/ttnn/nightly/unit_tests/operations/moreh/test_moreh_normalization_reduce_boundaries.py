@@ -5,6 +5,7 @@
 import pytest
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
 
@@ -124,7 +125,16 @@ def test_moreh_layer_norm_backward_reduce_boundaries(device, shape, fp32_dest_ac
         ),
     )
     torch.testing.assert_close(ttnn.to_torch(dx).float(), x.grad, rtol=0.08, atol=0.05)
-    for actual, expected in ((ttnn.to_torch(dgamma).float(), weight.grad), (ttnn.to_torch(dbeta).float(), bias.grad)):
+    for name, actual, expected in (
+        ("dgamma", ttnn.to_torch(dgamma).float(), weight.grad),
+        ("dbeta", ttnn.to_torch(dbeta).float(), bias.grad),
+    ):
+        logger.info(
+            "{} max absolute error: {} (fp32_dest_acc_en={})",
+            name,
+            (actual - expected).abs().max().item(),
+            fp32_dest_acc_en,
+        )
         if fp32_dest_acc_en:
             torch.testing.assert_close(actual, expected, rtol=0.1, atol=0.5)
         else:

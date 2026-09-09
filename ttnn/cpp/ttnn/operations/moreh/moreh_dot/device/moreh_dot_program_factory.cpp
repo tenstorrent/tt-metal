@@ -80,7 +80,9 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
          .dst_full_sync_en = dst_full_sync_en,
          .available_l1_bytes = 16 * cb_tile_size});
     for (auto& call : reduce_sequence.calls) {
-        call.plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::NONE;
+        // Multiplication configures both unpack operands for the input dtype;
+        // reduction's auxiliary tile may have a different format (e.g. BF8 input).
+        call.plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
     }
     reduce_sequence.calls.back().accumulation_index = num_tiles - 1;
     const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);

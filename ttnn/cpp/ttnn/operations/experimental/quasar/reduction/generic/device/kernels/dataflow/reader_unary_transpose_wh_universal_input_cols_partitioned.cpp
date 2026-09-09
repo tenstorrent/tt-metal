@@ -24,15 +24,10 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
-    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
-
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
-    // Welford must process one column at a time because the SFPU can only maintain
-    // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
-    // per chunk, which would feed the Welford kernel tiles from the wrong columns.
-    // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    // Each planned batch is one complete column, including Welford.
+    // Only the Quasar Welford factory uses this reader. It requires one column
+    // at a time because the SFPU maintains a single running mean/M2 state.
     constexpr uint32_t row_chunk = 1;
 
     constexpr uint32_t onetile = 1;
