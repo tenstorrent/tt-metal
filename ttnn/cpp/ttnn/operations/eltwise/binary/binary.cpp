@@ -606,10 +606,17 @@ inline auto invoke_binary_ng_impl(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const auto a_dtype = lhs.dtype();
-    const DataType b_dtype = [&] {
+    const auto b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
             return rhs.dtype();
         } else {
+            // When rhs is a scalar, determine its effective dtype for
+            // integer division detection and type promotion.
+            if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, unary::ScalarVariant>) {
+                if (std::holds_alternative<float>(rhs)) {
+                    return DataType::FLOAT32;
+                }
+            }
             return a_dtype;
         }
     }();
@@ -658,6 +665,21 @@ inline auto invoke_binary_ng_impl(
                     a_dtype);
                 rhs_promoted = ttnn::typecast(rhs, target);
             }
+        }
+    }
+    // Scalar path: when rhs is a float scalar and lhs is 32-bit int, promote
+    // lhs to float to match PyTorch type promotion and avoid truncation.
+    if constexpr (!requires { rhs.dtype(); }) {
+        const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
+                                    (binary_op_type == operations::binary::BinaryOpType::MUL);
+        if (is_float_arith && is_32bit_int(a_dtype) && std::holds_alternative<float>(rhs)) {
+            const auto target = float_promote_target(b_dtype);
+            log_debug(
+                tt::LogOp,
+                "Binary: typecasting lhs from integer dtype {} to {} to match float scalar rhs",
+                a_dtype,
+                target);
+            lhs_promoted = ttnn::typecast(lhs, target);
         }
     }
     const Tensor& lhs_eff = lhs_promoted.has_value() ? *lhs_promoted : lhs;
