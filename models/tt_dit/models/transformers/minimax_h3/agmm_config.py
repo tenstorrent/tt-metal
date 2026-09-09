@@ -29,12 +29,19 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import os
+
 # The op derives its worker grid from the device, reserving the mux axis: M parallelizes over 12
 # cores when transposed (narrow output, M > N) and 10 otherwise. per_core_M -- the M-tiles each core
 # walks -- follows.
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
 _M_CORES_NON_TRANSPOSED = 10
+
+# A swept entry is a measurement at one operating point; reusing it at another per_core_M means
+# reusing a block shape swept for a different tile count, or in the other grid orientation. Off
+# the swept points the v3 rules fit the shape better than the nearest divisor entry does.
+_EXACT_ONLY = os.environ.get("MINIMAX_H3_AGMM_EXACT_ONLY", "1") == "1"
 
 
 def _per_core_m(m: int, n: int) -> int:
@@ -112,6 +119,8 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     into whole blocks with no wasteful partial last block -- and return its block shape.
     """
     per_core_m = _per_core_m(m, n)
+    if _EXACT_ONLY:
+        return AGMM_BLOCK_SIZES.get((k, n, per_core_m))
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:

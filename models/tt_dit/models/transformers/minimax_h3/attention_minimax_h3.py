@@ -360,6 +360,12 @@ class MiniMaxH3Attention(Module):
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
+            if measured is None and os.environ.get("MINIMAX_H3_SDPA_NEAREST_KEY", "1") == "1":
+                # Within a few tiles of a swept point the measured chunking still beats the generic
+                # rule, and the served length only lands off-table because of packing and padding.
+                nearest = min(self.measured_sdpa_chunk_sizes, key=lambda length: abs(length - seq_local))
+                if abs(nearest - seq_local) <= 4 * ttnn.TILE_SIZE:
+                    measured = self.measured_sdpa_chunk_sizes[nearest]
             if measured is not None:
                 q_chunk, k_chunk = measured
             else:
