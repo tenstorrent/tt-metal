@@ -8,11 +8,11 @@
 
 namespace ttnn::prim {
 
-struct WidthToHeightShardParams {
+struct AllGatherForMatmulParams {
     tt::tt_metal::CoreRangeSet output_core_range_set;
 };
 
-struct WidthToHeightShardInputs {
+struct AllGatherForMatmulInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };
