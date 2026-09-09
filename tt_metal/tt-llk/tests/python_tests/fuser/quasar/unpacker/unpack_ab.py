@@ -97,7 +97,10 @@ class UnpackerAB(Unpacker):
                 f"({id_a}, {id_b}, 1);\n"
             )
 
-        return bfd_program + f"_llk_unpack_binary_operands_init_({id_a}, {id_b}, 1);\n"
+        return (
+            bfd_program
+            + f"_llk_unpack_binary_operands_init_({id_a}, {id_b}, 1, {compute_unit.src_a.tile_shape.cpp_value});\n"
+        )
 
     def unpack(
         self,
@@ -114,7 +117,10 @@ class UnpackerAB(Unpacker):
             )
             return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_global}, {tile_id_b});\n"
 
-        return f"_llk_unpack_binary_operands_({block.tile_id_global}, {block.tile_id_global});\n"
+        return (
+            f"_llk_unpack_binary_operands_({block.tile_id_global}, {block.tile_id_global}, "
+            f"{compute_unit.src_a.tile_shape.cpp_value});\n"
+        )
 
     def uninit(
         self,

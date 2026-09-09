@@ -50,7 +50,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_binary_operands_init_(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            1 /*num_tiles_per_unpack*/);
+            1 /*num_tiles_per_unpack*/,
+            tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -64,11 +65,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
-                    _llk_unpack_binary_operands_(i, i);
+                    _llk_unpack_binary_operands_(i, i, tensor_shape);
                 }
             }
         }
