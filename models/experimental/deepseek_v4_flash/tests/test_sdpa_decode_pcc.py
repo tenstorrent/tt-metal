@@ -101,7 +101,10 @@ def test_sdpa_decode_pcc(device, reset_seeds, num_heads: int, head_dim: int, skv
     def to_tt(t):
         return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    fused = ttnn.to_torch(attn._sdpa_decode(to_tt(q), to_tt(kv), to_tt(mask))).float()
+    # The op (and its height-sharded output) is ``[1, B, H, Dh]``; the fp32
+    # reference keeps the head-major ``[1, H, 1, Dh]`` layout.
+    fused = ttnn.to_torch(attn._sdpa_decode(to_tt(q.transpose(1, 2)), to_tt(kv), to_tt(mask))).float()
+    fused = fused.transpose(1, 2)
     reference = _torch_reference(q, kv, mask, attn.sinks_torch, attn.scaling)
 
     fus_ok, fus_pcc = comp_pcc(reference, fused, pcc=PCC_THRESHOLD)

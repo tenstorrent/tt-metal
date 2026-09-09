@@ -1,16 +1,16 @@
 include(sources.cmake)
 
-add_library(ttnn_op_experimental_deepseek_width_to_height_shard ${LIB_TYPE})
+add_library(ttnn_op_experimental_deepseek_all_gather_for_matmul ${LIB_TYPE})
 add_library(
-    TTNN::Ops::Experimental::DeepSeek::WidthToHeightShard
-    ALIAS ttnn_op_experimental_deepseek_width_to_height_shard
+    TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul
+    ALIAS ttnn_op_experimental_deepseek_all_gather_for_matmul
 )
 
-tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_width_to_height_shard TT::CommonPCH)
-TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_width_to_height_shard)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_all_gather_for_matmul TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_all_gather_for_matmul)
 
 set_target_properties(
-    ttnn_op_experimental_deepseek_width_to_height_shard
+    ttnn_op_experimental_deepseek_all_gather_for_matmul
     PROPERTIES
         INTERFACE_HEADER_SETS_TO_VERIFY
             api
@@ -19,35 +19,35 @@ set_target_properties(
 file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(
-    ttnn_op_experimental_deepseek_width_to_height_shard
+    ttnn_op_experimental_deepseek_all_gather_for_matmul
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_WIDTH_TO_HEIGHT_SHARD_API_HEADERS}
+        FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_ALL_GATHER_FOR_MATMUL_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_WIDTH_TO_HEIGHT_SHARD_SRCS}
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_ALL_GATHER_FOR_MATMUL_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_deepseek_width_to_height_shard PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(ttnn_op_experimental_deepseek_all_gather_for_matmul PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
-        ttnn_op_experimental_deepseek_width_to_height_shard
+        ttnn_op_experimental_deepseek_all_gather_for_matmul
     FILE_SET
     kernels
         DESTINATION
-            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek/width_to_height_shard
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek/all_gather_for_matmul
         COMPONENT ttnn-runtime
 )
 
 install(
     TARGETS
-        ttnn_op_experimental_deepseek_width_to_height_shard
+        ttnn_op_experimental_deepseek_all_gather_for_matmul
     FILE_SET
     api
         COMPONENT ttnn-dev
@@ -62,11 +62,11 @@ install(
 # own registration source doesn't need to be. `ttnn` only exists when
 # WITH_PYTHON_BINDINGS is on, hence the guard.
 #
-# The actual file list (TTNN_OP_EXPERIMENTAL_DEEPSEEK_WIDTH_TO_HEIGHT_SHARD_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# The actual file list (TTNN_OP_EXPERIMENTAL_DEEPSEEK_ALL_GATHER_FOR_MATMUL_NANOBIND_SRCS) lives in sources.cmake, not here: this
 # file carries metalium-developers-infra as a required co-owner (so infra
 # can land sweeping build-system changes), and routine add/remove/rename of
 # a nanobind source shouldn't need to go through infra. This wiring line
 # itself is build logic and is expected to change rarely.
 if(TARGET ttnn)
-    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_WIDTH_TO_HEIGHT_SHARD_NANOBIND_SRCS})
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_ALL_GATHER_FOR_MATMUL_NANOBIND_SRCS})
 endif()

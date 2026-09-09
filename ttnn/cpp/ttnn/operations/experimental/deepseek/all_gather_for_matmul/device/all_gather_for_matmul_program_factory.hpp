@@ -6,15 +6,15 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 
-#include "width_to_height_shard_device_operation_types.hpp"
+#include "all_gather_for_matmul_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::prim {
 
-struct WidthToHeightShardProgramFactory {
+struct AllGatherForMatmulProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const WidthToHeightShardParams& operation_attributes,
-        const WidthToHeightShardInputs& tensor_args,
+        const AllGatherForMatmulParams& operation_attributes,
+        const AllGatherForMatmulInputs& tensor_args,
         Tensor& output);
 };
 

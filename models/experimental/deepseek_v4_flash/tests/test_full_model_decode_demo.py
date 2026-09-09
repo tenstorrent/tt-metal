@@ -17,7 +17,7 @@ The test has three deployment variants:
 * ``tp4_32chip``: the same two 1x4 stages on a 32-chip Galaxy (24 chips idle).
 
 Attention uses q_a/kv, replicated full-width on every rank of a
-stage; head-sharded SDPA, sequential local-group O_A and row-parallel O_B.
+stage; head-sharded SDPA, batched local-group O_A and row-parallel O_B.
 MoE shards the intermediate dimension and all-reduces its output. The DRISC
 prefetcher stays on (same as TP1) for every projection that still fits the
 shared GCB.
