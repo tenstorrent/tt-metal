@@ -228,7 +228,7 @@
         "S080",
         "DF036"
       ],
-      "selection": "ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 intermediates. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.",
+      "selection": "ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 destination accumulation. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.",
       "lane": "common",
       "hardware": "One device with at least four cores in its first row.",
       "expected_cases": 1,
@@ -3832,6 +3832,6 @@
     }
   ],
   "migration_updates": [
-    "2026-09-09: SM006 now selects the existing small sharded groupnorm BF8-mask/FP32-intermediate case that exposed the native mean format transition. The previous C++ smoke case remains in the full T159 group. Total sanity case and kernel-coverage counts are unchanged."
+    "2026-09-09: SM006 now selects the existing small sharded groupnorm BF8-mask/FP32-destination case that exposed the native mean format transition. The previous C++ smoke case remains in the full T159 group. Total sanity case and kernel-coverage counts are unchanged."
   ]
 }
