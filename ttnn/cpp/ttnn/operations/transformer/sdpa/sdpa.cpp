@@ -246,7 +246,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& page_bundle_indices,
     uint32_t kv_cache_page_size,
     uint32_t kv_cache_slot_idx,
-    std::optional<uint32_t> kv_cache_sp_axis) {
+    std::optional<uint32_t> kv_cache_sp_axis,
+    std::optional<uint32_t> kv_cache_local_seq_len) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -296,7 +297,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_page_size,
         sliding_window_size,
         kv_cache_slot_idx,
-        kv_cache_sp_axis);
+        kv_cache_sp_axis,
+        kv_cache_local_seq_len);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

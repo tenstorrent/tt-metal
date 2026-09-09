@@ -124,7 +124,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
     uint32_t kv_cache_page_size = 32,
     uint32_t kv_cache_slot_idx = 0,
-    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt,
+    std::optional<uint32_t> kv_cache_local_seq_len = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

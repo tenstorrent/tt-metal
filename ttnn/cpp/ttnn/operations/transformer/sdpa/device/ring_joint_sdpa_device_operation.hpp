@@ -73,6 +73,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t kv_cache_page_size = 32,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     uint32_t kv_cache_slot_idx = 0,
-    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt,
+    std::optional<uint32_t> kv_cache_local_seq_len = std::nullopt);
 
 }  // namespace ttnn::prim

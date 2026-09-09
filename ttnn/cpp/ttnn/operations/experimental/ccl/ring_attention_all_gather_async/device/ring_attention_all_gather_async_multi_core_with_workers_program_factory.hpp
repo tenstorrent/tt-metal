@@ -221,7 +221,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_page_size = 32,
     uint32_t kv_cache_slot_idx = 0,
     uint32_t kv_cache_sp_size = 1,
-    uint32_t kv_cache_sp_rank = 0);
+    uint32_t kv_cache_sp_rank = 0,
+    std::optional<uint32_t> paged_local_seq_len = std::nullopt);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

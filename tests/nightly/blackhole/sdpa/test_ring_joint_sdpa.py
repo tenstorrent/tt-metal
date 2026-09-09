@@ -739,6 +739,7 @@ def paged_ring_addressing(runtime, expect_error):
     """Exercise rank-specific allocation, nonzero layers, and slot changes on cached programs."""
     original_upload = upload_ring_paged_cache
     nonreplicated_table = None
+    oversized_table = None
     runtime.mesh_device.enable_program_cache()
 
     def page_ids(count, rank):
@@ -757,11 +758,21 @@ def paged_ring_addressing(runtime, expect_error):
         return original_upload(physical.reshape(b, h, 4 * seq, dim), runtime, dtype, page_size, shard_heads=shard_heads)
 
     def upload_allocated_table(runtime, seq_len, page_size):
-        nonlocal nonreplicated_table
+        nonlocal nonreplicated_table, oversized_table
         sp = runtime.mesh_device.shape[runtime.sp_axis]
         count = seq_len // sp // page_size
         ids = torch.stack([page_ids(count, rank) for rank in range(sp)], dim=1).flatten()
         table = torch.stack((ids, ids + count))
+        # Unused logical capacity maps to the finite-zero slot. Reading it must not
+        # change chunk detection, causal positions, or output values.
+        oversized_table = ttnn.from_torch(
+            torch.cat((table, torch.zeros_like(table)), dim=1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=runtime.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(runtime.mesh_device),
+        )
         shard_dims = [None, None]
         shard_dims[runtime.sp_axis] = 0
         nonreplicated_table = ttnn.from_torch(
@@ -782,11 +793,32 @@ def paged_ring_addressing(runtime, expect_error):
             mesh_mapper=ttnn.ReplicateTensorToMesh(runtime.mesh_device),
         )
 
-    def check_slot_switch(operation, check_full_mesh=False):
+    def check_capacity_and_rotation(operation, args, kwargs, output, is_mla):
+        variants = [{"page_bundle_indices": oversized_table}]
+        q_global = args[0].shape[2] * runtime.mesh_device.shape[runtime.sp_axis]
+        if (
+            kwargs["logical_n"] == q_global
+            and (is_mla or kwargs.get("is_causal", False))
+            and not kwargs.get("is_balanced", False)
+            and kwargs.get("kv_actual_isl") is None
+        ):
+            # Explicit rotation must also accept the first chunk in an exact-size cache.
+            variants.extend(({"kv_actual_isl": 0}, {"kv_actual_isl": 0, "page_bundle_indices": oversized_table}))
+        for variant in variants:
+            actual_output = operation(*args, **dict(kwargs, **variant))
+            for expected, actual in zip(ttnn.get_device_tensors(output[0]), ttnn.get_device_tensors(actual_output[0])):
+                torch.testing.assert_close(ttnn.to_torch(actual), ttnn.to_torch(expected), rtol=0, atol=0)
+        if kwargs.get("kv_actual_isl") is not None:
+            # logical_n is runtime-patched for rotation: reject overflow on cache hits too.
+            capacity_global = kwargs["page_bundle_indices"].shape[1] * kwargs["kv_cache_page_size"]
+            with expect_error(RuntimeError, "Padded paged KV length"):
+                operation(*args, **dict(kwargs, logical_n=capacity_global + q_global))
+
+    def check_slot_switch(operation, is_mla=False):
         def invoke(*args, **kwargs):
             kwargs.update(kv_cache_num_layers=2, kv_cache_layer_idx=1, kv_cache_slot_idx=0)
             # Reject unsupported full-mesh paging before launching any device work.
-            if check_full_mesh:
+            if is_mla:
                 with expect_error(RuntimeError, "requires an explicit cluster_axis"):
                     operation(*args, **dict(kwargs, cluster_axis=None))
             with expect_error(RuntimeError, "page_bundle_indices must be replicated across the complete mesh"):
@@ -799,6 +831,7 @@ def paged_ring_addressing(runtime, expect_error):
             kwargs["kv_cache_slot_idx"] = 1
             output = operation(*args, **kwargs)
             assert runtime.mesh_device.num_program_cache_entries() == entries, "slot changes must reuse the program"
+            check_capacity_and_rotation(operation, args, kwargs, output, is_mla)
             with expect_error(RuntimeError, "page_bundle_indices must be replicated across the complete mesh"):
                 operation(*args, **dict(kwargs, page_bundle_indices=nonreplicated_table))
             return output
@@ -813,9 +846,7 @@ def paged_ring_addressing(runtime, expect_error):
             "ring_joint_scaled_dot_product_attention",
             check_slot_switch(ttnn.transformer.ring_joint_scaled_dot_product_attention),
         ),
-        mock.patch.object(
-            ttnn.transformer, "ring_mla", check_slot_switch(ttnn.transformer.ring_mla, check_full_mesh=True)
-        ),
+        mock.patch.object(ttnn.transformer, "ring_mla", check_slot_switch(ttnn.transformer.ring_mla, is_mla=True)),
     ):
         yield
 
@@ -967,6 +998,7 @@ def call_sdpa(
     kv_cache_layer_idx=None,
     page_bundle_indices=None,
     kv_cache_page_size=32,
+    kv_cache_local_seq_len=None,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -1004,6 +1036,7 @@ def call_sdpa(
         kv_cache_layer_idx=kv_cache_layer_idx,
         page_bundle_indices=page_bundle_indices,
         kv_cache_page_size=kv_cache_page_size,
+        kv_cache_local_seq_len=kv_cache_local_seq_len,
         kv_cache_sp_axis=sp_axis if page_bundle_indices is not None else None,
     )
     return tt_out
@@ -6997,6 +7030,9 @@ def run_ring_joint_sdpa_cross(
     topology=Topology.Linear,
     pcc_threshold=CROSS_PCC_THRESHOLD,
     rmse_threshold=CROSS_RMSE_THRESHOLD,
+    kv_cache_page_size=None,
+    extra_page_table=False,
+    extra_gather_buffer=False,
 ):
     """Validate is_cross ring SDPA (short Q, long K/V) against a non-causal torch oracle over the
     first logical_n keys."""
@@ -7058,16 +7094,6 @@ def run_ring_joint_sdpa_cross(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
             )
 
-        tt_Q = shard_to_device(Q, sdpa_input_shard_dims)
-        tt_K = shard_to_device(K, sdpa_input_shard_dims)
-        tt_V = shard_to_device(V, sdpa_input_shard_dims)
-        persistent_output_buffer_k = shard_to_device(
-            torch.zeros(BATCH_SIZE, nhq_total, kv_global, head_dim), persistent_kv_shard_dims
-        )
-        persistent_output_buffer_v = shard_to_device(
-            torch.zeros(BATCH_SIZE, nhq_total, kv_global, head_dim), persistent_kv_shard_dims
-        )
-
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -7075,6 +7101,38 @@ def run_ring_joint_sdpa_cross(
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+        tt_Q = shard_to_device(Q, sdpa_input_shard_dims)
+        page_table = None
+        if kv_cache_page_size is not None:
+            runtime = RingJointSDPARuntime(
+                mesh_device,
+                topology,
+                sp_axis,
+                tp_axis,
+                num_links,
+                sdpa_compute_grid,
+                ccl_column,
+                worker_sub_device_id,
+                ccl_semaphore_handles,
+                compute_kernel_config,
+            )
+            tt_K = upload_ring_paged_cache(K, runtime, ttnn.bfloat16, kv_cache_page_size, shard_heads=True)
+            tt_V = upload_ring_paged_cache(V, runtime, ttnn.bfloat16, kv_cache_page_size, shard_heads=True)
+            page_table = upload_ring_page_table(runtime, kv_global, kv_cache_page_size)
+            if extra_page_table:
+                # Spare entries address allocated data, but must not extend the logical layout.
+                page_table = ttnn.concat([page_table, page_table], dim=1)
+        else:
+            tt_K = shard_to_device(K, sdpa_input_shard_dims)
+            tt_V = shard_to_device(V, sdpa_input_shard_dims)
+        gather_seq = kv_global * (2 if extra_gather_buffer else 1)
+        persistent_output_buffer_k = shard_to_device(
+            torch.zeros(BATCH_SIZE, nhq_total, gather_seq, head_dim), persistent_kv_shard_dims
+        )
+        persistent_output_buffer_v = shard_to_device(
+            torch.zeros(BATCH_SIZE, nhq_total, gather_seq, head_dim), persistent_kv_shard_dims
+        )
+
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
         gt_main = torch_sdpa_reference(Q, K[:, :, :logical_n, :], V[:, :, :logical_n, :], is_causal=False)
@@ -7095,6 +7153,9 @@ def run_ring_joint_sdpa_cross(
                 is_causal=False,
                 is_balanced=False,
                 is_cross=True,
+                page_bundle_indices=page_table,
+                kv_cache_page_size=kv_cache_page_size or 32,
+                kv_cache_local_seq_len=kv_global // sp_size if extra_page_table else None,
                 p_buf_k=persistent_output_buffer_k,
                 p_buf_v=persistent_output_buffer_v,
                 program_config=program_config,
@@ -7122,6 +7183,7 @@ def run_ring_joint_sdpa_cross(
             ), f"Cross RMSE {rmse_main:.6f} >= {rmse_threshold} (q_chunk={q_chunk_size})"
             assert out_pass_main, f"Cross PCC {out_pcc_main} below {pcc_threshold} (q_chunk={q_chunk_size})"
 
+        return tt_out_torch
     finally:
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -7147,3 +7209,29 @@ def test_ring_joint_attention_sdpa_cross_accuracy(
         sp_size=sp_size,
         topology=topology,
     )
+
+
+@pytest.mark.parametrize("page_size", [32, 64])
+def test_ring_joint_attention_paged_cross_layout(page_size):
+    """LTX cross-attention keeps source positions independent of scratch and allocator slack."""
+    for logical_n in (9690, 128):
+        expected = None
+        for extra_table, extra_gather in ((False, False), (False, True), (True, True)):
+            output = run_ring_joint_sdpa_cross(
+                MESH_CONFIG,
+                nhq_total=32,
+                head_dim=64,
+                q_global=256,
+                kv_global=9728,
+                logical_n=logical_n,
+                q_chunk_sizes=[64],
+                tp_size=1,
+                sp_size=4,
+                kv_cache_page_size=page_size,
+                extra_page_table=extra_table,
+                extra_gather_buffer=extra_gather,
+            )
+            if expected is None:
+                expected = output
+            else:
+                torch.testing.assert_close(output, expected, rtol=0, atol=0)

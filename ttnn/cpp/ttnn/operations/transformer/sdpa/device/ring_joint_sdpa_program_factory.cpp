@@ -422,7 +422,7 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_cache_sp_axis) && !args.is_cross) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -456,7 +456,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     const auto& q_shape = tensor_args.input_q.logical_shape();
     const uint32_t k_chunk_size = args.get_k_chunk_size();
     const uint32_t q_local_padded_N = q_shape[2];
-    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
+    const uint32_t kv_local_padded_N = tensor_args.local_kv_program_seq_len(args);
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
 
     RingJointRuntimeDerivation derivation;
@@ -476,10 +476,10 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_cache_sp_axis) && !args.is_cross;
+    derivation.kernel_chunked = tensor_args.is_chunked(args) && !args.is_cross;
     // The metadata path derives kv_actual_isl on-device for chunked prefill.
     derivation.kv_pad_rotation_enabled =
-        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_cache_sp_axis));
+        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked(args));
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
@@ -578,7 +578,10 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
 // dispatch is bounded) and the cache-hit override path.
 std::optional<uint32_t> compute_gather_valid_Ht(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_cache_sp_axis))) {
+    if (tensor_args.has_paged_kv_cache()) {
+        return tensor_args.local_kv_padded_seq_len(args) / tt::constants::TILE_HEIGHT;
+    }
+    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked(args))) {
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
@@ -726,7 +729,7 @@ void apply_ring_joint_scalar_runtime_args(
                         const uint32_t Ht =
                             tensor_args.has_paged_kv_cache()
                                 ? static_cast<uint32_t>(
-                                      tensor_args.local_kv_seq_len(args.kv_cache_sp_axis) / tt::constants::TILE_HEIGHT)
+                                      tensor_args.local_kv_program_seq_len(args) / tt::constants::TILE_HEIGHT)
                                 : shape[2] / tt::constants::TILE_HEIGHT;
                         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
                         const uint32_t valid_Ht = std::min(gather_valid_Ht, Ht);
@@ -1069,7 +1072,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t NHV = tensor_args.v_num_heads();
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
-    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
+    const uint32_t kv_local_padded_N = tensor_args.local_kv_program_seq_len(args);
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t gathered_padded_N = k_shape[2];
     const uint32_t global_padded_N = kv_local_padded_N * ring_size;
@@ -1106,7 +1109,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_cache_sp_axis);
+    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked(args);
     const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation() || kv_pad_from_metadata;
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
@@ -2963,7 +2966,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .page_table_slot = args.kv_cache_slot_idx,
             .page_table_sp_size = tensor_args.page_table_sp_size(args.kv_cache_sp_axis),
             .page_table_sp_rank = args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u,
-            .local_cache_tile_rows = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis) / tt::constants::TILE_HEIGHT,
+            .local_cache_tile_rows = tensor_args.local_kv_program_seq_len(args) / tt::constants::TILE_HEIGHT,
         };
         log_debug(
             tt::LogOp,
@@ -3041,7 +3044,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             args.kv_cache_page_size,
             args.kv_cache_slot_idx,
             tensor_args.page_table_sp_size(args.kv_cache_sp_axis),
-            args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u);
+            args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u,
+            tensor_args.has_paged_kv_cache() ? std::optional<uint32_t>(tensor_args.local_kv_program_seq_len(args))
+                                             : std::nullopt);
     }
 
     return desc;

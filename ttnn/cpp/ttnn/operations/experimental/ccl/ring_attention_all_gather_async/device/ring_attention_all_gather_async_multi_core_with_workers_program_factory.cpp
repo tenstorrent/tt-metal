@@ -588,7 +588,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_page_size,
     uint32_t kv_cache_slot_idx,
     uint32_t kv_cache_sp_size,
-    uint32_t kv_cache_sp_rank) {
+    uint32_t kv_cache_sp_rank,
+    std::optional<uint32_t> paged_local_seq_len) {
+    TT_FATAL(
+        !page_bundle_indices.has_value() || paged_local_seq_len.has_value(),
+        "Paged all-gather requires an explicit local KV length");
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -1099,12 +1103,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 num_heads;
 
             const uint32_t input_tensor_Wt = input_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
-            const uint32_t input_tensor_Ht =
-                has_page_bundles
-                    ? static_cast<uint32_t>(
-                          ((page_bundle_indices->logical_shape()[1] + kv_cache_sp_size - 1) / kv_cache_sp_size) *
-                          (kv_cache_page_size / tt::constants::TILE_HEIGHT))
-                    : input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
+            const uint32_t input_tensor_Ht = has_page_bundles
+                                                 ? *paged_local_seq_len / tt::constants::TILE_HEIGHT
+                                                 : input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
             const uint32_t output_tensor_Ht = output_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             TT_ASSERT(!(input_tensor_shape[kWidthDimension] % tt::constants::TILE_WIDTH));

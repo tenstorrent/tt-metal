@@ -252,6 +252,9 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
 // Runtime-patched scalar arguments and mesh placements are not part of the program hash.
 // Validate them on both cache misses and hits so a cached program cannot bypass these checks.
 void validate_runtime_inputs(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    TT_FATAL(
+        !args.kv_cache_local_seq_len.has_value() || (tensor_args.has_paged_kv_cache() && args.is_cross),
+        "kv_cache_local_seq_len is only supported for paged cross-attention");
     if (tensor_args.has_paged_kv_cache()) {
         const auto& bundles = tensor_args.page_bundle_indices.value();
         const auto& shape = bundles.logical_shape();
@@ -266,14 +269,26 @@ void validate_runtime_inputs(const RingJointSDPAParams& args, const RingJointSDP
             "kv_cache_sp_axis is out of range");
         const uint32_t sp = tensor_args.page_table_sp_size(args.kv_cache_sp_axis);
         TT_FATAL(shape[1] >= sp, "page table must contain at least one page per SP rank");
-        if (shape[1] % sp != 0 || args.has_kv_pad_rotation()) {
-            const uint32_t q_local = tensor_args.input_q.logical_shape()[2];
-            const uint32_t chunk_global = q_local * args.ring_size;
-            const uint32_t valid_local = ((args.logical_n + chunk_global - 1) / chunk_global) * q_local;
+        TT_FATAL(
+            args.ring_size > 0 && tensor_args.input_q.logical_shape()[2] > 0, "Ring size and Q length must be nonzero");
+        if (args.is_cross) {
+            const uint32_t local_seq_len = tensor_args.local_kv_padded_seq_len(args);
             TT_FATAL(
-                args.has_kv_pad_rotation() && valid_local <= (shape[1] / sp) * args.kv_cache_page_size,
-                "Paged rotation and uneven SP tables require a logical_n-valid prefix within every rank's capacity");
+                local_seq_len > 0 && local_seq_len % tt::constants::TILE_HEIGHT == 0,
+                "Paged cross-attention local KV length must be positive and tile aligned");
+            TT_FATAL(
+                args.logical_n <= uint64_t{local_seq_len} * args.ring_size,
+                "logical_n exceeds the paged cross-attention KV layout");
         }
+        TT_FATAL(
+            args.logical_n > 0 &&
+                tensor_args.local_kv_padded_seq_len(args) <= (shape[1] / sp) * args.kv_cache_page_size,
+            "Padded paged KV length must fit in every rank's page-table capacity");
+        TT_FATAL(
+            tensor_args.local_kv_padded_seq_len(args) <= tensor_args.local_kv_program_seq_len(args),
+            "Padded paged KV length exceeds the reusable gather buffer");
+        TT_FATAL(
+            shape[1] % sp == 0 || args.has_kv_pad_rotation(), "Uneven SP page tables require KV-pad-aware rotation");
     } else {
         TT_FATAL(
             args.kv_cache_slot_idx == 0 && !args.kv_cache_sp_axis.has_value(),
@@ -298,7 +313,7 @@ void validate_runtime_inputs(const RingJointSDPAParams& args, const RingJointSDP
 
     if (args.has_kv_pad_rotation()) {
         const auto N_local_q = tensor_args.input_q.logical_shape()[2];
-        const auto N_local_kv = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
+        const auto N_local_kv = tensor_args.local_kv_capacity(args.kv_cache_sp_axis);
         const auto kv_actual_isl = args.kv_actual_isl.value();
         TT_FATAL(
             args.logical_n >= kv_actual_isl,
@@ -335,7 +350,7 @@ void validate_runtime_inputs(const RingJointSDPAParams& args, const RingJointSDP
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_cache_sp_axis)) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
@@ -575,7 +590,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.all_gather_tensor_args,
         args.has_indexed_kv_cache() || tensor_args.has_metadata() || tensor_args.has_paged_kv_cache(),
         compact_gather_dim_minimum,
-        tensor_args.has_paged_kv_cache() ? std::optional<uint32_t>(tensor_args.local_kv_seq_len(args.kv_cache_sp_axis))
+        tensor_args.has_paged_kv_cache() ? std::optional<uint32_t>(tensor_args.local_kv_program_seq_len(args))
                                          : std::nullopt);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
@@ -605,10 +620,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
-    // Chunked-prefill (`tensor_args.is_chunked(args.kv_cache_sp_axis)`): Q is shorter than the per-device K shard
-    // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
-    // is_causal=True path.
-    const bool is_chunked = tensor_args.is_chunked(args.kv_cache_sp_axis);
+    // Paged mode follows the valid prefix and explicit rotation metadata, not pool capacity.
+    const bool is_chunked = tensor_args.is_chunked(args);
 
     const auto dtype = input_tensor_q.dtype();
     if ((!args.is_causal && !is_chunked) || args.is_cross) {
@@ -640,7 +653,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
     const auto N_local_q = q_shape[2];
-    const auto N_local_kv = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
+    const auto N_local_kv = tensor_args.local_kv_program_seq_len(args);
     const auto gathered_buffer_n = k_shape[2];
     const auto N_global = args.has_sliding_window() ? N_local_kv * args.ring_size : gathered_buffer_n;
     const auto L = has_joint_tensors ? joint_q_shape[2] : 0;
@@ -758,11 +771,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.is_causal,
         args.is_cross);
 
-    // Cross is the non-causal short-Q/long-K/V path: requires is_chunked, excludes is_causal and
-    // balanced (causal-only) zigzag.
+    // Cross compares padded source lengths independently of causal chunk detection.
+    // Its valid key prefix may be shorter than the query sequence.
     if (args.is_cross) {
         TT_FATAL(
-            is_chunked,
+            N_local_q < N_local_kv,
             "is_cross requires per-device Q seq length < K/V seq length; use the full-prefill non-causal "
             "path for equal lengths. Got N_local_q={}, N_local_kv={}",
             N_local_q,
@@ -777,7 +790,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // checks run in validate_runtime_inputs at entry and on cache hits.
         TT_FATAL(
             is_chunked,
-            "kv_actual_isl enables KV-pad-aware rotation and requires chunked-prefill input (Q.seq < K.seq). "
+            "kv_actual_isl enables KV-pad-aware rotation and requires chunked-prefill input. "
             "Got N_local_q={}, N_local_kv={}",
             N_local_q,
             N_local_kv);
@@ -1146,6 +1159,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_cache_layer_idx,
         args.kv_cache_page_size,
         args.kv_cache_sp_axis,
+        args.kv_cache_local_seq_len,
         tensor_args.has_latent_v(),
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
@@ -1287,7 +1301,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const uint32_t kv_cache_page_size,
     const std::optional<uint32_t> sliding_window_size,
     const uint32_t kv_cache_slot_idx,
-    const std::optional<uint32_t> kv_cache_sp_axis) {
+    const std::optional<uint32_t> kv_cache_sp_axis,
+    const std::optional<uint32_t> kv_cache_local_seq_len) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1479,7 +1494,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_page_size,
         sliding_window_size,
         kv_cache_slot_idx,
-        kv_cache_sp_axis);
+        kv_cache_sp_axis,
+        kv_cache_local_seq_len);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
