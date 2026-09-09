@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -84,6 +85,10 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
+    # KV dedup: also shard the KV/index caches across tp_axis, so each of the sp*tp devices stores a
+    # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated and how the
+    # KV chunk address table was built; sparse (DSA) path only.
+    tp_shard_kv: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -245,6 +250,7 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
 
@@ -521,7 +527,9 @@ class TtPrefillRuntime:
         The per-element slices read from the persistent copy rather than metadata_msg so both forms are
         guaranteed to carry the same chunk's words."""
         ttnn.copy(metadata_msg, self._trace_metadata_msg)
-        for i, dst in enumerate(self._trace_metadata):
+        # .scalars, not the whole tuple: ChunkMetadata's 4th field (Mistral's llama4_scale) is
+        # persistent rather than per-chunk and has no word in the packed [1,1,1,3] message.
+        for i, dst in enumerate(self._trace_metadata.scalars):
             word = ttnn.slice(self._trace_metadata_msg, [0, 0, 0, i], [1, 1, 1, i + 1])
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
@@ -567,7 +575,14 @@ class TtPrefillRuntime:
         # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
         self._trace_input = self.make_chunk_input([0] * chunk)
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
-        self._trace_metadata = (self._meta1_dev(0), self._meta1_dev(0), self._meta1_dev(chunk))
+        # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
+        # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
+        self._trace_metadata = ChunkMetadata(
+            self._meta1_dev(0),
+            self._meta1_dev(0),
+            self._meta1_dev(chunk),
+            self.model.rope_setup.make_llama4_scale_buffer(chunk),
+        )
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
         self._trace_metadata_msg = self._meta3_dev((0, 0, chunk))
@@ -691,6 +706,26 @@ class TtPrefillRuntime:
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
             ttnn.copy(input_tensor, self._trace_input)
+            # The three scalars come off the device from metadata_msg -- on this path the host is
+            # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
+            # is the point of consuming them on-device.
+            #
+            # That is also why Mistral's query-scale buffer cannot ride along here: it is computed on
+            # host from actual_start, and there is no actual_start to compute it from. An unrefreshed
+            # buffer is ones-initialised, so the replay would silently apply a temperature of 1.0 --
+            # a wrong softmax scale that still produces plausible output. Fail instead; wiring the
+            # scale into the packed record (or deriving it on-device) is follow-up work
+            # (https://github.com/tenstorrent/tt-metal/issues/55126).
+            #
+            # An explicit raise rather than an assert, unlike most guards in this tree: `python -O`
+            # strips asserts, and stripping THIS one does not crash -- it re-enables the silent
+            # wrong-temperature path, which the chunked PCC gate cannot see (~0.002 against 0.98).
+            if self._trace_metadata.llama4_scale is not None:
+                raise RuntimeError(
+                    "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
+                    "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
+                    "through the host-scalar path until the scale is carried in the metadata record"
+                )
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
@@ -947,6 +982,7 @@ class TtPrefillRuntime:
                 layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
             ]
 
+        # The table must describe the SAME layout the caches were allocated with and the write op produced.
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kvpe_cache=kv_caches.kvpe,
@@ -955,6 +991,7 @@ class TtPrefillRuntime:
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
+            tp_shard_kv=self.config.tp_shard_kv,
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
@@ -972,6 +1009,12 @@ class TtPrefillRuntime:
         not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
+        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. Under
+        # KV dedup each column holds a distinct 1/tp of its row, so it would drop (tp-1)/tp of the tokens.
+        assert not self.config.tp_shard_kv, (
+            "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
+            "host reconstruction. Use the mock-migration producer read-back to validate a TP-sharded cache."
+        )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
         # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical

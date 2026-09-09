@@ -568,6 +568,8 @@ struct Metal2BindingsSnapshot {
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
+    std::map<std::string, bool> dfb_accessor_is_relay;
+    std::map<std::string, uint8_t> dfb_accessor_prefetcher_pipe_id;
     std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
@@ -579,6 +581,12 @@ struct Metal2BindingsSnapshot {
         std::string s;
         for (const auto& [name, id] : dfb_accessors) {
             s += ":dfb:" + name + "=" + std::to_string(id);
+            if (dfb_accessor_is_relay.contains(name) && dfb_accessor_is_relay.at(name)) {
+                s += ":relay";
+                if (dfb_accessor_prefetcher_pipe_id.contains(name) && dfb_accessor_prefetcher_pipe_id.at(name) != 0xFF) {
+                    s += ":prefetcher_pipe" + std::to_string(dfb_accessor_prefetcher_pipe_id.at(name));
+                }
+            }
         }
         for (const auto& [name, h] : sem_accessors) {
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
@@ -797,7 +805,11 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     s.runtime_arg_names = kernel.get_runtime_arg_names();
     s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
     kernel.process_dataflow_buffer_binding_handles(
-        [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
+        [&s](const std::string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
+            s.dfb_accessors[name] = id;
+            s.dfb_accessor_is_relay[name] = is_relay;
+            s.dfb_accessor_prefetcher_pipe_id[name] = prefetcher_pipe_id;
+        });
     kernel.process_semaphore_binding_handles(
         [&s](const std::string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
             s.sem_accessors[name] = {id, scope, total_binder_harts};
@@ -875,15 +887,8 @@ static void emit_metal2_namespaces(
             named_compile_args.begin(), named_compile_args.end());
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
-            // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
-            // which is not a valid flat C++ identifier, so emitting
-            // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
-            // skip them to keep the flat `args::` form namespaced-safe. This change
-            // does NOT emit the matching `blaze_ct_args::<ns>` structs — that is a separate
-            // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
-            // a kernel that references `blaze_ct_args::<ns>` requires that step to be
-            // present, so skipping here only prevents invalid flat C++, it does not
-            // itself make namespaced args available.
+            // Dotted keys cannot name flat args:: constants.
+            // Blaze constants are emitted separately from named_ct_arg_namespaces.
             if (name.find('.') != std::string::npos) {
                 continue;
             }
@@ -894,7 +899,18 @@ static void emit_metal2_namespaces(
     if (!s.dfb_accessors.empty()) {
         f << "namespace dfb {\n";
         for (const auto& [name, id] : s.dfb_accessors) {
-            f << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+            const bool is_relay = s.dfb_accessor_is_relay.contains(name) && s.dfb_accessor_is_relay.at(name);
+            if (is_relay) {
+                const uint8_t prefetcher_pipe_id =
+                    s.dfb_accessor_prefetcher_pipe_id.contains(name) ? s.dfb_accessor_prefetcher_pipe_id.at(name) : 0xFF;
+                f << "constexpr RelayDFBBindingToken " << name << "{" << id;
+                if (prefetcher_pipe_id != 0xFF) {
+                    f << ", " << static_cast<uint32_t>(prefetcher_pipe_id);
+                }
+                f << "};\n";
+            } else {
+                f << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+            }
         }
         f << "}  // namespace dfb\n";
     }
@@ -1817,12 +1833,16 @@ static void collect_kernels(
                 // be part of the key. Without it, two kernels sharing source/CT args/defines
                 // but differing in Blaze RT names or layout alias in the JIT and disk caches
                 // and load a stale descriptor layout (the .so then reads runtime args from
-                // the wrong slots). The named CT namespaces need no separate entry: they are
-                // a deterministic split of the flat named_compile_args serialized above.
-                // Determinism: NamedRuntimeArgNamespaces is a std::map (sorted ns order) of
-                // declaration-ordered vectors, so this iteration order is fixed; ns/field are
-                // validated C++ identifiers (alnum + '_'), so they cannot contain the
-                // ':'/'='/',' separators and the serialization is unambiguous.
+                // the wrong slots). Typed CT args bypass named_compile_args, so serialize them too.
+                // Both namespace maps have a fixed iteration order: namespaces are sorted
+                // and entries retain declaration order. Names cannot contain the ':', '=',
+                // or ',' separators used below.
+                for (const auto& [ns, entries] : named_ct_arg_namespaces) {
+                    key += ":bctns:" + ns;
+                    for (const auto& [field, value] : entries) {
+                        key += ":bct:" + field + "=" + std::to_string(value);
+                    }
+                }
                 for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
                     key += ":brtns:" + ns;
                     for (const auto& entry : entries) {

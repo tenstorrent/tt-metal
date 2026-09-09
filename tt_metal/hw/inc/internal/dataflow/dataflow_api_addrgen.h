@@ -122,7 +122,7 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
 #endif
         // Keep default as Bfp8?
         default: return ((index << datum_shift) + (index << (exp_shift)));
-    };
+    }
 }
 
 // Check for get_noc_addr method

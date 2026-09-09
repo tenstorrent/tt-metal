@@ -16,7 +16,10 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.migration import (
+    is_per_host_storage,
     migration_file_export_enabled,
+    migration_table_path,
+    migration_table_path_is_explicit,
     remove_stale_device_map_sidecars,
     serialize_device_map,
 )
@@ -81,6 +84,14 @@ KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 DFLASH_ENABLED = (
     ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
 )
+
+# KV dedup: also shard the KV/index caches across TP (1/(sp*tp) slice per device) instead of TP-replicating
+# them. Storage only, cache content bit-identical; sparse (DSA) path only.
+TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", "0") == "1"
+assert not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv, (
+    f"PREFILL_TP_SHARD_KV=1 is not supported by model {ADAPTER.name!r}: its allocate_kv_cache does not pass "
+    f"params.tp_shard_kv to the cache allocators, so writes would be TP-sharded into TP-replicated caches."
+)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
@@ -89,6 +100,14 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
+
+# Traced writes go through the metadata tensors, which cannot supply the host kv_actual_global the
+# TP-sharded reader needs to pick its 1/tp source window. Unreachable today (trace is already rejected for
+# every sparse/DSA model, and tp_shard_kv is sparse-only), so this is the tripwire for when that lifts.
+assert not (TP_SHARD_KV and USE_TRACE), (
+    "PREFILL_TP_SHARD_KV=1 is not supported with PREFILL_USE_TRACE=1: the traced metadata write path has "
+    "no host kv_actual_global, so the TP-sharded reader and the writer would disagree on the chunk start."
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
@@ -386,6 +405,7 @@ def _print_config() -> None:
             f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
+        ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
@@ -397,10 +417,7 @@ def _print_config() -> None:
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
-        (
-            "PREFILL_MIGRATION_TABLE_PATH",
-            os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
-        ),
+        ("PREFILL_MIGRATION_TABLE_PATH", migration_table_path()),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
         ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
         (
@@ -491,6 +508,7 @@ def main() -> None:
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
@@ -565,7 +583,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _file_export = migration_file_export_enabled()
 
     if _mock_migration and not _migration_enabled:
-        _mock_table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        _mock_table_path = migration_table_path()
         _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
         remove_stale_device_map_sidecars(_mock_map_path)
@@ -589,17 +607,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         first_layer_idx, num_my_layers = compute_layer_split(
             NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
         )[rank]
-        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        table_path = migration_table_path()
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
-        if num_ranks > 1:
-            _abs_table = os.path.abspath(table_path)
-            if any(_abs_table == p or _abs_table.startswith(p + "/") for p in ("/tmp", "/dev/shm", "/run", "/var/tmp")):
+        if num_ranks > 1 and is_per_host_storage(table_path):
+            if migration_table_path_is_explicit():
                 raise ValueError(
-                    f"PREFILL_MIGRATION_TABLE_PATH={_abs_table} is on per-host storage; with num_ranks="
-                    f"{num_ranks} the table rank 0 writes is invisible to the other hosts' readers. Point "
-                    "it at shared/NFS storage (e.g. /data/...)."
+                    f"PREFILL_MIGRATION_TABLE_PATH={os.path.abspath(table_path)} is on per-host storage; "
+                    f"with num_ranks={num_ranks} the table rank 0 writes is invisible to the other hosts' "
+                    "readers. Point it at shared/NFS storage (e.g. /data/...)."
                 )
+            logger.warning(
+                f"[migration] KV chunk table defaults to per-host {table_path} at num_ranks={num_ranks}; "
+                "readers on other hosts cannot see it. Set PREFILL_MIGRATION_TABLE_PATH to shared storage "
+                "if one is expected."
+            )
 
         if is_first_rank and os.path.exists(table_path):
             logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
@@ -695,7 +717,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 "publish a table covering only its own layer slice; a merged mock table is not "
                 "implemented); run single-rank or unset PREFILL_MOCK_MIGRATION."
             )
-        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        table_path = migration_table_path()
         runtime.build_kv_chunk_table(kv_caches, path=table_path)
         device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         serialize_device_map(mesh_device, device_map_path)
