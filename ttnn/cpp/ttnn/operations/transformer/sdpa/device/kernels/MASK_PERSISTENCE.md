@@ -1,7 +1,7 @@
 # Persistent per-brick mask block in the neighborhood-SDPA reader
 
 Branch `mask-persistence` (off `na-integration` 26e9c99), 2026-09-04. Commits `f548b5586d6`
-(interior-only persistence + test) and `125a6656f5a` (signature-keyed persistence).
+(interior-only persistence + test) and `125a6656f5a` (WindowClamp-keyed persistence).
 
 ## Result
 
@@ -37,7 +37,7 @@ window is shifted by the same amount at both ends of the brick -- 0 when the win
 when it clamps at 0 or at `volume - window` the shift pins the brick's absolute position, and the
 shifts of the sites in between follow. Interior chunks are the all-zero case; every T-edge chunk
 along one W row shares another; and so on. Work items are assigned to cores W-fastest, so a core
-sees long runs of chunks with the same signature.
+sees long runs of chunks with the same WindowClamp.
 
 ## The mechanism
 
@@ -49,12 +49,12 @@ sees long runs of chunks with the same signature.
   TensorAccessorArgs chain). `cb_push_back` wraps the write pointer to base exactly when it reaches
   the limit and the CB is an exact multiple of the per-chunk push, so every work item writes the
   same L1 addresses.
-- Per chunk the reader computes `per_brick_block_signature` (gather-origin offset per axis + per
+- Per chunk the reader computes `per_brick_window_clamp` (gather-origin offset per axis + per
   brick, per axis, the two window shifts + ghost flags; 1 + 2*bricks words) and compares it with the
-  signature of the block resident in `cb_mask`. Equal: no mask work at all (K/V reads, barrier,
+  WindowClamp of the block resident in `cb_mask`. Equal: no mask work at all (K/V reads, barrier,
   pushes only). Different: write the block as before (table DMA / fill / memset per tile) and record
-  the new signature. A brick beyond the resident tensor (the T-overhang of the last chunk) is a flag
-  in the signature -- its rows are generated open and its keys lie inside the resident tensor
+  the new WindowClamp. A brick beyond the resident tensor (the T-overhang of the last chunk) is a flag
+  in the WindowClamp -- its rows are generated open and its keys lie inside the resident tensor
   because the planner clamps the gather. A brick below the volume (a low-edge halo brick) is not
   persistable; query bricks are never in the halo, so this never fires in practice.
 - The chunk==stride path keeps its original, table-based `use_interior_table` /
@@ -95,12 +95,12 @@ only changes edge bricks (table DMA instead of `fill_mask_tile`), took attention
 without touching an interior chunk, and the memset probe's 3230 ms is the floor once every core,
 edge included, does only cheap writes.
 
-**The T-overhang, the same lesson once more.** The signature version's first run landed at 5404 ms,
+**The T-overhang, the same lesson once more.** The WindowClamp version's first run landed at 5404 ms,
 not the floor. The counters showed 2.5% of cores still generating every item: the cores owning the
 LAST T slice. The volume is 39 T-bricks and the chunk is 2, so the 20th chunk's second brick lies
-beyond the volume -- a ghost brick -- and the signature refused to persist any chunk containing one.
+beyond the volume -- a ghost brick -- and the WindowClamp refused to persist any chunk containing one.
 A tiny fraction of chunks, again concentrated on whole cores, again the critical path. Folding a
-ghost flag into the signature (the ghost brick's rows are generated open, and its keys lie inside
+ghost flag into the WindowClamp (the ghost brick's rows are generated open, and its keys lie inside
 the resident tensor because the planner clamps the gather) put those cores in skip mode too and
 gave the final 3377 ms.
 
@@ -127,7 +127,7 @@ persistence path was not being exercised by the tests meant to cover it.
 ## Remaining lever
 
 The 4.1% of chunks that refill are on cores whose runs cross W-edge chunks (each W-edge brick has
-its own signature: up to 25 rewrites of 336 tiles per core, ~7 per W row). A second resident
+its own WindowClamp: up to 25 rewrites of 336 tiles per core, ~7 per W row). A second resident
 block, or ordering work so a core's run stays inside one W-regime, would remove those. The banded
 flash (`BANDED_FLASH_*.md`, branch `banded-flash`) is orthogonal: it targets the ~3.2 s compute side
 and measured slower than the default there.
