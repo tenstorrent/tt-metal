@@ -123,6 +123,7 @@ void kernel_main() {
     constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
 
     constexpr auto dfb_out_o = dfb::out_o;
+    constexpr auto dfb_out_worker = dfb::out_worker;
     constexpr auto dfb_out_m = dfb::out_m;
     constexpr auto dfb_out_l = dfb::out_l;
     constexpr auto dfb_out_final = dfb::out;
@@ -180,7 +181,7 @@ void kernel_main() {
             // Read cur_pos from the DFB using mailbox-based synchronization (issue #27979).
             DataflowBuffer dfb_cur_pos_buf(dfb_cur_pos);
             dfb_cur_pos_buf.wait_front(1);
-            cur_pos = dfb_cur_pos_buf.read_tile_value(0, cur_batch / q_heads_parallel_factor);
+            cur_pos = ckernel::read_tile_value(dfb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
             // read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
             // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
             dummy_unpack(dfb_cur_pos);
@@ -711,8 +712,8 @@ void kernel_main() {
             //   - dfb_out_accumulate_im: O
             //   - dfb_prev_sum: L
             //   - dfb_prev_max: M
-            // Move O to the output DFB
-            move_block<true>(dfb_out_accumulate_im, dfb_out_o, out_chunk_tiles);
+            // Move O to the output DFB for the writer to send to parent
+            move_block<true>(dfb_out_accumulate_im, dfb_out_worker, out_chunk_tiles);
             // Move M to the output DFB
             move_block<true>(dfb_prev_max, dfb_out_m, Sq_chunk_t);
             // Move L to the output DFB
