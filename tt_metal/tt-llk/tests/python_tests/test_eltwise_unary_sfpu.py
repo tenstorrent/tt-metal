@@ -1093,72 +1093,30 @@ def test_eltwise_unary_sfpu_int(
 
 _INT32_MAX = 2**31 - 1
 
-# relu_min's integer threshold, which is the last unreached branch of that kernel.
-#
-# The vInt branch of _relu_min_ (Wormhole) re-encodes its threshold from two's complement
-# into the sign+magnitude order SFPSWAP compares in -- but only when the threshold is
-# negative:
-#
-#     const int scalar = static_cast<int>(threshold);
-#     if (scalar < 0) {
-#         const std::uint32_t magnitude = -static_cast<std::uint32_t>(scalar);
-#         sign_mag = 0x80000000u | (magnitude > 0x7FFFFFFFu ? 0x7FFFFFFFu : magnitude);
-#     }
-#
-# Nothing reaches that `if`. The harness's own dispatch hard-coded 5u, and no Compute API
-# entry point passes a negative integer threshold either (relu_tile_int32 passes 0, and
-# relu_min_tile_int32 routes to a different kernel entirely). So the re-encoding shipped
-# untested. Overriding the threshold via SFPU_RELU_MIN_INT_THRESHOLD is what reaches it.
-#
-# Both signs are swept, because the negation is only meaningful against a control: the
-# non-negative thresholds take the straight-through path and must keep agreeing.
-#
-# The negative extreme is deliberately one off the end of the range rather than on it.
-# -(2^31 - 1) is exactly the bound CustomStrategy clamps stimuli to (_get_integer_bounds
-# returns info.min + 1), so at that threshold every generated value lands on or above the
-# threshold and the clamp branch never fires -- the case would look extreme and assert
-# nothing. -(2^31 - 2) leaves the clamped stimuli one below it.
-#
-# INT_MIN is absent for the same clamping reason plus a representation one: sign+magnitude
-# has a 31-bit magnitude field, so Dst cannot hold -2^31 at all and neither arch can be
-# handed it as a stimulus. Both kernels do the mathematically right thing with it as a
-# *threshold* -- no representable input is below it, so the clamp correctly never fires --
-# which is not something this sweep can assert.
+# relu_min's vInt branch is the last unreached path in that kernel and only a negative
+# threshold reaches it, so both signs are swept, the non-negative ones as the control.
+# The negative extreme sits one off the end of the range because -(2^31 - 1) is exactly the
+# bound CustomStrategy clamps stimuli to (_get_integer_bounds returns info.min + 1), which
+# would leave nothing below the threshold for the clamp to do. INT_MIN is absent for that
+# reason plus representation: Dst cannot hold -2^31, so it cannot be delivered as a stimulus
+# either.
 _RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
 
 
 def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
-    """Values straddling *threshold*, plus both ends of the range, so every compare fires.
+    """Values straddling *threshold*, plus both ends of int32.
 
-    Built around the threshold rather than from a fixed span: at -1000 a positive-only
-    spread would sit entirely on the pass-through side and the clamp would never fire,
-    which is the same way the float domain used to be vacuous.
-
-    Negatives are required here -- max(x, -5) only clamps for x < -5 -- so unlike
-    _int_unary_stimuli_spec this cannot stay positive-only. (The positive-only rule over
-    there is about ops that are also read as unsigned, which is a different constraint.)
-
-    Negative inputs and a negative threshold matter independently, which is worth keeping
-    straight. Negative *inputs* alone are harmless where the compare is a sign+magnitude
-    order: for a non-negative threshold that ordering cannot change the outcome, because a
-    negative input loses under either encoding. Only once the *threshold* is negative too
-    does the encoding of the two operands have to actually agree -- on Wormhole, that both
-    reach SFPSWAP in sign+magnitude.
-
-    The two range ends are here for a second, independent failure mode, and they matter on
-    Blackhole rather than Wormhole. That kernel compares in two's complement, and the SFPU
-    signed compare subtracts and tests the sign of the result, so it inverts its answer for
-    operands >= 2^31 apart. A stimulus set that only ever reaches threshold +/- 1000 cannot
-    see that: it takes an input at one end of int32 against a threshold at the other. Every
-    threshold therefore gets +/-(2^31 - 1) as well, which is a pass-through case under an
-    exact golden and so costs nothing to assert. Wormhole is immune by construction --
-    SFPSWAP orders operands instead of subtracting -- and passes the same cases.
+    Built around the threshold rather than a fixed span, because a positive-only spread
+    would sit entirely on the pass-through side of a negative threshold and the clamp would
+    never fire. Negatives are therefore required here, unlike _int_unary_stimuli_spec. The
+    range ends cover the compare between far-apart operands, which a set reaching only
+    threshold +/- 1000 cannot; they are pass-through cases under an exact golden, so they
+    cost nothing to assert.
     """
     straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
     # A decade either side, so the comparison is exercised well away from the boundary too.
     spread = [float(threshold + d) for d in (-1000, -100, -10, 10, 100, 1000)]
-    # Both ends of int32, for the far-apart compare. CustomStrategy clamps to info.min + 1,
-    # so -2**31 would arrive as -(2**31 - 1) anyway; ask for what is representable.
+    # CustomStrategy clamps to info.min + 1, so ask for what is representable.
     extremes = [float(-_INT32_MAX), float(_INT32_MAX)]
     return StimuliSpec.custom(values=straddle + spread + extremes, seed=0)
 
@@ -1175,15 +1133,8 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
 ):
     """relu_min on Int32 against both signs of threshold.
 
-    The negative cases are the point: they are the only inputs that reach the
-    sign+magnitude re-encoding in _relu_min_'s vInt branch, and the only ones whose result
-    depends on the two operands reaching the compare in the same representation. Exact
-    integer golden, so a mis-encoded threshold shows up as a wrong clamp value rather than
-    a tolerance miss.
-
-    The stimuli reach both ends of int32 at every threshold, which is what covers the other
-    way this can go wrong -- a subtracting compare inverting for far-apart operands. See
-    _relu_min_int_stimuli_spec.
+    The negative half is the point, and the golden is an exact integer max, so a wrong
+    threshold shows up as a wrong clamp value rather than a tolerance miss.
     """
     # ReluMin is hardcoded here rather than parametrized, so the guard takes it directly.
     _skip_coverage_unsupported(MathOperation.ReluMin)
