@@ -343,7 +343,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                           1.0F / (num_cores_per_batch * num_cores_per_group),
                           im_data_format,
                           {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
-                          compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+                          compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                          // Masking leaves input/mask unpack formats active. The new
+                          // mean call consumes intermediates and its planned auxiliary.
+                          compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

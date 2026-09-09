@@ -34,7 +34,9 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
     float global_scalar,
     tt::tt_metal::DataType dtype,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
-    compute_kernel_lib::ReduceInputPolicy second_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
+    compute_kernel_lib::ReduceInputPolicy second_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+    compute_kernel_lib::ReduceDataFormatReconfigMode first_native_reconfig =
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE) {
     using namespace tt::tt_metal;
     namespace rh = ttnn::kernel_lib::host;
     const TensorLayout layout(dtype, PageConfig(Layout::TILE), MemoryConfig{});
@@ -44,7 +46,9 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
                       uint32_t columns,
                       float scalar,
                       compute_kernel_lib::ReduceInputPolicy policy,
-                      rh::ReduceAuxiliaryPlan& auxiliary) {
+                      rh::ReduceAuxiliaryPlan& auxiliary,
+                      compute_kernel_lib::ReduceDataFormatReconfigMode native_reconfig =
+                          compute_kernel_lib::ReduceDataFormatReconfigMode::NONE) {
         auto plan = rh::make_reduce_plan(
             TensorSpec(Shape{rows * 32, columns * 32}, layout),
             output,
@@ -54,10 +58,11 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
             ReduceFp32Mode::Fast,
             hardware);
         plan.input_policy = policy;
-        // Native calls retain the caller-owned format state. Add consumes two
-        // input operands instead of input/scaler, so it must configure that pair.
+        // Existing native calls retain caller-owned format state. The sharded
+        // mean follows masking and must restore its reduction operands instead.
+        // Add consumes two inputs instead of input/scaler and configures that pair.
         plan.reconfig_mode = plan.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile
-                                 ? compute_kernel_lib::ReduceDataFormatReconfigMode::NONE
+                                 ? native_reconfig
                                  : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
         const rh::ReduceCallPlan call{
             .input_cb_id = 0,
@@ -74,7 +79,8 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         first_columns,
         local_scalar,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        result.local_auxiliary);
+        result.local_auxiliary,
+        first_native_reconfig);
     append(second_rows, second_columns, local_scalar, second_policy, result.local_auxiliary);
     append(
         global_tiles,
