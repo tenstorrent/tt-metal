@@ -9,8 +9,8 @@ Gate tests (``-m "not slow"``):
    within ``LOGMEL_BAR_DB`` of the golden ``audio.wav`` in log-mel RMS distance;
 2. free-running 10 s (seed 7): 44.1 kHz stereo, RMS > 1e-3, finite, duration within 1 s of ``frames / 25``; the wav
    is saved under ``generated/``;
-3. ``audio_duration`` 2 s / 10 s / 13 s (one window; two windows; three windows with a short tail) run with a
-   reduced step count;
+3. ``audio_duration`` 0.4 s / 2 s / 10 s / 13 s (a 34-latent window; one window; two windows; three windows with a short
+   tail) run with a reduced step count;
 4. same-seed determinism (bit-identical audio and codes).
 
 Log-mel bar: ``scripts/vocoder_control_cpu.py`` (host only, recorded in ``doc/pipeline/pcc/vocoder_control.json``)
@@ -180,6 +180,20 @@ def test_golden_replay(pipeline, golden):
     rms, seconds = _check_audio(out)
     assert out["audio"].shape == golden["audio"].shape, (out["audio"].shape, golden["audio"].shape)
     dist = log_mel_distance(out["audio"], golden["audio"], SAMPLING_RATE)
+    # Path-matched qualitative control: the replay's spectral statistics next to the golden clip's.
+    replay_full, golden_full = audio_stats(out["audio"], SAMPLING_RATE), audio_stats(golden["audio"], SAMPLING_RATE)
+    replay_stats = {k: v for k, v in replay_full.items() if not isinstance(v, list)}
+    golden_stats = {k: v for k, v in golden_full.items() if not isinstance(v, list)}
+    replay_bands, golden_bands = replay_full["band_energy_mean"], golden_full["band_energy_mean"]
+    # Per-second wav PCC across the whole clip (covers the window join at latent 431 = sample 220672).
+    n = out["audio"].shape[-1] // SAMPLING_RATE
+    per_second_pcc = [
+        _pcc(
+            torch.from_numpy(golden["audio"][:, i * SAMPLING_RATE : (i + 1) * SAMPLING_RATE]),
+            torch.from_numpy(out["audio"][:, i * SAMPLING_RATE : (i + 1) * SAMPLING_RATE]),
+        )
+        for i in range(n)
+    ]
     wav_pcc = _pcc(torch.from_numpy(golden["audio"]), torch.from_numpy(out["audio"]))
     path = _save_wav("golden_replay_seed7_10s.wav", out["audio"], out["sampling_rate"])
     logger.info(
@@ -195,6 +209,11 @@ def test_golden_replay(pipeline, golden):
         wav_pcc=wav_pcc,
         log_mel=dist,
         log_mel_bar_db=LOGMEL_BAR_DB,
+        per_second_wav_pcc=per_second_pcc,
+        replay_audio_stats=replay_stats,
+        golden_audio_stats=golden_stats,
+        replay_band_energy_mean=replay_bands,
+        golden_band_energy_mean=golden_bands,
         audio_seconds=seconds,
         audio_rms=rms,
         timings=out["timings"],
@@ -204,6 +223,11 @@ def test_golden_replay(pipeline, golden):
     for k, p in enumerate(latent_pccs):
         assert p >= PCC_LATENT, f"window {k}: latent PCC {p} < {PCC_LATENT}"
     assert dist["rms_db"] <= LOGMEL_BAR_DB, f"log-mel RMS distance {dist['rms_db']:.3f} dB > {LOGMEL_BAR_DB} dB"
+    assert (
+        min(per_second_pcc) >= 0.99
+    ), f"per-second wav PCC dipped to {min(per_second_pcc):.4f} (window join / crop drift?)"
+    for rb, gb in zip(replay_bands, golden_bands):
+        assert abs(rb - gb) < 0.02, (replay_bands, golden_bands)
 
 
 @pytest.mark.hardware
@@ -235,10 +259,11 @@ def test_free_running_10s(pipeline):
 @pytest.mark.hardware
 @pytest.mark.parametrize(
     "audio_duration,expected_frames,expected_starts",
-    [(2.0, 50, [0]), (10.0, 250, [0, 100]), (13.0, 325, [0, 100, 200])],
+    [(0.4, 10, [0]), (2.0, 50, [0]), (10.0, 250, [0, 100]), (13.0, 325, [0, 100, 200])],
 )
 def test_audio_durations(pipeline, audio_duration, expected_frames, expected_starts):
-    """One window (50 frames -> 172 latents), two windows, three windows with a 125-frame tail; reduced step count."""
+    """A tiny window (10 frames -> 34 latents, the shortest realistic end-token song), one window (50 frames -> 172
+    latents), two windows, three windows with a 125-frame tail; reduced step count."""
     out = pipeline.generate(
         GOLDEN_PROMPT, GOLDEN_LYRICS, audio_duration=audio_duration, seed=11, num_inference_steps=FAST_STEPS
     )

@@ -234,7 +234,9 @@ class MiniMaxMusic3Pipeline:
             keep_latents: also return the per-window uncropped latents and the frame hiddens.
         Returns:
             ``audio`` ``np.ndarray [2, samples]`` float32 in ``[-1, 1]``, ``sampling_rate``, ``frames``, ``seed``,
-            ``codes [F, 8]``, ``chunk_starts``, ``stopped_by``, ``timings`` (seconds; ``prefill``, ``ar``,
+            ``codes [F, 8]``, ``chunk_starts``, ``stopped_by`` (``"max_frames"`` / ``"end_token"`` / ``"context"`` / ``"teacher_codes"``),
+            ``context_frames`` (the most frames the 10240-position backbone context can hold after this prompt) and
+            ``truncated_by_context``, ``timings`` (seconds; ``prefill``, ``ar``,
             ``ar_frames_per_s``, ``dit_per_chunk``, ``vocoder_per_chunk``, ``total`` ...), and with
             ``keep_latents`` also ``latents`` (list) and ``frame_hiddens``.
         """
@@ -252,6 +254,19 @@ class MiniMaxMusic3Pipeline:
         steps = int(num_inference_steps)
         if steps < 1:
             raise ValueError(f"num_inference_steps must be >= 1, got {steps}")
+
+        # Context cap: the backbone runs at the checkpoint's advertised 10240 positions (stage 02), so a song can hold
+        # at most 10240 - prompt_len - 1 frames; the reference's separate caps (5000 tokens + 9000 frames) exceed that.
+        # The AR loop stops with stopped_by == "context" when it is reached; say so up front instead of only at the end.
+        if text_ids is None:
+            text_ids = self.ar.build_text_ids(prompt, lyrics)
+        prompt_len = int(text_ids.shape[1])
+        context_frames = self.llm.max_seq_len - prompt_len - 1
+        if max_frames > context_frames:
+            logger.warning(
+                f"generate: {max_frames} frames requested but the {self.llm.max_seq_len}-position context leaves room for "
+                f"{context_frames} after the {prompt_len}-token prompt; the song will be cut there (stopped_by='context')"
+            )
 
         timings: Dict[str, object] = {}
         t_all = time.perf_counter()
@@ -330,6 +345,9 @@ class MiniMaxMusic3Pipeline:
             "chunk_starts": starts,
             "stopped_by": ar_out["stopped_by"],
             "prompt_len": ar_out["prompt_len"],
+            "max_frames": max_frames,
+            "context_frames": context_frames,
+            "truncated_by_context": ar_out["stopped_by"] == "context",
             "text_ids": ar_out["text_ids"],
             "timings": timings,
         }

@@ -12,8 +12,8 @@ the log-mel distance (``tt/audio_metrics.log_mel_distance``) of the stitched wav
 3. ``perturbed_<pcc>`` - fp32 vocoder on golden latents with Gaussian noise added until their PCC vs the golden
                          latents equals the given value (0.9996 = the stage-05 per-chunk DiT PCC, 0.98 = the
                          latent PCC bar), i.e. what a DiT error of that size alone does to the spectrum;
-4. ``different_seed``  - fp32 vocoder on latents from a *different* noise (noise-only, no denoising) as an
-                         "unrelated audio" reference point for the scale of the metric.
+4. ``unrelated_noise_latents`` - fp32 vocoder on pure noise latents (no denoising) as an "unrelated audio"
+                         reference point for the scale of the metric.
 
 Writes ``doc/pipeline/pcc/vocoder_control.json``. Run with the ttnn python (``$MM3_PY``); takes a few minutes.
 """
