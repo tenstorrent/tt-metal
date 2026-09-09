@@ -228,16 +228,15 @@ def _bfp_zero_nonfinite_blocks(operand):
 
 
 def convert_nan_to_inf(operand):
-    """Replace every NaN with an infinity *of the same sign*, preserving the input type.
+    """Replace every NaN with an infinity *of the same sign*, keeping the input's type.
 
-    Takes a Tensor or a list of floats and returns the same type, so downstream
-    `result.to(...)` does not break on a tensor.
+    A Tensor in gives a Tensor back (a list, a list), so a downstream `result.to(...)` works.
 
-    The sign models the pack path, which rewrites exponent/mantissa and leaves the sign bit
-    alone, so a signed NaN packs to -inf -- Neg(NaN) -> -inf is the case that measured it.
-    Sound only because cast_to_dest_dtype keeps that sign across the Dest write and
-    UnarySFPUGolden canonicalises a *generated* NaN's sign, which IEEE leaves unspecified;
-    without both, the sign read here comes from the cast or the host libm, not the datum.
+    The sign models the pack path, which rewrites exponent/mantissa but leaves the sign bit
+    alone, so a signed NaN packs to -inf -- measured on Neg(NaN) -> -inf. Sound only because
+    cast_to_dest_dtype keeps that sign across the Dest write and UnarySFPUGolden canonicalises
+    a *generated* NaN's sign (IEEE leaves it unspecified); without both, the sign read here is
+    the cast's or the host libm's, not the datum's.
     """
     if isinstance(operand, torch.Tensor):
         return torch.where(
@@ -303,12 +302,12 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
         v_if (result > threshold) result = threshold;
         v_if (result < 0.0f)      result = 0.0f;
 
-    The first compare is against a vector and so uses the total order, which puts a NaN above
-    the threshold and replaces it; the relu clamp then sees a finite value. The order is not
-    interchangeable -- relu first would leave the NaN in place.
+    The first compare is against a vector, so it uses the total order: a NaN outranks the
+    threshold and is replaced, leaving the relu clamp a finite value. Not interchangeable --
+    relu first would leave the NaN in place.
 
-    The relu clamp reads the order key's sign, so it fires for -0.0 as well and this returns +0.0
-    there. Unspecified on hardware either way: that branch is SFPSETCC, whose contract holds only
+    The relu clamp reads the order key's sign, so it fires for -0.0 too and returns +0.0 there.
+    Unspecified on hardware either way: that branch is SFPSETCC, whose contract holds only
     "provided that VC is neither negative zero nor any kind of NaN".
     """
     clamped = sfpu_min(value, threshold)
@@ -446,12 +445,11 @@ def _dummy_zeros(*operands, **kwargs):
     elif dims_a is not None and dims_b is not None:
         size = dims_a[0] * dims_b[1]
     else:
-        # Nothing named the geometry, so fall back to the first tensor operand:
-        # for the elementwise goldens the result is exactly as long as its
-        # inputs. This is the historical ELEMENTS_PER_TILE (1024) whenever the
-        # operand is a whole tile, and it is what keeps callers that size-check
-        # a PARTIAL-tile result (an 8x32 SDPA tile, say) working -- a fixed 1024
-        # would blow up when they combine the result with their own operands.
+        # Nothing named the geometry: fall back to the first tensor operand, since
+        # an elementwise golden's result is exactly as long as its inputs. That is
+        # the historical ELEMENTS_PER_TILE (1024) for a whole tile, and it is what
+        # keeps a caller that size-checks a PARTIAL-tile result (an 8x32 SDPA tile,
+        # say) working -- a fixed 1024 would blow up there.
         operand = next((arg for arg in operands if isinstance(arg, torch.Tensor)), None)
         size = ELEMENTS_PER_TILE if operand is None else operand.numel()
     return torch.zeros(size, dtype=torch.bfloat16)
@@ -1269,37 +1267,12 @@ class TransposeGolden:
         untilize: bool = False,
         input_dimensions: tuple[int, int] = (32, 32),
     ) -> torch.Tensor:
-        """
-        Transpose elements within each face across multiple tiles.
+        """Transpose elements within each face, independently, across *num_tiles* tiles.
 
-        This function applies within-face transposition to each 32×32 tile in a multi-tile tensor.
-        Each tile contains 4 faces of 256 elements each, and the transposition is applied
-        independently within each face of every tile, preserving face boundaries.
-
-        Args:
-            operand: Input tensor containing concatenated tiles to process
-            data_format: Target data format for the result tensor
-            num_tiles: Number of 32×32 tiles in the input tensor (must be positive)
-            tilize: If True, applies tilization preprocessing to the input
-            untilize: If True, applies untilization postprocessing to the result
-            input_dimensions: Overall input matrix dimensions as (rows, cols)
-
-        Returns:
-            Tensor with elements transposed within each face of all tiles
-
-        Raises:
-            ValueError: If tensor size doesn't match expected size for num_tiles
-            ValueError: If num_tiles is not positive
-
-        Example:
-            >>> # Process 2 tiles with within-face transposition
-            >>> result = obj.transpose_within_faces_multi_tile(
-            ...     tensor, "float32", num_tiles=2, untilize=True
-            ... )
-
-        Note:
-            The transposition occurs within each of the 4 faces per tile, preserving
-            the face boundaries but reordering elements within each face.
+        Each 32x32 tile holds 4 faces of 256 elements; the transposition reorders elements
+        inside a face and never crosses a face boundary. *tilize* / *untilize* pre- and
+        post-process the input and result. Raises ValueError if *num_tiles* is not positive
+        or the tensor size does not match it.
         """
         return self._apply_tile_operation_multi_tile(
             operand=operand,
@@ -1796,13 +1769,11 @@ class DataCopyGolden:
 
         height, width = input_dimensions[0], input_dimensions[1]
 
-        # Tile count selection:
-        # - tile_shape given: derive directly from the real tile geometry. This
-        #   is required for full-width tiny tiles (e.g. 16x32, num_faces=2) where
-        #   face_r_dim is still 16 but a tensor packs into more, smaller tiles than
-        #   the 32x32 assumption below would compute.
-        # - face_r_dim < 16: legacy partial-face path treats the input as one tile.
-        # - otherwise: assume standard 32x32 tiles (backward compatible).
+        # Tile count: tile_shape gives the real geometry, required for full-width tiny
+        # tiles (e.g. 16x32, num_faces=2), where face_r_dim is still 16 but the tensor
+        # packs into more, smaller tiles than the 32x32 assumption below would compute.
+        # face_r_dim < 16 is the legacy partial-face path (one tile); otherwise assume
+        # standard 32x32 tiles (backward compatible).
         if tile_shape is not None:
             tile_rows = tile_shape.total_row_dim()
             tile_cols = tile_shape.total_col_dim()
@@ -1877,9 +1848,8 @@ class DataCopyGolden:
 class TypecastGolden:
     """Golden generator for the SFPU typecast operation.
 
-    Models the production flow (copy_tile -> typecast_tile -> pack): the tile loads into Dest,
-    the SFPU converts each datum in place, the packer writes it to L1. Purely elementwise and
-    read back row-major over the same unpack->Dest->pack path as DataCopyGolden, so the
+    Models the production flow (copy_tile -> typecast_tile -> pack) over the same
+    unpack->Dest->pack path as DataCopyGolden: elementwise, read back row-major, so the
     conversion applies no tilization. Covers the full ttnn matrix over float, integer and
     block-float (Bfp8_b / Bfp4_b) source/destination dtypes:
       * block-float input round-trips through ``quantize_input_to_unpack_format``, matching
@@ -3816,16 +3786,15 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     ):
         """*dest_acc* and *output_format* enable the Dest-width and pack-path modelling.
 
-        Both default to None, which reproduces the pre-cat-B behaviour: the golden computes in
-        *data_format* and models neither the store into Dest nor the pack out of it. Sound only
-        while every operand is finite, since both steps are sub-ULP on a finite value and
-        decisive on a non-finite one.
+        Both default to None, which reproduces the pre-cat-B behaviour: compute in *data_format*,
+        modelling neither the store into Dest nor the pack out of it. Sound only while every
+        operand is finite, both steps being sub-ULP on a finite value and decisive on a
+        non-finite one.
 
-        Supply both to get what the hardware does (modelled inline in __call__ below, the same two
-        steps UnarySFPUGolden applies): the SFPU evaluates
-        in fp32 and stores to a Dest whose width *dest_acc* selects, and the packer substitutes a
-        signed infinity for a NaN a 16-bit Dest cannot hold. Same contract UnarySFPUGolden and
-        ScalarBinopGolden already model.
+        Supply both for what the hardware does -- the same two steps UnarySFPUGolden and
+        ScalarBinopGolden model, applied inline in __call__ below: the SFPU evaluates in fp32 and
+        stores to a Dest whose width *dest_acc* selects, and the packer substitutes a signed
+        infinity for a NaN a 16-bit Dest cannot hold.
 
         *collect_generated_nan* additionally returns a per-lane mask of the results that were a
         NaN this op *invented*, in the result's layout -- for a caller that has to stop asserting
@@ -3999,12 +3968,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
         return result
 
-    # The ops whose NaN result is a selected operand rather than a computed one. An exclusion
-    # list, because an allowlist of the arithmetic ops would silently drop the composition ops
-    # (div, fmod, remainder, xlogy, pow, atan2), whose NaN is every bit as computed as add's.
-    # binary_max_min picks one of its two inputs, so a NaN it returns is the datum it was
-    # handed and its sign can be asserted; everything else builds its result through the
-    # datapath, where the sign of an emitted NaN is not the operand's.
+    # The ops whose NaN result is a selected operand rather than a computed one: binary_max_min
+    # returns one of its inputs, so its NaN is the datum it was handed and the sign can be
+    # asserted. Everything else builds the result through the datapath, where an emitted NaN's
+    # sign is not the operand's. An exclusion list, so the composition ops (div, fmod, remainder,
+    # xlogy, pow, atan2) can't be silently dropped -- their NaN is as computed as add's.
     _NAN_SIGN_SELECTED_OPS = frozenset(
         {
             MathOperation.SfpuBinaryMax,
@@ -4016,21 +3984,21 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     def _canonicalise_emitted_nan(cls, operation, result_row):
         """Clear the sign of a NaN the datapath computed; keep the sign of one SFPSWAP selected.
 
-        IEEE 754 leaves the sign of an invalid-operation default unspecified, and the ISA declines
-        to promise the operand's sign even for a NaN that merely passed through: `SFPMAD.md` says
-        only "if a NaN is emitted", then that Blackhole gives the canonical 0x7fc00000 and Wormhole
-        "might or might not" set the sign bit. So for the arithmetic ops the golden must not export
-        a sign at all -- not the host libm's invented one, which is what made xlogy(0,0) and
-        div(0,0) disagree for no reason either kernel owns, and not the operand's either.
+        IEEE 754 leaves an invalid-operation default's sign unspecified, and the ISA declines to
+        promise the operand's sign even for a NaN that merely passed through: `SFPMAD.md` says
+        only "if a NaN is emitted", Blackhole giving the canonical 0x7fc00000 and Wormhole "might
+        or might not" setting the sign bit. So for the arithmetic ops the golden must export no
+        sign at all -- neither the host libm's invented one, which made xlogy(0,0) and div(0,0)
+        disagree for no reason either kernel owns, nor the operand's.
 
         abs() clears the sign bit without disturbing the payload, as UnarySFPUGolden does at the
-        same point. It only becomes observable once the pack path substitutes a *signed* infinity
-        for the NaN, where the assertion is sound on Blackhole and gated off on Wormhole.
+        same point, and only becomes observable once the pack path substitutes a *signed* infinity
+        for the NaN -- an assertion sound on Blackhole and gated off on Wormhole.
 
-        Returns the per-lane mask as well as the row, because a caller gating that assertion needs
-        to know *which lanes*: this is the last point where a NaN is still legible, the
-        substitution downstream leaving none to re-derive it from. Lanes holding a genuine
-        infinity are never in it -- `0 - (-inf)` is `+inf` by IEEE and stays asserted.
+        The per-lane mask comes back too, because a caller gating that assertion needs to know
+        *which lanes*: this is the last point where a NaN is still legible, the substitution
+        downstream leaving none to re-derive it from. Lanes holding a genuine infinity are never
+        in it -- `0 - (-inf)` is `+inf` by IEEE and stays asserted.
         """
         if operation in cls._NAN_SIGN_SELECTED_OPS:
             return result_row, torch.zeros_like(result_row, dtype=torch.bool)
@@ -4603,13 +4571,12 @@ class ReduceGapoolGolden(FidelityMasking):
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        # On Quasar with implied_math_format, HW dest precision is implied by
-        # the SrcA tag: Float16 → FP16A; Float16_b / MX inputs → BF16. For
-        # MX-output paths we preserve that precision through the gapool +
-        # face-accumulation chain rather than collapsing inputs to the output
-        # dtype (which would force fp16 → bf16 before any math).
-        # When dest_acc=Yes, HW accumulates in fp32 regardless of input —
-        # so the inter-face / inter-fidelity accumulators must follow.
+        # On Quasar with implied_math_format, HW dest precision follows the SrcA tag:
+        # Float16 → FP16A; Float16_b / MX inputs → BF16. MX-output paths keep that
+        # precision through the gapool + face-accumulation chain instead of collapsing
+        # inputs to the output dtype, which would force fp16 → bf16 before any math.
+        # With dest_acc=Yes the HW accumulates in fp32 regardless of input, so the
+        # inter-face / inter-fidelity accumulators must follow.
         out_is_mx = data_format.is_mx_format()
         fp32_acc = dest_acc == DestAccumulation.Yes
         if out_is_mx and input_format is not None:
@@ -5256,21 +5223,17 @@ class TopKXLGolden:
 class Top32RmGolden:
     """Golden generator for the DeepSeek top32_rm LLKs (row-major top-32, K=32).
 
-    Mirrors the on-silicon gtest reference verify_top32_outputs(): rank the
-    (score, original_index) pairs of a single row by score DESCENDING, ties broken
-    by the smaller original index, and take the first K. The index paired with each
-    surviving score is that score's original row-major position, because the kernel's
-    index stream is index[i] = i and index tracking carries it through the sort.
+    Mirrors the on-silicon gtest reference verify_top32_outputs(): rank the row's
+    (score, original_index) pairs by score DESCENDING, ties broken by the smaller
+    original index, and take the first K. Each surviving score is paired with its
+    own original row-major position, because the kernel's index stream is
+    index[i] = i and index tracking carries it through the sort.
 
     Every stimulus is exactly representable in bf16, so the fp32 score order equals
     the bf16 compare order the SFPU SFPSWAP uses.
 
-    Args:
-        row: 1-D float tensor [row_elements] of the row's scores.
-        K:   number of top elements (32 for top32_rm).
-    Returns:
-        (values, indices): float tensor [K] of the top-K scores and int64 tensor [K]
-        of their original row-major positions, in descending-score order.
+    Returns (values, indices): the top-K scores and, as int64, their original
+    positions, in descending-score order.
     """
 
     def __call__(self, row, K=32):
@@ -5298,26 +5261,24 @@ class TernarySFPUGolden:
     """Golden for the ternary SFPU kernels (addcmul / addcdiv / lerp / snake_beta).
 
     All operate element-wise on three same-shaped operands (a, b, c) — and, for
-    the addc kernels, a scalar constant — so, like where, the result at each
-    position depends only on the same-position inputs. No tilize is needed: the
-    kernel copies each input tile into a Dest tile (layout-preserving) and the
-    SFPU processes rows in place, so a row-major element-wise reference matches
-    the packed result.
+    the addc kernels, a scalar constant — so, like where, each result depends only
+    on the same-position inputs. No tilize needed: the kernel copies each input
+    into a Dest tile (layout-preserving) and the SFPU processes rows in place, so
+    a row-major element-wise reference matches the packed result.
 
         addcmul:    out = a + (value * b * c)
         addcdiv:    out = a + (value * b / c)
         lerp:       out = a + c * (b - a)
         snake_beta: out = a + sin(b * a)^2 / c    (a=x, b=alpha, c=beta)
 
-    Known limitation: this reference computes in fp32 with a single final cast and
-    is dest-accumulation-agnostic. The kernels, however, branch on
-    is_fp32_dest_acc_en for their intermediate rounding (addcmul emits an
-    SFP_STOCH_RND fp32->fp16b before the store; addcdiv/lerp round via
-    float32_to_bf16_rne; snake_beta drops to a lower-degree sin polynomial when it
-    is off), so both dest_acc arms are checked against this one golden and are
-    distinguished only by the (looser, for Bfp8_b) PCC/atol tolerance rather than
-    by a bit-exact reference. Tightening this into a dest_acc-aware golden that
-    models the intermediate bf16 rounding is tracked as follow-up.
+    Known limitation: this reference computes in fp32 with a single final cast,
+    while the kernels branch on is_fp32_dest_acc_en for their intermediate rounding
+    (addcmul emits an SFP_STOCH_RND fp32->fp16b before the store; addcdiv/lerp
+    round via float32_to_bf16_rne; snake_beta drops to a lower-degree sin
+    polynomial when it is off). Both dest_acc arms are therefore checked against
+    this one golden, distinguished only by the (looser, for Bfp8_b) PCC/atol
+    tolerance rather than by a bit-exact reference. A dest_acc-aware golden
+    modelling that rounding is tracked as follow-up.
     """
 
     def __call__(
