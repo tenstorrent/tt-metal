@@ -475,6 +475,26 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
 # in-place KV writer (it mutates the persistent cache buffer during capture,
 # unlike ``ttnn.copy`` which is rejected mid-capture).
 # ---------------------------------------------------------------------------- #
+def _sdpa_decode_output_config(q: ttnn.Tensor, grid_size: ttnn.CoreCoord) -> ttnn.MemoryConfig:
+    """Native height-sharded output of ``sdpa_decode``: one reducer core per batch user.
+
+    The writer has ``num_output_cores = B`` and places those reducers on the first
+    ``B`` cores of the program grid in row-major order
+    (``{idx % grid.x, idx / grid.x}``). Each core holds that user's full Q-head
+    axis, so the shard is ``[H, Dh]`` (ROW_MAJOR) or ``[round_up(H, 32), Dh]``
+    (TILE). Matching this spec lets the output CB alias the result buffer; any
+    other grid or a width/block shard is either rejected or a reshard.
+    """
+    batch, heads, head_dim = q.shape[1], q.shape[2], q.shape[3]
+    if q.layout == ttnn.ROW_MAJOR_LAYOUT:
+        shard_h = heads
+    else:
+        shard_h = ((heads + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    grid = ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
+    shard_spec = ttnn.ShardSpec(grid, [shard_h, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
 def _height_sharded_l1_config(
     num_users: int, width: int, device, layout: ttnn.Layout = ttnn.TILE_LAYOUT
 ) -> ttnn.MemoryConfig:
@@ -1007,16 +1027,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     Galaxy32 uses ``replicated``: q_a and kv stay full-width on every rank (no
     all-gather), while ``q_b`` stays head-sharded TP4. ``balanced`` (N-shard then
     all-gather) and dedicated ranks remain available. Query heads and complete
-    output groups are sharded across the mesh. By default, each local output group
-    uses an ordinary matmul and ``o_b`` is row-parallel: it consumes those local
-    groups directly and all-reduces the full-hidden partials. Column-parallel
-    ``o_b`` remains available as an alternative.
+    output groups are sharded across the mesh. Decode is ``M == 1``, so ``o_a`` is a
+    batched ``matmul_decode`` over the local groups (the group-major permute is a
+    no-op). ``o_b`` is row-parallel by default: it consumes those local groups and
+    all-reduces the full-hidden partials. Column-parallel ``o_b`` remains available.
 
     ``use_prefetcher=True`` switches the decode projections that still fit the shared
-    64-receiver GCB (q_b, row-parallel o_b, the compressor's kv/gate pair) onto
-    DRISC-prefetched weights. Sequential o_a stays on the DRAM->L1 copy: a private
-    32-core GCB on the same cores as the shared ring (and the pipeline socket at
-    ``(0,0)``) collides with ``fused_hyperconnection`` static CBs. Each prefetched
+    64-receiver GCB (q_b, batched o_a, row-parallel o_b, the compressor's kv/gate pair)
+    onto DRISC-prefetched weights. Sequential o_a, if opted into, stays on the DRAM->L1
+    copy: a private 32-core GCB on the same cores as the shared ring (and the pipeline
+    socket at ``(0,0)``) collides with ``fused_hyperconnection`` static CBs. Each prefetched
     weight stays DRAM ND-sharded and the tensor prefetcher pushes it into the
     matmul's in1 buffer, instead of copying DRAM -> L1 before every call. Two
     things come with it:
@@ -1049,7 +1069,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         tp_size: int = 1,
         qkv_tp_strategy: Optional[str] = None,
         o_b_tp_strategy: str = "row",
-        o_a_tp_strategy: str = "sequential",
+        o_a_tp_strategy: str = "batched",
     ):
         # SDPA program config, the resident-weight choice and the prefetch ring depth all
         # come from the system profile unless the caller pinned them.
@@ -1513,9 +1533,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         output RoPE and the group-local ``o_a`` projection; :meth:`_grouped_output`
         gathers those projected groups before the global ``o_b`` mix, then gathers
         the N/TP ``o_b`` outputs to restore a replicated hidden state.
+
+        The op's cheapest sharded output is height-sharded L1 on ``B`` cores (one
+        reducer per user) with shard ``[H, Dh]``; see :func:`_sdpa_decode_output_config`.
         """
-        # sdpa_decode requires its K/V operands in DRAM.
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        # sdpa_decode requires its K/V operands in DRAM. Q and the output share the
+        # native height-sharded layout (one batch user per reducer core) so the
+        # writer aliases the result buffer instead of bouncing through DRAM.
+        out_mem = _sdpa_decode_output_config(q, self._sdpa_pcfg.compute_with_storage_grid_size)
+        if q.memory_config() != out_mem:
+            q = ttnn.to_memory_config(q, out_mem)
         if cur_pos is not None:
             bounds = {"is_causal": True, "cur_pos_tensor": cur_pos}
         else:
@@ -1526,32 +1553,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             if mask.shape[-2] != self.local_num_heads:
                 attn_mask = ttnn.repeat(mask, ttnn.Shape([1, 1, self.local_num_heads, 1]))
             bounds = {"is_causal": False, "attn_mask": attn_mask}
+        common = dict(
+            attention_sink=self.sdpa_sinks_tt,
+            scale=self.scaling,
+            program_config=self._sdpa_pcfg,
+            compute_kernel_config=_HIFI4_SDPA,
+            memory_config=out_mem,
+            **bounds,
+        )
         if paged is not None:
             return ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q,
                 paged.pool,
                 paged.pool,  # K == V (shared single KV head)
                 paged.page_table,
-                attention_sink=self.sdpa_sinks_tt,
-                scale=self.scaling,
                 sliding_window_size=sliding_window,
                 cache_position_modulo=paged.position_modulo,
-                program_config=self._sdpa_pcfg,
-                compute_kernel_config=_HIFI4_SDPA,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                **bounds,
+                **common,
             )
         kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             kv,
             kv,  # K == V (shared single KV head)
-            attention_sink=self.sdpa_sinks_tt,
-            scale=self.scaling,
-            program_config=self._sdpa_pcfg,
-            compute_kernel_config=_HIFI4_SDPA,
-            **bounds,
-        )  # [1, B, H, Dh]
+            **common,
+        )  # [1, B, H, Dh] height-sharded L1
 
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
@@ -1560,23 +1586,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         back on packed rows, ``[1, 1, B, D]``. ``o_a`` is block-diagonal over
         ``o_groups``, and ``o_b_proj`` then mixes the groups back to hidden.
 
-        The groups partition the heads, so folding the head axis onto packed rows
-        (``[1, B, H, Dh]`` -> ``[1, 1, B, H*Dh]``) puts each group's ``K`` features in a
-        contiguous slice of the feature axis -- which is also the slice of ``o_b``'s
-        ``K`` that group feeds. The two o_a modes want different things from that:
-
-        * ``sequential`` (the TP default) runs one ordinary ``matmul_decode`` per local
-          group and can stay on the feature axis end to end: the inputs are feature
-          slices of the folded activation, and concatenating the results back on that
-          same axis *is* ``o_b``'s activation. No group axis is ever materialised, so a
-          step costs the fold plus the split/concat pair -- where routing through a
-          group-major ``[1, g, M, N]`` intermediate additionally paid two ``permute``s,
-          each a transpose plus the tilize/untilize pair a tiled transpose drags along.
-        * ``batched`` runs the groups as a single batched ``matmul_decode`` whose batch
-          axis *is* the group, so it does need the group-major ``[1, g, M, K]``
-          activation, and the reverse permute on the way out -- except at ``M == 1``,
-          where a unit token axis makes group-major and token-major the same bytes and
-          the fold alone gets there.
+        Decode is a single token (``M == 1``), so ``[1, 1, H, Dh]`` is already
+        group-major in memory: each group's ``K = H*Dh / g`` features are a
+        contiguous slice. Batched ``matmul_decode`` reads that as ``[1, g, 1, K]``
+        (a view) and returns ``[1, g, 1, N]``, which is the same bytes as o_b's
+        packed ``[1, 1, 1, g*N]``.
 
         With TP, each rank owns a contiguous set of complete groups. ``o_a`` is
         consequently group-sharded and runs locally. In the default row-parallel
@@ -1590,49 +1604,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # (measured: ~0.58 PCC on the attention block, correct as soon as this is tiled). Tilize
         # once here and the whole epilogue -- o_a, o_b and the fold between them -- runs on the
         # layout it was written for. Everything ahead of this point stays ROW_MAJOR.
+        print(f"attn: {attn.shape}, {attn.layout}, {attn.memory_config()}")
         attn = ttnn.to_layout(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
-
         _, m, h, dh = attn.shape
         groups = self.local_o_groups
         in_per_group = (h * dh) // groups
-        if self.sequential_o_a:
-            # Row-major, ``[1, B, H, Dh]`` element ``b*H*Dh + head*Dh + c`` is
-            # ``[1, 1, B, H*Dh]`` element ``b*H*Dh + w``, so the head fold is a plain
-            # reshape and group ``j`` is the feature slice ``[j*K, (j+1)*K)``.
-            x = ttnn.reshape(attn, [1, 1, m, h * dh])
-            if groups == 1:
-                # o_groups == TP: the fold is already o_a's activation and o_a's result is
-                # already o_b's, so neither the split nor the concat runs at all.
-                y = ttnn.to_memory_config(self.o_a_projs[0](x), ttnn.DRAM_MEMORY_CONFIG)
-            else:
-                group_outputs = [
-                    ttnn.to_memory_config(proj(group_input), ttnn.DRAM_MEMORY_CONFIG)
-                    for proj, group_input in zip(self.o_a_projs, ttnn.split(x, in_per_group, dim=3))
-                ]
-                y = ttnn.concat(group_outputs, dim=3)  # [1, 1, M, g_local*N]
-                for tensor in group_outputs:
-                    ttnn.deallocate(tensor)
-        else:
-            # Group-major [1, g, M, K] (batch = g = o_groups) for the batched
-            # matmul_decode; the op folds the group axis to match the folded
-            # (b_blocks x n_blocks) weight layout.
-            #
-            # At M == 1 the token axis is unit, so group-major and token-major orderings
-            # are the same bytes: the head fold lands the activation directly, and the
-            # matmul's result is already the packed-row output. Both permutes then reduce
-            # to moving a unit axis, which is worth skipping rather than paying for -- a
-            # transpose on tiled data drags a tilize/untilize pair with it. Above one token
-            # the (M, g) axes genuinely have to swap, so the permutes stay.
-            if m == 1:
-                x = ttnn.reshape(attn, [1, groups, m, in_per_group])
-            else:
-                x = ttnn.reshape(attn, [m, groups, in_per_group])
-                x = ttnn.permute(x, [1, 0, 2])  # [g, M, K]
-                x = ttnn.reshape(x, [1, groups, m, in_per_group])  # [1, g_local, M, K]
-            y = self.o_a_proj(x)  # DRAM-interleaved [1, g, M, N]
-            if m != 1:
-                y = ttnn.permute(y, [0, 2, 1, 3])  # [1, M, g, N]
-            y = ttnn.reshape(y, [1, 1, m, groups * self.o_lora_rank])
+        assert not self.sequential_o_a, "decode o_a is batched (M == 1); sequential is not wired"
+        assert m == 1, f"batched o_a is decode-only (M == 1), got M={m}"
+        x = ttnn.reshape(attn, [1, groups, 1, in_per_group])
+        y = self.o_a_proj(x)  # DRAM-interleaved [1, g, 1, N]
+        y = ttnn.reshape(y, [1, 1, 1, groups * self.o_lora_rank])
         if self.tp_size > 1 and not self.row_parallel_o_b:
             gathered = ttnn.all_gather(
                 y,
@@ -1712,7 +1693,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # whole of K replicated on each of the weight's B cores. Untilize+broadcast once onto
         # q_a's (larger) B grid and reuse that replica for kv: every kv B core is in that
         # rectangle. A partial-width weight cannot take this layout (the helper is a no-op).
-        qkv_tokens = ttnn.experimental.deepseek.width_to_height_shard(tokens, self.q_a_proj.b_core_grid())
+        qkv_tokens = ttnn.experimental.deepseek.all_gather_for_matmul(tokens, self.q_a_proj.b_core_grid())
         q_a_raw = self.q_a_proj(qkv_tokens, mesh_coords=self.q_projection_mesh_coords)
         if self.dedicated_qkv_ranks:
             q_a_raw = _replicate_from_tp_rank(q_a_raw, self.device, self.q_projection_rank, self.tp_size)
