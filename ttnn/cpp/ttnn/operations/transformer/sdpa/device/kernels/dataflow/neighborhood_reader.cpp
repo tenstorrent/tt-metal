@@ -153,17 +153,17 @@ FORCE_INLINE bool gather_is_canonical(
     return true;
 }
 
-// ---- per-brick persistent mask block: the WindowClamp that identifies it ----
-//
-// "Per-brick" names the mask LAYOUT this applies to (per_brick_mask: one mask tile per query brick
-// per slot, for a chunk wider than the stride), not the granularity of the record. A WindowClamp is
-// ONE record per query chunk -- computed once per work item, covering every brick in the chunk,
+// A WindowClamp represent the boundaries of the context windows for a query chunk.
+// (currently only applicable for neighborhood attention, GNA is not supported yet.)
+// It covers every brick inside the chunk (with a limit of up to MAX_BRICKS_PER_CHUNK),
 // with a group of fields for each brick -- describing every geometric input to that chunk's
-// [brick][slot] mask block. Two chunks with equal WindowClamps produce byte-identical blocks, so the
-// reader can leave the block already in cb_mask untouched (see per_brick_window_clamp for how it is
-// used). It is a cache KEY only: the tiles themselves are always produced from the real coordinates.
+// [brick][slot] mask block.
 //
-// Why these fields and nothing else. A tile element (query site q, key site k) is visible when, on
+// Two chunks with equal WindowClamps produce the same masks, so the reader can leave the mask already
+// in cb_mask untouched (see compute_per_brick_window_clamp for how it is
+// used). It is essentially a cache KEY only: the tiles themselves are always produced from the real coordinates.
+//
+// Why these fields and nothing else: A tile element (query site q, key site k) is visible when, on
 // every axis, origin(q) <= k < origin(q) + window, with origin(q) = clamp(q - half, 0, volume -
 // window). Writing shift(q) = origin(q) - (q - half), that is shift(q) <= (k - q) < shift(q) +
 // window: the pattern depends only on the RELATIVE distance k - q and on the query site's shift.
@@ -191,14 +191,16 @@ struct WindowClamp {
 FORCE_INLINE uint32_t clamp_field(int32_t value) { return static_cast<uint8_t>(value); }
 
 // Fill `out` with this query chunk's WindowClamp (one call per chunk; the loop inside visits each
-// of its bricks). Returns TRUE when the chunk's block is persistable --
-// i.e. `out` fully determines it and a later chunk with an equal WindowClamp may reuse the pages
-// unchanged. Returns FALSE when it is not: a query brick that starts below the volume (a low-edge
-// halo brick, query_first < 0) has no window of its own and its tiles depend on which keys this
-// device holds, so the chunk generates its block tile by tile and nothing is recorded for it. Query
-// bricks are only ever owned bricks, so that never happens in practice; it is here so the reuse
-// argument does not rest on it.
-FORCE_INLINE bool per_brick_window_clamp(
+// of its bricks). On return `out` fully determines the chunk's mask block, so a later chunk with an
+// equal WindowClamp may reuse the pages unchanged.
+//
+// Edge case, excluded by contract: a query brick that starts below the volume (query_first < 0, a
+// low-edge halo brick under W-sharding) has no window of its own, and no WindowClamp could describe
+// it. The plan builder rejects such a query region on the host (`require` in build_plan: callers
+// must restrict queries to the owned bricks). It has to be the host: shard_origin is per-device
+// data read from the gather-origin table, so the reader cannot check it at compile time, and a
+// device-side ASSERT is compiled out unless the watcher is on.
+FORCE_INLINE void compute_per_brick_window_clamp(
     WindowClamp& out,
     const BrickPoint& gather_origin_brick,
     const BrickPoint& chunk_origin,
@@ -235,12 +237,9 @@ FORCE_INLINE bool per_brick_window_clamp(
                 word_w |= 1u << (16u + axis_index);
                 continue;
             }
-            // Global coordinates, since the window rule clamps against the global volume; signed,
-            // because a halo brick sits below 0.
+            // Global coordinates, since the window rule clamps against the global volume (>= 0 by the
+            // contract above).
             const int32_t query_first = static_cast<int32_t>(site[axis]) + shard_origin[axis];
-            if (query_first < 0) {
-                return false;
-            }
             const int32_t query_last = query_first + static_cast<int32_t>(brick_sites[axis]) - 1;
             const uint32_t window = context_window[axis] < volume[axis] ? context_window[axis] : volume[axis];
             const int32_t half = static_cast<int32_t>(window / 2);
@@ -263,7 +262,6 @@ FORCE_INLINE bool per_brick_window_clamp(
         out.word[1 + 2 * brick_in_chunk] = word_th;
         out.word[2 + 2 * brick_in_chunk] = word_w;
     }
-    return true;
 }
 
 // Is this query brick far enough from every volume edge that none of its 32 queries clamps? Only
@@ -481,18 +479,17 @@ void kernel_main() {
     const bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 && per_brick_mask == 0;
     bool mask_pages_hold_table = false;
     // Per-brick: the block resident in cb_mask is whichever chunk wrote it last, identified by its
-    // WindowClamp (see per_brick_window_clamp); the table is not needed for this, generated blocks
+    // WindowClamp (see compute_per_brick_window_clamp); the table is not needed for this, generated blocks
     // persist just the same. MEMSET_ONLY keeps writing so that probe stays a floor on the write cost.
     // resident_clamp_is_valid says the resident record describes what the pages hold; it is false
-    // at start and after a non-persistable chunk generated over them. Whether the resident block
-    // is the one THIS chunk needs is the word-by-word compare below, not this flag.
+    // until the first work item has written them. Whether the resident block is the one THIS chunk
+    // needs is the word-by-word compare below, not this flag.
     static_assert(bricks_per_query_chunk <= MAX_BRICKS_PER_CHUNK, "WindowClamp holds at most 8 bricks");
-    constexpr bool per_brick_block_persistence = per_brick_persistent_fits && mask_memset_only == 0;
+    constexpr bool persistent_mask_enabled = per_brick_mask != 0 && per_brick_persistent_fits && mask_memset_only == 0;
     WindowClamp resident_query_brick_window_clamp{};
     bool resident_clamp_is_valid = false;
 #if defined(DEBUG_PRINT_ENABLED)
     uint32_t dbg_skipped = 0, dbg_refilled = 0, dbg_generated = 0, dbg_items = 0;
-    uint32_t dbg_not_persistable = 0;
 #endif
 
     uint32_t argument_index = 0;
@@ -610,38 +607,35 @@ void kernel_main() {
 
         // Per-brick: skip the whole block when the pages hold a block with this chunk's WindowClamp.
         WindowClamp query_brick_window_clamp{};
-        bool block_persistable = false;
-        bool block_resident = false;
-        if constexpr (per_brick_mask != 0) {
-            block_persistable = per_brick_block_persistence && per_brick_window_clamp(
-                                                                   query_brick_window_clamp,
-                                                                   gather_origin_brick,
-                                                                   chunk_origin,
-                                                                   query_chunk_bricks,
-                                                                   query_origin_bricks,
-                                                                   bricks_per_query_chunk,
-                                                                   extents);
-            if (block_persistable && resident_clamp_is_valid) {
-                block_resident = true;
+        bool mask_writes_skippable = false;
+        if constexpr (persistent_mask_enabled) {
+            compute_per_brick_window_clamp(
+                query_brick_window_clamp,
+                gather_origin_brick,
+                chunk_origin,
+                query_chunk_bricks,
+                query_origin_bricks,
+                bricks_per_query_chunk,
+                extents);
+            if (resident_clamp_is_valid) {
+                mask_writes_skippable = true;
                 for (uint32_t word = 0; word < 1 + 2 * bricks_per_query_chunk; ++word) {
                     if (query_brick_window_clamp.word[word] != resident_query_brick_window_clamp.word[word]) {
-                        block_resident = false;
+                        mask_writes_skippable = false;
                         break;
                     }
                 }
             }
         }
-        const bool skip_per_brick_mask_writes = block_persistable && block_resident;
 #if defined(DEBUG_PRINT_ENABLED)
         if constexpr (per_brick_mask != 0) {
             ++dbg_items;
-            if (skip_per_brick_mask_writes) {
+            if (mask_writes_skippable) {
                 ++dbg_skipped;
-            } else if (block_persistable) {
+            } else if (persistent_mask_enabled) {
                 ++dbg_refilled;
             } else {
                 ++dbg_generated;
-                ++dbg_not_persistable;
             }
         }
 #endif
@@ -750,7 +744,7 @@ void kernel_main() {
             if (per_brick_mask != 0) {
                 // The pages already hold a block with this chunk's WindowClamp: nothing to write, only
                 // the K/V reads above and the pushes below.
-                if (!skip_per_brick_mask_writes) {
+                if (!mask_writes_skippable) {
                     for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
                         const BrickPoint query_brick =
                             layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
@@ -913,22 +907,15 @@ void kernel_main() {
         // An edge brick wrote generated tiles over the pages, so the next unclamped one must
         // put the table back.
         mask_pages_hold_table = use_interior_table;
-        if constexpr (per_brick_mask != 0) {
-            // A non-persistable chunk generated over the pages; whatever it left is unnamed.
-            resident_clamp_is_valid = block_persistable;
-            if (block_persistable) {
-                resident_query_brick_window_clamp = query_brick_window_clamp;
-            }
+        if constexpr (persistent_mask_enabled) {
+            // Every chunk is persistable by contract, so after the first work item the pages always
+            // hold the block this record names.
+            resident_clamp_is_valid = true;
+            resident_query_brick_window_clamp = query_brick_window_clamp;
         }
 #if defined(DEBUG_PRINT_ENABLED)
         if (work_item + 1 == work_item_start + work_item_count) {
-            DPRINT(
-                "mp items={} skip={} refill={} gen={} not_persistable={}\n",
-                dbg_items,
-                dbg_skipped,
-                dbg_refilled,
-                dbg_generated,
-                dbg_not_persistable);
+            DPRINT("mp items={} skip={} refill={} gen={}\n", dbg_items, dbg_skipped, dbg_refilled, dbg_generated);
         }
 #endif
 

@@ -571,6 +571,12 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
                         query_chunk_bricks=_query_chunk_bricks(stride, brick),
                         shard_extent=resident,
                         shard_origin=(0, 0, index * width_local - halo),
+                        # The owned bricks only, as _cached_plan passes: the planner refuses a query
+                        # region that starts below the volume, which shard 0's halo does, and the
+                        # except below would otherwise discard EVERY candidate and fall back to the
+                        # default brick (200 gathered bricks at 1080p against 168).
+                        query_extent=(volume[0], volume[1], width_local),
+                        query_origin=(0, 0, halo),
                     )
                     for index in range(shard_count)
                 ]

@@ -49,14 +49,16 @@ sees long runs of chunks with the same WindowClamp.
   TensorAccessorArgs chain). `cb_push_back` wraps the write pointer to base exactly when it reaches
   the limit and the CB is an exact multiple of the per-chunk push, so every work item writes the
   same L1 addresses.
-- Per chunk the reader computes `per_brick_window_clamp` (gather-origin offset per axis + per
+- Per chunk the reader computes `compute_per_brick_window_clamp` (gather-origin offset per axis + per
   brick, per axis, the two window shifts + ghost flags; 1 + 2*bricks words) and compares it with the
   WindowClamp of the block resident in `cb_mask`. Equal: no mask work at all (K/V reads, barrier,
   pushes only). Different: write the block as before (table DMA / fill / memset per tile) and record
   the new WindowClamp. A brick beyond the resident tensor (the T-overhang of the last chunk) is a flag
   in the WindowClamp -- its rows are generated open and its keys lie inside the resident tensor
-  because the planner clamps the gather. A brick below the volume (a low-edge halo brick) is not
-  persistable; query bricks are never in the halo, so this never fires in practice.
+  because the planner clamps the gather. A query brick below the volume (a low-edge halo brick)
+  has no window of its own and cannot be described, so it is excluded by CONTRACT: the plan builder
+  rejects a query region that starts below the volume, and sharded callers must restrict queries to
+  the owned bricks (`query_extent`/`query_origin`), as the production W-sharded path already did.
 - The chunk==stride path keeps its original, table-based `use_interior_table` /
   `mask_pages_hold_table` logic unchanged.
 - Probes: `DIFFVAE_NA_MASK_MEMSET_ONLY=1` disables persistence (so it stays a floor on the write

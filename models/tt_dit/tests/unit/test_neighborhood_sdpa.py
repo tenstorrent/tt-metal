@@ -302,6 +302,11 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
 
     for shard_index in range(volume[2] // owned_width):
         origin_width = shard_index * owned_width - halo_width  # NEGATIVE for shard 0
+        # The op computes queries for the OWNED bricks only (contract: no query may start below
+        # the volume, which the halo does on shard 0), so the plan and the call carry the query
+        # region and the output covers just that band.
+        query_extent = (volume[0], volume[1], owned_width)
+        query_origin = (0, 0, halo_width)
         plan = ttnn.transformer.neighborhood_plan(
             volume,
             context_window,
@@ -309,7 +314,10 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
             brick,
             shard_extent=resident,
             shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
         )
+        query_table = bricked_index_table(query_extent, brick)
 
         def upload(tensor):
             # Columns outside the volume are real storage holding nothing meaningful. Zeros
@@ -324,11 +332,23 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
             bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
             return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
+        def upload_query(tensor):
+            # Q carries only the OWNED bricks (the query region); K/V stay resident-wide.
+            owned_start = shard_index * owned_width
+            window = tensor[:, :, :, owned_start : owned_start + owned_width]
+            flat = window.reshape(1, query_extent[0] * query_extent[1] * query_extent[2], head_count, head_dim)
+            bricked = to_bricked(flat, query_table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
         origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
             1, 1, plan["chunk_count"], plan["gather_origin_columns"]
         )
+        query_form, key_form, value_form = volume_form
         actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
-            *(upload(tensor) for tensor in volume_form),
+            upload_query(query_form),
+            upload(key_form),
+            upload(value_form),
             ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
             volume=volume,
             context_window=context_window,
@@ -336,19 +356,19 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
             brick=brick,
             shard_extent=resident,
             shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
             head_count=head_count,
             scale=1.0,
             tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
         )
 
+        # The output is the owned band, bricked over the query region.
         bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
-        present = table >= 0
-        resident_out = torch.zeros(1, resident_sites, head_count, head_dim)
-        resident_out[:, table[present]] = bricked_out[:, present]
-        resident_out = resident_out.reshape(1, *resident, head_count, head_dim)
-
-        # Every device owns the same local band: the middle, past its own halo.
-        actual_owned = resident_out[:, :, :, halo_width : halo_width + owned_width]
+        present = query_table >= 0
+        actual_owned = torch.zeros(1, query_extent[0] * query_extent[1] * query_extent[2], head_count, head_dim)
+        actual_owned[:, query_table[present]] = bricked_out[:, present]
+        actual_owned = actual_owned.reshape(1, *query_extent, head_count, head_dim)
         global_start = shard_index * owned_width
         expected_owned = expected[:, :, :, global_start : global_start + owned_width]
 
@@ -445,6 +465,13 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
     resident_sites = resident[0] * resident[1] * resident[2]
     table = bricked_index_table(resident, brick)
 
+    # Sharded: queries are the OWNED bricks only (contract: no query may start below the volume,
+    # which shard 0's halo does). Unsharded: the whole volume, no query region.
+    query_extent = None if owned_width is None else (volume[0], volume[1], owned)
+    query_origin = None if owned_width is None else (0, 0, halo)
+    output_table = table if owned_width is None else bricked_index_table(query_extent, brick)
+    output_extent = resident if owned_width is None else query_extent
+
     for shard_index in range(volume[2] // owned):
         origin_width = shard_index * owned - halo  # NEGATIVE for shard 0 when sharded
         plan = ttnn.transformer.neighborhood_plan(
@@ -460,6 +487,8 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
             query_chunk_bricks=_query_chunk_bricks(stride, brick),
             shard_extent=resident,
             shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
         )
 
         def upload(tensor):
@@ -472,11 +501,25 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
             bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
             return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
+        def upload_query(tensor):
+            # Q carries only the query region: the OWNED bricks when sharded, everything otherwise.
+            if owned_width is None:
+                return upload(tensor)
+            owned_start = shard_index * owned
+            window = tensor[:, :, :, owned_start : owned_start + owned]
+            flat = window.reshape(1, output_extent[0] * output_extent[1] * output_extent[2], head_count, head_dim)
+            bricked = to_bricked(flat, output_table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
         origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
             1, 1, plan["chunk_count"], plan["gather_origin_columns"]
         )
+        query_form, key_form, value_form = volume_form
         actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
-            *(upload(tensor) for tensor in volume_form),
+            upload_query(query_form),
+            upload(key_form),
+            upload(value_form),
             ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
             interior_mask=interior_mask,
             volume=volume,
@@ -486,19 +529,20 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
             query_chunk_bricks=_query_chunk_bricks(stride, brick),
             shard_extent=resident,
             shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
             head_count=head_count,
             scale=1.0,
             tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
         )
 
+        # The output covers the query region: the whole resident tensor unsharded, the owned band
+        # sharded (so no halo columns to slice off).
         bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
-        present = table >= 0
-        resident_out = torch.zeros(1, resident_sites, head_count, head_dim)
-        resident_out[:, table[present]] = bricked_out[:, present]
-        resident_out = resident_out.reshape(1, *resident, head_count, head_dim)
-
-        # Compare the owned band: halo columns sit outside this shard's slice of the volume.
-        actual_owned = resident_out[:, :, :, halo : halo + owned]
+        present = output_table >= 0
+        actual_owned = torch.zeros(1, output_extent[0] * output_extent[1] * output_extent[2], head_count, head_dim)
+        actual_owned[:, output_table[present]] = bricked_out[:, present]
+        actual_owned = actual_owned.reshape(1, *output_extent, head_count, head_dim)
         expected_owned = expected[:, :, :, shard_index * owned : shard_index * owned + owned]
         correlation = pearson(actual_owned, expected_owned)
         assert correlation > 0.99, f"shard {shard_index} at origin {origin_width}: PCC {correlation:.5f}"
@@ -553,6 +597,9 @@ def test_choose_sharded_brick_regression(
         query_chunk_bricks=_query_chunk_bricks(stride, brick),
         shard_extent=resident,
         shard_origin=(0, 0, -halo),
+        # Owned bricks only: a query region that starts below the volume is refused.
+        query_extent=(volume[0], volume[1], width_local),
+        query_origin=(0, 0, halo),
     )
     assert (
         plan["gather_brick_count"] == expected_gather
