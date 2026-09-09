@@ -132,6 +132,38 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+  olmo-3.1-32b:
+    aliases: ["Olmo-3.1-32B", "Olmo-3.1-32B-Instruct", "allenai/Olmo-3.1-32B-Instruct"]
+    # Blackhole bring-up floors (bfp4 MLP / bfp8 attention, 2026-09-09). Accuracy is the tale-of-two-cities
+    # token match vs the HF bf16 refpt; perf left open until the pipeline records measured baselines.
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 88
+              top5: 97
+      bh_p300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 88
+              top5: 97
+      p300x2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 88
+              top5: 97
   falcon-40b:
     aliases: ["falcon-40b"]
     skus:

@@ -89,6 +89,31 @@ class LMHead(LightweightModule):
                 dim=-1,
             )
 
+        # Vocab padding mask: the padded LM-head columns are all-zero weights, so their logits are exactly 0 and
+        # win the (on-device) argmax whenever every real logit is negative — OLMo-3 (vocab 100278 -> 100352) hits
+        # this and emits token ids >= vocab_size. Add a large negative bias on the padded columns instead.
+        self.pad_logit_bias = None
+        if self.vocab_size < self.padded_vocab_size and not args.is_galaxy:
+            pad_bias = torch.zeros(1, 1, 1, self.padded_vocab_size, dtype=torch.bfloat16)
+            pad_bias[..., self.vocab_size :] = -1000.0
+            self.pad_logit_bias = ttnn.as_tensor(
+                pad_bias,
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=(
+                    ttnn.ShardTensorToMesh(mesh_device, dim=3)
+                    if self.num_devices > 1
+                    else ttnn.ReplicateTensorToMesh(mesh_device)
+                ),
+                cache_file_name=(
+                    None
+                    if weight_cache_path is None
+                    else weight_cache_path / f"lm_head_pad_logit_bias_{self.padded_vocab_size}"
+                ),
+            )
+
         self.output_weights_dram_sharded = []
         self.output_weights_ring_mm = []
 
@@ -304,5 +329,7 @@ class LMHead(LightweightModule):
             use_composite=True,
             subdevice_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
         )
+        if self.pad_logit_bias is not None:
+            output = ttnn.add(output, self.pad_logit_bias, memory_config=output.memory_config())
 
         return output
