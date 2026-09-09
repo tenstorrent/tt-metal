@@ -353,7 +353,10 @@ class WanPipeline(PipelineAPIMixin):
         self._num_frames = config.num_frames
 
         self._checkpoint = WanCheckpoint(config.checkpoint_name, subfolder="transformer")
-        self._checkpoint_2 = WanCheckpoint(config.checkpoint_name, subfolder="transformer_2")
+        # Single-expert models (Wan2.2 TI2V-5B) have no transformer_2.
+        self._checkpoint_2 = (
+            None if config.boundary_ratio is None else WanCheckpoint(config.checkpoint_name, subfolder="transformer_2")
+        )
 
         self.dit_ccl_manager = CCLManager(
             mesh_device=device,
@@ -395,12 +398,16 @@ class WanPipeline(PipelineAPIMixin):
             lora_enabled=lora_enabled,
         )
 
-        self.transformer_2 = self._checkpoint_2.build(
-            ccl_manager=self.dit_ccl_manager,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-            model_type=self.model_type,
-            lora_enabled=lora_enabled,
+        self.transformer_2 = (
+            None
+            if self._checkpoint_2 is None
+            else self._checkpoint_2.build(
+                ccl_manager=self.dit_ccl_manager,
+                parallel_config=self.parallel_config,
+                is_fsdp=self.is_fsdp,
+                model_type=self.model_type,
+                lora_enabled=lora_enabled,
+            )
         )
 
         self._vae = WanVAEDecoderAdapter(
@@ -417,8 +424,9 @@ class WanPipeline(PipelineAPIMixin):
 
         self.transformer_states = [
             TransformerState(self.transformer, self._checkpoint, guidance_scale=4.0),
-            TransformerState(self.transformer_2, self._checkpoint_2, guidance_scale=3.0),
         ]
+        if self.transformer_2 is not None:
+            self.transformer_states.append(TransformerState(self.transformer_2, self._checkpoint_2, guidance_scale=3.0))
 
         self._solver = solver_for_scheduler(
             scheduler
@@ -429,7 +437,7 @@ class WanPipeline(PipelineAPIMixin):
         self.latent_buffer = None
         self.condition_buffer = None
 
-        if self.dynamic_load:
+        if self.dynamic_load and self.transformer_2 is not None:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
             if ttnn.device.is_blackhole():
@@ -443,7 +451,8 @@ class WanPipeline(PipelineAPIMixin):
                 self._vae.decoder.register_coresident_exclusions(self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
-        self._prepare_transformer(1)
+        if self.transformer_2 is not None:
+            self._prepare_transformer(1)
         self._prepare_transformer(0)
         self._prepare_text_encoder()
         self._vae.reload_weights()
@@ -619,6 +628,11 @@ class WanPipeline(PipelineAPIMixin):
         # host-side expert selection (no captured trace depends on it).
         effective_boundary_ratio = boundary_ratio if boundary_ratio is not None else self._boundary_ratio
 
+        # Dense single-transformer variants (e.g. TI2V-5B) have no second expert;
+        # guidance_scale_2 is meaningless there, so ignore it rather than erroring.
+        if effective_boundary_ratio is None:
+            guidance_scale_2 = None
+
         if guidance_scale > 1 and not self._cfg_enabled:
             msg = "guidance_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
@@ -649,7 +663,8 @@ class WanPipeline(PipelineAPIMixin):
             guidance_scale_2 = guidance_scale
 
         self.transformer_states[0].guidance_scale = guidance_scale
-        self.transformer_states[1].guidance_scale = guidance_scale_2
+        if len(self.transformer_states) > 1:
+            self.transformer_states[1].guidance_scale = guidance_scale_2
 
         device = "cpu"
 
@@ -708,7 +723,9 @@ class WanPipeline(PipelineAPIMixin):
 
         with tqdm.tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
+                warmup_t2 = (
+                    i == 1 and len(timesteps) == 2 and len(self.transformer_states) > 1
+                )  # Ensure transformer_2 is also warmed up
 
                 # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
                 transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
@@ -835,7 +852,7 @@ class WanPipeline(PipelineAPIMixin):
         ttnn.synchronize_device(self.mesh_device)
 
     def release_traces(self) -> None:
-        for model in (self.transformer, self.transformer_2):
+        for model in (self.transformer, self.transformer_2) if self.transformer_2 is not None else (self.transformer,):
             tracer = WanTransformer3DModel.combined_step._tracers.get(model)
             if tracer is not None:
                 tracer.release_trace()
