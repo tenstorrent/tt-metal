@@ -48,14 +48,26 @@ case "${MODEL}" in
     NUM_USERS_DEFAULT=28
     # KV-dedup default for this leg (#51968 / #55458); main's value, kept as-is.
     TP_SHARD_KV_DEFAULT=1
-    # Traced. traced + tp_shard_kv needs the full-mesh snake KV gather: the two-stage fallback refuses
-    # the metadata path (see _gather_kvpe_prefix_tp_sharded_high_bw), and pinning its extents to make it
-    # run produced KVPE 0.44-0.65 across the four ranks. Traced TP IS bit-exact where the snake runs
-    # (8x4 galaxy: 0.998829/0.999756), so the question is why SC4's mesh refuses it --
-    # _can_full_mesh_gather_kvpe now logs the reason. If the blocker is the declared dim-2 shard factor
-    # (a deduped cache still declaring the legacy kv-head-on-TP layout), it is fixable and this leg can
-    # keep trace; if it is the mesh geometry, this goes back to untraced.
-    RUNNER_ENV="export PREFILL_USE_TRACE=1;"
+    # UNTRACED, deliberately -- main's form. Trace was enabled on this leg and is backed out until the
+    # failure below is understood; it is being debugged separately, so do NOT flip PREFILL_USE_TRACE
+    # back on here without that fix.
+    #
+    # WHY. Five SC4 runs of the traced leg (2026-09-09, runs 34286884010 / 34311408715 / 34313895634 /
+    # 34316647468 / 34319986941) came back 4 pass / 1 CATASTROPHIC: round 3 read back KVPE PCC
+    # -0.001961 / 0.000283 / 0.000936 on ranks 1/2/3 -- uncorrelated, not merely degraded -- while rank 0
+    # was bit-identical to the passing rounds (0.977205). The trace captures were byte-identical to a
+    # passing round (61/59/61/49 segments), so it happens at REPLAY, and it collapses from rank 1 down,
+    # i.e. across the first D2D handoff. Prime suspects are the two buffers that trace makes persistent
+    # and the D2D consumer may still be reading when the next chunk's replay overwrites them:
+    # _trace_output and trace_metadata_msg (a stale metadata copy sends ranks 1..3 at the WRONG cache
+    # slot, which is what a ~0 PCC looks like). A ~20% silent-wrong-KV rate is not shippable.
+    #
+    # Perf is not the reason to keep it either: over those same five runs the traced leg's chunk-0
+    # pipeline fill was 2849.3 ms mean (0.24% spread) against 2550.5 ms untraced -- 11.7% SLOWER, because
+    # SC4 is non-torus, so the snake ring cannot close and _gather_kvpe_prefix_tp_sharded_high_bw pins
+    # BOTH gather extents to the full buffer whenever metadata is present. ttft/throughput differences
+    # were inside run-to-run noise (11%/28% spread), so trace buys SC4 nothing today.
+    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
     # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
