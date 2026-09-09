@@ -1234,8 +1234,8 @@ def test_tilize_block_two_pair_program_cache_addr_change(device, tensor_shape):
 
 # Blackhole sends non-sharded uint8 tilize to the block factory, the only way a 1-tile-wide tensor
 # reaches it. These get a single reader/writer pair: 2048/4096 rows build only full_set, 5120 rows
-# only cliffrow_set. Checks that lone pair is still re-pointed on a cache hit. 4160 rows is to check
-# the case where row is narrower than a block case.
+# only cliffrow_set. Checks that lone pair is still re-pointed on a cache hit. 4160 rows makes the
+# row narrower than one block (full_cores_per_row == 0), which puts core 0 in the cliff-row set.
 @run_for_blackhole()
 @pytest.mark.parametrize("shape", [(1, 1, 2048, 32), (1, 1, 4096, 32), (1, 1, 4160, 32), (1, 1, 5120, 32)])
 def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
