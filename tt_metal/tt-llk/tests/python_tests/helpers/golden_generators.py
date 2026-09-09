@@ -3158,44 +3158,19 @@ class UnarySFPUGolden:
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
     def _relu_max(self, x, threshold=RELU_MAX_THRESHOLD):
-        # _relu_max_body_ is `v_if (val > threshold) val = threshold` then
-        # `v_if (val < 0) val = 0`. The first is a two-vector compare and so uses the total
-        # order -- a NaN is greater than the threshold and is replaced by it, after which the
-        # relu clamp sees a finite value. Order matters: relu-then-min would keep the NaN.
         return sfpu_relu_max(float(x), float(threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         if isinstance(x, int):
-            # Integer dst. An exact integer max with no float round-trip, and
-            # deliberately blind to how either kernel gets there: Wormhole compares in
-            # sign+magnitude (a hand-encoded threshold in LREG2 against an input loaded
-            # under the non-converting InstrModLoadStore::INT32) and Blackhole compares in
-            # two's complement (DEST read through the converting DataLayout::SM32). Same
-            # answer, so the golden states the answer.
-            # Deliberately independent of self.dst_format: for an integer dst the max is
-            # exact, so the dest format cannot change the result, and nothing here should
-            # imply the golden tracks it.
-            #
-            # The threshold comes from _relu_min_int_threshold, not the float default: the
-            # int32 sweep drives negative thresholds to reach the wrapper's sign+magnitude
-            # re-encoding branch, and a negative value has no float-path equivalent here.
+            # Integer dst: an exact integer max, independent of both dst_format and of how
+            # each arch performs the compare, since none of those can change the result.
+            # The threshold comes from _relu_min_int_threshold because the int32 sweep drives
+            # negative values, which the float default cannot express.
             return max(x, int(self._relu_min_int_threshold))
-        # Float dst. The kernel is a single SFPSWAP fold, so this is a max under the SFPU's
-        # total order and not IEEE's -- see sfpu_total_order_key. Measured on n150, threshold
-        # 5.0, Float32 end to end:
-        #
-        #   -NaN (0xFFC00000) -> 5.0        +NaN (0x7FC00000) -> +NaN
-        #   -inf              -> 5.0        +inf              -> +inf
-        #
-        # torch.max agrees on four of those and not on -NaN, which it propagates: -NaN ranks
-        # below -inf under the total order, so the fold discards it for the threshold exactly
-        # as it does -inf. FLOAT_SPECIALS injects only +NaN, so no sweep reaches that lane
-        # today and switching to sfpu_max changes no sweep's outcome -- but the device answer
-        # is measured, so the golden may as well be right there rather than resting on which
-        # NaN sign the specials set happens to carry.
-        #
-        # ReluMax states the same thing through sfpu_relu_max, whose first compare is this
-        # fold; relu_min is that compare with no relu clamp after it.
+        # Float dst: a max under the SFPU's total order rather than IEEE's -- see
+        # sfpu_total_order_key. It diverges from torch.max only on -NaN, which the device
+        # discards in favour of the threshold exactly as it does -inf. No sweep injects -NaN
+        # today, so the choice changes no current result.
         return sfpu_max(float(x), float(threshold))
 
     def _lrelu(self, x, negative_slope=LRELU_NEGATIVE_SLOPE):
