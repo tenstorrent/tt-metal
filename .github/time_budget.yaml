@@ -356,7 +356,7 @@ models:
     bh_sc1: 335
     bh_sc4: 120
   e2e_tier2:
-    wh_llmbox_perf: 266
+    wh_llmbox_perf: 276
     wh_n150: 45
     wh_n300: 6
     bh_p150: 26
@@ -381,7 +381,7 @@ models:
     bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
-    wh_llmbox: 114
+    wh_llmbox: 139
     wh_llmbox_perf: 191
     wh_n150: 82
     wh_n300: 30

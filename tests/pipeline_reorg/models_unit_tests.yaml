@@ -570,6 +570,9 @@
   model: gemma-4-12b
   model_family: Gemma
   skus:
+    wh_llmbox:
+      timeout: 25
+      tier: 2
     bh_quietbox_2:
       timeout: 15
       tier: 1

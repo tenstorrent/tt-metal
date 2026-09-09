@@ -351,6 +351,17 @@ targets:
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
+  gemma-4-12b:
+    aliases: ["gemma-4-12b", "google/gemma-4-12B-it"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+
   gemma-4-31b:
     aliases: ["gemma-4-31b", "google/gemma-4-31B-it"]
     skus:
