@@ -447,7 +447,13 @@ struct mailboxes_t {
 };
 
 // DevicePrintMemoryLayout asserts
+// DPRINT_BUFFER_SIZE is the legacy default buffer size, kept only to check that the layout has not
+// changed size. hostdevcommon/dprint_common.h does not declare it under ENV_LLK_INFRA, and the layout
+// is sized by DEVICE_PRINT_BUFFER_SIZE whenever that is overridden, so this check only applies to the
+// default layout.
+#if !defined(DEVICE_PRINT_BUFFER_SIZE) && !defined(ENV_LLK_INFRA)
 static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+#endif
 static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
