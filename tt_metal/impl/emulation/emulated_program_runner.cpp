@@ -1502,20 +1502,6 @@ static std::map<std::string, std::string> build_kernel_defines(
     if (tt::tt_fabric::is_2d_fabric_config(fabric_cfg)) {
         defines["EMULE_FABRIC_2D"] = "1";
     }
-    // A kernel compiled without EMULE_FABRIC_2D stamps 2D routes as 1D hop distances, which
-    // misroutes silently — so make the mode this build saw visible. See docs/fabric-ccl-emulation.md.
-    if (std::getenv("EMULE_FABRIC_DEBUG") != nullptr) {
-        static std::mutex mu;
-        static std::set<int> seen;
-        std::lock_guard<std::mutex> g(mu);
-        if (seen.insert(static_cast<int>(fabric_cfg)).second) {
-            std::fprintf(
-                stderr,
-                "[EMULE_FABRIC] kernel defines: fabric_config=%d EMULE_FABRIC_2D=%d\n",
-                static_cast<int>(fabric_cfg),
-                tt::tt_fabric::is_2d_fabric_config(fabric_cfg) ? 1 : 0);
-        }
-    }
     // Upstream tensor/dspec.h gates `get_common_arg_addr` as a forward-decl
     // under KERNEL_BUILD; emule's jit_kernel_stubs.hpp provides the definition.
     // Without KERNEL_BUILD, dspec.h emits a stub that collides with emule's.

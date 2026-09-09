@@ -361,10 +361,14 @@ static void fiber_trampoline() {
     // Falling off a makecontext entry whose uc_link is null makes POSIX exit the whole
     // PROCESS with status 0 — a green run that silently ran nothing. Never let that be
     // the failure mode: if the swap back ever fails, say so and abort.
-    fprintf(stderr,
-            "[EMULE_FIBER] FATAL: swapcontext back to the worker loop failed (errno=%d) on fiber "
-            "core (%u,%u) processor %u — aborting instead of exiting silently\n",
-            errno, f->id.logical_x, f->id.logical_y, f->id.proc_id);
+    fprintf(
+        stderr,
+        "[EMULE_FIBER] FATAL: swapcontext back to the worker loop failed (errno=%d) on fiber "
+        "core (%u,%u) processor %u — aborting instead of exiting silently\n",
+        errno,
+        f->id.logical_x,
+        f->id.logical_y,
+        f->id.proc_id);
     std::abort();
 }
 
@@ -1279,8 +1283,8 @@ RunOutcome FiberScheduler::finish_or_host_wait() {
         return RunOutcome::HostWait;   // fibers parked awaiting host socket I/O — ALIVE, no teardown
     }
     if (p_->peer_wait_) {
-        p_->peer_wait_ = false;        // consumed; the next quiescence re-decides
-        return RunOutcome::PeerWait;   // same ALIVE contract, resolved by a peer rank rather than the host
+        p_->peer_wait_ = false;       // consumed; the next quiescence re-decides
+        return RunOutcome::PeerWait;  // same ALIVE contract, resolved by a peer rank rather than the host
     }
     teardown_and_throw();
     return RunOutcome::Completed;

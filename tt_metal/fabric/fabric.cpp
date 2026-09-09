@@ -110,10 +110,7 @@ std::vector<FabricType> get_all_mgd_fabric_types() {
 // emule has no fabric router, so the device-L1 connection table is never populated. Record the
 // fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
 // See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" void __emule_fabric_record_conn(
-    uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
-// Node -> emule chip id, valid for a node on a mesh this rank does not own (where the control
-// plane's own lookup raises). See tt-emule docs/multi-rank-emulation.md.
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
 extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 

@@ -60,9 +60,6 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     if (target != tt::TargetDevice::Emule) {
         return;
     }
-    // A deferred cross-queue registration runs here: this is a fence, and every emule fence already
-    // funnels through this function (enqueue_mesh_workload deliberately does not call it, which is
-    // what lets a peer queue's workload join the pending generation first).
     tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
     device_ids.reserve(mesh_device->get_devices().size());
