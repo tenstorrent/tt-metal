@@ -13,6 +13,7 @@ Run:
 """
 import os
 
+import pytest
 import torch
 from loguru import logger
 
@@ -38,6 +39,13 @@ def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
+
+    # Mirror of test_moe_tp's dense guard. On a sparse-MoE checkpoint (35B-A3B) EVERY layer's dense
+    # SwiGLU is replaced by the MoE block, so there is no `mlp.gate_proj.weight` and load_mlp_layer
+    # dies with a bare StopIteration. The dense MLP code this test covers is still exercised on that
+    # checkpoint — as the MoE shared expert, via test_moe_tp.
+    if args.moe_num_experts > 0:
+        pytest.skip("MoE checkpoint has no dense MLP; same code runs as the shared expert (test_moe_tp)")
 
     # args.CKPT_DIR is the resolved local snapshot dir (Qwen36ModelArgs downloads the hub id).
     mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
@@ -74,6 +82,10 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
+
+    # See test_mlp_tp: a MoE checkpoint has no dense MLP to load.
+    if args.moe_num_experts > 0:
+        pytest.skip("MoE checkpoint has no dense MLP; same code runs as the shared expert (test_moe_tp)")
 
     mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
 
