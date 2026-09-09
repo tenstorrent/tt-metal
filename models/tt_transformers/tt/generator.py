@@ -1066,13 +1066,34 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and getattr(self.model[0], "sampling", None) is not None
         )
         if warmup_prefill:
-            # Warmup owns prefill deferral across the whole bucket sweep. The hoist below
-            # handles the first warmup-less request instead.
+            # The prefill sweep records its traces before returning. Stage decode
+            # programs and persistent inputs first, otherwise the first decode
+            # allocates behind those traces and a later request cannot replay them.
+            prepare_decode = (
+                enable_trace
+                and not self.already_warmed_up_prefill
+                and not self._defer_trace_recording
+                and not self._defer_prefill_recording
+                and not self._any_trace_captured()
+                and not self._will_row_shard_prefill(tokens, sampling_params)
+                and not self._overrides_prefill_capture()
+                and not self._uses_prefetcher()
+            )
+            if prepare_decode:
+                self._prepare_decode_trace_once(
+                    kv_cache=kv_cache,
+                    page_table=page_table,
+                    on_device_sampling=on_device_sampling_requested and on_device_sampling_enabled,
+                )
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
             )
+            if prepare_decode:
+                # Capture also executes a dummy decode and writes K/V. Finish it
+                # here, before the real prefill below overwrites the warmup data.
+                self._record_pending_traces()
         elif (
             enable_trace
             and not self._defer_trace_recording
@@ -1559,6 +1580,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 self._post_prefill_tail(model_id, logits, sampling_enabled),
                 sampling_enabled,
             )
+            # Only host results are queued above. Release this user's temporary
+            # logits before the next user's prefill trace can overwrite them.
+            del logits
 
         if len(prefill_results) > 0:
             for elem_idx, res in enumerate(prefill_results):
