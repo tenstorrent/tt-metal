@@ -843,7 +843,12 @@ class TTVibeVoiceGenerator:
                 )
                 spos += b - a
         if made_f32:
-            ttnn.deallocate(text_f32)  # the slices above are copies, so the source tensor is dead
+            # A partial slice is a copy, so the widened source is dead here.  The exception is a
+            # mask with no speech slots at all (an ``--isl`` crop landing before the first speech
+            # slot): the single full-range slice is a no-op that aliases ``text_f32``, so a forced
+            # deallocate would free the buffer this function returns.  ``force=False`` drops just
+            # the local reference and leaves a shared buffer to its remaining owner.
+            ttnn.deallocate(text_f32, force=False)
         if len(parts) == 1:
             return parts[0]
         return ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1467,6 +1472,52 @@ class TTVibeVoiceGenerator:
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids, dtype=torch.long)
 
+        # Determine the max number of AR steps up front — it sizes the fixed KV cache, and every
+        # position it spans has to index the RoPE tables, which are built once with
+        # ``cfg.max_position_embeddings`` rows (``_build_rope_tables_dev``).  A request that runs
+        # past the last row would fetch a garbage row (or an out-of-range embedding index) deep
+        # into a render rather than fail, so every length path is bounded here, ahead of voice
+        # encoding and cache allocation — the expensive, hard-to-unwind work.  The bound uses the
+        # tokenized length: the scatter replaces speech slots in place, so ``prefill_len`` below
+        # equals ``initial_length``.
+        #
+        # ``max_new_tokens`` is a CAP ("generate at most N"), so an oversized one is clamped, the
+        # same as the ``max_length_times`` default path — a caller passing the documented
+        # ``2 x ISL`` budget for a long prompt should still render, and usually EOSes well short of
+        # the limit anyway.  ``forced_token_ids`` is an exact stream that must be replayed in full,
+        # so clamping it would silently truncate the run: that one raises.
+        initial_length = input_ids.shape[-1]
+        max_context = cfg.max_position_embeddings
+        context_room = max_context - initial_length
+        if context_room <= 0:
+            raise ValueError(
+                f"prompt is {initial_length} tokens, which leaves no room to generate within the "
+                f"model's {max_context}-position context (max_position_embeddings)"
+            )
+        forced_tokens: Optional[List[int]] = None
+        if forced_token_ids is not None:
+            forced_tokens = forced_token_ids.reshape(-1).tolist()
+            if not forced_tokens:
+                raise ValueError("forced_token_ids must be non-empty")
+            if len(forced_tokens) > context_room:
+                raise ValueError(
+                    f"forced_token_ids has {len(forced_tokens)} tokens but only {context_room} "
+                    f"positions remain after a {initial_length}-token prompt within the model's "
+                    f"{max_context}-position context (max_position_embeddings)"
+                )
+            max_steps = len(forced_tokens)
+        elif max_new_tokens is not None:
+            max_steps = min(max_new_tokens, context_room)
+            if max_steps < max_new_tokens:
+                print(
+                    f"[vibevoice] max_new_tokens={max_new_tokens} clamped to {max_steps}: only that "
+                    f"many positions remain after a {initial_length}-token prompt within the "
+                    f"model's {max_context}-position context (max_position_embeddings)",
+                    flush=True,
+                )
+        else:
+            max_steps = min(context_room, int(self.max_length_times * initial_length))
+
         prof = _Profiler(device)
 
         # Op-level speech-frame profiling (VV_PROFILE_SPEECH_FRAME=<n>, 0=off): wrap the n-th
@@ -1503,22 +1554,6 @@ class TTVibeVoiceGenerator:
             f"speech_slots={int(speech_input_mask[0].sum().item()) if speech_input_mask is not None else 0} "
             f"scale={self.speech_scaling_factor} bias={self.speech_bias_factor}"
         )
-
-        # Determine the max number of AR steps up front — it sizes the fixed KV cache.
-        initial_length = input_ids.shape[-1]
-        forced_tokens: Optional[List[int]] = None
-        if forced_token_ids is not None:
-            forced_tokens = forced_token_ids.reshape(-1).tolist()
-            if not forced_tokens:
-                raise ValueError("forced_token_ids must be non-empty")
-            max_steps = len(forced_tokens)
-        elif max_new_tokens is not None:
-            max_steps = max_new_tokens
-        else:
-            max_steps = min(
-                cfg.max_position_embeddings - initial_length,
-                int(self.max_length_times * initial_length),
-            )
 
         # Preallocate fixed-size KV caches (TT LM path only).  Positive cache holds
         # prefill + all generated tokens; negative cache is reset per speech segment
@@ -1763,7 +1798,11 @@ class TTVibeVoiceGenerator:
                     logits, step_hidden = self._lm_decode_token(current_token, start_pos, kv_cache_pos)
 
             if current_token == self.speech_start_id:
-                if self._trace_segment:
+                # Mirror the frame loop's gating: with forced tokens the frames run eagerly even
+                # under VV_TRACE_SEGMENT=1, so the boundary must take the eager reset path (there
+                # is no capture to release, and the separate neg-KV / streaming caches would
+                # otherwise survive into the next speaker segment).
+                if self._trace_segment and forced_tokens is None:
                     # Whole-segment fused trace: release the capture so the boundary's eager LM
                     # decodes can't corrupt it, then let the next diffusion frame (frame 0) rewind
                     # positions, re-seed hidden, fold the negative prefill and zero the conv caches

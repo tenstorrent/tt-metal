@@ -162,15 +162,28 @@ def _materialize(t):
     return t() if callable(t) else t
 
 
-def _get_or_zeros(sd: dict, key: str, shape, dtype=torch.float32) -> torch.Tensor:
-    """``sd[key]`` if present, else a fresh zero tensor of ``shape``.
+def _get_required(sd: dict, key: str, shape) -> torch.Tensor:
+    """``sd[key]``, or raise — for learned tensors the model cannot run without.
 
-    Unlike ``sd.get(key, torch.zeros(shape))`` this does NOT allocate the (potentially large)
-    zero fallback when the key is present — the fallback only exists for malformed/partial states,
-    so for a real checkpoint this is a pure dict lookup with no allocation or data read.
+    Convolution kernels and FFN projections have no meaningful default: substituting zeros turns a
+    malformed or partial state dict into a silently wrong model whose output is a zero/constant
+    waveform, and the tiled result would be written to the persistent weight cache
+    (``TT_CACHE_PATH``), so the synthetic weights outlive the bad load.  Fail at load instead.
+
+    ``shape`` is the architecturally-expected shape, reported in the error to make a checkpoint /
+    config mismatch obvious.  It is deliberately not asserted against the tensor: some dimensions
+    (notably ``ffn_dim``) are read back from the checkpoint rather than fixed by the config.
+
+    Genuinely optional parameters — biases, layer-scale gammas, norm weights — keep their defaults
+    at the call sites (``sd.get(...)`` with ``None`` / ``torch.ones``).
     """
     v = sd.get(key)
-    return v if v is not None else torch.zeros(*shape, dtype=dtype)
+    if v is None:
+        raise KeyError(
+            f"missing required weight {key!r} (expected shape {tuple(shape)}) — the checkpoint is "
+            f"incomplete or does not match the configured architecture"
+        )
+    return v
 
 
 @dataclass
@@ -231,7 +244,7 @@ def _parse_depths(depths_str: str) -> List[int]:
 def _get_conv_weights(
     sd: dict, prefix: str, in_ch: int, out_ch: int, kernel_size: int, stride: int, groups: int = 1, causal: bool = False
 ) -> ConvWeightsHost:
-    w = _get_or_zeros(sd, f"{prefix}.weight", (out_ch, in_ch // groups, kernel_size))
+    w = _get_required(sd, f"{prefix}.weight", (out_ch, in_ch // groups, kernel_size))
     b = sd.get(f"{prefix}.bias", None)
     # Reference: padding_total = (kernel_size - 1) * dilation - (stride - 1)
     # All convolutions here have dilation=1
@@ -310,9 +323,9 @@ def preprocess_semantic_tokenizer_weights(
             norm_w = hf_state.get(f"{bp}.norm.weight", torch.ones(dim))
             ffn_norm_w = hf_state.get(f"{bp}.ffn_norm.weight", torch.ones(dim))
 
-            l1_w = _get_or_zeros(hf_state, f"{bp}.ffn.linear1.weight", (ffn_dim_default, dim))
+            l1_w = _get_required(hf_state, f"{bp}.ffn.linear1.weight", (ffn_dim_default, dim))
             l1_b = hf_state.get(f"{bp}.ffn.linear1.bias", None)
-            l2_w = _get_or_zeros(hf_state, f"{bp}.ffn.linear2.weight", (dim, ffn_dim_default))
+            l2_w = _get_required(hf_state, f"{bp}.ffn.linear2.weight", (dim, ffn_dim_default))
             l2_b = hf_state.get(f"{bp}.ffn.linear2.bias", None)
 
             gamma = hf_state.get(f"{bp}.gamma", None)
