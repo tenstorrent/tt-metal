@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <variant>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental {
@@ -15,9 +16,9 @@ Tensor update_cache_bundle_allocation(
     const Tensor& allocated_pages,
     const Tensor& free_list,
     const Tensor& free_count,
-    uint32_t slot_id,
-    uint32_t actual_start,
-    uint32_t actual_end,
+    const std::variant<uint32_t, Tensor>& slot_id,
+    const std::variant<uint32_t, Tensor>& actual_start,
+    const std::variant<uint32_t, Tensor>& actual_end,
     uint32_t page_size = 32);
 
 }  // namespace ttnn::experimental

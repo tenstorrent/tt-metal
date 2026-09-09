@@ -18,6 +18,9 @@ struct CacheBundleAllocationInputs {
     Tensor allocated_pages;
     Tensor free_list;
     Tensor free_count;
+    std::optional<Tensor> slot_id;
+    std::optional<Tensor> actual_start;
+    std::optional<Tensor> actual_end;
 };
 struct CacheBundleAllocationProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(

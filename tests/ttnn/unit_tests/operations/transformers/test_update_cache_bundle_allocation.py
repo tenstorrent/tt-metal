@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch
 
 PAGE_SIZE = 32
 
@@ -155,3 +156,93 @@ def test_chunked_growth_preserves_other_slots(device, sp):
         table, _, _, _ = pool.check(pages)
         assert torch.equal(table[:17], before[:17])
         assert torch.equal(table[18:], before[18:])
+
+
+def request_tensor(value, device):
+    return ttnn.from_torch(
+        torch.tensor([[value]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
+def test_tensor_requests(device):
+    device.enable_program_cache()
+    # Retain both sets of buffers so the second call must override cached addresses.
+    pools = [CachePool(device, bundles=8) for _ in range(2)]
+    request_buffers = []
+    entries = None
+    for pool in pools:
+        reference = CachePool(device, bundles=8)
+        for slot, start, end, pages in (
+            (0, 0, 65, [3, 0, 0]),
+            (1, 0, 33, [3, 2, 0]),
+            (0, 65, 129, [5, 2, 0]),
+            (0, 100, 128, [5, 2, 0]),
+            (0, 0, 32, [1, 2, 0]),
+            (1, 0, 0, [1, 0, 0]),
+        ):
+            args = [request_tensor(value, device) for value in (slot, start, end)]
+            request_buffers.append(args)
+            pool.update(*args)
+            reference.update(slot, start, end)
+            assert all(torch.equal(a, b) for a, b in zip(pool.check(pages), reference.check(pages)))
+            if entries is None:
+                entries = device.num_program_cache_entries()
+            assert device.num_program_cache_entries() == entries
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@skip_for_slow_dispatch()
+def test_trace_replay_uses_updated_request_values(device):
+    device.enable_program_cache()
+    pool = CachePool(device, context=10240, sp=8, bundles=128)
+    args = [request_tensor(0, device) for _ in range(3)]
+    pool.update(*args)  # Compile before capture with an empty-slot release.
+    entries = device.num_program_cache_entries()
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    result = pool.update(*args)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        # slot, start, end, expected allocated pages per slot.
+        for slot, start, end, pages in (
+            (0, 0, 5120, [160, 0, 0]),  # First chunk.
+            (0, 5120, 10240, [320, 0, 0]),  # Grow by one chunk.
+            (0, 5120, 10240, [320, 0, 0]),  # Repeated growth is a no-op.
+            (1, 0, 5120, [320, 160, 0]),  # Switch slots in the same trace.
+            (0, 0, 32, [1, 160, 0]),  # Reset to a shorter request.
+            (1, 0, 0, [1, 0, 0]),  # Release.
+            (0, 0, 0, [0, 0, 0]),
+            (0, 0, 0, [0, 0, 0]),  # Repeated release.
+            (2, 0, 5120, [0, 0, 160]),  # Reuse returned bundles.
+        ):
+            for tensor, value in zip(args, (slot, start, end)):
+                host = ttnn.from_torch(
+                    torch.tensor([[value]], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                ttnn.copy_host_to_device_tensor(host, tensor, cq_id=0)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            pool.check(pages)
+            assert result.buffer_address() == pool.tensors[0].buffer_address()
+            assert device.num_program_cache_entries() == entries
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("invalid", ["shape", "dtype", "placement"])
+def test_invalid_request_tensor(device, expect_error, invalid):
+    pool = CachePool(device)
+    value = ttnn.from_torch(
+        torch.zeros((1, 2) if invalid == "shape" else (1, 1), dtype=torch.int32),
+        dtype=ttnn.int32 if invalid == "dtype" else ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG if invalid == "placement" else ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    with expect_error(RuntimeError, "Request must"):
+        pool.update(request_tensor(0, device), request_tensor(0, device), value)
+    pool.check([0, 0, 0])

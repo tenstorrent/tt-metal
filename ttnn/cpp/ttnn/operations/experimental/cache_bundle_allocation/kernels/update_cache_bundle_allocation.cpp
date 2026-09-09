@@ -53,10 +53,30 @@ ByteRange aligned_range(uint32_t first, uint32_t end, uint32_t row_bytes) {
     return {begin_bytes, end_bytes < row_bytes ? end_bytes : row_bytes};
 }
 
-constexpr auto table_args = TensorAccessorArgs<7>();
+constexpr uint32_t request_mask = get_compile_time_arg_val(7);
+constexpr auto table_args = TensorAccessorArgs<8>();
 constexpr auto allocated_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
 constexpr auto free_args = TensorAccessorArgs<allocated_args.next_compile_time_args_offset()>();
 constexpr auto count_args = TensorAccessorArgs<free_args.next_compile_time_args_offset()>();
+
+constexpr auto slot_args = TensorAccessorArgs<count_args.next_compile_time_args_offset()>();
+constexpr auto start_args = TensorAccessorArgs<slot_args.next_compile_time_args_offset()>();
+constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
+
+// Resolve scalar or device request values before entering the shared allocation path.
+template <uint32_t index, typename AccessorArgs>
+uint32_t read_request_value(const Noc& noc, AccessorArgs accessor_args, uint32_t& rt_args_idx) {
+    const uint32_t value = get_arg_val<uint32_t>(rt_args_idx++);
+    if constexpr ((request_mask & (1u << index)) != 0) {
+        CircularBuffer cb_request(4);
+        const CoreLocalMem<volatile uint32_t> scratch(cb_request.get_write_ptr());
+        const auto accessor = TensorAccessor(accessor_args, value);
+        noc.async_read(accessor, scratch, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        return scratch[0];
+    }
+    return value;
+}
 
 struct MetadataBuffers {
     decltype(TensorAccessor(table_args, 0)) table_acc;
@@ -103,9 +123,9 @@ uint32_t read_allocated_pages(const Noc& noc, const MetadataBuffers& buffers, ui
 
 // Decode the request and read the selected slot's current allocation.
 AllocationUpdate read_allocation_update(const Noc& noc, const MetadataBuffers& buffers, uint32_t& rt_args_idx) {
-    const uint32_t slot = get_arg_val<uint32_t>(rt_args_idx++);
-    const bool reset = get_arg_val<uint32_t>(rt_args_idx++) == 0;
-    const uint32_t end = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t slot = read_request_value<0>(noc, slot_args, rt_args_idx);
+    const bool reset = read_request_value<1>(noc, start_args, rt_args_idx) == 0;
+    const uint32_t end = read_request_value<2>(noc, end_args, rt_args_idx);
     const auto allocated_range = aligned_range(slot, slot + 1, allocated_bytes);
     const uint32_t old_pages = read_allocated_pages(noc, buffers, slot, allocated_range);
     const uint32_t required_pages = end / page_size + (end % page_size != 0);
