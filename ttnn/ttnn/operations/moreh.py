@@ -25,8 +25,6 @@ fold = ttnn.moreh_fold
 getitem = ttnn.moreh_getitem
 linear = ttnn.moreh_linear
 linear_backward = ttnn.moreh_linear_backward
-logsoftmax = ttnn.moreh_logsoftmax
-logsoftmax_backward = ttnn.moreh_logsoftmax_backward
 matmul = ttnn.moreh_matmul
 matmul_backward = ttnn.moreh_matmul_backward
 mean = ttnn.moreh_mean
@@ -37,8 +35,6 @@ nll_loss_unreduced_backward = ttnn.moreh_nll_loss_unreduced_backward
 norm = ttnn.moreh_norm
 norm_backward = ttnn.moreh_norm_backward
 sgd = ttnn.moreh_sgd
-softmin = ttnn.moreh_softmin
-softmin_backward = ttnn.moreh_softmin_backward
 sum = ttnn.moreh_sum
 sum_backward = ttnn.moreh_sum_backward
 
