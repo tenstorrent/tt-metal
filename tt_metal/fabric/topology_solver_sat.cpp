@@ -578,13 +578,17 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
 // Build one "occupied" indicator per non-empty host group: occ_g <=> (some target maps into a global of group g).
 // When all_or_nothing is true, additionally force occ_g => every (reachable) global of g is used. This is valid ONLY
 // when a minimal-host packing fills each used host completely; it eliminates partially-used hosts, which massively
-// prunes the at-most-k search. Returns the occupancy indicators (one per non-empty group).
+// prunes the at-most-k search. Those tightening clauses carry `extra_lit` (when non-zero) like the cap's counter
+// assertion does, so an optional (assumed) cap switches them off together with the cap; otherwise a relaxed soft
+// cap would leave "every used host is full" behind as a hard constraint and make the whole CNF UNSAT.
+// Returns the occupancy indicators (one per non-empty group).
 inline void topology_sat_build_group_occupancy(
     TopologySatSolver& solver,
     const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc,
     bool all_or_nothing,
-    std::vector<int>& occ_out) {
+    std::vector<int>& occ_out,
+    int extra_lit = 0) {
     occ_out.clear();
     const auto& global_to_host = constraint_data.global_to_same_rank_group;
     const size_t num_groups = constraint_data.same_rank_groups.size();
@@ -647,6 +651,9 @@ inline void topology_sat_build_group_occupancy(
         }
         if (all_or_nothing) {
             for (int um : used_m) {  // occ => every reachable mesh of the group is used
+                if (extra_lit != 0) {
+                    solver.add(extra_lit);
+                }
                 solver.add(-occ);
                 solver.add(um);
                 solver.add(0);
@@ -698,7 +705,7 @@ inline bool topology_sat_encode_at_most_k_groups(
     bool full_packing,
     int extra_lit = 0) {
     std::vector<int> occ;
-    topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ);
+    topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ, extra_lit);
     const size_t num_present = occ.size();
     if (num_present == 0 || k_hosts >= num_present) {
         return true;  // not binding
