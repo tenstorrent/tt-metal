@@ -173,31 +173,23 @@ def test_layer_selects_topology_by_physical_axis(
     assert layer.tp_ccl_topology == expected_tp
 
 
-def test_layer_requires_topology(device: ttnn.Device, expect_error) -> None:
-    config = make_small_kda_test_config()
-    with expect_error(TypeError, "topology"):
-        ttKDA(device, config, random_weights(config))
-
-
-@pytest.mark.parametrize(
-    "topology",
-    [
-        pytest.param(ttnn.Topology.Linear, id="scalar"),
-        pytest.param((ttnn.Topology.Linear,), id="short-tuple"),
-        pytest.param((ttnn.Topology.Linear, ttnn.Topology.Linear, ttnn.Topology.Linear), id="long-tuple"),
-        pytest.param((ttnn.Topology.Linear, "Ring"), id="invalid-member"),
-    ],
-)
-def test_layer_rejects_malformed_topology(topology: object, device: ttnn.Device, expect_error) -> None:
-    config = make_small_kda_test_config()
-    with expect_error(ValueError, "2-tuple of ttnn.Topology"):
-        ttKDA(device, config, random_weights(config), topology=topology)
+_MALFORMED_TOPOLOGIES = {
+    "topology_scalar": ttnn.Topology.Linear,
+    "topology_short": (ttnn.Topology.Linear,),
+    "topology_long": (ttnn.Topology.Linear, ttnn.Topology.Linear, ttnn.Topology.Linear),
+    "topology_member": (ttnn.Topology.Linear, "Ring"),
+}
 
 
 @pytest.mark.parametrize(
     "case",
     [
         pytest.param("axes", id="sp-and-tp-axes-must-be-distinct"),
+        pytest.param("topology_missing", id="topology-is-required"),
+        pytest.param("topology_scalar", id="topology-rejects-a-bare-topology"),
+        pytest.param("topology_short", id="topology-rejects-a-1-tuple"),
+        pytest.param("topology_long", id="topology-rejects-a-3-tuple"),
+        pytest.param("topology_member", id="topology-rejects-a-non-topology-member"),
         pytest.param("weight_sources", id="weight-sources-are-mutually-exclusive"),
         pytest.param("grouped_nonsquare", id="grouped-scan-requires-square-state"),
         pytest.param("batch_state", id="state-allocation-requires-batch-one"),
@@ -210,6 +202,12 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
     if case == "axes":
         with expect_error(ValueError, "requires distinct 2D SP/TP axes"):
             ttKDA(device, config, state_dict, sp_axis=0, tp_axis=0, topology=LINEAR_TOPOLOGY)
+    elif case == "topology_missing":
+        with expect_error(TypeError, "topology"):
+            ttKDA(device, config, state_dict)
+    elif case in _MALFORMED_TOPOLOGIES:
+        with expect_error(ValueError, "2-tuple of ttnn.Topology"):
+            ttKDA(device, config, state_dict, topology=_MALFORMED_TOPOLOGIES[case])
     elif case == "weight_sources":
         weights = ttKDA(device, config, state_dict, topology=LINEAR_TOPOLOGY).weights
         with expect_error(ValueError, "either constructed KDAWeights or host state_dict"):

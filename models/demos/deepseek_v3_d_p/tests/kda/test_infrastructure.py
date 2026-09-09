@@ -144,8 +144,6 @@ def test_program_config_resolution(device: ttnn.Device) -> None:
     )
 
     assert layer.qkv_convolution_program_config.channel_chunk_size == 96
-    assert layer.sp_ccl_topology == ttnn.Topology.Linear
-    assert layer.tp_ccl_topology == ttnn.Topology.Linear
 
 
 @pytest.mark.parametrize(
