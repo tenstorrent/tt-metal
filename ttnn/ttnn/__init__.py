@@ -568,7 +568,6 @@ from ttnn.operations.conv2d import (
     Conv2dL1FullSliceConfig,
     prepare_conv_weights,
     prepare_conv_bias,
-    determine_conv2d_dram_slice_config,
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
