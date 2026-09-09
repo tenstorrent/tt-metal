@@ -167,6 +167,9 @@ inline void _relu_min_(T threshold)
             // name that sounds otherwise. The threshold does not arrive through a load and so
             // passes through no mode at all, which is why it is re-encoded by hand here to
             // match, and why that is scoped to the integer branch.
+            constexpr std::uint32_t SIGN_MAG_SIGN_BIT      = 0x80000000u;
+            constexpr std::uint32_t SIGN_MAG_MAX_MAGNITUDE = 0x7FFFFFFFu;
+
             const int scalar       = static_cast<int>(threshold);
             std::uint32_t sign_mag = static_cast<std::uint32_t>(scalar);
             if (scalar < 0)
@@ -175,7 +178,7 @@ inline void _relu_min_(T threshold)
                 // sign+magnitude form, so it saturates to -(2^31 - 1); the clamp is what
                 // saturates it, where a mask would encode negative zero and clamp at 0.
                 const std::uint32_t magnitude = -static_cast<std::uint32_t>(scalar);
-                sign_mag                      = 0x80000000u | (magnitude > 0x7FFFFFFFu ? 0x7FFFFFFFu : magnitude);
+                sign_mag                      = SIGN_MAG_SIGN_BIT | (magnitude > SIGN_MAG_MAX_MAGNITUDE ? SIGN_MAG_MAX_MAGNITUDE : magnitude);
             }
             _sfpu_load_imm32_(p_sfpu::LREG2, sign_mag);
         }
