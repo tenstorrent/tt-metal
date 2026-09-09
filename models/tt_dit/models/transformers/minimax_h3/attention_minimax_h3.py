@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -233,6 +234,39 @@ class MiniMaxH3Attention(Module):
         )
 
     # ------------------------------------------------------------------ weights
+
+    _vsa_dump_calls = 0
+
+    def _dump_vsa_indices(self, vsa_indices) -> None:
+        """VSA_DUMP_INDICES=<dir>: save the per-device raw top-k rows of the first 3 attention calls
+        (untraced compile run) plus the geometry, for host-side selection statistics."""
+        import torch as _torch
+
+        if type(self)._vsa_dump_calls >= 3:
+            return
+        d = os.environ["VSA_DUMP_INDICES"]
+        os.makedirs(d, exist_ok=True)
+        n = type(self)._vsa_dump_calls
+        type(self)._vsa_dump_calls += 1
+        per_dev = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(vsa_indices)]
+        stage = self.vsa_stage
+        _torch.save(
+            dict(
+                indices=per_dev,
+                k=stage.k,
+                exempt_ids=stage.exempt_ids,
+                coarse_slots_shift=stage.coarse_slots_shift,
+                tiles_per_shard=stage.geometry.tiles_per_shard,
+                sp_factor=stage.geometry.sp_factor,
+                tile_ids=stage.geometry.tile_ids,
+                is_exempt=stage.geometry.is_exempt,
+                is_3d=stage.geometry.is_3d,
+                n_prefix_tiles=stage.geometry.n_prefix_tiles,
+                n_video_tiles=stage.geometry.n_video_tiles,
+                dense_rows=stage.dense_row_hint,
+            ),
+            os.path.join(d, f"vsa_indices_call{n}.pt"),
+        )
 
     def set_vsa_stage(self, stage) -> None:
         """Bind the geometry-specific coarse stage (shared across blocks; see MiniMaxH3VSACoarseStage)."""
@@ -555,7 +589,13 @@ class MiniMaxH3Attention(Module):
         # order (the geometry the bound stage was built from).
         if self.vsa_stage is not None:
             use_gate = not self.gate_compress_is_zero
-            o_c, vsa_indices = self.vsa_stage(q_BHNE, k_BHNE, v_BHNE, compute_o_c=use_gate)
+            # streaming kernel: raw top-k rows + exempt ids + dense-row mask (assembly done on device)
+            raw = (
+                self.vsa_config.streaming and os.environ.get("VSA_RAW", "1") == "1"
+            )  # VSA_RAW=0: host assembly (debug)
+            o_c, vsa_indices = self.vsa_stage(q_BHNE, k_BHNE, v_BHNE, compute_o_c=use_gate, raw_selection=raw)
+            if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
+                self._dump_vsa_indices(vsa_indices)
 
             # R2: gathered K/V equal the concatenation of all shards' local K/V.
             if self.parallel_config.sequence_parallel.factor > 1:
@@ -572,6 +612,24 @@ class MiniMaxH3Attention(Module):
                 self.vsa_stage.block_counts_tensor(),
                 k_chunk_blocks=self.vsa_config.k_chunk_blocks,
                 streaming=self.vsa_config.streaming,
+                distributed=self.vsa_config.distributed,
+                **(
+                    dict(
+                        list_len=self.vsa_stage.k,
+                        exempt_ids=self.vsa_stage.exempt_ids,
+                        dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
+                        coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
+                        coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
+                        dense_row_hint=self.vsa_stage.dense_row_hint,  # cost-aware row dealing (both kernels)
+                        **(
+                            dict(stream_order=self.vsa_stage.stream_order_tensor(self.vsa_config.stream_order))
+                            if self.vsa_config.stream_order != "identity" and not self.vsa_config.distributed
+                            else {}
+                        ),
+                    )
+                    if raw
+                    else {}
+                ),
             )
             ttnn.deallocate(vsa_indices)
 

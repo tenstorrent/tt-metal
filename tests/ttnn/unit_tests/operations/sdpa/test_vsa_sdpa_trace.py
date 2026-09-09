@@ -5,6 +5,9 @@
 program-cache-hit invocations after other ops / with poisoned L1 (regression for a model-block hang
 whose root cause was a kreq page word read before it was written)."""
 
+import functools
+import os
+
 import pytest
 import torch
 import ttnn
@@ -13,14 +16,17 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.sdpa.test_vsa_sdpa_perf import make_inputs
 from tests.ttnn.utils_for_testing import comp_pcc
 
+# VSA_DIST=1 runs every check against the distributed-window kernel
+_vsa_sdpa = functools.partial(ttnn.transformer.vsa_sdpa, distributed=os.environ.get("VSA_DIST", "0") == "1")
+
 
 def _run_checks(dev, order):
     q, k, v, idx, counts, _ = make_inputs(dev, s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order=order)
     multi = isinstance(dev, ttnn.MeshDevice) and dev.get_num_devices() > 1
     composer = ttnn.ConcatMeshToTensor(dev, dim=0) if multi else None
     host = lambda t: ttnn.to_torch(t, mesh_composer=composer).float()
-    ref = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts)  # compile + untraced reference
-    rep = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts)  # untraced repeat
+    ref = _vsa_sdpa(q, k, v, idx, counts)  # compile + untraced reference
+    rep = _vsa_sdpa(q, k, v, idx, counts)  # untraced repeat
     ttnn.synchronize_device(dev)
     ref_t = host(ref)
     rep_t = host(rep)
@@ -33,7 +39,7 @@ def _run_checks(dev, order):
     q2, k2, v2, idx2, counts2 = (ttnn.clone(x) for x in (q, k, v, idx, counts))
     assert q2.buffer_address() != q.buffer_address() and v2.buffer_address() != v.buffer_address()
     tid = ttnn.begin_trace_capture(dev, cq_id=0)
-    out = ttnn.transformer.vsa_sdpa(q2, k2, v2, idx2, counts2)
+    out = _vsa_sdpa(q2, k2, v2, idx2, counts2)
     ttnn.end_trace_capture(dev, tid, cq_id=0)
     for _ in range(3):
         ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
@@ -73,7 +79,7 @@ def _run_cache_hit(dev, between):
     multi = isinstance(dev, ttnn.MeshDevice) and dev.get_num_devices() > 1
     composer = ttnn.ConcatMeshToTensor(dev, dim=0) if multi else None
     host = lambda t: ttnn.to_torch(t, mesh_composer=composer).float()
-    ref = host(ttnn.transformer.vsa_sdpa(q, k, v, idx, counts))
+    ref = host(_vsa_sdpa(q, k, v, idx, counts))
     q2, k2, v2, idx2, counts2 = (ttnn.clone(x) for x in (q, k, v, idx, counts))
     if between == "matmul":
         a = ttnn.from_torch(
@@ -87,7 +93,7 @@ def _run_cache_hit(dev, between):
         ttnn.deallocate(b)
         ttnn.deallocate(a)
     ttnn.synchronize_device(dev)
-    out = host(ttnn.transformer.vsa_sdpa(q2, k2, v2, idx2, counts2))
+    out = host(_vsa_sdpa(q2, k2, v2, idx2, counts2))
     _, pcc = comp_pcc(ref, out, 0.9999)
     print(f"VSA_CACHE_HIT between={between} pcc={pcc:.6f} shape={tuple(out.shape)}")
     if pcc < 0.998:
@@ -177,7 +183,7 @@ def test_vsa_sdpa_cache_hit_loop(device, between):
     q, k, v, idx, counts, _ = make_inputs(
         dev, s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order="model"
     )
-    ref = ttnn.to_torch(ttnn.transformer.vsa_sdpa(q, k, v, idx, counts)).float()
+    ref = ttnn.to_torch(_vsa_sdpa(q, k, v, idx, counts)).float()
     a = ttnn.from_torch(torch.randn(1, 1, 4096, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
 
     l1_fill = lambda value: _l1_fill(dev, value)
@@ -199,7 +205,7 @@ def test_vsa_sdpa_cache_hit_loop(device, between):
             l1_fill(1000.0)
         if "fill1000_" in between:  # fill only the TOP <n>k of each core's L1 (buffers allocate top-down)
             _l1_fill(dev, 1000.0, mib_per_core=int(between.split("fill1000_")[1].rstrip("k")) / 1024)
-        out = ttnn.to_torch(ttnn.transformer.vsa_sdpa(q2, k2, v2, idx2, counts2)).float()
+        out = ttnn.to_torch(_vsa_sdpa(q2, k2, v2, idx2, counts2)).float()
         _, pcc = comp_pcc(ref, out, 0.9999)
         nan = torch.isnan(out).sum().item()
         print(f"VSA_CACHE_HIT_LOOP between={between} it={it} pcc={pcc:.6f} nan={nan}")
@@ -232,7 +238,7 @@ def _run_followed_by(dev, n_follow):
     )
 
     def graph():
-        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts)
+        out = _vsa_sdpa(q, k, v, idx, counts)
         tails = []
         for _ in range(n_follow):
             tails.append(ttnn.matmul(a, a))  # kernel-heavy follower: many cores, fresh binaries

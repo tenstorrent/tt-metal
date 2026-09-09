@@ -40,7 +40,6 @@ _TOPK_K_MULTIPLE = 16  # ttnn.experimental.topk_large_indices wants k % 16 == 0,
 
 from dataclasses import dataclass  # noqa: E402
 
-
 DEFAULT_VSA_PLACEMENT = "interleaved"
 
 
@@ -55,6 +54,16 @@ class MiniMaxH3VSAConfig:
     placement: str = DEFAULT_VSA_PLACEMENT
     k_chunk_blocks: int = 1  # vsa_sdpa's m: listed blocks gathered per L1 chunk (v1 kernel only)
     streaming: bool = True  # vsa_sdpa kernel: streaming leader/worker (default) or the v1 per-row gather
+    # pooled K^T/V gathers tile-aligned via a padded per-shard coarse numbering (needs streaming);
+    # default on: -1.1 ms per block at 15 s, validated by the stage oracle, sparsity-0 and block tests
+    padded_pooling: bool = True
+    # vsa_sdpa distributed-window kernel (v18): every core of a head group fetches a slice of each KV
+    # window and rows gather from the peers' L1 (larger visits); rows are dealt by static cost so the
+    # dense rows do not pile onto one core. Needs streaming.
+    distributed: bool = False
+    # vsa_sdpa KV streaming order: "identity" (ascending placement ids) | "canonical" | "zorder"
+    # (spatial Z-order over video cubes: bigger visits, see MiniMaxH3VSAGeometry.stream_order)
+    stream_order: str = "identity"
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:
@@ -74,6 +83,7 @@ class MiniMaxH3VSACoarseStage:
         geometry: MiniMaxH3VSAGeometry,
         *,
         sparsity: float,
+        padded_pooling: bool = False,
         head_dim: int,
         mesh_device: ttnn.MeshDevice,
         sp_axis: int,
@@ -107,17 +117,27 @@ class MiniMaxH3VSACoarseStage:
             for s in range(geometry.sp_factor)
         ]
         a_t = torch.cat(blocks, dim=0)  # [padded_len, tiles_per_shard]
-        shard2 = [None] * len(list(mesh_device.shape)) + [None, None]
+        # Padded pooling: pad each shard's tile axis to a power of two >= 32 (zero columns) so the
+        # pooled K^T / V gathers are tile-aligned (the CCL otherwise falls back to a broadcast+concat
+        # composite, ~1.6 ms per block at 15 s). Scores/top-k then run in the padded per-shard
+        # numbering (shard j, slot s -> j * slots + s); vsa_sdpa maps ids back (coarse_slots_shift).
+        self.padded_pooling = padded_pooling
+        self.slots_per_shard = tiles_per_shard
+        if padded_pooling:
+            self.slots_per_shard = 32
+            while self.slots_per_shard < tiles_per_shard:
+                self.slots_per_shard *= 2
+            a_t = torch.nn.functional.pad(a_t, (0, self.slots_per_shard - tiles_per_shard))
+        self.coarse_slots_shift = self.slots_per_shard.bit_length() - 1 if padded_pooling else 0
         mesh_axes = [..., sp_axis, None]
-        del shard2
         self.a_t_kv = from_torch(
-            a_t.reshape(1, 1, geometry.padded_len, tiles_per_shard),
+            a_t.reshape(1, 1, geometry.padded_len, self.slots_per_shard),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             mesh_axes=mesh_axes,
         )
         self.a_t_q = from_torch(
-            (a_t / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, tiles_per_shard),
+            (a_t / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, self.slots_per_shard),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             mesh_axes=mesh_axes,
@@ -128,8 +148,10 @@ class MiniMaxH3VSACoarseStage:
         # matmul copies each tile's row to its 64 tokens exactly; used in place of
         # repeat_interleave, whose permute/concat/tilize chain cost ~3 ms at 15 s.
         bcast = torch.kron(torch.eye(tiles_per_shard), torch.ones(1, VSA_TILE_TOKENS))
+        if padded_pooling:  # pooled rows are padded to slots_per_shard; the extra rows broadcast nothing
+            bcast = torch.nn.functional.pad(bcast, (0, 0, 0, self.slots_per_shard - tiles_per_shard))
         self.bcast_t = from_torch(
-            bcast.reshape(1, 1, tiles_per_shard, tiles_per_shard * VSA_TILE_TOKENS),
+            bcast.reshape(1, 1, self.slots_per_shard, tiles_per_shard * VSA_TILE_TOKENS),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             mesh_axes=None,
@@ -138,8 +160,23 @@ class MiniMaxH3VSACoarseStage:
         # --- selection constants (replicated; row space is shard-local but content is global) ---
         # additive candidate mask over score columns: 0 for candidates, -inf otherwise
         cand_mask = torch.where(geometry.is_candidate, 0.0, -float("inf")).to(torch.float32)
+        if padded_pooling:  # shard-major padded columns; pad slots are never candidates
+            padded = torch.full((geometry.sp_factor, self.slots_per_shard), -float("inf"))
+            padded[:, :tiles_per_shard] = cand_mask.reshape(geometry.sp_factor, tiles_per_shard)
+            cand_mask = padded.reshape(-1)
+        self.n_coarse_cols = int(cand_mask.numel())
+        # padded pooling adds (slots_per_shard - tiles_per_shard) zero-key slots per shard: the top-k masks
+        # them via cand_mask, but the coarse o_c softmax must not give them exp(0) weight either (it did:
+        # attention-level oracle 92.7% -> fixed). Real pad TILES stay in, as in the unpadded path.
+        self.pool_pad_mask = None
+        if padded_pooling:
+            pad_mask = torch.zeros(geometry.sp_factor, self.slots_per_shard)
+            pad_mask[:, tiles_per_shard:] = -float("inf")
+            self.pool_pad_mask = from_torch(
+                pad_mask.reshape(1, 1, 1, self.n_coarse_cols), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=None
+            )
         self.cand_mask = from_torch(
-            cand_mask.reshape(1, 1, 1, n_tiles), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=None
+            cand_mask.reshape(1, 1, 1, self.n_coarse_cols), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=None
         )
 
         # per-shard row mask: rows whose q tile is exempt take the dense (all real tiles) list
@@ -192,6 +229,31 @@ class MiniMaxH3VSACoarseStage:
             return x
         return self.ccl_manager.all_gather_persistent_buffer(x, dim=dim, mesh_axis=self.sp_axis)
 
+    def _pool_program_config(self, m: int, k: int):
+        """Full-grid multicast config for the [H*d, S_local] @ [S_local, slots] pooling product: the default
+        picked 80 cores and 0.48 ms at 15 s; 12x10 with in0_block_w=4 measured 0.34 ms
+        (test_vsa_pooling_perf.py). Cached per (m, k)."""
+        key = (m, k)
+        cache = self.__dict__.setdefault("_pool_cfg", {})
+        if key not in cache:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            m_tiles, n_tiles, k_tiles = m // 32, self.slots_per_shard // 32, k // 32
+            if min(m_tiles, n_tiles, k_tiles) == 0:  # sub-tile shapes (tiny tests): default matmul config
+                cache[key] = None
+                return None
+            in0_block_w = next((w for w in (4, 2, 1) if k_tiles % w == 0), 1)
+            cache[key] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=-(-m_tiles // grid.y),
+                per_core_N=-(-n_tiles // grid.x),
+                transpose_mcast=False,
+                fused_activation=None,
+            )
+        return cache[key]
+
     def pool(self, x_bhnd: ttnn.Tensor, *, scaled: bool) -> ttnn.Tensor:
         """[1, H, S_local, d] -> pooled [1, H, tiles_local, d] (fp math in bf16, matches oracle to bf16)."""
         _, num_heads, s_local, d = x_bhnd.shape
@@ -201,7 +263,9 @@ class MiniMaxH3VSACoarseStage:
         # As one [H*d, S_local] @ [S_local, tiles_local] product the same math spans 14x the output
         # tiles and the whole grid. Tile-aligned merge of adjacent dims: a view, no data movement.
         x_t = ttnn.reshape(x_t, [1, 1, num_heads * d, s_local])
-        pooled_t = ttnn.matmul(x_t, self.a_t_q if scaled else self.a_t_kv)  # [1, 1, H*d, tiles_local]
+        pooled_t = ttnn.matmul(
+            x_t, self.a_t_q if scaled else self.a_t_kv, program_config=self._pool_program_config(num_heads * d, s_local)
+        )  # [1, 1, H*d, slots]
         ttnn.deallocate(x_t)
         pooled_t = ttnn.reshape(pooled_t, [1, num_heads, d, pooled_t.shape[-1]])
         pooled = ttnn.transpose(pooled_t, 2, 3)  # [1, H, tiles_local, d]
@@ -209,12 +273,23 @@ class MiniMaxH3VSACoarseStage:
         return pooled
 
     def __call__(
-        self, q_bhnd: ttnn.Tensor, k_bhnd: ttnn.Tensor, v_bhnd: ttnn.Tensor, *, compute_o_c: bool = True
+        self,
+        q_bhnd: ttnn.Tensor,
+        k_bhnd: ttnn.Tensor,
+        v_bhnd: ttnn.Tensor,
+        *,
+        compute_o_c: bool = True,
+        raw_selection: bool = False,
     ) -> tuple[ttnn.Tensor | None, ttnn.Tensor]:
         """Run the coarse stage. Returns (o_c [1,H,S_local,d] bf16 or None, indices [1,H,rows,W] uint32 ROW_MAJOR).
 
         ``compute_o_c=False`` skips the coarse-output branch (an all-zero gate weight contributes
         nothing, so skipping it gives identical output); selection always runs.
+
+        ``raw_selection=True`` returns the top-k rows as-is ([1,H,rows,k_pad]); the exempt prefix,
+        sentinel tail and dense-row blend move into the streaming kernel via
+        ``vsa_sdpa(..., list_len=self.k, exempt_ids=self.exempt_ids, dense_row_mask=self.dense_row_mask_tensor())``.
+        Saves ~10 layout ops (~2.5 ms per block at 15 s / 768p).
         """
         num_heads = q_bhnd.shape[1]
         self._upload_row_constants(num_heads)
@@ -232,8 +307,24 @@ class MiniMaxH3VSACoarseStage:
         if compute_o_c:
             v_c = self.pool(v_bhnd, scaled=False)
             v_c_g = self._all_gather(v_c, dim=2)  # [1, H, n_tiles, d]
+            if self.pool_pad_mask is not None:
+                scores_m = ttnn.add(scores, self.pool_pad_mask)
+                ttnn.deallocate(scores)
+                scores = scores_m
             probs = ttnn.softmax(scores, dim=-1)
-            o_c_tiles = ttnn.matmul(probs, v_c_g)  # [1, H, tiles_local, d]
+            # batched [H, slots, cols] @ [H, cols, d]: the default config ran on 32 cores (0.62 ms at
+            # 15 s); splitting batch x M over the grid with 2 M-tiles per core measured 0.13 ms
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            m_tiles, n_tiles, k_tiles = probs.shape[2] // 32, v_c_g.shape[3] // 32, probs.shape[3] // 32
+            o_c_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=next((w for w in (4, 2, 1) if k_tiles % w == 0), 1),
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=2 if m_tiles % 2 == 0 else 1,
+                per_core_N=n_tiles,
+            )
+            o_c_tiles = ttnn.matmul(probs, v_c_g, program_config=o_c_cfg)  # [1, H, slots, d]
             ttnn.deallocate(probs)
             # broadcast tile -> 64 tokens as a folded 0/1 matmul (see bcast_t): [H*d, T] @ [T, S_local]
             d = o_c_tiles.shape[-1]
@@ -251,6 +342,11 @@ class MiniMaxH3VSACoarseStage:
         ttnn.deallocate(masked)
         topk_ids = ttnn.experimental.topk_large_indices(masked_rm, k=self.k_pad)  # [1,H,rows,k_pad] uint32
         ttnn.deallocate(masked_rm)
+        if self.padded_pooling:  # drop the pad q-tile rows (pooled Q was padded to slots_per_shard rows)
+            topk_ids = ttnn.slice(topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k_pad])
+        if raw_selection:
+            return o_c, topk_ids
+        assert not self.padded_pooling, "padded_pooling needs raw_selection (the kernel maps the padded ids)"
         if self.k != self.k_pad:
             topk_ids = ttnn.slice(topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k])
 
@@ -268,6 +364,47 @@ class MiniMaxH3VSACoarseStage:
         ttnn.deallocate(blended)
 
         return o_c, indices
+
+    @property
+    def exempt_ids(self) -> list[int]:
+        """Global ids of the exempt (dense-list) blocks every row attends (raw-selection mode)."""
+        return [int(b) for b in self._host_exempt_ids.tolist()]
+
+    @property
+    def dense_row_hint(self) -> list[int]:
+        """q-tile rows that take the dense list on SOME shard (the union over shards): the distributed
+        kernel weights them as dense when dealing rows to cores (an op attribute, so mesh-uniform)."""
+        return sorted(set(torch.nonzero(self._host_row_exempt.any(dim=0)).reshape(-1).tolist()))
+
+    def stream_order_tensor(self, kind: str) -> ttnn.Tensor:
+        """[1,1,1,n_tiles] uint32 permutation for vsa_sdpa(stream_order=...), replicated. Cached per kind."""
+        cache = self.__dict__.setdefault("_stream_order_cache", {})
+        if kind not in cache:
+            perm = self.geometry.stream_order(kind).to(torch.int32).reshape(1, 1, 1, -1)
+            cache[kind] = from_torch(
+                perm, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, mesh_axes=[None] * 4
+            )
+        return cache[kind]
+
+    def dense_row_mask_tensor(self) -> ttnn.Tensor:
+        """[1,1,1,words] uint32 ROW_MAJOR per device: bit q_tile set -> that row takes the dense list
+        (raw-selection mode). Sharded over the SP axis like the selection constants. Cached."""
+        if not hasattr(self, "_dense_row_mask"):
+            rows = self.geometry.tiles_per_shard
+            words = _round_up(max(8, (rows + 31) // 32), 8)  # words*4 bytes must be a multiple of 32
+            mask = torch.zeros(self.geometry.sp_factor, words, dtype=torch.int64)
+            row_exempt = self._host_row_exempt  # [sp, rows] bool
+            for s in range(self.geometry.sp_factor):
+                for r in torch.nonzero(row_exempt[s]).reshape(-1).tolist():
+                    mask[s, r // 32] |= 1 << (r % 32)
+            self._dense_row_mask = from_torch(
+                mask.to(torch.int32).reshape(self.geometry.sp_factor, 1, 1, words),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=[self.sp_axis, None, None, None],
+            )
+        return self._dense_row_mask
 
     def block_counts_tensor(self) -> ttnn.Tensor:
         """[1,1,1,W] uint32 valid tokens per block, replicated (vsa_sdpa's block_counts input). Cached."""

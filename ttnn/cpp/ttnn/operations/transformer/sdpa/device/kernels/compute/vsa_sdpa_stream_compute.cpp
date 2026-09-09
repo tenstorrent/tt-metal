@@ -2,20 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// vsa_sdpa streaming (v4) compute: batched per-row online-softmax visits. Resident rows keep Q, an
-// O accumulator, and PING-PONG running max/sum slots in RAM-mode CBs. The reader windows the block
-// stream (all slots of a window are freed together after its visits), so each visit is one row's
-// batch of n windowed blocks and the flash machinery -- max reduce, corr, O/sum rescale, syncs --
-// runs ONCE per batch instead of once per block:
+// vsa_sdpa streaming compute: batched per-row online-softmax visits. Resident rows keep Q, an O
+// accumulator, and an ANCHOR max + THRESHOLD (anchor + T) tile pair in RAM-mode CBs; the exact row
+// sums live on the writer core (vsa_sum_service.hpp). The reader windows the block stream (all slots
+// of a window are freed together after its visits), so each visit is one row's batch of n windowed
+// blocks and the flash machinery -- max reduce, corr, O rescale, syncs -- runs ONCE per batch:
 //
 //   1. QK    per block: two no-MOP column chains into the row's [Sqt x n*Skt] qk scratch (+ masks)
-//   2. MAX   one runtime-width reduce over all n*Skt columns, eltwise-max with the old slot
-//   3. CORR  corr = exp((old_max - new_max) * scale) (skipped on the row's first visit)
-//   4. RESCALE O *= corr in place; old_sum * corr -> the NEW sum slot
-//   5. EXP   probs = exp((qk - new_max) * scale) in place, col-batched; row sums L1-acc the NEW sum
-//   6. PV    one acquire; per (col, block) no-MOP chains accumulate O (packer L1-acc, or overwrite)
+//   2. MAX   one runtime-width reduce over all n*Skt columns -> candidate c = max(anchor, visit);
+//            the UNPACK RISC compares c with the threshold and broadcasts which visits MOVE
+//   3. CORR  moved visits only: corr = exp((anchor - c) * scale), anchor := c, threshold := c + T
+//   4. RESCALE moved visits only: O *= corr in place; CORR tile to the writer's row sum
+//   5. EXP   probs = exp((qk - threshold) * scale) in place, col-batched (arguments never positive)
+//   6. PV    deferred one chunk: O accumulates (packer L1-acc); per-visit partial row sums (probs @
+//            ones column) stream to the writer, which accumulates them exactly
 //
-// Ping-pong state comes from the reader's parity bit; MSG_WINDOW returns a window's slot credits.
+// MSG_WINDOW returns a window's slot credits; the reader's parity word is unused since the lazy
+// rescale (kept in the message format).
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -24,6 +27,8 @@
 #define VSA_TICK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
 #endif
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -52,6 +57,36 @@ ALWI void stream_pack_to_unpack_sync() {
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+}
+
+// Like stream_pack_to_unpack_sync, but the UNPACK *RISC* (not just its Tensix instruction stream) waits
+// for the packer: needed before software L1 reads of freshly packed tiles. The Tensix SEMWAIT only orders
+// later unpack instructions; the RISC keeps running C code past it. A dedicated semaphore (UNPACK_OPERAND_SYNC:
+// unused by the LLKs) is polled from the RISC; the matching get is also waited for so the next pairing is clean.
+ALWI void stream_pack_to_risc_sync() {
+    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_OPERAND_SYNC)));
+    UNPACK({
+        while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) == 0) {
+        }
+        t6_semaphore_get<>(semaphore::UNPACK_OPERAND_SYNC);
+        while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) != 0) {
+        }
+    });
+}
+
+// DEST[idst] += scalar over the WHOLE tile (32 iterations, VectorMode::None). The face-looped SFPU forms
+// (add_unary_tile / the first-column exp: VectorMode RC / C) step 16 DEST rows per face, which in this
+// kernel's 16-bit DEST (8 rows per face) skips faces and spills into the neighbouring tile: measured as
+// garbage in rows 16..31 of the corr/threshold tiles. Full-tile forms (like the phase-5 exp) are exact.
+ALWI void add_scalar_tile_full(uint32_t idst, uint32_t param) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (false, ADD_UNARY, 32, DST_ACCUM_MODE),
+        idst,
+        VectorMode::None,
+        param));
 }
 
 __attribute__((noinline)) void vsa_trap_bad_ctrl() {
@@ -93,13 +128,28 @@ void kernel_main() {
     constexpr uint32_t cb_qdone = get_compile_time_arg_val(23);
     constexpr uint32_t cb_out = get_compile_time_arg_val(24);
     constexpr uint32_t stream_depth = get_compile_time_arg_val(25);
+    constexpr uint32_t chunk_slots = get_compile_time_arg_val(26);  // max blocks per visit = qk region width
+    constexpr uint32_t cb_shdr = get_compile_time_arg_val(27);      // row-sum service to the writer
+    constexpr uint32_t cb_stiles = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_sumback = get_compile_time_arg_val(29);
 
     constexpr uint32_t k_tiles_per_block = Skt * DHt;
     constexpr uint32_t v_tiles_per_block = Skt * vDHt;
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+    // Lazy rescaling threshold: the running max moves only when a visit's max exceeds it by more than
+    // 32 logits (exp(32) ~ 8e13 stays far inside fp32/bf16 range). Raw scores are unscaled, so the raw
+    // threshold is 32 / scale.
+#if defined(VSA_LAZY_T_OVERRIDE)
+    constexpr float kLazyT =
+        static_cast<float>(VSA_LAZY_T_OVERRIDE) / __builtin_bit_cast(float, scale_fp32);  // TT_VSA_LAZY_T
+#else
+    constexpr float kLazyT = 2.0f / __builtin_bit_cast(float, scale_fp32);
+#endif
+    constexpr uint32_t kLazyT_bits = __builtin_bit_cast(uint32_t, kLazyT);
 
     const uint32_t row_count = get_arg_val<uint32_t>(0);
+    const uint32_t n_passes = get_arg_val<uint32_t>(1);  // pass row counts follow (args 2..)
     if (row_count == 0) {
         return;  // leader core (or a worker with no rows): its writer builds no persistent tiles
     }
@@ -116,10 +166,13 @@ void kernel_main() {
         cb_push_back_hold_wr_ptr(cb, tiles);
     };
     ram(cb_max_res, R_MAX * 2 * Sqt);
-    ram(cb_sum_res, R_MAX * 2 * Sqt);
+    ram(cb_sum_res, 1);  // legacy placeholder (row sums live on the writer core)
     ram(cb_o_res, R_MAX * Sqt * vDHt);
     ram(cb_qk, G * Sqt * Skt);
-    ram(cb_corr, ((G > stream_depth / 2) ? G : stream_depth / 2) * Sqt);  // corr slot per chunk visit (<= half_slots)
+    // cb_corr, indexed by ROW SLOT (one visit per row per chunk): the visit's candidate max tile, overwritten
+    // by its corr once the anchor moved. A chunk can carry up to R_MAX visits (every row of the pass may list
+    // a block of the window), more than the window's chunk_slots blocks: never index these by visit.
+    ram(cb_corr, R_MAX * Sqt);
     ram(cb_k_stream, stream_depth * k_tiles_per_block);
     ram(cb_v_stream, stream_depth * v_tiles_per_block);
     ram(cb_q_res, R_MAX * Sqt * DHt);
@@ -133,6 +186,9 @@ void kernel_main() {
 #if defined(VSA_PROBE) && VSA_PROBE == 9
     // MATH-thread phase timers: elapsed wall clock between phase boundaries as seen by TRISC1.
     uint32_t t_wait = 0, t_qk = 0, t_max = 0, t_corr = 0, t_pv = 0, t_exp = 0, t_flush = 0;
+    uint32_t n_moved = 0, n_nonfirst = 0;
+    (void)n_moved;
+    (void)n_nonfirst;
     uint32_t n_visits = 0;
     const uint32_t t_begin = VSA_TICK();
     uint32_t tmark = t_begin;
@@ -144,6 +200,9 @@ void kernel_main() {
 #else
     const auto lap = [](...) {};
     uint32_t t_wait = 0, t_qk = 0, t_max = 0, t_corr = 0, t_pv = 0, t_exp = 0, t_flush = 0;
+    uint32_t n_moved = 0, n_nonfirst = 0;
+    (void)n_moved;
+    (void)n_nonfirst;
     (void)t_wait; (void)t_qk; (void)t_max; (void)t_corr; (void)t_pv; (void)t_exp; (void)t_flush;
 #endif
 
@@ -155,21 +214,40 @@ void kernel_main() {
     // scratch; each chunk's PV is DEFERRED to the next chunk (or flush), overlapping its
     // pack-thread exp with the next chunk's math, and the window's slot credits are stashed
     // until the deferred PV has consumed its V tiles.
-    constexpr uint32_t kChunkCols = (stream_depth / 2) * Skt;         // qk region width in tiles
+    constexpr uint32_t kChunkCols = chunk_slots * Skt;                // qk region width in tiles
     constexpr uint32_t kRegionTiles = kChunkCols * Sqt;               // qk region size in tiles
-    constexpr uint32_t kMaxVisits = 16;                               // >= rows per pass
+    constexpr uint32_t kMaxVisits = R_MAX;  // one visit per row of the pass at most (TRISC stack is small)
     struct Visit {
         uint32_t row_slot;
         uint32_t flags;  // ROW_IS_FIRST / ROW_PARITY as sent by the reader
         uint32_t n;
         uint32_t tile_base;  // dense sub-block base within the qk region (tiles)
-        uint32_t entries[stream_depth / 2 > 0 ? stream_depth / 2 : 1];
+        uint16_t entries[chunk_slots > 0 ? chunk_slots : 1];  // slot | count<<8 | vmask<<15
     };
     Visit vbuf[kMaxVisits];
+    // row-sum service: header pages {kind, row, n_tiles, 0} written by the PACK thread (it also packs the
+    // tiles that follow); see vsa_sum_service.hpp
+    const auto push_hdr = [&](uint32_t kind, uint32_t row, uint32_t ntiles) {
+#if defined(VSA_NO_SUMS)
+        return;  // probe 10: no row-sum traffic (timing only, output garbage)
+#endif
+        PACK({
+            cb_reserve_back(cb_shdr, 1);
+            volatile tt_l1_ptr uint32_t* h =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(cb_shdr).fifo_wr_ptr << 4);
+            h[0] = kind;
+            h[1] = row;
+            h[2] = ntiles;
+            h[3] = 0;
+            cb_push_back(cb_shdr, 1);
+        });
+    };
+    const uint32_t max_l1_base = get_tile_address(cb_max_res, 0);  // RAM CB: tile t at base + t * 2048
+    const uint32_t corr_l1_base = get_tile_address(cb_corr, 0);
     uint32_t vn = 0;
 
     // Deferred chunk: its probs live in the OTHER qk region; PV runs at the next chunk (or flush).
-    Visit pend_v[stream_depth / 2 > 0 ? stream_depth / 2 : 1];
+    Visit pend_v[kMaxVisits];  // up to R_MAX visits per chunk (one per row of the pass)
     uint32_t pend_n = 0;
     uint32_t pend_qk_base = 0;
     uint32_t pend_credits = 0;  // window credits held until the deferred PV consumed its V slots
@@ -233,6 +311,59 @@ void kernel_main() {
             PACK((llk_pack_reconfig_l1_acc(0)));
             tile_regs_release();
         }
+        // Per-row partial sums of every visit in the chunk: probs @ ones-column (fp32 inside the FPU,
+        // one bf16 rounding), streamed to the writer, which accumulates them exactly (vsa_sum_service.hpp).
+#if !defined(VSA_NO_SUMS)
+        // Block form (ct=1, rt=Sqt, one call per k tile, like the PV): half the calls of a per-tile form.
+        reconfig_data_format(cb_qk, cb_col_identity);
+        uint32_t sum_init_cols = 0;
+        // Up to kSumBatch visits per DEST acquire (the acquire/commit/release round trip dominated a
+        // per-visit version); each visit still gets its own header + Sqt tiles in the FIFO.
+        constexpr uint32_t kSumBatch = 8 / Sqt;
+        for (uint32_t i0 = 0; i0 < pend_n; i0 += kSumBatch) {
+            const uint32_t nb = (pend_n - i0 < kSumBatch) ? (pend_n - i0) : kSumBatch;
+            tile_regs_acquire();
+            for (uint32_t b = 0; b < nb; ++b) {
+                const Visit& v = pend_v[i0 + b];
+                const uint32_t qk_cols = v.n * Skt;
+                if (qk_cols != sum_init_cols) {
+                    matmul_block_init(cb_qk, cb_col_identity, /*transpose=*/0, /*ct=*/1, /*rt=*/Sqt, /*kt=*/qk_cols);
+                    sum_init_cols = qk_cols;
+                }
+                for (uint32_t k = 0; k < qk_cols; ++k) {
+                    matmul_block(
+                        cb_qk,
+                        cb_col_identity,
+                        /*in0=*/pend_qk_base + v.tile_base + k,
+                        /*in1=*/0,
+                        /*dst=*/b * Sqt,
+                        /*transpose=*/0,
+                        /*ct=*/1,
+                        /*rt=*/Sqt,
+                        /*kt=*/qk_cols);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            configure_single_tile_pack(cb_stiles);
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            for (uint32_t b = 0; b < nb; ++b) {
+                const Visit& v = pend_v[i0 + b];
+                if (v.flags & ROW_IS_FIRST) {
+                    push_hdr(3 /*FIRST*/, v.row_slot, 0);
+                }
+                // stream the visit's partial to the writer as is: any bf16 aggregation of partials on the
+                // compute side (packer L1-acc) truncates the smaller addend and biased the sums by ~2%
+                push_hdr(0 /*PARTIAL*/, v.row_slot, Sqt);
+                PACK((cb_reserve_back(cb_stiles, Sqt)));
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    pack_tile(b * Sqt + sr, cb_stiles);
+                }
+                PACK((cb_push_back(cb_stiles, Sqt)));
+            }
+            tile_regs_release();
+        }
+#endif  // !VSA_NO_SUMS
         pend_n = 0;
         if (pend_credits != 0) {
             free_cb.reserve_back(pend_credits);
@@ -329,102 +460,213 @@ void kernel_main() {
         stream_pack_to_unpack_sync();  // s1: every visit's qk (+masks) visible
         lap(t_qk);
 
-        // Phase 2: running maxes, FOUR visits per DEST acquire, ONE s2 sync.
+        // Phase 2: lazy running max (FlashAttention-3 style). Per row the ANCHOR max lives in max slot
+        // (row*2)*Sqt + sr for the whole pass and slot (row*2+1)*Sqt + sr holds the row's THRESHOLD
+        // tile anchor + T (T = kLazyT raw logits). Per visit and sub-row the FPU reduce forms the
+        // candidate c = max(anchor, visit) in DEST (anchor copied in first) and packs it to the visit's
+        // corr slot. The anchor moves only when some row's c exceeds the threshold (decided below on
+        // UNPACK with integer bf16 compares): every other visit skips the corr/rescale entirely, so the
+        // running sum and O are never rescaled through the 16-bit DEST for them.
+        // No SFPU tile-to-tile op is used: sub_binary_tile indexes DEST with the 32-bit-mode tile stride
+        // and misreads its second operand in 16-bit DEST mode.
         reconfig_data_format(cb_qk, cb_scale);
-        for (uint32_t g = 0; g < nv; g += 4) {
-            const uint32_t ng = (nv - g < 4) ? (nv - g) : 4;
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < ng; ++i) {
-                const Visit& v = vs[g + i];
-                const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
-                const uint32_t old_st = (v.row_slot * 2 + (parity ^ 1u)) * Sqt;
-                if (!(v.flags & ROW_IS_FIRST)) {
-                    sdpa_reduce_copy_tile_to_dst_init_short(cb_max_res);
-                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                        copy_tile(cb_max_res, old_st + sr, i * Sqt + sr);
-                    }
-                } else {
-                    // The block max-reduce folds the running max held in DEST into every tile,
-                    // including the first: a first visit must seed DEST with -inf, or it maxes
-                    // against whatever the previous acquire left there (stale but usually benign
-                    // untraced; on a re-launched program the DEST bank phase differs and it is not).
+        {
+            uint32_t g = 0;
+            while (g < nv) {
+                if (vs[g].flags & ROW_IS_FIRST) {
+                    // First visit of a row: DEST[2sr] = DEST[2sr+1] = max(-inf, visit); +T on the odd copy.
+                    const Visit& v = vs[g];
+                    const uint32_t anc_st = (v.row_slot * 2) * Sqt;
+                    const uint32_t thr_st = (v.row_slot * 2 + 1) * Sqt;
+                    const uint32_t qk_cols = v.n * Skt;
+                    tile_regs_acquire();
                     sdpa_reduce_copy_tile_to_dst_init_short(cb_neginf);
                     for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                        copy_tile(cb_neginf, 0, i * Sqt + sr);
+                        copy_tile(cb_neginf, 0, sr * 2);
+                        copy_tile(cb_neginf, 0, sr * 2 + 1);
                     }
-                }
-                const uint32_t qk_cols = v.n * Skt;
-                reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    reduce_block_max_row_runtime(
-                        cb_qk, cb_scale, qk_base + v.tile_base + sr * qk_cols, i * Sqt + sr, false, false);
-                }
-                reduce_block_max_row_uninit_runtime(cb_qk, false, false);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            configure_single_tile_pack(cb_max_res);
-            PACK((llk_pack_reconfig_l1_acc(0)));
-            for (uint32_t i = 0; i < ng; ++i) {
-                const Visit& v = vs[g + i];
-                const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
-                const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    pack_tile<true>(i * Sqt + sr, cb_max_res, new_st + sr);
-                }
-            }
-            tile_regs_release();
-        }
-        stream_pack_to_unpack_sync();  // s2: new maxes visible
-        lap(t_max);
-
-        // Phase 3: corr for every non-first visit, FOUR per acquire, ONE s3 sync (if any).
-        bool any_corr = false;
-        {
-            uint32_t done = 0;
-            exp_packthread_tile_init<EXP_APPROX_MODE>();
-            sub_init(cb_max_res, cb_max_res);
-            while (done < nv) {
-                uint32_t taken = 0;
-                tile_regs_acquire();
-                uint32_t members[4];
-                while (done < nv && taken < 4) {
-                    const Visit& v = vs[done];
-                    if (v.flags & ROW_IS_FIRST) {
-                        ++done;
-                        continue;
-                    }
-                    const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
-                    const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
-                    const uint32_t old_st = (v.row_slot * 2 + (parity ^ 1u)) * Sqt;
+                    reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);
                     for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                        sub_tiles(cb_max_res, cb_max_res, old_st + sr, new_st + sr, taken * Sqt + sr);
+                        reduce_block_max_row_runtime(
+                            cb_qk, cb_scale, qk_base + v.tile_base + sr * qk_cols, sr * 2, false, false);
+                        reduce_block_max_row_runtime(
+                            cb_qk, cb_scale, qk_base + v.tile_base + sr * qk_cols, sr * 2 + 1, false, false);
                     }
-                    members[taken] = done;
-                    ++taken;
-                    ++done;
+                    reduce_block_max_row_uninit_runtime(cb_qk, false, false);
+                    MATH((binop_with_scalar_tile_init()));
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        add_scalar_tile_full(sr * 2 + 1, kLazyT_bits);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    configure_single_tile_pack(cb_max_res);
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        pack_tile<true>(sr * 2, cb_max_res, anc_st + sr);      // the row's initial anchor
+                        pack_tile<true>(sr * 2 + 1, cb_max_res, thr_st + sr);  // anchor + T
+                    }
+                    tile_regs_release();
+                    ++g;
+                    continue;
+                }
+                // up to 2 consecutive non-first visits per acquire: reduces into DEST tiles 0..3 only (4 visits
+                // x Sqt = tiles 4..7 gave wrong candidates for the last two visits: see VSA_STREAM_DESIGN.md)
+                uint32_t ng = 0;
+                while (g + ng < nv && ng < 2 && !(vs[g + ng].flags & ROW_IS_FIRST)) {
+                    ++ng;
+                }
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < ng; ++i) {
+                    const Visit& v = vs[g + i];
+                    const uint32_t anc_st = (v.row_slot * 2) * Sqt;
+                    const uint32_t qk_cols = v.n * Skt;
+                    // anchor copy immediately followed by its reduce: copying every visit's anchor first
+                    // and reducing afterwards corrupted rows (the reduce init disturbs earlier DEST tiles)
+                    sdpa_reduce_copy_tile_to_dst_init_short(cb_max_res);
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        copy_tile(cb_max_res, anc_st + sr, i * Sqt + sr);
+                    }
+                    reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        reduce_block_max_row_runtime(
+                            cb_qk, cb_scale, qk_base + v.tile_base + sr * qk_cols, i * Sqt + sr, false, false);
+                    }
+                    reduce_block_max_row_uninit_runtime(cb_qk, false, false);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                if (taken > 0) {
-                    any_corr = true;
-                    for (uint32_t i = 0; i < taken * Sqt; ++i) {
-                        PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(i)));
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                configure_single_tile_pack(cb_corr);
+                for (uint32_t i = 0; i < ng; ++i) {
+                    const uint32_t cand_st = vs[g + i].row_slot * Sqt;
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        pack_tile<true>(i * Sqt + sr, cb_corr, cand_st + sr);  // candidate max
                     }
-                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                    configure_single_tile_pack(cb_corr);
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                    for (uint32_t i = 0; i < taken; ++i) {
-                        for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                            pack_tile<true>(i * Sqt + sr, cb_corr, members[i] * Sqt + sr);
+                }
+                for (uint32_t i = 0; i < ng; ++i) {
+                }
+                tile_regs_release();
+                g += ng;
+            }
+        }
+        stream_pack_to_unpack_sync();  // s2: candidates/thresholds visible to the unpacker
+        stream_pack_to_risc_sync();    // ... and to the UNPACK RISC's reads below
+        // Which visits move their anchor? Decided once on UNPACK: a visit moves when any row's candidate
+        // (column 0 of its corr-slot tile) exceeds the row's threshold tile, compared as order-preserving
+        // integer keys of the bf16 bits. Broadcast by mailbox so all three threads branch identically.
+        uint32_t updated = 0;
+        UNPACK({
+            // the packer rewrote these L1 tiles since this RISC last read the same addresses: drop the
+            // RISC's L1 read cache first (stale candidates/thresholds gave path-dependent decisions)
+            invalidate_l1_cache();
+            auto bkey = [](uint32_t b) -> uint32_t {
+                return (b & 0x8000u) ? (0x7FFFu - (b & 0x7FFFu)) : (b | 0x8000u);
+            };
+            for (uint32_t i = 0; i < nv; ++i) {
+                const Visit& v = vs[i];
+                if (v.flags & ROW_IS_FIRST) {
+                    continue;
+                }
+                const uint32_t thr_st = (v.row_slot * 2 + 1) * Sqt;
+                bool moved = false;
+                for (uint32_t sr = 0; sr < Sqt && !moved; ++sr) {
+                    volatile tt_l1_ptr uint16_t* cand =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(corr_l1_base + (v.row_slot * Sqt + sr) * 2048);
+                    volatile tt_l1_ptr uint16_t* thr =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(max_l1_base + (thr_st + sr) * 2048);
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        const uint32_t off = (r < 16 ? 0u : 512u) + (r & 15) * 16;  // column 0, face-major (bf16 units)
+                        if (bkey(cand[off]) > bkey(thr[off])) {
+                            moved = true;
+                            break;
                         }
                     }
+                }
+                if (moved) {
+                    updated |= 1u << i;
+                }
+            }
+            mailbox_write(ckernel::ThreadId::MathThreadId, updated);
+            mailbox_write(ckernel::ThreadId::PackThreadId, updated);
+        })
+        MATH(updated = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        PACK(updated = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+        n_moved += __builtin_popcount(updated & ((1u << nv) - 1u));
+        n_nonfirst += nv;
+#endif
+        lap(t_max);
+
+        // Phase 3: for each visit that moves its anchor (rare), corr = exp((anchor - candidate) * scale),
+        // the candidate becomes the row's anchor and candidate + T its threshold. Two acquires per moved
+        // visit, DEST tiles 0..3 only (see phase 2). The corr exp runs on the MATH thread: a face-looped SFPU
+        // op on the PACK thread (exp_tile_first_column) displaced the packer's DEST reads for the packs that
+        // followed it (garbage in rows 16..31 of the packed tiles). The corr overwrites the candidate slot,
+        // so the threshold (which needs the candidate) is derived first.
+        bool any_corr = false;
+        {
+            for (uint32_t i = 0; i < nv; ++i) {
+                const Visit& v = vs[i];
+                if ((v.flags & ROW_IS_FIRST) || !((updated >> i) & 1u)) {
+                    continue;
+                }
+                any_corr = true;
+                const uint32_t anc_st = (v.row_slot * 2) * Sqt;
+                const uint32_t thr_st = (v.row_slot * 2 + 1) * Sqt;
+                const uint32_t cand_st = v.row_slot * Sqt;  // candidate now, corr after (2)
+                // (1) DEST[sr] = candidate + T -> new threshold
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_corr);
+                copy_tile_to_dst_init_short(cb_corr);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    copy_tile(cb_corr, cand_st + sr, sr);
+                }
+                MATH((binop_with_scalar_tile_init()));
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    add_scalar_tile_full(sr, kLazyT_bits);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                configure_single_tile_pack(cb_max_res);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    pack_tile<true>(sr, cb_max_res, thr_st + sr);  // new threshold
+                }
+                tile_regs_release();
+                // (2) DEST[sr] = anchor - candidate -> corr (into the candidate slot); DEST[Sqt + sr] = candidate
+                //     -> new anchor. The unpacker reads the candidate before the corr pack lands (same acquire).
+                tile_regs_acquire();
+                sub_init(cb_max_res, cb_corr);
+                reconfig_data_format(cb_max_res, cb_corr);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    sub_tiles(cb_max_res, cb_corr, anc_st + sr, cand_st + sr, sr);
+                }
+                reconfig_data_format_srca(cb_corr);
+                copy_tile_to_dst_init_short(cb_corr);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    copy_tile(cb_corr, cand_st + sr, Sqt + sr);
+                }
+                // exact exp with the scale applied inside the SFPU (one bf16 rounding, as the dense kernel)
+                exp_tile_init<EXP_APPROX_MODE, 0x3F800000u, InputClamping::None>();
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    exp_tile<EXP_APPROX_MODE, true, InputClamping::None, 8>(sr, VectorMode::RC, scale_bf16);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                configure_single_tile_pack(cb_corr);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    pack_tile<true>(sr, cb_corr, cand_st + sr);  // corr
+                }
+                configure_single_tile_pack(cb_max_res);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    pack_tile<true>(Sqt + sr, cb_max_res, anc_st + sr);  // new anchor
                 }
                 tile_regs_release();
             }
         }
         if (any_corr) {
-            stream_pack_to_unpack_sync();  // s3: corrs visible
+            stream_pack_to_unpack_sync();  // s3: corrs and moved anchors visible
         }
 
         // The PREVIOUS chunk's deferred PV: its exp/packs overlapped every phase above. It must
@@ -439,19 +681,29 @@ void kernel_main() {
             reconfig_data_format(cb_o_res, cb_corr);
             for (uint32_t i = 0; i < nv; ++i) {
                 const Visit& v = vs[i];
-                if (v.flags & ROW_IS_FIRST) {
+                if ((v.flags & ROW_IS_FIRST) || !((updated >> i) & 1u)) {
                     continue;
                 }
-                const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
-                const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
-                const uint32_t old_st = (v.row_slot * 2 + (parity ^ 1u)) * Sqt;
+                const uint32_t corr_st = v.row_slot * Sqt;  // the corr replaced the candidate (phase 3)
                 const uint32_t o_base = v.row_slot * Sqt * vDHt;
+                // the writer rescales its exact row sum by the same corr. This runs AFTER drain_pend(),
+                // so the corr follows every earlier visit's partial sum (they belong to the old anchor).
+                mul_bcast_cols_init(cb_o_res, cb_corr);
+                reconfig_data_format(cb_o_res, cb_corr);
+                push_hdr(1 /*CORR*/, v.row_slot, Sqt);
+#if !defined(VSA_NO_SUMS)
+                PACK((cb_reserve_back(cb_stiles, Sqt)));
+#endif
                 for (uint32_t sr = 0; sr < Sqt; ++sr) {
                     tile_regs_acquire();
                     for (uint32_t j = 0; j < vDHt; ++j) {
-                        mul_tiles_bcast_cols(cb_o_res, cb_corr, o_base + sr * vDHt + j, i * Sqt + sr, j);
+                        mul_tiles_bcast_cols(cb_o_res, cb_corr, o_base + sr * vDHt + j, corr_st + sr, j);
                     }
-                    mul_tiles_bcast_cols(cb_sum_res, cb_corr, old_st + sr, i * Sqt + sr, vDHt);
+                    reconfig_data_format_srca(cb_o_res, cb_corr);
+                    copy_tile_to_dst_init_short(cb_corr);
+                    copy_tile(cb_corr, corr_st + sr, vDHt);  // corr copy for the writer
+                    mul_bcast_cols_init(cb_o_res, cb_corr);
+                    reconfig_data_format(cb_o_res, cb_corr);
                     tile_regs_commit();
                     tile_regs_wait();
                     const bool blocked_o = configure_row_pack_width(cb_o_res, vDHt);
@@ -463,23 +715,28 @@ void kernel_main() {
                             pack_tile<true>(j, cb_o_res, o_base + sr * vDHt + j);
                         }
                     }
-                    configure_single_tile_pack(cb_sum_res);
-                    pack_tile<true>(vDHt, cb_sum_res, new_st + sr);
+#if !defined(VSA_NO_SUMS)
+                    configure_single_tile_pack(cb_stiles);
+                    pack_tile(vDHt, cb_stiles);
+#endif
                     tile_regs_release();
                 }
+#if !defined(VSA_NO_SUMS)
+                PACK((cb_push_back(cb_stiles, Sqt)));
+#endif
             }
         }
         lap(t_corr);
 
-        // Phase 5: probs = exp((qk - new_max) * scale) in place per visit, in DEST-sized column
-        // batches; row sums L1-acc onto the NEW sum slot (overwrite on a first visit's first
-        // batch).
+        // Phase 5: probs = exp((qk - threshold) * scale) in place per visit, in DEST-sized column batches.
         exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
         for (uint32_t i = 0; i < nv; ++i) {
             const Visit& v = vs[i];
-            const bool is_first = (v.flags & ROW_IS_FIRST) != 0;
-            const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
-            const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
+            // exp reference = the row's THRESHOLD tile (anchor + T): while the anchor stands, every score is
+            // <= anchor + T, so the exp argument stays <= 0 (the fast approx exp is only accurate there).
+            // Online softmax is exact for any consistent reference; corr = exp(anchor_old - anchor_new)
+            // is unchanged since both references carry the same +T.
+            const uint32_t new_st = (v.row_slot * 2 + 1) * Sqt;
             const uint32_t qk_cols = v.n * Skt;
             for (uint32_t kc = 0; kc < qk_cols; kc += 4) {
                 const uint32_t w = (qk_cols - kc < 4) ? (qk_cols - kc) : 4;
@@ -508,15 +765,6 @@ void kernel_main() {
                         }
                     }
                 }
-                configure_single_tile_pack(cb_sum_res);
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    for (uint32_t c = 0; c < w; ++c) {
-                        const bool overwrite = is_first && kc == 0 && c == 0;
-                        PACK((llk_pack_reconfig_l1_acc(overwrite ? 0 : 1)));
-                        pack_tile<true>(sr * w + c, cb_sum_res, new_st + sr);
-                    }
-                }
-                PACK((llk_pack_reconfig_l1_acc(0)));
                 PACK((llk_pack_relu_config(ReluConfig::none())));
                 tile_regs_release();
             }
@@ -536,8 +784,11 @@ void kernel_main() {
     };
 
     uint32_t rows_done = 0;
-    while (rows_done < row_count) {
-        const uint32_t pass_rows = (row_count - rows_done < R_MAX) ? (row_count - rows_done) : R_MAX;
+    for (uint32_t pass = 0; pass < n_passes; ++pass) {
+        const uint32_t pass_rows = get_arg_val<uint32_t>(2 + pass);
+        if (pass_rows == 0) {
+            continue;  // a peer with nothing resident this pass (distributed dealing)
+        }
         qdone_cb.wait_front(1);  // pass Q resident
         qdone_cb.pop_front(1);
 
@@ -551,21 +802,25 @@ void kernel_main() {
 
             if (type == MSG_FLUSH) {
                 drain_pend();
-                const uint32_t row_slot = ckernel::read_tile_value(cb_ctrl, 0, 1);
-                const uint32_t parity = ckernel::read_tile_value(cb_ctrl, 0, 2);
+                const uint32_t row_slot = ckernel::read_tile_value(cb_ctrl, 0, 1);  // word 2 (parity) unused
                 ctrl_cb.pop_front(1);
                 stream_pack_to_unpack_sync();  // the row's last PV pack must be visible
 
                 const uint32_t o_base = row_slot * Sqt * vDHt;
-                const uint32_t sum_base = (row_slot * 2 + parity) * Sqt;
-                constexpr uint32_t N = 1;
+                push_hdr(2 /*FLUSH*/, row_slot, 0);
+#if defined(VSA_NO_SUMS)
+                const uint32_t cb_sumsrc = cb_col_identity;  // probe 10: pretend sum = 1
+#else
+                CircularBuffer(cb_sumback).wait_front(Sqt);  // the writer's exact row sums (bf16 tiles, column 0)
+                const uint32_t cb_sumsrc = cb_sumback;
+#endif
                 out_cb.reserve_back(Sqt * vDHt);
                 for (uint32_t s = 0; s < Sqt; ++s) {
-                    matmul_block_init(cb_sum_res, cb_col_identity, 0, N, 1, N);
-                    reconfig_data_format(cb_sum_res, cb_col_identity);
+                    reconfig_data_format_srca(cb_sumsrc);
+                    copy_tile_to_dst_init_short(cb_sumsrc);
                     CircularBuffer(cb_recip_scratch).reserve_back(1);
                     tile_regs_acquire();
-                    matmul_block(cb_sum_res, cb_col_identity, sum_base + s, 0, 0, 0, N, 1, N);
+                    copy_tile(cb_sumsrc, cb_sumsrc == cb_sumback ? s : 0, 0);
 #ifdef ARCH_BLACKHOLE
                     recip_tile_init<false>();
                     MATH((recip_tile<false>(0, VectorMode::C)));
@@ -575,6 +830,7 @@ void kernel_main() {
 #endif
                     tile_regs_commit();
                     tile_regs_wait();
+                    pack_reconfig_data_format(cb_recip_scratch);
                     configure_single_tile_pack(cb_recip_scratch);
                     PACK((llk_pack_reconfig_l1_acc(0)));
                     pack_tile(0, cb_recip_scratch);
@@ -599,6 +855,9 @@ void kernel_main() {
                     tile_regs_release();
                     CircularBuffer(cb_recip_scratch).pop_front(1);
                 }
+#if !defined(VSA_NO_SUMS)
+                CircularBuffer(cb_sumback).pop_front(Sqt);
+#endif
                 out_cb.push_back(Sqt * vDHt);
                 ++flushed;
                 lap(t_flush);
@@ -641,7 +900,7 @@ void kernel_main() {
             continue;  // probe 1: delivery floor -- consume the visit without any math
 #else
             {
-                if (type != MSG_VISIT || vn >= kMaxVisits || (w0 >> 16) == 0 || (w0 >> 16) > stream_depth / 2) {
+                if (type != MSG_VISIT || vn >= kMaxVisits || (w0 >> 16) == 0 || (w0 >> 16) > chunk_slots) {
                     vsa_trap_bad_ctrl();
                 }
                 Visit& v = vbuf[vn];
@@ -663,8 +922,18 @@ void kernel_main() {
     {
         const uint32_t t_total = VSA_TICK() - t_begin;
         DPRINT(
-            "VSAC v={} total={} wait={} qk={} max={} corr={} pv={} exp={} flush={}\n",
-            n_visits, t_total, t_wait, t_qk, t_max, t_corr, t_pv, t_exp, t_flush);
+            "VSAC v={} total={} wait={} qk={} max={} corr={} pv={} exp={} flush={} moved={}/{}\n",
+            n_visits,
+            t_total,
+            t_wait,
+            t_qk,
+            t_max,
+            t_corr,
+            t_pv,
+            t_exp,
+            t_flush,
+            n_moved,
+            n_nonfirst);
     }
 #endif
 }

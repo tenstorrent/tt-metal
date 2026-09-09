@@ -4,6 +4,7 @@
 
 """One signposted, timed warm vsa_sdpa streaming run at the median 15s shard (tracy-compatible)."""
 
+import os
 import time
 
 from tracy import signpost
@@ -18,12 +19,13 @@ from .test_vsa_sdpa_perf import make_inputs
 def test_vsa_sdpa_stream_profile(device):
     args = make_inputs(device, s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order="topk")
     q, k, v, idx, counts, flops = args
-    out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=True)  # compile
+    dist = os.environ.get("VSA_DIST", "0") == "1"
+    out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=True, distributed=dist)  # compile
     ttnn.synchronize_device(device)
     signpost("start")
     t0 = time.perf_counter()
     for _ in range(8):
-        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=True)
+        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=True, distributed=dist)
     ttnn.synchronize_device(device)
     ms = (time.perf_counter() - t0) / 8 * 1e3
     signpost("stop")

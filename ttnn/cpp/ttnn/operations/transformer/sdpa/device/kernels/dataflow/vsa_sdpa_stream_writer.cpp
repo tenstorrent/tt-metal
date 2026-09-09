@@ -16,6 +16,8 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"
 #include "dataflow_common.hpp"
+#include "vsa_sum_service.hpp"
+#include "api/debug/dprint.h"
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;
 
@@ -39,8 +41,13 @@ void kernel_main() {
     constexpr uint32_t cb_kack = get_compile_time_arg_val(15);
     constexpr uint32_t cb_qdone = get_compile_time_arg_val(16);
     constexpr uint32_t cb_out = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_shdr = get_compile_time_arg_val(18);  // row-sum service (vsa_sum_service.hpp)
+    constexpr uint32_t cb_stiles = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_sumback = get_compile_time_arg_val(20);
+    constexpr uint32_t cb_sacc = get_compile_time_arg_val(21);
+    constexpr uint32_t Sqt = get_compile_time_arg_val(22);
 
-    constexpr auto out_args = TensorAccessorArgs<18, 0>();
+    constexpr auto out_args = TensorAccessorArgs<23, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
     constexpr auto q_args =
@@ -58,8 +65,18 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(argi++);
     const uint32_t row_stride = get_arg_val<uint32_t>(argi++);
     const uint32_t row_count = get_arg_val<uint32_t>(argi++);
+    constexpr uint32_t kPassArg = 12;         // pass_rows[n_passes] ...
+    const uint32_t kRowsArg = 12 + n_passes;  // ... then the row list (q tiles, pass-major)
+    (void)row_start;
+    (void)row_stride;
 
     Noc noc;
+    vsa_sum::Service sums{cb_shdr, cb_stiles, cb_sumback, get_write_ptr(cb_sacc), R_MAX, Sqt};
+#define VSA_SERVE() sums.serve()
+#if defined(VSA_NO_SUMS)
+#undef VSA_SERVE
+#define VSA_SERVE() ((void)0)
+#endif
     experimental::CB q_cb(cb_q_res), k_cb(cb_k_stream), kreq_cb(cb_kreq), kack_cb(cb_kack);
     experimental::CB qdone_cb(cb_qdone), out_cb(cb_out);
     const auto out = TensorAccessor(out_args, out_addr);
@@ -114,8 +131,12 @@ void kernel_main() {
         }
         uint32_t drained = 0;
         uint32_t pass_base = 0;
+        uint32_t pass_i = 0;
         uint32_t sentinels_seen = 0;
         while (sentinels_seen < n_passes || drained < row_count) {
+            if (row_count > 0) {
+                VSA_SERVE();  // one 16-row slice at most: bounded delay for the K service below
+            }
             while (cb_pages_available_at_front(cb_kreq, 1)) {
                 kreq_cb.wait_front(1);
                 uint32_t b0, s0, b1, s1;
@@ -142,11 +163,9 @@ void kernel_main() {
                 }
             }
             if (row_count > 0 && pass_base < row_count && drained >= pass_base) {
-                const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
+                const uint32_t pass_rows = get_arg_val<uint32_t>(kPassArg + pass_i++);
                 for (uint32_t r = 0; r < pass_rows; ++r) {
-                    const uint32_t ri = pass_base + r;  // chunk-cyclic (see reader)
-                    const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride +
-                                            (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+                    const uint32_t q_tile = get_arg_val<uint32_t>(kRowsArg + pass_base + r);
                     const uint32_t page0 = (head * n_q_tiles + q_tile) * q_tiles_per_row;
                     for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
                         // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
@@ -162,8 +181,7 @@ void kernel_main() {
             }
             if (row_count > 0 && cb_pages_available_at_front(cb_out, out_tiles_per_row)) {
                 out_cb.wait_front(out_tiles_per_row);
-                const uint32_t q_tile = row_start + (drained >> VSA_ROW_CHUNK_LOG2) * row_stride +
-                                        (drained & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+                const uint32_t q_tile = get_arg_val<uint32_t>(kRowsArg + drained);
                 const uint32_t page0 = (head * n_q_tiles + q_tile) * out_tiles_per_row;
                 for (uint32_t i = 0; i < out_tiles_per_row; ++i) {
                     noc.async_write(
@@ -193,6 +211,7 @@ void kernel_main() {
 
     uint32_t drained = 0;
     uint32_t pass_base = 0;
+    uint32_t pass_i = 0;
 
     // K pulls are tagged with per-half trid groups (half h -> trids 4h+1..4h+4). A window-end
     // marker kreq {0xFFFFFFFF, half} queues a LAZY ack: it is pushed, in marker order, once a
@@ -252,10 +271,9 @@ void kernel_main() {
 
     while (pass_base < row_count || drained < row_count) {
         if (pass_base < row_count && drained >= pass_base) {
-            const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
+            const uint32_t pass_rows = get_arg_val<uint32_t>(kPassArg + pass_i++);
             for (uint32_t r = 0; r < pass_rows; ++r) {
-                const uint32_t ri = pass_base + r;  // chunk-cyclic (see reader)
-                const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride + (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+                const uint32_t q_tile = get_arg_val<uint32_t>(kRowsArg + pass_base + r);
                 const uint32_t page0 = (head * n_q_tiles + q_tile) * q_tiles_per_row;
                 for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
                     // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
@@ -272,10 +290,11 @@ void kernel_main() {
         }
 
         serve_kreq_if_any();
+        VSA_SERVE();  // one 16-row slice at most: bounded delay for the K service
 
         if (cb_pages_available_at_front(cb_out, out_tiles_per_row)) {
             out_cb.wait_front(out_tiles_per_row);
-            const uint32_t q_tile = row_start + (drained >> 2) * row_stride + (drained & 3);
+            const uint32_t q_tile = get_arg_val<uint32_t>(kRowsArg + drained);
             const uint32_t page0 = (head * n_q_tiles + q_tile) * out_tiles_per_row;
             for (uint32_t i = 0; i < out_tiles_per_row; ++i) {
                 noc.async_write(

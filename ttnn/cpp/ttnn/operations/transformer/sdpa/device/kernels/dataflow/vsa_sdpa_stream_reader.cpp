@@ -27,6 +27,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #if defined(VSA_PROBE) && VSA_PROBE == 9
 #include "api/debug/dprint.h"
+#include "api/debug/waypoint.h"
 #define VSA_TICK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
 #endif
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -107,6 +108,75 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(argi++);     // worker: first resident row
     const uint32_t row_stride = get_arg_val<uint32_t>(argi++);    // worker: row stride
     const uint32_t row_count = get_arg_val<uint32_t>(argi++);     // worker: total rows
+    // Raw-selection mode (see VsaSdpaParams): entries consumed per index row (0 = W), dense-row bits
+    // (resident row index -> bit), exempt block ids added to every row.
+    const uint32_t list_len_arg = get_arg_val<uint32_t>(argi++);
+    const uint32_t dense_mask_addr = get_arg_val<uint32_t>(argi++);  // 0 = no dense rows
+    const uint32_t cb_dense = get_arg_val<uint32_t>(argi++);
+    const uint32_t dense_bytes = get_arg_val<uint32_t>(argi++);
+    const uint32_t coarse_shift = get_arg_val<uint32_t>(argi++);  // padded coarse numbering (0 = real ids)
+    const uint32_t coarse_pad = get_arg_val<uint32_t>(argi++);    // pad slots per shard to subtract
+    const uint32_t n_exempt = get_arg_val<uint32_t>(argi++);
+    const uint32_t exempt_argi = argi;  // the ids stay in the runtime-arg block (no stack array)
+    argi += n_exempt;
+    const uint32_t order_addr = get_arg_val<uint32_t>(argi++);  // stream order tensor (0 = ascending)
+    const uint32_t cb_order = get_arg_val<uint32_t>(argi++);
+    const uint32_t order_bytes =
+        get_arg_val<uint32_t>(argi++);  // its row size (get_tile_size(cb) is the FORMAT tile size, not the page)
+    // explicit resident-row list (q tiles, pass-major) follows the role-specific args; the host deals
+    // rows by static cost (see the factory) so row_start/row_stride are no longer used
+    uint32_t pass_argi = argi;             // pass_rows[n_passes] ...
+    uint32_t rows_argi = argi + n_passes;  // ... then the rows
+    (void)row_start;
+    (void)row_stride;
+    const auto exempt_id = [&](uint32_t i) -> uint32_t { return get_arg_val<uint32_t>(exempt_argi + i); };
+    const uint32_t list_len = (list_len_arg == 0) ? W : list_len_arg;
+    const auto real_block = [&](uint32_t b) -> uint32_t {
+        return coarse_shift ? b - (b >> coarse_shift) * coarse_pad : b;
+    };
+    // dense-row bitmask (bit q_tile): one interleaved DRAM page, read once into its CB page
+    volatile tt_l1_ptr uint32_t* dense_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_dense));
+    if (dense_mask_addr != 0) {
+        // same layout family as block_counts (interleaved DRAM, row-major): reuse its accessor args
+        const auto dense_acc = TensorAccessor(counts_args, dense_mask_addr, dense_bytes);
+        noc_async_read(dense_acc.get_noc_addr(0), get_write_ptr(cb_dense), dense_bytes);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    }
+    // stream order (leader): the permutation the sequence is streamed in
+    volatile tt_l1_ptr uint32_t* order_ptr = nullptr;
+#if defined(VSA_PROBE) && VSA_PROBE == 7
+    DPRINT(
+        "VSA_ORDER_ARGS leader={} order_addr={:x} cb_order={} bytes={} dense_addr={:x}\n",
+        is_leader,
+        order_addr,
+        cb_order,
+        order_bytes,
+        dense_mask_addr);
+#endif
+    if (order_addr != 0) {
+        const auto order_acc = TensorAccessor(counts_args, order_addr, order_bytes);
+        noc_async_read(order_acc.get_noc_addr(0), get_write_ptr(cb_order), order_bytes);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        order_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_order));
+#if defined(VSA_PROBE) && VSA_PROBE == 7
+        DPRINT(
+            "VSA_ORDER cb={} page={} addr={:x} o[0..3]={} {} {} {} o[n-2..n-1]={} {}\n",
+            cb_order,
+            order_bytes,
+            order_addr,
+            order_ptr[0],
+            order_ptr[1],
+            order_ptr[2],
+            order_ptr[3],
+            order_ptr[n_kv_blocks - 2],
+            order_ptr[n_kv_blocks - 1]);
+#endif
+    }
+    const auto row_is_dense = [&](uint32_t q_tile) -> bool {
+        return dense_mask_addr != 0 && ((dense_words[q_tile >> 5] >> (q_tile & 31)) & 1u);
+    };
 
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
     constexpr uint32_t bitmap_words = (n_kv_blocks + 31) / 32;
@@ -155,6 +225,20 @@ void kernel_main() {
         // Multicast strips (height-1 rectangles covering the group's workers) follow in the
         // runtime args; log entries are published with one multicast write per strip.
         const uint32_t n_strips = get_arg_val<uint32_t>(argi++);
+#if defined(VSA_PROBE) && VSA_PROBE == 7  // TT_VSA_PROBE=7: print parsed args
+        DPRINT(
+            "VSA_ARGS leader head={} n_workers={} row_count={} list_len={} cb_dense={} dense_bytes={} n_exempt={} "
+            "n_strips={} argi={}\n",
+            head,
+            n_workers,
+            row_count,
+            list_len,
+            cb_dense,
+            dense_bytes,
+            n_exempt,
+            n_strips,
+            argi);
+#endif
         uint32_t strip_sx[4], strip_sy[4], strip_ex[4], strip_ey[4], strip_n[4];
         for (uint32_t st = 0; st < n_strips; ++st) {
             strip_sx[st] = get_arg_val<uint32_t>(argi++);
@@ -166,6 +250,16 @@ void kernel_main() {
         // Translated (virtual) coordinates are direction-agnostic on Blackhole: the per-NoC
         // translation tables absorb NOC_1's reversed orientation, so the rectangle is given in
         // ascending translated order on both NoCs (a raw-coordinate swap here breaks NOC_1).
+        // per-worker NoC coords: the log is published by UNICAST writes (one per worker). Multicast
+        // strips were the original transport; together with the workers' unicast progress posts and
+        // V pulls on the same NoC they formed a NoC-level deadlock at some shapes/timings (see
+        // VSA_STREAM_DESIGN.md 5d). The strip args stay in the layout, unused.
+        const uint32_t wcoord_argi = argi;
+        argi += 2 * n_workers;
+        pass_argi = argi;  // the leader's pass counts and row list follow its strips and worker coords
+        rows_argi = argi + n_passes;
+        const auto worker_x = [&](uint32_t w) { return get_arg_val<uint32_t>(wcoord_argi + 2 * w); };
+        const auto worker_y = [&](uint32_t w) { return get_arg_val<uint32_t>(wcoord_argi + 2 * w + 1); };
         uint64_t strip_base[4];
         for (uint32_t st = 0; st < n_strips; ++st) {
             strip_base[st] = get_noc_multicast_addr(
@@ -177,10 +271,35 @@ void kernel_main() {
             ackbox[w] = 0;
             ackbox[kAckboxReady + w] = 0;
         }
+        uint32_t arrival_dbg = 0, fetched_dbg = 0;
         const auto wait_all_workers_at = [&](uint32_t target) {
             for (uint32_t w = 0; w < n_workers; ++w) {
+#if defined(VSA_PROBE) && VSA_PROBE == 7
+                uint32_t spins = 0;
+#endif
+                WAYPOINT("LWAI");
                 while (ackbox[w] < target) {
                     invalidate_l1_cache();
+#if defined(VSA_PROBE) && VSA_PROBE == 7
+                    if (++spins == (1u << 26)) {
+                        DPRINT(
+                            "VSA_STUCK leader head={} target={} w={} box={} {} {} {} {} {} {} {} arrival={} "
+                            "fetched={}\n",
+                            head,
+                            target,
+                            w,
+                            ackbox[0],
+                            ackbox[1],
+                            ackbox[2],
+                            ackbox[3],
+                            ackbox[4],
+                            ackbox[5],
+                            ackbox[6],
+                            ackbox[7],
+                            arrival_dbg,
+                            fetched_dbg);
+                    }
+#endif
                 }
                 if (ackbox[w] > target + stream_depth + 8) {  // posted > anything published
                     vsa_trap_bad_progress();                  // more consumed than published
@@ -212,6 +331,7 @@ void kernel_main() {
         uint32_t own_fifo_n[kOwnFifo];
         uint32_t own_head = 0, own_tail = 0;
         uint32_t own_pass_rows = 0;
+        uint32_t pass_base_acc = 0;
         const auto own_advance = [&]() {
             while (own_commit < own_consumed && !own_busy[own_commit % stream_depth]) {
                 ++own_commit;
@@ -331,6 +451,7 @@ void kernel_main() {
                 cp[1] = 0;
             }
             ctrl_cb.push_back(1);
+            WAYPOINT("LOWN");
             while (own_commit < target) {
                 own_poll_credits();
             }
@@ -353,6 +474,7 @@ void kernel_main() {
         // before that zeroing is simply re-posted -- so this needs neither a host-reset semaphore
         // nor any assumption about relaunch state (trace replays reuse L1 as-is).
         for (uint32_t w = 0; w < n_workers; ++w) {
+            WAYPOINT("LRDY");
             while (ackbox[kAckboxReady + w] != kReadyMagic) {
                 invalidate_l1_cache();
             }
@@ -372,13 +494,18 @@ void kernel_main() {
                 entry[2] = log_n + j + 1;
             }
             const uint32_t run1 = (e0 + k <= log_depth) ? k : (log_depth - e0);
-            for (uint32_t st = 0; st < n_strips; ++st) {
-                noc_async_write_multicast(
-                    log_l1 + e0 * log_entry_words * 4, strip_base[st] + log_l1 + e0 * log_entry_words * 4,
-                    run1 * log_entry_words * 4, strip_n[st], false, noc.get_noc_id());
+            (void)strip_base;
+            for (uint32_t w = 0; w < n_workers; ++w) {
+                noc_async_write(
+                    log_l1 + e0 * log_entry_words * 4,
+                    get_noc_addr(worker_x(w), worker_y(w), log_l1 + e0 * log_entry_words * 4, noc.get_noc_id()),
+                    run1 * log_entry_words * 4,
+                    noc.get_noc_id());
                 if (run1 < k) {
-                    noc_async_write_multicast(
-                        log_l1, strip_base[st] + log_l1, (k - run1) * log_entry_words * 4, strip_n[st], false,
+                    noc_async_write(
+                        log_l1,
+                        get_noc_addr(worker_x(w), worker_y(w), log_l1, noc.get_noc_id()),
+                        (k - run1) * log_entry_words * 4,
                         noc.get_noc_id());
                 }
             }
@@ -390,6 +517,7 @@ void kernel_main() {
             uint32_t bs[2], slots[2];
             for (uint32_t j = 0; j < k; ++j) {
                 experimental::async_read_barrier_with_trid(noc, ((arrival + j) % 8) + 1);  // V landed
+                WAYPOINT("LKAK");
                 kack_cb.wait_front(1);  // K landed (writer acks per block, same pipelining)
                 kack_cb.pop_front(1);
                 bs[j] = pend_b[(arrival + j) % kFetchLag];
@@ -408,6 +536,8 @@ void kernel_main() {
         const auto issue_pair = [&](const uint32_t* bs, uint32_t k) {
             if (fetched + k > stream_depth) {
                 // Every consumer (workers AND the local compute) must be done with these slots.
+                arrival_dbg = arrival;
+                fetched_dbg = fetched;
                 wait_all_workers_at(fetched + k - stream_depth);
                 if (row_count > 0) {
                     own_wait_at(fetched + k - stream_depth);
@@ -439,28 +569,39 @@ void kernel_main() {
             }
         };
         for (uint32_t pass = 0; pass < n_passes; ++pass) {
-            const uint32_t pass_row_base = pass * R_MAX;
-            own_pass_rows = (row_count > pass_row_base)
-                                ? ((row_count - pass_row_base < R_MAX) ? row_count - pass_row_base : R_MAX)
-                                : 0;
+            const uint32_t pass_row_base = pass_base_acc;
+            own_pass_rows = get_arg_val<uint32_t>(pass_argi + pass);
+            pass_base_acc += own_pass_rows;
             for (uint32_t r = 0; r < own_pass_rows; ++r) {
                 volatile tt_l1_ptr uint32_t* bm = bitmaps + r * bitmap_words;
                 for (uint32_t wd = 0; wd < bitmap_words; ++wd) {
                     bm[wd] = 0;
                 }
                 const uint32_t ri = pass_row_base + r;
-                const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride +
-                                        (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
-                noc.async_read(
-                    idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
-                for (uint32_t e = 0; e < W; ++e) {
-                    const uint32_t bb = idx_ptr[e];
-                    if (bb == sentinel) {
-                        break;
+                const uint32_t q_tile = get_arg_val<uint32_t>(rows_argi + ri);
+                if (row_is_dense(q_tile)) {
+                    for (uint32_t bb = 0; bb < n_kv_blocks; ++bb) {  // every real block (pads have count 0)
+                        if (counts_ptr[bb] != 0) {
+                            bm[bb >> 5] |= (1u << (bb & 31));
+                        }
                     }
-                    bm[bb >> 5] |= (1u << (bb & 31));
+                } else {
+                    noc.async_read(
+                        idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
+                    for (uint32_t e = 0; e < list_len; ++e) {
+                        const uint32_t raw = idx_ptr[e];
+                        if (raw == sentinel) {
+                            break;
+                        }
+                        const uint32_t bb = real_block(raw);
+                        bm[bb >> 5] |= (1u << (bb & 31));
+                    }
+                    for (uint32_t i = 0; i < n_exempt; ++i) {
+                        const uint32_t eb = exempt_id(i);
+                        bm[eb >> 5] |= (1u << (eb & 31));
+                    }
                 }
             }
             own_row_parity = 0;
@@ -470,19 +611,33 @@ void kernel_main() {
             }
             uint32_t pair[2];
             uint32_t np = 0;
-            for (uint32_t b = 0; b < n_kv_blocks; ++b) {
+            // NOTE: the default (no stream_order) loop is kept byte-for-byte as committed: the
+            // leader/worker NoC protocol has a latent timing-sensitive deadlock at tiny shapes
+            // (6 rows/head, 48 blocks: tests/.../test_vsa_repro.py) that any change to this loop's
+            // timing exposed (-O2 with an indirection: hang; -Os: pass). stream_order is EXPERIMENTAL
+            // for the same reason until that race is fixed.
+            const auto stream_block = [&](uint32_t b) {
                 if (counts_ptr[b] == 0) {
-                    continue;  // pad block: never listed
+                    return;  // pad block: never listed
                 }
                 pair[np++] = b;
                 if (np < 2) {
-                    continue;
+                    return;
                 }
                 if (fetched - arrival + 2 > kFetchLag) {
                     publish_pending(fetched - arrival + 2 - kFetchLag);
                 }
                 issue_pair(pair, 2);
                 np = 0;
+            };
+            if (order_ptr == nullptr) {
+                for (uint32_t b = 0; b < n_kv_blocks; ++b) {
+                    stream_block(b);
+                }
+            } else {
+                for (uint32_t bi = 0; bi < n_kv_blocks; ++bi) {
+                    stream_block(order_ptr[bi]);
+                }
             }
             if (np == 1) {
                 if (fetched - arrival + 1 > kFetchLag) {
@@ -525,6 +680,7 @@ void kernel_main() {
                     }
                     ctrl_cb.push_back(1);
                 }
+                WAYPOINT("LDRN");
                 while (own_head != own_tail) {
                     own_poll_credits();
                 }
@@ -536,6 +692,8 @@ void kernel_main() {
         // non-posted (ack-counted) writes, and outstanding acks arriving after this kernel ends
         // corrupt the NEXT kernel's write-barrier accounting on this core -- untraced runs hide
         // it behind host gaps between ops, trace replays run ops back-to-back and hang.
+        arrival_dbg = arrival;
+        fetched_dbg = fetched;
         wait_all_workers_at(arrival);
         noc.async_write_barrier();
         noc_async_atomic_barrier(noc.get_noc_id());
@@ -646,6 +804,7 @@ void kernel_main() {
     uint32_t window_slots = 0;      // pulled blocks in the open window
     uint32_t window_first_listed = 0xFFFFFFFFu;
     uint32_t cur_pass_rows = 0;
+    uint32_t pass_base_acc = 0;
 
     // Close the open window: K marker to the writer (it acks lazily, in order), queue for
     // emission. No waiting of any kind here.
@@ -734,29 +893,40 @@ void kernel_main() {
 
     uint32_t log_n = 0;
     for (uint32_t pass = 0; pass < n_passes; ++pass) {
-        const uint32_t pass_row_base = pass * R_MAX;
-        const uint32_t pass_rows =
-            (row_count > pass_row_base) ? ((row_count - pass_row_base < R_MAX) ? row_count - pass_row_base : R_MAX)
-                                        : 0;
+        const uint32_t pass_row_base = pass_base_acc;
+        const uint32_t pass_rows = get_arg_val<uint32_t>(pass_argi + pass);
+        pass_base_acc += pass_rows;
         // Membership bitmaps for this pass's rows.
         for (uint32_t r = 0; r < pass_rows; ++r) {
             volatile tt_l1_ptr uint32_t* bm = bitmaps + r * bitmap_words;
             for (uint32_t wd = 0; wd < bitmap_words; ++wd) {
                 bm[wd] = 0;
             }
-            // chunk-cyclic placement: 4-row chunks dealt round-robin (row_stride = workers * 4)
             const uint32_t ri = pass_row_base + r;
-            const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride + (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+            const uint32_t q_tile = get_arg_val<uint32_t>(rows_argi + ri);
+            if (row_is_dense(q_tile)) {
+                for (uint32_t b = 0; b < n_kv_blocks; ++b) {  // every real block (pads have count 0)
+                    if (counts_ptr[b] != 0) {
+                        bm[b >> 5] |= (1u << (b & 31));
+                    }
+                }
+                continue;
+            }
             noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
             noc.async_read_barrier();
             invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
-            for (uint32_t e = 0; e < W; ++e) {
-                const uint32_t b = idx_ptr[e];
-                if (b == sentinel) {
+            for (uint32_t e = 0; e < list_len; ++e) {
+                const uint32_t raw = idx_ptr[e];
+                if (raw == sentinel) {
                     break;
                 }
+                const uint32_t b = real_block(raw);
                 ASSERT(b < n_kv_blocks);
                 bm[b >> 5] |= (1u << (b & 31));
+            }
+            for (uint32_t i = 0; i < n_exempt; ++i) {
+                const uint32_t eb = exempt_id(i);
+                bm[eb >> 5] |= (1u << (eb & 31));
             }
         }
         row_parity_bits = 0;

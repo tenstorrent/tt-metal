@@ -13,19 +13,18 @@ Gates covered here at attention level: sparsity 0 vs the dense ring path (R6a), 
 zero and random gate vs the torch oracle (R6b/c), striped == identity after unpacking (R6d).
 """
 
+import os
+
 import pytest
 import torch
-from diffusers.models.transformers.transformer_minimax_h3 import (
-    MiniMaxH3Attention as TorchMiniMaxH3Attention,
-    MiniMaxH3RotaryPosEmbed,
-    _apply_rotary_emb,
-)
+from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3Attention as TorchMiniMaxH3Attention
+from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3RotaryPosEmbed, _apply_rotary_emb
 from loguru import logger
 
 import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig, MiniMaxH3VSACoarseStage
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import build_packed_sequence
@@ -106,6 +105,7 @@ def _setup_tt_model(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp,
         stage = MiniMaxH3VSACoarseStage(
             geometry,
             sparsity=vsa_config.sparsity,
+            padded_pooling=vsa_config.padded_pooling,
             head_dim=HEAD_DIM,
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -215,7 +215,14 @@ def test_vsa_attention_vs_torch_oracle(
 
     vsa_model, _ = _setup_tt_model(
         mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, geometry,
-        MiniMaxH3VSAConfig(sparsity=SPARSITY, placement=placement, k_chunk_blocks=2), state,
+        MiniMaxH3VSAConfig(
+            sparsity=SPARSITY,
+            placement=placement,
+            k_chunk_blocks=2,
+            padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1",
+            streaming=os.environ.get("VSA_STREAMING", "1") == "1",
+        ),
+        state,
     )  # fmt: skip
     assert vsa_model.gate_compress_is_zero == (gate == "zero")
     tt_out = _run_tt(vsa_model, mesh_device, sp_axis, tp_axis, geometry, x, rope_cos, rope_sin)
@@ -223,6 +230,19 @@ def test_vsa_attention_vs_torch_oracle(
     # unpack to the original packed order and compare on real rows only
     tt_rows = geometry.unpack_rows(tt_out.reshape(geometry.padded_len, HIDDEN_SIZE), dim=0)
     logger.info(f"comparing {tt_rows.shape} rows (placement={placement}, gate={gate})")
+    if os.environ.get("VSA_ORACLE_DEBUG"):  # per q-tile PCC in placement order: which rows are wrong
+        ref_tiled = geometry.pack_rows(ref[0], dim=0).reshape(geometry.n_tiles, 64, HIDDEN_SIZE)
+        tt_tiled = tt_out.reshape(geometry.n_tiles, 64, HIDDEN_SIZE)
+        tps = geometry.tiles_per_shard
+        bad = []
+        for slot in range(geometry.n_tiles):
+            if int(geometry.valid_counts[slot]) == 0:
+                continue
+            a_, b_ = ref_tiled[slot].float().flatten(), tt_tiled[slot].float().flatten()
+            p = torch.corrcoef(torch.stack([a_, b_]))[0, 1].item()
+            if p < 0.99:
+                bad.append((slot, slot // tps, slot % tps, bool(geometry.is_exempt[slot]), round(p, 4)))
+        logger.info(f"ORACLE_DEBUG bad tiles (slot, shard, row_in_shard, exempt, pcc): {bad}")
     assert_quality(ref[0], tt_rows, pcc=MIN_PCC)
 
 

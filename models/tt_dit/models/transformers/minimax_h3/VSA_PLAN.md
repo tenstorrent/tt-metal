@@ -1,6 +1,6 @@
 # VSA v0 implementation plan
 
-## Status (2026-09-03)
+## Status (2026-09-03; see VSA_README.md for the 2026-09-09 checkpoint)
 
 Fine-stage kernel: streaming leader/worker `vsa_sdpa` (v17) shipped as the model default
 (`MiniMaxH3VSAConfig.streaming`); design and ceiling in `VSA_STREAM_DESIGN.md`. Block-level at
@@ -159,7 +159,7 @@ q-rows, exempt blocks first (shared by every row); (2) bfp8 K/V halves bytes; (3
 the chunk CBs (gather/compute currently serialized); (4) larger m only amortizes handshakes, not
 bytes. Ideal-utilization bound at 0.9 sparsity is ~6-7 ms for the fine stage at 15s (~30x headroom
 in the kernel, ~2-3x end-to-end block speedup over dense). Reports & CSVs were generated via
-`run_vsa_perf_sweep.sh` + `tt-perf-report --start-signpost start --end-signpost stop`.
+`scripts/profile_block.sh` (wraps `tt-perf-report --start-signpost start --end-signpost stop`).
 
 ## vsa_sdpa optimization (goal: ~60% math utilization, lossless)
 
@@ -286,8 +286,8 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
          9.1 ms were the three pooling matmuls on 20 cores)
     15s: dense 76.7 ms | VSA 72.2 ms  (attn 51.4 -> vsa_sdpa 24.3; +22.5 ms VSA-only ops; measured
          with the pooling fold already in: the same matmuls were 13.6 ms before it)
-  VSA-only ops at 15 s: 2 x ~4.0 ms K/V all-gather (20 cores, ~9 GB/s -- the elephant; dense ring
-  attention has no such step), 4.4 ms extra all-gather-matmul (gate projection), ~3 ms
+  VSA-only ops at 15 s: 2 x ~4.0 ms K/V all-gather (link-bound: 363 MB received per device per tensor, 87 GB/s over 2
+  links -- the elephant; dense ring attention has no such step), 4.4 ms extra all-gather-matmul (gate projection), ~3 ms
   repeat_interleave lowering (permute/concat/tilize -> replaced by a 0/1 matmul), 3 x 0.5 ms pooling
   (after the fold), transposes/topk/index assembly ~2 ms.
   Re-measured with pooling fold + 0/1 broadcast matmul (commit 183d3a84491):
@@ -316,6 +316,17 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
 - 2026-09-03: exact exp made the op default (`math_approx_mode=False`, as dense SDPA): +3% standalone.
   Deterministic arrival-bin windows applied: untraced repeat and traced replay bit-exact (PCC 1.0);
   standalone neutral to +6% (15s 17.1/16.0 ms; 10s 7.9; 5s 2.5). Details in VSA_STREAM_DESIGN.md 3b/3c.
+- 2026-09-03 coarse-stage work: (1) K/V all-gather is link-bound (87 GB/s over the axis's 2 eth
+  channels; 4 links unavailable; Linear 1.9x slower; generic ttnn.all_gather 6% faster) -- no serial
+  reduction possible, only overlap or fewer bytes. (2) raw-selection inputs to vsa_sdpa move the index
+  assembly into the kernel (bit-identical; sparsity0/traced block pass). (3) padded pooled gathers
+  behind MiniMaxH3VSAConfig.padded_pooling (stage oracle tests pass; block A/B pending). Build gotcha:
+  C++ changes need `cmake --install build` -- `--target ttnn` alone leaves ttnn/ttnn/_ttnn.so stale.
+  Results at 15 s (slowest device, exact block period): 63.7 (morning) -> 60.5 (device-side index
+  assembly) -> 59.6 (padded pooled gathers, now default) -> 59.2 (full-grid pooling matmul config)
+  -> 58.6 ms (batched config for the coarse-output matmul) vs dense 75.4: VSA is 22% faster. Real-weights pipeline PASS with all defaults. Remaining VSA-only:
+  K/V gather 8.1 (link-bound), gate projection 2.9 (model), pooling 2.0 (0.9 of it transposes,
+  DRAM-bound), o_c 1.2, pooled gathers 0.5, scores/topk 0.6.
 - Run-to-run NONDETERMINISM (resolved above): untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:
@@ -328,11 +339,49 @@ Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 
 - delivery: 10.7 ms = leader serialization 5.6 (1.55 us/arrival: gate+kreq+8 accessor read issues+mcast publish) + leader L1 egress ~5 (8 workers x 32KB/block through one core's two NoC ports)
 - next levers: split the block stream across the leader's two RISCs (halves the 5.6), batched publishes/kreqs, IAGF addressing; compute is within ~2x of its lossless SFPU floor
 
+### Session 5 (2026-09-04): distributed window (v18) and cost-aware dealing
+
+Built the distributed-window vsa_sdpa (`distributed=True`; new dist reader/writer, shared compute):
+every core of a head group fetches a slice of each KV window, rows gather their listed blocks from
+peers' L1 into <= 6-block visits. Correct and bit-exact vs the host-assembled path, deterministic,
+all unit cases pass -- but **34 ms vs 15.9 ms** standalone at the 15 s median shard. Compute work per
+core halves (9.6 ms) yet idles 67%: the per-(row, block) pull traffic (~146 MB/core) moves at ~4 GB/s
+per core through the NoC (each 3-block message lands ~30 us after issue), and with 12-14 gather slots
+only 2-4 messages are in flight. Sweeps of ring depth, slice size, message size and double-buffered
+prefetch all landed at 34-37 ms; putting K and V on one NoC ring was 66 ms. Verdict: NoC-bound; left
+as opt-in with probes and a written analysis (VSA_STREAM_DESIGN.md 5b).
+
+Cost-aware dealing shipped for both kernels (explicit per-core row lists + per-pass counts in the
+runtime args, `deal_units_by_cost`): identity-placement worst shard 25.3 -> 24.0-24.5 ms; the
+streaming kernel keeps its chunk-cyclic layout when dense rows are few (the balanced layout costs
+~1 ms of locality on the median shard). Median unchanged: 15.9 model / 16.7 topk ms.
+
+Debugging notes: 1x1 multicast strips don't deliver (peer alone on the next grid row) -> unicast
+flags; the online-softmax engine needs one visit per row per chunk; in-place owned slots need a
+credit-style gate before refill; watcher build needs `TT_VSA_OS=1`.
+
+### Session 6 (2026-09-04, afternoon): ideas pass on the streaming kernel
+
+Measured real selections (VSA_DUMP_INDICES on the real-weights 15 s pipeline) before building:
+adjacent-tile overlap 0.55 (pairing = a wash, dropped), per-device block union 79% (selective gather
+dropped), Z-order stream gives 2.4 -> 3.3 blocks per visit (worth ~25% of visits). Built the
+`stream_order` input + Z-order geometry, but a permuted stream exposes a latent timing-sensitive NoC
+deadlock in the leader/worker protocol (tiny-shape repro `test_vsa_repro.py`; even an identity
+permutation hangs at -O2; the committed loop and -Os pass). Kept the default path byte-identical,
+stream_order is experimental until the race is fixed. Found in passing that the attention-level torch
+oracle (6 tiles/shard) fails on the streaming kernel at HEAD (PCC 92.7%, v1 kernel 99.6%) -- same race
+family, predates today; the 15 s block gates are self-consistency only. Real-index bench:
+rows-for-depth now pays (rmax 15/12: 18.7 ms, 10/20: 17.5, 10/18: ~18.0); depth 20 does not fit the
+model's L1, 18 does. Dense rows are placed one per (pass, core) bin (the interleaved placement had put
+two on one core's pass 0): block-level per-device kernel time 17.0 median / 20.2 max -> 16.4 / 17.1 ms
+(rmax 10 / depth 18 now the streaming default). Dense-row split into dense SDPA dropped after costing (0.5 ms per row in
+kernel vs a similar standalone cost plus a pad mask).
+
 ## Decisions log
 - **2026-08-31 machine setup**: 4x8 BH galaxy runs bare-metal (no docker): build_metal.sh with
   clang-20, create_venv.sh, pinned diffusers (abc5e9bf71) for the torch reference. Requires
   `TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto`
-  (see run_h3_test.sh). The machine had one untrained eth link (chips 1<->25, torus wrap) which
+  (see `scripts/run_h3_test.sh`). The machine had one untrained eth link (chips 1<->25, torus wrap) which
   broke FABRIC_1D_RING topology mapping; `tt-smi -glx_reset` retrained it. Smoke test
   `test_minimax_h3_transformer_block[blackhole-small_s2048-4x8...]` passes at PCC 99.9995%.
 - **R3 topk spike (resolved)**: at production selection shape [1, 14, 226 rows, 1808 cols] bf16,
@@ -351,3 +400,11 @@ Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 
   slots are nonzero by the time they reach attention; correctness relies on count masking
   (K side), the averaging matrix (pooling), and unpack dropping pad rows (Q side) — never on
   pad values. -inf mask via L1-acc add requires finite (non-NaN) inputs.
+- **2026-09-04/05 exact numerics (v19)**: row sums moved to the writer RISC in 64-bit fixed point
+  (`vsa_sum_service.hpp`), FA3-style lazy anchor rescale with the exp referenced to anchor + T
+  (T = 2 logits, `TT_VSA_LAZY_T`), corr exp exact on the MATH thread. kv1024 precision 0.987 ->
+  0.99969 (rows at the bf16 floor), padded-pooling oracle 92.7% -> 99.6% (pad-slot mask in the
+  coarse softmax), stream-order read bug and mcast/unicast publish deadlock fixed. Found and fixed
+  four latent kernel bugs (16-bit DEST SFPU forms, RISC-vs-Tensix sync for software L1 reads,
+  writer L1 read cache, visits-per-chunk bound). New regression tests: `test_vsa_sdpa_precision`,
+  `test_vsa_sdpa_determinism`. Cost: standalone 18.1 -> 22.8 ms; see VSA_STREAM_DESIGN.md 7.

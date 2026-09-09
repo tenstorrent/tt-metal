@@ -8,6 +8,7 @@ Prints per-variant time, effective FLOPs, and math utilization against the tt-pe
 Blackhole peak (4096 FLOP/cyc x 1.35 GHz / 2 for HiFi2). Run with -s.
 """
 
+import os
 import time
 
 import pytest
@@ -75,13 +76,23 @@ def make_inputs(device, s_local, n_blocks, row_blocks, dense_rows, order, seed=0
     )
 
 
-def bench(device, args, m, iters=8, streaming=False):
+# kernel variants: v1 per-row gather, streaming leader/worker, distributed window
+MODES = {
+    "v1": dict(k_chunk_blocks=2, streaming=False),
+    "stream": dict(streaming=True),
+    "dist": dict(streaming=True, distributed=True),
+}
+
+
+def bench(device, args, m=None, iters=8, streaming=False, **kw):
     q, k, v, idx, counts, flops = args
-    out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, k_chunk_blocks=m, streaming=streaming)  # compile
+    if m is not None:
+        kw["k_chunk_blocks"] = m
+    out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=streaming, **kw)  # compile
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
     for _ in range(iters):
-        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, k_chunk_blocks=m, streaming=streaming)
+        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=streaming, **kw)
     ttnn.synchronize_device(device)
     ms = (time.perf_counter() - t0) / iters * 1e3
     ttnn.deallocate(out)
@@ -105,9 +116,15 @@ def test_vsa_sdpa_bench(device):
     ]
     print()
     for label, spec in cases:
+        if os.environ.get("VSA_CASES") and os.environ["VSA_CASES"] not in label:  # substring filter
+            continue
         args = make_inputs(device, **spec)
-        for mode, m in (("v1", 2), ("stream", 1)):
-            ms, util, grid = bench(device, args, m, streaming=(mode == "stream"))
+        # VSA_MODES=stream,dist selects the kernels to time (default: all)
+        for mode in os.environ.get("VSA_MODES", ",".join(MODES)).split(","):
+            kw = dict(MODES[mode])
+            if kw.get("streaming"):
+                kw["dense_row_hint"] = list(range(spec["dense_rows"]))  # make_inputs densifies rows [0, dense_rows)
+            ms, util, grid = bench(device, args, **kw)
             print(f"{label}  {mode:<6s}  {ms:8.3f} ms   util {util:5.2f} %   grid {grid}")
         for t in args[:5]:
             ttnn.deallocate(t)
