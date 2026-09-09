@@ -81,7 +81,8 @@ def test_coarse_stage_vs_oracle(mesh_device, placement, selection, reset_seeds):
     # (c+e) O_c and index rows
     raw = selection != "assembled"
     tt_oc, tt_idx = stage(tt_q, tt_k, tt_v, raw_selection=raw)
-    oc_tt = _from_device(mesh_device, tt_oc).float()
+    oc_tt = _from_device(mesh_device, tt_oc).float()  # [1, 1, S_pad, H*d] (head-concatenated layout)
+    oc_tt = oc_tt.reshape(1, oc_tt.shape[-2], HEADS, DIM).permute(0, 2, 1, 3)  # -> [1, H, S_pad, d]
     idx_tt = _from_device(mesh_device, tt_idx).to(torch.int64)
     if raw:
         # decode the rows exactly as the kernel does: first k entries, padded-numbering remap, exempt
@@ -150,8 +151,12 @@ def test_coarse_plus_fine_vs_full_oracle(mesh_device, m, reset_seeds):
     tt_oc, tt_idx = stage(tt_q, tt_k, tt_v)
     tt_counts = stage.block_counts_tensor()
     tt_fine = ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, k_chunk_blocks=m)
-    tt_out = ttnn.add(tt_fine, ttnn.multiply(tt_gate, tt_oc))
+    # o_c is head-concatenated: gate after concatenate_heads, as the model does
+    tt_fine_flat = ttnn.reshape(ttnn.transformer.concatenate_heads(tt_fine), [1, 1, geometry.padded_len, HEADS * DIM])
+    tt_gate_flat = ttnn.reshape(ttnn.transformer.concatenate_heads(tt_gate), [1, 1, geometry.padded_len, HEADS * DIM])
+    tt_out = ttnn.add(tt_fine_flat, ttnn.multiply(tt_gate_flat, tt_oc))
     out = _from_device(mesh_device, tt_out).float()
+    out = out.reshape(1, geometry.padded_len, HEADS, DIM).permute(0, 2, 1, 3)  # -> [1, H, S_pad, d]
 
     # oracle on the device's own index rows would hide selection bugs; use the oracle end to end
     ref = vsa_attention(tq, tk, tv, geometry, SPARSITY, gate_tiled=gate)

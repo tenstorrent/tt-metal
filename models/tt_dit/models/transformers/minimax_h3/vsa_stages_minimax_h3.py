@@ -156,16 +156,26 @@ class MiniMaxH3VSACoarseStage:
             dtype=ttnn.bfloat16,
             mesh_axes=mesh_axes,
         )
+        # Left-multiply form A [slots, S_local] (per shard: A^T's diagonal block, transposed) for pooling an
+        # un-split [1, 1, S_local, H*d] activation without any transpose: pooled = A @ x is [slots, H*d].
+        self.a_kv_flat = from_torch(
+            a_t.T.contiguous().reshape(1, 1, self.slots_per_shard, geometry.padded_len),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            mesh_axes=[..., None, sp_axis],
+        )
 
         # tile -> token broadcast for the coarse output, B = kron(I_tiles_local, ones(1, 64)) as
         # [tiles_local, S_local] (replicated: every shard has the same local structure). A 0/1
         # matmul copies each tile's row to its 64 tokens exactly; used in place of
-        # repeat_interleave, whose permute/concat/tilize chain cost ~3 ms at 15 s.
+        # repeat_interleave, whose permute/concat/tilize chain cost ~3 ms at 15 s. Stored transposed:
         bcast = torch.kron(torch.eye(tiles_per_shard), torch.ones(1, VSA_TILE_TOKENS))
         if padded_pooling:  # pooled rows are padded to slots_per_shard; the extra rows broadcast nothing
             bcast = torch.nn.functional.pad(bcast, (0, 0, 0, self.slots_per_shard - tiles_per_shard))
-        self.bcast_t = from_torch(
-            bcast.reshape(1, 1, self.slots_per_shard, tiles_per_shard * VSA_TILE_TOKENS),
+        # as [S_local, slots]: o_c = B^T @ o_c_tiles[slots, H*d] lands directly in the [1, 1, S_local, H*d]
+        # layout the gate is applied in after the head concat (no transposes)
+        self.bcast_flat = from_torch(
+            bcast.T.contiguous().reshape(1, 1, tiles_per_shard * VSA_TILE_TOKENS, self.slots_per_shard),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             mesh_axes=None,
@@ -243,15 +253,16 @@ class MiniMaxH3VSACoarseStage:
             return x
         return self.ccl_manager.all_gather_persistent_buffer(x, dim=dim, mesh_axis=self.sp_axis)
 
-    def _pool_program_config(self, m: int, k: int):
-        """Full-grid multicast config for the [H*d, S_local] @ [S_local, slots] pooling product: the default
-        picked 80 cores and 0.48 ms at 15 s; 12x10 with in0_block_w=4 measured 0.34 ms
-        (test_vsa_pooling_perf.py). Cached per (m, k)."""
-        key = (m, k)
+    def _pool_program_config(self, m: int, k: int, n: int | None = None):
+        """Full-grid multicast config for the pooling products ([H*d, S_local] @ [S_local, slots], or
+        [slots, S_local] @ [S_local, H*d]): the default picked 80 cores and 0.48 ms at 15 s; the full grid
+        with in0_block_w=4 measured 0.34 ms (0.22 ms for the flat form). Cached per (m, k, n)."""
+        n = self.slots_per_shard if n is None else n
+        key = (m, k, n)
         cache = self.__dict__.setdefault("_pool_cfg", {})
         if key not in cache:
             grid = self.mesh_device.compute_with_storage_grid_size()
-            m_tiles, n_tiles, k_tiles = m // 32, self.slots_per_shard // 32, k // 32
+            m_tiles, n_tiles, k_tiles = m // 32, n // 32, k // 32
             if min(m_tiles, n_tiles, k_tiles) == 0:  # sub-tile shapes (tiny tests): default matmul config
                 cache[key] = None
                 return None
@@ -268,34 +279,57 @@ class MiniMaxH3VSACoarseStage:
             )
         return cache[key]
 
-    def pool(self, x_bhnd: ttnn.Tensor, *, scaled: bool) -> ttnn.Tensor:
-        """[1, H, S_local, d] -> pooled [1, H, tiles_local, d] (fp math in bf16, matches oracle to bf16)."""
+    def pool_t(self, x_bhnd: ttnn.Tensor, *, scaled: bool) -> ttnn.Tensor:
+        """Head-split [1, H, S_local, d] -> pooled and TRANSPOSED [1, H, d, slots] (fp math in bf16, matches
+        the oracle to bf16). One large transpose of the input, none of the output: K is consumed in this
+        orientation (k_c^T for the scores) and Q's transpose back is on the small pooled tensor."""
         _, num_heads, s_local, d = x_bhnd.shape
         x_t = ttnn.transpose(x_bhnd, 2, 3)  # [1, H, d, S_local]
-        # Fold heads into M: per head the product has only (d/32) x (tiles_local/32) output tiles (20 at
-        # 768p), which is all the parallelism a batched matmul gets -- 20 cores grinding K = S_local.
-        # As one [H*d, S_local] @ [S_local, tiles_local] product the same math spans 14x the output
-        # tiles and the whole grid. Tile-aligned merge of adjacent dims: a view, no data movement.
+        # Fold heads into M: per head the product has only (d/32) x (slots/32) output tiles, which is all
+        # the parallelism a batched matmul gets (the batch-broadcast form measured 3.4 ms). As one
+        # [H*d, S_local] @ [S_local, slots] product the same math spans the whole grid. The merge of
+        # adjacent tile-aligned dims is a view, no data movement.
         x_t = ttnn.reshape(x_t, [1, 1, num_heads * d, s_local])
         pooled_t = ttnn.matmul(
             x_t, self.a_t_q if scaled else self.a_t_kv, program_config=self._pool_program_config(num_heads * d, s_local)
         )  # [1, 1, H*d, slots]
         ttnn.deallocate(x_t)
-        pooled_t = ttnn.reshape(pooled_t, [1, num_heads, d, pooled_t.shape[-1]])
-        pooled = ttnn.transpose(pooled_t, 2, 3)  # [1, H, tiles_local, d]
+        return ttnn.reshape(pooled_t, [1, num_heads, d, pooled_t.shape[-1]])
+
+    def pool(self, x_bhnd: ttnn.Tensor, *, scaled: bool) -> ttnn.Tensor:
+        """[1, H, S_local, d] -> pooled [1, H, slots, d]."""
+        pooled_t = self.pool_t(x_bhnd, scaled=scaled)
+        pooled = ttnn.transpose(pooled_t, 2, 3)  # small: [1, H, d, slots] -> [1, H, slots, d]
         ttnn.deallocate(pooled_t)
         return pooled
+
+    def pool_flat(self, x_1bnf: ttnn.Tensor, num_heads: int) -> ttnn.Tensor:
+        """Un-split [1, 1, S_local, H*d] -> pooled head-split [1, H, slots, d] with no large transpose:
+        A[slots, S_local] @ x, then the head split on the small pooled tensor (26 us at 15 s)."""
+        _, _, s_local, hd = x_1bnf.shape
+        pooled = ttnn.matmul(
+            self.a_kv_flat, x_1bnf, program_config=self._pool_program_config(self.slots_per_shard, s_local, hd)
+        )  # [1, 1, slots, H*d]
+        heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            pooled, num_heads=num_heads, num_kv_heads=0, transpose_k_heads=False
+        )
+        ttnn.deallocate(pooled)
+        return heads  # [1, H, slots, d]
 
     def __call__(
         self,
         q_bhnd: ttnn.Tensor,
         k_bhnd: ttnn.Tensor,
-        v_bhnd: ttnn.Tensor,
+        v_bhnd: ttnn.Tensor | None,
         *,
+        v_1bnf: ttnn.Tensor | None = None,
         compute_o_c: bool = True,
         raw_selection: bool = False,
     ) -> tuple[ttnn.Tensor | None, ttnn.Tensor]:
-        """Run the coarse stage. Returns (o_c [1,H,S_local,d] bf16 or None, indices [1,H,rows,W] uint32 ROW_MAJOR).
+        """Run the coarse stage. Returns (o_c [1,1,S_local,H*d] bf16 or None, indices [1,H,rows,W] uint32 ROW_MAJOR).
+        o_c comes in the head-concatenated layout: apply the gate after ``concatenate_heads`` on the fine output.
+        Pass V un-split as ``v_1bnf`` ([1,1,S_local,H*d], as it is before the head split) when available: it
+        pools with no transpose; ``v_bhnd`` is the head-split fallback (tests).
 
         ``compute_o_c=False`` skips the coarse-output branch (an all-zero gate weight contributes
         nothing, so skipping it gives identical output); selection always runs.
@@ -309,7 +343,7 @@ class MiniMaxH3VSACoarseStage:
         self._upload_row_constants(num_heads)
 
         q_c = self.pool(q_bhnd, scaled=True)  # scores scale baked into the Q averaging matrix
-        k_c_t = ttnn.transpose(self.pool(k_bhnd, scaled=False), 2, 3)  # [1, H, d, tiles_local]
+        k_c_t = self.pool_t(k_bhnd, scaled=False)  # [1, H, d, slots]: the scores consume K^T directly
 
         k_c_t_g = self._all_gather(k_c_t, dim=3)  # [1, H, d, n_tiles]
 
@@ -319,7 +353,11 @@ class MiniMaxH3VSACoarseStage:
         # (c) coarse output, broadcast tile -> 64 tokens
         o_c = None
         if compute_o_c:
-            v_c = self.pool(v_bhnd, scaled=False)
+            if v_1bnf is not None:
+                v_c = self.pool_flat(v_1bnf, num_heads)
+            else:
+                assert v_bhnd is not None, "the coarse output needs V (head-split or un-split)"
+                v_c = self.pool(v_bhnd, scaled=False)
             v_c_g = self._all_gather(v_c, dim=2)  # [1, H, n_tiles, d]
             if self.pool_pad_mask is not None:
                 scores_m = ttnn.add(scores, self.pool_pad_mask)
@@ -340,14 +378,14 @@ class MiniMaxH3VSACoarseStage:
             )
             o_c_tiles = ttnn.matmul(probs, v_c_g, program_config=o_c_cfg)  # [1, H, slots, d]
             ttnn.deallocate(probs)
-            # broadcast tile -> 64 tokens as a folded 0/1 matmul (see bcast_t): [H*d, T] @ [T, S_local]
-            d = o_c_tiles.shape[-1]
-            o_t = ttnn.reshape(ttnn.transpose(o_c_tiles, 2, 3), [1, 1, num_heads * d, o_c_tiles.shape[2]])
+            # broadcast tile -> 64 tokens as a 0/1 matmul in the head-concatenated layout (see bcast_flat):
+            # [S_local, T] @ [T, H*d] -> o_c [1, 1, S_local, H*d]; the head concat runs on the small pooled
+            # tensor. Replaces two large transposes around the [H*d, T] @ [T, S_local] form.
+            o_flat = ttnn.transformer.concatenate_heads(o_c_tiles)  # [1, slots, H*d]
             ttnn.deallocate(o_c_tiles)
-            o_c_t = ttnn.matmul(o_t, self.bcast_t)  # [1, 1, H*d, S_local]
-            ttnn.deallocate(o_t)
-            o_c = ttnn.transpose(ttnn.reshape(o_c_t, [1, num_heads, d, o_c_t.shape[-1]]), 2, 3)  # [1, H, S_local, d]
-            ttnn.deallocate(o_c_t)
+            o_flat = ttnn.reshape(o_flat, [1, 1, o_flat.shape[-2], o_flat.shape[-1]])
+            o_c = ttnn.matmul(self.bcast_flat, o_flat)  # [1, 1, S_local, H*d]
+            ttnn.deallocate(o_flat)
 
         # (e) selection: top-k over candidate columns only
         masked = ttnn.add(scores, self.cand_mask)  # -inf on non-candidate columns
