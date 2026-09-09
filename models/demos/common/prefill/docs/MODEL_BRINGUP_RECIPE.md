@@ -241,10 +241,10 @@ appear — an unlabelled PCC table reads as a full-model result. If the full-dep
 e2e number cannot be produced, that is a **blocker to log**, not something a reduced run substitutes
 for.
 
-All references and goldens are **fp16** (`torch.float16`), regardless of the checkpoint dtype and
-of the ttnn dtypes under test: the D1/M1 torch references compute in fp16 (input, weights, cos/sin),
-the per-module goldens they dump are fp16, and the golden trace P1-P2 compare against is written to
-disk as fp16. This is a fixed convention, not a per-model choice. The package you borrow a reference
+All references and goldens are **bf16** (`torch.bfloat16`), regardless of the checkpoint dtype and
+of the ttnn dtypes under test: the D1/M1 torch references compute in bf16 (input, weights, cos/sin),
+the per-module goldens they dump are bf16, and the golden trace P1-P2 compare against is written to
+disk as bf16. This is a fixed convention, not a per-model choice. The package you borrow a reference
 or a golden runner from might **not** follow it — its casts are shape-tuned, not structural (§2.3),
 so replace them rather than carrying them over.
 
@@ -439,7 +439,7 @@ stage's log lines are written (§7). No stage is entered before the previous sta
 2. Get a torch reference for the decoder blocks. Import the HF modeling file directly if it imports
    and constructs standalone; otherwise trim and vendor the classes you need, recording upstream
    line numbers as provenance. The reference imports torch only — no ttnn, no device code, and
-   computes in fp16 (§4).
+   computes in bf16 (§4).
 3. Write the golden runner: run the reference and dump each block's inputs/outputs to disk, keyed on
    everything that changes the result. Reuse `ReferenceCacheKey` + `save_/load_reference_cache`.
 4. Create the tests in the Testing table.
