@@ -105,11 +105,6 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
-    # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-
   - filter: "*MultiDmAddTwoInts*"
     config: 2x3_DISPATCH
     back2back: true
@@ -146,7 +141,75 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
-  - filter: "*QuasarFdsFixture*"
+  # - filter: "*QuasarMultiSemaphorePipeline"
+  #   config: 2x3_DISPATCH
+  #   back2back: true
+
+  # - filter: "*QuasarMultipleClustersMultiSemaphorePipeline"
+  #   config: 2x3_DISPATCH
+  #   back2back: true
+
+  - filter: "*QuasarTraceSingleReplay"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarTraceMultipleReplays"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*EventSynchronize"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*EventQuery"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*EventBetweenWorkloads"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MeshBufferWriteReadDRAM"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MeshBufferMultipleWriteReadRoundsDRAM"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MeshBufferWriteReadL1"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MeshBufferMultipleWriteReadRoundsL1"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSingleWorkloadNonBlockingEnqueueFinish"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestMultipleWorkloadsNonBlockingEnqueueFinish"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*BmmMultinode"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*PackReluZero"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*PackReluMinThreshold"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*PackReluMaxThreshold"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarFdsFixture*:-*DispatchEngineConcurrentEngines*"
     config: 2x3_DISPATCH
     back2back: true
     env:
@@ -323,12 +386,6 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "ImplicitSync/DFBImplicitSyncParamFixture.DMTest1xDFB1Sx1S/ImplicitSyncTrue"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
   - filter: "ImplicitSync/DFBImplicitSyncParamFixture.DMTest1xDFB_NumEntriesOverride_ReEntry_3Sx3S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
@@ -341,19 +398,19 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "MeshDeviceFixture.DMTest1xDFB2Sx4SConfig"
+  - filter: "UnitMeshFixture.DMTest1xDFB2Sx4SConfig"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "MeshDeviceFixture.DFBReentryOverridePreservesTcAndRecomputesTxn"
+  - filter: "UnitMeshFixture.DFBReentryOverridePreservesTcAndRecomputesTxn"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "MeshDeviceFixture.DFBOverrideCapacityExceedsUint16Fails"
+  - filter: "UnitMeshFixture.DFBOverrideCapacityExceedsUint16Fails"
     config: 1x3
     back2back: true
     env:
@@ -390,6 +447,52 @@ unit_tests_api:
   - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
     config: 2x3_DISPATCH
     back2back: true
+
+  - filter: "*ScopedLockCache*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  # - filter: "*QuasarDatacopyToDestWriter"
+  #   config: 2x3_DISPATCH
+  #   back2back: true
+
+  - filter: "*QuasarMergeProgramRunArgs"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarUpdateProgramRunArgs"
+    config: 2x3_DISPATCH
+    back2back: true
+
+unit_tests_data_movement:
+  - filter: "*QuasarL1DCacheOps*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarL2CacheOps*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarCacheWrite*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarIdmaOps*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+# Fixtures require slow dispatch
+  - filter: "*QuasarAddrgenOps*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*QuasarIm2ColOps*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_device:
   - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"

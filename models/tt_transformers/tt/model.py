@@ -65,6 +65,13 @@ class Transformer(LightweightModule):
 
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
+        # NoPE global layers (EXAONE-4.x): full-attention layers apply no rotary at
+        # all, so the global setup's cos/sin are neutralized to the identity. Only
+        # the Meta-style RotarySetup implements this.
+        use_global_nope = getattr(args, "use_global_nope", False)
+        if use_global_nope and self.args.use_hf_rope:
+            raise NotImplementedError("use_global_nope (NoPE global layers) requires the Meta-style RotarySetup")
+        global_rope_kwargs = {"nope": True} if use_global_nope else {}
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -74,6 +81,7 @@ class Transformer(LightweightModule):
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
             prefetcher=prefetcher,
+            **global_rope_kwargs,
         )
 
         if args.rope_theta_local:
@@ -83,6 +91,10 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                # Most hybrid models (Gemma-3) use unscaled rope on sliding layers;
+                # EXAONE-4.x instead applies its llama3-scaled rope there and sets
+                # rope_scaling_local (the global layers being NoPE).
+                rope_scaling=getattr(args, "rope_scaling_local", None),
                 use_qk_fused=args.use_qk_fused,
                 prefetcher=None,
             )

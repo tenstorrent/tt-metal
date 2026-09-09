@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -304,23 +305,45 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         !fabric_is_2d || operation_attributes.neighbor_unicast_eligible,
         "Fabric2D high_bw_all_gather neighbor unicast requires a host-proved direct physical line/ring");
 
+    const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology = operation_attributes.axis_topology[axis];
+    const auto topology =
+        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
     TT_FATAL(
         !is_ring || num_devices > 2,
-        "high_bw_all_gather ring schedule requires more than two devices on cluster_axis {}; "
-        "a size-two axis has no distinct wrap edge",
+        "high_bw_all_gather ring schedule requires more than two participating devices; got {}, "
+        "linearized_mesh_ring={}, cluster_axis={}",
+        num_devices,
+        linearized_mesh_ring,
         axis);
-    const uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, sender_device_coord, std::optional<uint32_t>{operation_attributes.cluster_axis});
-
-    auto fwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, 1, topology, axis);
-    auto bwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(
+        !linearized_mesh_ring ||
+            (operation_attributes.mesh_rows == mesh_shape[0] && operation_attributes.mesh_cols == mesh_shape[1]),
+        "cached full mesh-ring shape {}x{} does not match live mesh shape {}",
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
+        mesh_shape);
+    const ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
+        .cluster_axis = linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
+        .full_mesh = linearized_mesh_ring,
+        .orientation = operation_attributes.snake_ring_orientation,
+        .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
+        .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
+        .ring_size = num_devices,
+        .num_links = operation_attributes.num_links,
+        .topology = topology,
+        .fabric_config = operation_attributes.fabric_config,
+        .axis_topology = operation_attributes.axis_topology,
+        .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
+    const auto mesh_ring_position =
+        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+    const uint32_t device_idx = mesh_ring_position.transport_rank;
+    auto fwd_coord = mesh_ring_position.forward_coord;
+    auto bwd_coord = mesh_ring_position.backward_coord;
 
     // Stripes a direction sends from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint.
     // Also queried for the downstream device to choose granular vs single data_valid signalling.
@@ -354,7 +377,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.axis_num_links[axis];
+    const uint32_t num_links = operation_attributes.num_links;
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value();
     const auto page_geometry = derive_page_geometry(input_tensor, output_tensor, operation_attributes);
@@ -651,6 +674,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         cb_page_size,            // cb entry size
         slice_step,              // one means contiguous slices; >1 owns one interleaved DRAM bank
         static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -665,6 +692,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         packet_size,             // packet_size
         slice_step,              // one means scatter packets; >1 enables contiguous full packets
         static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 

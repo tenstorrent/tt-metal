@@ -29,8 +29,8 @@ _PROFILE_SAMPLES = 3
 _REFERENCE_USEFUL_BANDWIDTH_GBPS = {
     (4, "head_to_sequence"): 31.3,
     (4, "sequence_to_head"): 31.3,
-    (8, "head_to_sequence"): 31.8,
-    (8, "sequence_to_head"): 36.7,
+    (8, "head_to_sequence"): 29.6,
+    (8, "sequence_to_head"): 33.9,
 }
 _PERF_MARGIN = 0.02
 

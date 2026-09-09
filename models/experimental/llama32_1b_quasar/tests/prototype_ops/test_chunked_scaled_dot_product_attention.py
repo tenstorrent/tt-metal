@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Per-op test: ``ttnn.transformer.chunked_scaled_dot_product_attention``  (chunked/paged prefill SDPA).
+Per-op test: ``ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention``  (chunked/paged prefill SDPA).
 
 Model call site (modules/attention/attention_1d.py:553-561, prefill_forward, chunked path):
-    attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+    attn_output = ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention(
         input_tensor_q=q_heads_sdpa,      # [B, n_heads, chunk_len, head_dim]
         input_tensor_k=keys,              # paged cache [num_blocks, n_kv_heads, block, head_dim]
         input_tensor_v=values,            # paged cache [num_blocks, n_kv_heads, block, head_dim]
@@ -86,7 +86,7 @@ def test_chunked_scaled_dot_product_attention(ttnn_mesh_device, reset_seeds, seq
     )
 
     # One chunk covering the whole sequence: chunk_start_idx=0.
-    out = ttnn.transformer.chunked_scaled_dot_product_attention(
+    out = ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention(
         input_tensor_q=q,
         input_tensor_k=k,
         input_tensor_v=v,

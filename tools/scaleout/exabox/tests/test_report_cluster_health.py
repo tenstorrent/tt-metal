@@ -10,12 +10,15 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
+import stat
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -31,6 +34,7 @@ from analyze_host_health_results import main as analyze_main  # noqa: E402
 from report_backfill import Leftover  # noqa: E402
 from report_cluster_health import (  # noqa: E402
     RecordRequest,
+    _ensure_date_dir,
     _read_optional,
     build_record,
     leftover_namespace,
@@ -49,6 +53,17 @@ README_SOURCE = EXABOX_DIR / "README.md"
 
 HOSTS = "bh-glx-110-c01u02,bh-glx-110-c01u08"
 TS = "2026-08-19T03:12:00Z"
+
+
+def _assert_shared_dir_mode(testcase: unittest.TestCase, path: Path) -> None:
+    """Group-writable, sticky, not world-writable. Setgid is Linux-only."""
+    mode = path.stat().st_mode
+    testcase.assertEqual(mode & stat.S_IRWXU, stat.S_IRWXU)
+    testcase.assertEqual(mode & stat.S_IRWXG, stat.S_IRWXG)
+    testcase.assertEqual(mode & stat.S_IRWXO, 0)
+    testcase.assertTrue(mode & stat.S_ISVTX)
+    if sys.platform.startswith("linux"):
+        testcase.assertTrue(mode & stat.S_ISGID)
 
 
 def _run(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -256,6 +271,154 @@ class TestDryRunCli(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("analyzer_code", err)
 
+    def _iteration_dir(self, texts: list[str]) -> str:
+        root = fixtures.temp_dir(self)
+        for index, text in enumerate(texts, start=1):
+            fixtures.write(root, f"cluster_validation_iteration_{index}.log", text)
+        return str(root)
+
+    def test_infers_pass_pct_from_iteration_logs(self):
+        artifact = self._iteration_dir(
+            [
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nFound Unhealthy Links\n",
+            ]
+        )
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "physical",
+                "--artifact-dir",
+                artifact,
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["pass_pct"], 80.0)
+        self.assertEqual(record["analyzer_code"], 0)
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(
+            record["hosts"],
+            ["bh-glx-110-c01u02", "bh-glx-110-c01u08"],
+        )
+        validate_record(record, file_written=False)
+
+    def test_pass_pct_override_wins(self):
+        artifact = self._iteration_dir(["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"])
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                artifact,
+                "--pass-pct",
+                "12.5",
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["pass_pct"], 12.5)
+        self.assertEqual(record["hosts"], HOSTS.split(","))
+
+    def test_invalid_pass_pct_override_rejected(self):
+        artifact = self._iteration_dir(["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            main(
+                [
+                    "--test-type",
+                    "physical",
+                    "--hosts",
+                    HOSTS,
+                    "--analyzer-code",
+                    "0",
+                    "--artifact-dir",
+                    artifact,
+                    "--pass-pct",
+                    "120",
+                    "--ts",
+                    TS,
+                    "--dry-run",
+                ]
+            )
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("pass_pct", stderr.getvalue())
+
+    def test_nan_pass_pct_override_rejected(self):
+        artifact = self._iteration_dir(["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            main(
+                [
+                    "--test-type",
+                    "physical",
+                    "--hosts",
+                    HOSTS,
+                    "--analyzer-code",
+                    "0",
+                    "--artifact-dir",
+                    artifact,
+                    "--pass-pct",
+                    "nan",
+                    "--ts",
+                    TS,
+                    "--dry-run",
+                ]
+            )
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("pass_pct", stderr.getvalue())
+
+    def test_wrapper_log_infers_hosts_code_and_pass_pct(self):
+        root = fixtures.temp_dir(self)
+        wrapper = fixtures.write(
+            root,
+            "physical_validation-20260819T031200Z.log",
+            "=== Physical Validation ===\n"
+            "HOSTS=bh-glx-110-c01u02,bh-glx-110-c01u08\n"
+            "Success Rate: 66.0%\n"
+            "Analysis exit code: 1\n",
+        )
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "physical",
+                "--artifact-dir",
+                str(wrapper),
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["pass_pct"], 66.0)
+        self.assertEqual(record["analyzer_code"], 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(
+            record["hosts"],
+            ["bh-glx-110-c01u02", "bh-glx-110-c01u08"],
+        )
+
+    def test_missing_logs_omit_pass_pct(self):
+        rc, out, err = _run(_base_argv())
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertNotIn("pass_pct", record)
+        self.assertEqual(record["status"], "failed")
+
     def test_rejects_topology_flag(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr), self.assertRaises(SystemExit):
@@ -400,6 +563,136 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(dest.parent.name, "2026-08-19")
             on_disk = json.loads(dest.read_text(encoding="utf-8"))
             self.assertEqual(on_disk["record_id"], record["record_id"])
+            _assert_shared_dir_mode(self, dest.parent)
+
+    def test_date_dir_chmod_repairs_umask_masked_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            date_dir = Path(tmp) / "2026-08-19"
+            date_dir.mkdir()
+            os.chmod(date_dir, 0o755)
+            argv = [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--store-root",
+                tmp,
+            ]
+            rc, out, err = _run(argv)
+            self.assertEqual(rc, 0, err)
+            _assert_shared_dir_mode(self, date_dir)
+
+    def test_date_dir_is_assigned_store_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_gid = Path(tmp).stat().st_gid
+            with patch("report_cluster_health.os.fchown", wraps=os.fchown) as fchown:
+                rc, _out, err = _run(
+                    [
+                        "--test-type",
+                        "physical",
+                        "--hosts",
+                        HOSTS,
+                        "--analyzer-code",
+                        "0",
+                        "--artifact-dir",
+                        fixtures.ARTIFACT_DIR,
+                        "--ts",
+                        TS,
+                        "--store-root",
+                        tmp,
+                    ]
+                )
+            self.assertEqual(rc, 0, err)
+            fchown.assert_called_once()
+            _date_dir_fd, owner, group = fchown.call_args.args
+            self.assertEqual(owner, -1)
+            self.assertEqual(group, store_gid)
+
+    def test_failed_group_assignment_warns_on_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root_stat = root.stat()
+            stderr = io.StringIO()
+            with (
+                patch("report_cluster_health.os.fchown", side_effect=PermissionError),
+                patch(
+                    "report_cluster_health.os.fstat",
+                    side_effect=[root_stat, SimpleNamespace(st_gid=root_stat.st_gid + 1)],
+                ),
+                redirect_stderr(stderr),
+            ):
+                date_dir_fd = _ensure_date_dir(root, "2026-08-19")
+            os.close(date_dir_fd)
+            self.assertIn("date directory group does not match store root group", stderr.getvalue())
+
+    def test_date_dir_symlink_is_not_followed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "store"
+            store.mkdir()
+            target = Path(tmp) / "target"
+            target.mkdir()
+            original_mode = target.stat().st_mode
+            (store / "2026-08-19").symlink_to(target, target_is_directory=True)
+            rc, out, err = _run(
+                [
+                    "--test-type",
+                    "physical",
+                    "--hosts",
+                    HOSTS,
+                    "--analyzer-code",
+                    "0",
+                    "--artifact-dir",
+                    fixtures.ARTIFACT_DIR,
+                    "--ts",
+                    TS,
+                    "--store-root",
+                    str(store),
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertIn("store write failed", err)
+            self.assertNotIn("record_id", json.loads(out))
+            self.assertEqual(target.stat().st_mode, original_mode)
+
+    def test_only_date_dir_is_group_writable(self):
+        """Missing store-root ancestors keep default mkdir permissions."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "nested" / "store"
+            argv = [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--store-root",
+                str(store),
+            ]
+            previous_umask = os.umask(0o022)
+            try:
+                rc, out, err = _run(argv)
+            finally:
+                os.umask(previous_umask)
+            self.assertEqual(rc, 0, err)
+            date_dir = store / "2026-08-19"
+            self.assertTrue(date_dir.is_dir())
+            _assert_shared_dir_mode(self, date_dir)
+            self.assertEqual(date_dir.stat().st_gid, store.stat().st_gid)
+            current_umask = os.umask(0)
+            os.umask(current_umask)
+            expected_mode = 0o777 & ~current_umask
+            for ancestor in (store, Path(tmp) / "nested"):
+                self.assertEqual(ancestor.stat().st_mode & 0o777, expected_mode, f"{ancestor} was modified")
 
     def test_dry_run_does_not_write(self):
         with tempfile.TemporaryDirectory() as tmp:

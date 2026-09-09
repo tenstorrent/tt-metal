@@ -1,0 +1,232 @@
+name: "[internal] ttsim merge gate tests impl"
+
+# Quasar coverage on the ttsim simulator for the merge gate.
+#
+# Test matrix: tests/pipeline_reorg/ttsim_merge_gate_tests.yaml (ttsim -> merge_gate in
+# .github/time_budget.yaml). Like ttsim-sanity-tests-impl.yaml and
+# ttsim-unit-tests-impl.yaml, the tests yaml path is fixed here — one impl per test
+# list — so adding or retiring a merge-gate ttsim test is a change to that yaml alone.
+#
+# Runs from the build artifact rather than the deb packages, because the entries invoke
+# gtest binaries under ./build/test/tt_metal (unit_tests_legacy et al) which the
+# tt-metalium debs do not ship. ttsim-sanity-tests-impl.yaml is therefore not a
+# candidate to extend: its container installs the debs instead.
+#
+# The closest existing impl is runtime-sanity-tests-impl.yaml, which runs this same
+# test for the sanity pipeline off the same build artifact and ci-test-docker-image.
+# It is not reused here only because it hardcodes its own test list
+# (runtime_sanity_tests.yaml) and takes no tests-yaml-path input — the one-impl-per-list
+# convention above. Consolidating the two later is a reasonable cleanup; there is no
+# packaging constraint keeping them apart.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ""
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_merge_gate_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          # 15 = the merge-gate per-test ceiling; this pipeline must stay under the
+          # workflow's 15-min end-to-end requirement.
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "merge_gate" \
+            --max-per-test-timeout 15
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+
+  # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
+  fetch-ttsim:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
+      queue: max
+    # The probe and upload talk to the artifact service with the runtime token, not
+    # GITHUB_TOKEN, so no actions: scope is needed — and requesting one fails for callers that
+    # run with the default actions: none (a nested job cannot exceed its caller's grant).
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout fetch-ttsim action and pinned ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
+        with:
+          lib: ${{ matrix.lib }}
+
+  ttsim-merge-gate-tests:
+    needs: [load-test-matrix, fetch-ttsim]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && needs.fetch-ttsim.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        # Quasar is checked first: sim_quasar contains neither 'bh_' nor 'blackhole' and would
+        # otherwise fall through to the wormhole_b0 default.
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'quasar') && 'quasar' || (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+        TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      # This matrix is sim-only, so the container never needs /dev/tenstorrent.
+      options: --label runner-mode=sim
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+          ref: ${{ inputs.ref || github.sha }}
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ⬇️  Setup TTSim
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
+      # The tests run on the simulator (no hardware power telemetry); wrap the run in the
+      # host-load sidecar to capture host CPU/memory/disk/network usage. The command is
+      # written to a file first (a quoted heredoc preserves its embedded quoting) and run
+      # under the sidecar, which propagates the exit code so failures still fail the job.
+      - name: ${{ matrix.test-group.name }} (simulator)
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            echo "${{ matrix.test-group.cmd }}"
+            cat > /tmp/sim_cmd.sh <<'SIM_CMD_EOF'
+            ${{ matrix.test-group.cmd }}
+            SIM_CMD_EOF
+            .github/scripts/utils/host-load-sidecar.sh \
+              --interval 1 \
+              --label "${{ matrix.test-group.name }} (simulator)" \
+              --output /work/mem_report.json \
+              -- bash --noprofile --norc -eo pipefail /tmp/sim_cmd.sh
+      - name: Upload mem report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mem-report-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the container's /work/. The host-load sidecar
+          # writes its CPU/memory/disk/network report to --output /work/mem_report.json; this
+          # host path is what upload-artifact reads.
+          path: ${{ github.workspace }}/docker-job/mem_report.json
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": true
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

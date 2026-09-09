@@ -73,21 +73,34 @@ inline void llk_unpack_tilize_block(
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
-    const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
-
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
+
+    // Compute how many l1_index units fit in one DFB entry.
+    const std::uint32_t entry_size_16B = local_dfb.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                          // Buffer Descriptor granularity in 16B
+        SCALE_DATUM_SIZE(unpack_src_format[operand_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
+        entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
 
     // TODO (SK) #42757: Remove ct_dim loop when block_ct_dim unpacking optimization implemented.
     // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
     // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
     // structural pattern as BH/WH llk_unpack_tilize_block
-    const std::uint32_t l1_base_idx = (rd_entry_idx + input_tile_index) * faces_per_entry;
+    const std::uint32_t block = input_tile_index / block_c_tiles;
+    const std::uint32_t offset = input_tile_index % block_c_tiles;
+    const std::uint32_t l1_base_idx =
+        rd_entry_idx * l1_index_per_entry + block * (block_c_tiles * tensor_shape.total_row_dim());
+
+    if (tensor_shape.total_num_faces() == NUM_FACES) {
+        _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
+    }
+
     for (std::uint32_t t = 0; t < block_c_tiles; t++) {
         if (tensor_shape.total_num_faces() == NUM_FACES) {
-            _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+            _llk_unpack_tilize_<p_unpacr::UNP_A>(t + offset);
         } else {
-            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t);
+            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t + offset);
         }
     }
 }

@@ -383,12 +383,9 @@ void patch_slice_program_addresses(
     std::visit(
         [&](auto&& f) {
             using Factory = std::decay_t<decltype(f)>;
-            if constexpr (std::is_same_v<Factory, SliceRmProgramFactory>) {
-                // The reader reads from base+offset, which no Buffer* binding can express; reuse the
-                // helper create_descriptor calls so the emitted value cannot drift.
-                const auto dynamic_args = slice_rm_reader_dynamic_args(operation_attributes, tensor_args, output);
-                tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
-            } else if constexpr (std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
+            if constexpr (
+                std::is_same_v<Factory, SliceRmProgramFactory> ||
+                std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
                 patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
             } else if constexpr (
                 std::is_same_v<Factory, SliceTileProgramFactory> ||

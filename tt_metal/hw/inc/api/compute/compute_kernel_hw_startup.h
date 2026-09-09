@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "sanitizer/api.h"
 #include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 
@@ -13,7 +14,12 @@
 #endif
 
 #ifdef TRISC_MATH
+#include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
+
+#ifdef TRISC_PACK
+#include "llk_pack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -52,6 +58,8 @@ namespace ckernel {
 // clang-format on
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
     // lands in SrcB and in1 (icb1) lands in SrcA, so the per-source state below is programmed with the
     // operands swapped. src_order is a template parameter, so reverse (and the selection below) is
@@ -95,7 +103,11 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
  * | Function   | ocb   | The identifier of the output circular buffer (CB)                  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kernel_hw_startup(icb0, icb0, ocb); }
+ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
+    compute_kernel_hw_startup(icb0, icb0, ocb);
+}
 
 // clang-format off
 /**
@@ -103,9 +115,14 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * for 32-bit destination reads. This is a lightweight, standalone
- * reconfiguration that is safe to call mid-kernel without re-running
+ * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
+ * and wait; MATH writes dest-acc CFG and releases them. Every thread
+ * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
+ * those writes are visible. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
+ *
+ * All three TRISC threads must call this together. TRISC mailboxes must not
+ * be in use.
  *
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
@@ -117,8 +134,9 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
 // clang-format on
 #ifndef ARCH_QUASAR
 ALWI void enable_fp32_dest_acc() {
+    UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(true)));
-    PACK((llk_pack_set_fp32_dest_acc(true)));
+    PACK((llk_pack_wait_fp32_dest_acc()));
 }
 #endif
 
@@ -129,9 +147,14 @@ ALWI void enable_fp32_dest_acc() {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * to disable 32-bit destination reads. This is a lightweight, standalone
- * reconfiguration that is safe to call mid-kernel without re-running
+ * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
+ * MATH and wait; MATH writes dest-acc CFG and releases them. Every thread
+ * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
+ * those writes are visible. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
+ *
+ * All three TRISC threads must call this together. TRISC mailboxes must not
+ * be in use.
  *
  * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
@@ -140,8 +163,9 @@ ALWI void enable_fp32_dest_acc() {
 // clang-format on
 #ifndef ARCH_QUASAR
 ALWI void disable_fp32_dest_acc() {
+    UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(false)));
-    PACK((llk_pack_set_fp32_dest_acc(false)));
+    PACK((llk_pack_wait_fp32_dest_acc()));
 }
 #endif
 

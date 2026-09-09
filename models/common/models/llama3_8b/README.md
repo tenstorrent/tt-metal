@@ -9,7 +9,7 @@ The path has four layers:
 model provider / checkpoint
   -> hf_adaptor.py: provider metadata, tokenizer, and weight conversion
   -> model.py: TTTv2 tensor model assembled from reusable modules
-  -> executor.py: one lane's runtime composition and resource ownership
+  -> executor.py: thin typed entry point into the Llama family executor
   -> generator.py: vLLM-facing construction, DP composition, and dispatch
 ```
 
@@ -19,7 +19,9 @@ orchestration:
 - TTTv2 `LightweightModule` objects implement tensor computation.
 - [`models/common/llm_runtime`](../../llm_runtime/README.md) implements reusable
   execution, tracing, I/O, cache, warmup, and resource mechanics.
-- `Llama3Executor` composes those pieces for this model.
+- `models/common/models/executor.py::ModelExecutor` composes the common owners.
+- `models/common/models/llama3_executor.py::Llama3Executor` supplies the
+  Llama-8B sampling and prefill policy as a composition facade.
 - `Llama3Generator` adapts the resulting target to vLLM.
 
 ## Files
@@ -28,7 +30,7 @@ orchestration:
 | --- | --- |
 | `hf_adaptor.py` | Load HF config/tokenizer/weights, convert provider naming/layout, compute Llama 3 RoPE values, and create the product model |
 | `model.py` | Build and execute the TTTv2 Llama transformer graph |
-| `executor.py` | Compose one execution lane, own resources, validate model/runtime identity, and define cleanup |
+| `executor.py` | Preserve the model-local typed builder/import surface over `llama3_executor.py` |
 | `generator.py` | Construct lanes, optionally compose DP, normalize vLLM calls, and select eager/traced execution |
 
 ## End-to-end object graph
@@ -51,17 +53,18 @@ Llama3ForCausalLM
     ├── LMHead1D
     └── optional Sampling1D
 
-Llama3Executor
-├── exact Llama3Transformer1D above
-├── PagedKVCacheManager
-├── OutputReader
-├── PrefillRuntime
-├── DecodeRuntime
-├── ProgramCompiler
-├── EagerExecutor
-├── optional TraceCompiler
-├── optional TracedExecutor over the exact EagerExecutor
-└── WarmupCoordinator
+Llama3Executor composition facade
+└── ModelExecutor
+    ├── exact Llama3Transformer1D above
+    ├── PagedKVCacheManager
+    ├── OutputReader
+    ├── PrefillRuntime
+    ├── DecodeRuntime
+    ├── ProgramCompiler
+    ├── EagerExecutor
+    ├── optional TraceCompiler
+    ├── optional TracedExecutor over the exact EagerExecutor
+    └── WarmupCoordinator
 ```
 
 The vLLM-facing graph is:
@@ -197,11 +200,13 @@ It then calls:
 
 ```text
 build_llama3_executor(Llama3ForCausalLM, executor_config)
-  -> Llama3Executor(model, runtime_config, executor_config)
+  -> llama3_executor.Llama3Executor facade
+  -> ModelExecutor(model, runtime_config, executor_config, Llama policy)
 ```
 
-The executor resolves and composes all common runtime owners. It exposes three
-execution targets:
+The family facade creates native `SamplingState1D` state and resolves the
+Llama-8B device-sampling prefill policy. The shared `ModelExecutor` composes
+the runtime owners and exposes three execution targets:
 
 - `eager_execution`: always the one `EagerExecutor`;
 - `traced_prefill_execution`: the one `TracedExecutor` when prefill tracing is
@@ -209,7 +214,8 @@ execution targets:
 - `traced_decode_execution`: the same `TracedExecutor` when decode tracing is
   configured.
 
-There is no model-independent aggregate executor in `llm_runtime`.
+There is no aggregate executor in `llm_runtime`. The shared composition root
+lives in the model layer at `models/common/models/executor.py`.
 
 ### 4. Build the vLLM boundary adapter
 
@@ -419,7 +425,7 @@ The reusable pattern is not “subclass Llama3.” It is:
 ```text
 provider adapter
   -> model-specific TTTv2 graph
-  -> model-specific executor that composes common runtime mechanics
+  -> shared/family model executor or direct runtime composition
   -> server-specific facade
 ```
 
@@ -439,9 +445,15 @@ The tensor model should expose the runtime contract needed by its executor:
 - per-layer cache metadata; and
 - optional device sampling.
 
-### Model-owned executor
+### Model execution composition
 
-Create a concrete executor for that model. It should:
+Use the shared `models/common/models/executor.py::ModelExecutor` when the model
+fits its established lifecycle. A demonstrated family may add a small policy
+facade such as `llama3_executor.py` or `qwen2_executor.py`.
+
+When a model has genuinely distinct orchestration, its model-local
+`executor.py` may instead compose the focused `llm_runtime` modules directly.
+Either construction should:
 
 - translate model metadata into resolved common runtime configs;
 - construct one exact eager execution composition;
@@ -451,7 +463,8 @@ Create a concrete executor for that model. It should:
 - expose the duck-typed execution target used by a DP group; and
 - be the deterministic cleanup root.
 
-Do not add a generic aggregate model executor to `llm_runtime`.
+Do not add a generic aggregate model executor to `llm_runtime`, and do not
+force every model through the shared model-layer executor.
 
 ### Server facade
 
@@ -518,7 +531,8 @@ fork of runtime control flow.
 1. Build and validate the provider adapter.
 2. Construct the TTTv2 tensor model from module configs.
 3. Expose model runtime and KV metadata.
-4. Implement a concrete model-owned executor using the common runtime.
+4. Select shared model-layer composition, a justified family policy facade, or
+   direct composition from the common runtime.
 5. Test direct eager prefill/decode and cleanup.
 6. Add program compilation and warmup coverage.
 7. Add trace capture/replay without eager fallback inside `TracedExecutor`.

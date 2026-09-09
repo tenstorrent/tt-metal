@@ -186,6 +186,22 @@ def parametrize_weights(use_real=False):
     return pytest.mark.parametrize("use_real_weights", [use_real], ids=["real" if use_real else "random"])
 
 
+def compose_tp_hidden(device_tensors, row, cols):
+    """Reassemble one mesh row's residual hidden onto the host.
+
+    Under a sharded residual each TP column holds ``emb/tp``; concat them on the last dim.
+    Under a replicated residual column 0 already has full emb.
+    """
+    from models.demos.minimax_m3.tt.residual import use_sharded_residual
+
+    if use_sharded_residual() and cols > 1:
+        return torch.cat(
+            [ttnn.to_torch(device_tensors[row * cols + c]).float() for c in range(cols)],
+            dim=-1,
+        )
+    return ttnn.to_torch(device_tensors[row * cols]).float()
+
+
 # Test helper functions
 def compare_tensors(tt_tensor, torch_tensor, mesh_device, pcc_threshold=0.99):
     """Universal tensor comparison - handles both TT tensors and already-converted torch tensors"""

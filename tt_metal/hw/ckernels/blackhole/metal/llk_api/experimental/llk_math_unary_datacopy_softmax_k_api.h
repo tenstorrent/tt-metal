@@ -6,14 +6,19 @@
 
 #include "experimental/llk_math_eltwise_unary_datacopy_softmax_k.h"
 #include "llk_math_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY — SOFTMAX K
  *************************************************************************/
 
 inline void llk_math_eltwise_unary_datacopy_softmax_k(uint dst_index) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_eltwise_unary_datacopy_softmax_k_(dst_index);
 }
 
-inline void llk_math_eltwise_unary_datacopy_softmax_k_init() { _llk_math_eltwise_unary_datacopy_softmax_k_init_(); }
+inline void llk_math_eltwise_unary_datacopy_softmax_k_init() {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_unary_datacopy_softmax_k_init_();
+}

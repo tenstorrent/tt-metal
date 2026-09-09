@@ -812,6 +812,8 @@ void kernel_main() {
                 fabric_direction_connection,
                 pkt_hdr_seminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
+            // Complete the eagerly staged mux connection: a worker with no pages has sent nothing before this.
+            mf.flush();
             noc_obj.async_writes_flushed();
 
             noc_semaphore_wait_min(

@@ -28,16 +28,16 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
-    # pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
+    pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
     # pytest --timeout 500 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   model_family: Llama
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 40
       tier: 1
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -102,13 +102,13 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-    # pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
+    pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
     # pytest --timeout 900 models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
   model: llama3.2-90b-vision
   model_family: Llama
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 28
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -225,13 +225,13 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
-    #pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
+    pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
     #pytest --timeout 600 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 20
+      timeout: 28
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -262,7 +262,7 @@
     wh_llmbox:
       timeout: 20
       tier: 3
-  owner_id: U08GEGWHQJF # Adam Roberge
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: ViT unit tests
@@ -621,10 +621,11 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k quick
   model: llama3.3-70b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 30
+      timeout: 40
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -634,6 +635,9 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
+    pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
+    pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
+    pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -709,6 +713,15 @@
 - name: GPT-OSS 120B unit tests
   cmd: |
     export TT_METAL_WATCHER=15  # poll less often than the CI default of 2s
+    # TT_METAL_WATCHER=<n> only changes the host poll interval; NOC sanitize, waypoints and the ring
+    # buffer are still compiled into every kernel, and setup-job's TT_METAL_OPERATION_TIMEOUT_SECONDS=5
+    # fires when the dispatcher's command counter does not advance for 5 s, i.e. when ONE program runs
+    # longer than 5 s. Under watcher the MoE experts' SparseMatmul at prefill_4096 on bh_quietbox_2
+    # (1x4) takes >5 s (2.8 s -> 12.7 s measured on the smaller case), so the watchdog declared a hang,
+    # tt-triage halted the RISCs, and every later test (test_rope seq_16384 first) failed on a dead
+    # device -- red since #53594 re-enabled the watcher on 2026-08-21. Real backstops remain: the
+    # 22-min job budget and pytest --timeout 1500.
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=60
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
@@ -1102,7 +1115,7 @@
 
 - name: Stable Diffusion XL refiner unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=15
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/refiner/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py
   model: sdxl
@@ -1162,7 +1175,7 @@
 
 - name: Stable Diffusion XL base unet-loop unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=15
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py || exit_code=$?
@@ -1185,7 +1198,7 @@
 
 - name: Stable Diffusion XL refiner unet-loop unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=15
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py || exit_code=$?
@@ -1208,7 +1221,7 @@
 
 - name: TT-DiT Stable Diffusion 3.5 Large unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=15
     unset HF_HUB_OFFLINE
     pytest --timeout 300 models/tt_dit/tests/models/sd35/test_vae_sd35.py
     pytest --timeout 300 models/tt_dit/tests/models/sd35/test_attention_sd35.py
@@ -1261,7 +1274,7 @@
 
 - name: TT-DiT Motif-Image-6B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=15
     unset HF_HUB_OFFLINE
     pytest --timeout 300 models/tt_dit/tests/models/motif/test_attention_motif.py
     pytest --timeout 300 models/tt_dit/tests/models/motif/test_transformer_block_motif.py
@@ -1313,26 +1326,21 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
-    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
     pytest --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx"
     pytest --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "wh_glx"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    # bh_galaxy:
-    #   timeout: 150
-    #   tier: 1
     wh_galaxy:
-      timeout: 155
+      timeout: 130
       tier: 1
     bh_quietbox_2:
-      timeout: 105
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1348,9 +1356,6 @@
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    # bh_galaxy:
-    #   timeout: 120
-    #   tier: 1
     wh_galaxy:
       timeout: 60
       tier: 1
@@ -1395,6 +1400,69 @@
   skus:
     bh_sc1:
       timeout: 55
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ----------------------------------------------------------------------------
+# WAN 2.2 single-galaxy multihost tests (bh_sc1 / exabox-multihost-ci-sc1)
+# ----------------------------------------------------------------------------
+# Separate entries from the wh_galaxy / bh_quietbox_2 legs above rather than another SKU on those:
+# the bh_galaxy pool is too small to carry Wan, so Blackhole galaxy coverage runs on the exabox
+# single-galaxy SKU instead. That needs the multihost plumbing the LTX-2.3 bh_sc1 leg uses (a
+# single-rank mpirun plus TT_MESH_GRAPH_DESC_PATH) and the Blackhole parametrization ids
+# (bh_glx and nl2, not wh_glx and nl4), so the commands cannot be shared with the Wormhole entries.
+- name: TT-DiT Wan2.2-T2V-A14B unit tests (single BH galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    rc=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || rc=1; }
+    run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
+    run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
+    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not f81 and (not 720p or 720p_t33_fullT)"
+    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
+    run --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "bh_glx"
+    run --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "bh_glx"
+    exit $rc
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 110
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B unit tests (single BH galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+      if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
+    done
+    [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
+    # No is_fsdp1 filter here: that is a wh_galaxy workaround for an OOM on is_fsdp0, and Blackhole
+    # has the DRAM headroom to run both.
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 120
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1557,7 +1625,7 @@
 
 - name: On-device sampling unit tests
   cmd: |
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_route_mirror_parity"
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
   model: tt-model-sampling
   skus:
     wh_n150:
@@ -1585,7 +1653,7 @@
 
 - name: TT-Transformers MLP module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
@@ -1607,7 +1675,7 @@
 
 - name: TT-Transformers RMSNorm module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
@@ -1629,7 +1697,7 @@
 
 - name: TT-Transformers RoPE module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
@@ -1651,7 +1719,7 @@
 
 - name: TT-Transformers LM head module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
@@ -1694,7 +1762,7 @@
 
 - name: TT-Transformers embedding module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
@@ -1745,7 +1813,7 @@
 
 - name: TT-Transformers RMSNorm 2D module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
@@ -1766,7 +1834,7 @@
 
 - name: TT-Transformers MLP 2D module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/modules/mlp/test_mlp_2d.py \

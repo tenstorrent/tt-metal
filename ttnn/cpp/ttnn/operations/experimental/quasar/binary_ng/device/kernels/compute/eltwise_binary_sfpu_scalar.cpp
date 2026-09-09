@@ -96,7 +96,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -121,5 +121,13 @@ void kernel_main() {
     }
 
     // Pop the scalar tile from RHS CB
+    // Only the zero-work path (num_tiles == 0) needs this: both chunk loops zero-trip, so nothing unpacks
+    // cb_post_rhs between its wait_front(1) above and this pop_front(1) -> a bare pair that traps the Quasar
+    // unpacker. dummy_unpack() interposes an UNPACR_NOP so POP follows a real unpack. For num_tiles > 0 the op
+    // already unpacked the RHS, so skip it. (On WH/BH dummy_unpack is a debug-only SrcA flush with no ordering
+    // role; the guard also keeps it off the hot path there.)
+    if (num_tiles == 0) {
+        dummy_unpack(cb_post_rhs.get_id());
+    }
     cb_post_rhs.pop_front(1);
 }

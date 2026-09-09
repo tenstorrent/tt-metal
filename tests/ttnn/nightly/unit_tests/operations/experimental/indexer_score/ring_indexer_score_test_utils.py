@@ -9,6 +9,8 @@ recipe lives in exactly one place. The 4-chip variant (`test_ring_indexer_score_
 directly and keeps its own copy of `_open_ccl` (no (2,4)->(1,4) submesh carve).
 """
 
+import torch
+
 import ttnn
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
@@ -16,9 +18,21 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_in
     QB_SQ,
 )
 
-# Ring of 4 on the LoudBox: full physical mesh, then a 1x4 submesh (SP axis = 1).
-LOUDBOX_MESH_SHAPE = (2, 4)
+# Ring of 4: open the FULL system mesh, then carve a 1x4 submesh (SP axis = 1).
+#
+# The parent shape is queried, not hardcoded: fabric only trains against the mesh the control plane
+# exposes, so a hardcoded (2, 4) on a bigger box dies in router sync ("Ethernet handshake likely failed")
+# before any op runs. Carving the ring out of the real shape works on LoudBox and galaxy alike.
 RING = 4
+
+
+def ring_parent_shape():
+    """The system mesh shape, as a (rows, cols) tuple. Total -- a box too small for the ring reports its real
+    shape rather than raising, so this is safe in a collection-time `skipif` condition."""
+    shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+    return shape[0], shape[1]
+
+
 SP_AXIS = 1  # the length-4 axis of the (1, 4) submesh
 CHUNK_GLOBAL = RING * QB_SQ  # 2560 global prefill chunk = sp * per-shard slab (chunk_local = QB_SQ)
 T = QB_HISTORY + CHUNK_GLOBAL  # 28160 all-gathered keys (880 tiles); 11 global chunks of 2560
@@ -32,10 +46,39 @@ _INPUT_DIMS = (None, 2)
 _BUF_DIMS = (1, None)
 
 
+def _to_tp_inner_reconstructed(k_natural, *, sp, tp, chunk_local):
+    """Pack natural K in the physical order produced by a TP-inner then SP-outer gather."""
+    capacity = k_natural.shape[2]
+    assert capacity % (sp * tp) == 0
+    assert chunk_local % tp == 0
+    physical_shard_capacity = capacity // sp
+    tp_stripe_capacity = physical_shard_capacity // tp
+    stripe_chunk = chunk_local // tp
+    assert tp_stripe_capacity % stripe_chunk == 0
+
+    physical_to_logical = []
+    for sp_rank in range(sp):
+        physical_offset = torch.arange(physical_shard_capacity)
+        tp_rank = physical_offset // tp_stripe_capacity
+        within_tp = physical_offset % tp_stripe_capacity
+        slab = within_tp // stripe_chunk
+        within_chunk = within_tp % stripe_chunk
+        logical = (slab * sp + sp_rank) * chunk_local + tp_rank * stripe_chunk + within_chunk
+        physical_to_logical.append(logical)
+    physical_to_logical = torch.cat(physical_to_logical)
+    assert torch.equal(torch.sort(physical_to_logical).values, torch.arange(capacity))
+
+    reconstructed = k_natural.clone()
+    reconstructed[0, 0] = k_natural[0, 0, physical_to_logical]
+    return reconstructed
+
+
 def _open_ring4_ccl():
-    """Open the full 2x4 with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL semaphores
-    (the two ring directions, as ring_attention_all_gather_async needs). Returns
+    """Open the full system mesh with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL
+    semaphores (the two ring directions, as ring_attention_all_gather_async needs). Returns
     (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group)."""
+    rows, cols = ring_parent_shape()
+    assert cols >= RING, f"ring-of-4 needs a system mesh with axis-1 >= {RING}; got {rows}x{cols}"
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_2D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -46,7 +89,7 @@ def _open_ring4_ccl():
     )
     parent = None
     try:
-        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*LOUDBOX_MESH_SHAPE))
+        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
         submesh = parent.create_submesh(ttnn.MeshShape(1, RING))
 
         grid = submesh.compute_with_storage_grid_size()

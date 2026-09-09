@@ -31,6 +31,8 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/distributed/trace_allocation_tracker.hpp"
 
+#include "tt_metal/impl/dataflow_buffer/prefetcher_pipe.hpp"
+
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
@@ -151,6 +153,78 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     local_config_3.sub_device_id = SubDeviceId{0};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_3, local_config_3, mesh_device.get()), std::exception);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePersistentPipe) {
+    constexpr DeviceAddr local_l1_size = 3200;
+    constexpr uint32_t page_size = 32;
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
+    auto mesh_device = devices_[0];
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
+    }
+
+    auto pipe = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024);
+    const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
+
+    SubDevice sub_device(std::array{cores});
+    const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->load_sub_device_manager(manager);
+
+    ShardSpecBuffer shard_spec(cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {cores.num_cores(), 1});
+    distributed::ReplicatedBufferConfig local_replicated_config = {
+        cores.num_cores() * page_size,
+    };
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true,
+        .sub_device_id = SubDeviceId{0},
+    };
+    auto local_buffer = distributed::MeshBuffer::create(local_replicated_config, local_config, mesh_device.get());
+    EXPECT_GE(local_buffer->address(), persistent_end);
+    EXPECT_LT(local_buffer->address(), persistent_end + local_l1_size);
+
+    distributed::ReplicatedBufferConfig global_replicated_config = {
+        page_size,
+    };
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = std::nullopt,
+        .bottom_up = true,
+        .sub_device_id = std::nullopt,
+    };
+    auto global_buffer = distributed::MeshBuffer::create(global_replicated_config, global_config, mesh_device.get());
+    EXPECT_GE(global_buffer->address(), persistent_end + local_l1_size);
+
+    local_buffer->deallocate();
+    global_buffer->deallocate();
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(manager);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1UntilRemoved) {
+    constexpr DeviceAddr local_l1_size = 3200;
+    auto mesh_device = devices_[0];
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
+    }
+
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
+    SubDevice sub_device(std::array{cores});
+    const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+
+    EXPECT_THROW(
+        experimental::CreatePrefetcherPipe(
+            mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024),
+        std::exception);
+
+    mesh_device->remove_sub_device_manager(manager);
+    EXPECT_NO_THROW(experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024));
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {

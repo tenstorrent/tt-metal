@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
-        .compiler_options = {.defines = std::move(unary_defines)},
+        .compiler_options = {.defines = std::move(unary_defines), .opt_level = KernelBuildOptLevel::O3},
         // The output DFB has no other toucher — no writer kernel drains it, the borrowed output
         // buffer *is* the result — so compute binds it as both PRODUCER and CONSUMER (self-loop).
         .dfb_bindings =

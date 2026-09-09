@@ -72,10 +72,10 @@ jobs:
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
-            && 'wh_n300_civ2,bh_p150_perf'
+            && 'wh_n300_civ2,bh_p150_perf,bh_p150b_civ2_viommu'
             || format('{0}{1}',
               inputs.wormhole && 'wh_n300_civ2' || '',
-              inputs.blackhole && format('{0}bh_p150_perf',
+              inputs.blackhole && format('{0}bh_p150_perf,bh_p150b_civ2_viommu',
                 inputs.wormhole && ',' || '') || ''
             )
         }}
@@ -113,9 +113,9 @@ jobs:
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
-            && 'wh_n300_civ2,bh_p150_perf'
+            && 'wh_n300_civ2,wh_n300_perf,bh_p150_perf'
             || format('{0}{1}',
-              inputs.wormhole && 'wh_n300_civ2' || '',
+              inputs.wormhole && 'wh_n300_civ2,wh_n300_perf' || '',
               inputs.blackhole && format('{0}bh_p150_perf',
                 inputs.wormhole && ',' || '') || ''
             )

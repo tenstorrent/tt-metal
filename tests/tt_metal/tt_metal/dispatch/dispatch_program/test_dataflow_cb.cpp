@@ -104,7 +104,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, tiles_to_transfer_per_cb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, tiles_to_transfer_per_cb});
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
@@ -194,7 +194,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowDfb) {
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, tiles_to_transfer_per_dfb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, tiles_to_transfer_per_dfb});
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);

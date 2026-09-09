@@ -59,13 +59,11 @@ KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
 }
 
 std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
-    InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::DRAM};
-    return CreateBuffer(cfg);
+    return Buffer::create(device, size, size, BufferType::DRAM);
 }
 
 std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
-    InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::L1};
-    return CreateBuffer(cfg);
+    return Buffer::create(device, size, size, BufferType::L1);
 }
 
 MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

@@ -391,6 +391,9 @@ std::vector<Tensor> lgamma_bw(
 std::vector<Tensor> frac_bw(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // grad is returned as-is and keeps its own config; honouring the request here would
+    // mean materialising a copy where none is needed.
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
@@ -535,14 +538,16 @@ std::vector<Tensor> relu_bw(
 // result: at::fill(self_t, 0)
 std::vector<std::optional<Tensor>> fill_bw(
     const Tensor& grad,
-    const Tensor& input,
+    const Tensor& /*input*/,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& input_grad) {
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    // The gradient of fill does not depend on the input value, only its shape, which grad
+    // already has. Pass output_mem_config rather than value_or(input.memory_config()): the
+    // tensor is created from grad, so an unset config must keep inheriting grad's placement.
     std::vector<std::optional<Tensor>> result = {std::nullopt};
     result[0] = input_grad.has_value()
-                    ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad)
-                    : ttnn::zeros_like(grad);
+                    ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config, input_grad)
+                    : ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     return result;
 }
 
@@ -817,17 +822,17 @@ std::vector<Tensor> rpow_bw(
 }
 
 std::vector<Tensor> floor_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = ttnn::zeros_like(grad);
+    Tensor t_zero = ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(t_zero);
     return grad_tensor;
 }
 
 std::vector<Tensor> round_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = ttnn::zeros_like(grad);
+    Tensor t_zero = ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(t_zero);
     return grad_tensor;
 }
@@ -1157,9 +1162,9 @@ std::vector<Tensor> erfc_bw(
 }
 
 std::vector<Tensor> ceil_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = ttnn::zeros_like(grad);
+    Tensor zero_grad = ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
     return grad_tensor;
 }

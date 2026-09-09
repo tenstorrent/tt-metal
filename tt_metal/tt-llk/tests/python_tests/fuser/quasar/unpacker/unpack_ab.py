@@ -10,6 +10,7 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import BroadcastType
 
@@ -82,19 +83,21 @@ class UnpackerAB(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id_a = compute_unit.src_a.buf_desc_id
-        buf_desc_id_b = compute_unit.src_b.buf_desc_id
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
+            BfdResource.UNP0
+        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP1)
+        id_a = bfd_current(BfdResource.UNP0)
+        id_b = bfd_current(BfdResource.UNP1)
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
             return (
-                f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
-                f"({buf_desc_id_a}, {buf_desc_id_b}, 1);\n"
+                bfd_program
+                + f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
+                f"({id_a}, {id_b}, 1);\n"
             )
 
-        return (
-            f"_llk_unpack_binary_operands_init_({buf_desc_id_a}, {buf_desc_id_b}, 1);\n"
-        )
+        return bfd_program + f"_llk_unpack_binary_operands_init_({id_a}, {id_b}, 1);\n"
 
     def unpack(
         self,

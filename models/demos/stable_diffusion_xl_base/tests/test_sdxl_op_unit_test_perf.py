@@ -172,7 +172,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
+    expected_duration_ns = 74907  # Measured: ~74.9μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(

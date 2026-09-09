@@ -285,6 +285,47 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_THRESHOLD(TemplateParameter):
+    """Threshold operand for a unary op that clamps against a scalar, as raw fp32 bits.
+
+    Same contract as :class:`SFPU_UNARY_SCALAR` -- emit the bit pattern rather than a
+    decimal literal so the kernel and the torch golden agree exactly. Separate from
+    SFPU_UNARY_SCALAR so a driver can carry both at once, which
+    relu_min_lreg2_regression_test.cpp does: the scalar is its LREG2 poison and the
+    threshold is the value relu_min is supposed to clamp to.
+    """
+
+    # Field name is deliberately not `value_bits`: test_perf_header_gate requires every
+    # parameter field name in the tree to be unique, because the perf CSV takes its column
+    # headers from them and SFPU_UNARY_SCALAR already owns `value_bits`.
+    threshold_bits: int = 0x40A00000  # 5.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_UNARY_THRESHOLD = {self.threshold_bits}u;"
+
+
+@dataclass
+class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
+    """Integer threshold for relu_min's vInt branch, as a two's-complement uint32.
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations.h selects on ``#ifdef``, the header is
+    shared by every unary test, and only the int32 relu_min sweep sets this, so the rest
+    have to keep compiling without it. Unset means the kernel's fixed 5.
+
+    Takes a *signed* Python int and emits its two's-complement pattern, because
+    ``_relu_min_`` declares the parameter ``std::uint32_t`` and immediately
+    ``static_cast<int>``s it. A negative value is the only way to reach the sign+magnitude
+    re-encoding branch inside that wrapper.
+    """
+
+    threshold: int = 5
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_RELU_MIN_INT_THRESHOLD {self.threshold & 0xFFFFFFFF}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 

@@ -83,12 +83,15 @@ inline void _llk_unpack_A_sdpa_init_(
 inline void _llk_unpack_A_sdpa_set_srcb_dummy_valid_()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    // Stall_Clr_Cntrl=1 so the publication waits on the bank it clears.
+    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
 inline void _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    // Stall_Clr_Cntrl=1 on each: per-instruction, so the SrcB publication flipping the
+    // unpacker's bank pointer cannot leave the SrcA publication relying on a stale gate.
+    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }

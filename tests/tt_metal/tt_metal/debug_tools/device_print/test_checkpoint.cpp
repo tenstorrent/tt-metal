@@ -41,8 +41,17 @@ constexpr uint32_t NUM_CORES = 2;
 // Fixture: DevicePrintFixture with checkpoint enabled
 class DevicePrintCheckpointTest : public DevicePrintFixture {
 protected:
-    void ExtraSetUp() override { tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(true); }
-    void ExtraTearDown() override { tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(false); }
+    void ExtraSetUp() override {
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        checkpoint_previous_ = rtoptions.get_checkpoint_enabled();
+        rtoptions.set_checkpoint_enabled(true);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(checkpoint_previous_);
+    }
+
+private:
+    bool checkpoint_previous_{};
 };
 
 // Helper: create standard DRAM buffers, CBs, and run program on single core

@@ -391,12 +391,16 @@ The modifying variants, ``OP=``, are available.
 
 Conditional operators are provided -- ``==``, ``!=``, ``<``, ``>=``,
 ``>`` & ``<=``. These produce a ``vBool`` result, which may be used
-directly or indirectly in a ``v_if`` conditional. Both operands must
+directly in a ``v_if`` conditional. Both operands must
 be related vector types, or the second operand may be an appropriate
 scalar operator, or, for integral comparisons, may be a ``vMag`` type.
 
 ``vBool``s may be combined with ``&&``, ``||`` and ``!``
 operations. Note that these are not short-circuiting.
+
+You may create predicate functions that return a ``vBool``, but they
+must be invoked inside a ``v_if`` (or ``v_elseif``) condition.  Do not
+store the return value and then interrogate it later.
 
 Note: There is currently a compiler defect regarding signed and
 unsigned integer comparisons, where ordering comparisons are only
@@ -628,28 +632,84 @@ Blackhole.
 
 .. code-block:: c++
 
-    vFloat lut(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
-    vFloat lut_sign(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
+    // Wormhole, Blackhole
+    vFloat lut(vFloat v, vLut8si si0, vLut8si si1, vLut8si si2,
+               LutSign  = LutSign::Retain);
+    vFloat lut(vFloat v, vLut16si si0, vLut16si si1, vLut16si si2,
+               LutSign  = LutSign::Retain);
+    vFloat lut(vFloat v, vLut32si si0, vLut32si si1, vLut132si si2,
+               LutSign  = LutSign::Retain);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    vFloat lut (vFloat v, vLut16ss s01, vLut16ii i01,
+                vLut16ss s23, vLut16ii i23,
+                vLut16ss s45, vLut16ii i45,
+                LutSign signedness = LutSign::Retain);
 
-``l0``, ``l1``, ``l2`` each contain 2 8-bit floating point values ``A`` and ``B`` with ``A`` in bits 15:8 and ``B`` in bits 7:0. The 8-bit format is:
+    // Quasar
+    LutCookie<LutMode::Fp8x3> lut_init (sLut8si si0, sLut8si si1, sLut8si si2);
+    LutCookie<LutMode::Fp16x3> lut_init (sLut16si si0, sLut16si si1, sLut16si si2);
+    LutCookie<LutMode::Fp32x3> lut_init (sLut32si si0, sLut32si si1, sLut32si si2);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    LutCookie<Mode> lut_init (sLut16ss s01, sLut16ii i01,
+                              sLut16ss s23, sLut16ii i23,
+                              sLut16ss s45, sLut16ii i45);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    LutCookie<Mode> lut_init (sLut16si si0, sLut16si si1,
+                              sLut16si si2, sLut16si si3,
+                              sLut16si si4, sLut16si si5);
+    template <LutMode Mode>
+    vFloat lut (vFloat v, LutSign = LutSign::Retain);
+    template <LutMode Mode>
+    vFloat lut (vFloat v, LutCookie<Mode>, LutSign = LutSign::Retain);
 
-  * 0xFF represents the value 0, otherwise
-  * bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa
+Compute a multiply-add driven by a 3 or 6-entry lookup table.  Each table entry
+consists of a slope (``s``) and an intercept (``i``). The absolute value of the
+incoming `v` determines which lookup table entry to use.
 
-Floating point representations of ``A`` and ``B`` (19-bit on GS and 32-bit on WH) are constructed by:
+The three-entry tables use the first entry for values <1.0, otherwise
+the second entry for <2.0 and the third entry otherwise. The six entry
+tables use <0.5, <1.0, <1.5, <2.0 as cutoffs for the first 4 entries
+and then either <3.0 or <4.0 for the 5th entry, otherwise the 6th
+entry is used. ``LutMode::Fp16x6_HWM3`` uses 3.0 and
+``LutMode::Fp16x6_HWM4`` uses 4.0.
 
-  * Using the sign bit
-  * Generating an 8-bit exponent as (127 – exponent_extender)
-  * Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s
+The table entries themselves are created from pairs floating point or
+integer values representing either the slope and intercept, a pair of
+slopes or a pair of intercepts. Both scalar (``s``) and vector (``v``)
+variants are available. Floating point values are converted after
+rounding to nearest representable value, with ties rounding away from
+zero. Integer values are reinterpretted directly as the encoded
+coefficients. (This arrangement is determined by the underlying
+instruction, ``sfplut`` or ``sfplut32fp``.)
 
-``A`` and ``B`` are selected from one of ``l0``, ``l1`` or ``l2`` based on the value in ``v`` as follows:
+The optional ``LutSign`` operand determines whether the result sign is
+copied from the source value (``LutSign::Retain``), or is that
+determined by the computation (``LutSign::Update``).
 
-  * ``l0`` when ``v`` < 0
-  * ``l1`` when ``v`` == 0
-  * ``l2`` when ``v`` > 0
+The Quasar API uses an initialization and evaluation scheme, which
+matches how the hardware holds the constant table. It makes more use
+of the ``LutMode`` enumeration, whose values are:
 
-.. XXXX is this backwards?
-.. Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
+  * ``Fp8x3``       // 3 entry 8-bit constants
+  * ``Fp16x3``      // 3 entry 16-bit constants
+  * ``Fp32x3``      // 3 entry 32-bit constants
+  * ``Fp16x6_HWM3`` // 6 entry 16-bit constants cutoff 3.0
+  * ``Fp16x6_HWM4`` // 6 entry 16-bit constants cutoff 4.0
+
+The Quasar 16-bit 6-entry initialization may be done in two forms,
+either passing ``ss`` and ``ii`` pairs as with the Blackhole and
+Wormhole scheme, or passing a sequence of ``si`` values, which more
+closely matches the table format and the 3-entry routines.  The
+intialization routines return an empty-class cookie, whose only use is
+to convey type information implicitly to the ``lut`` evaluation
+routine.  It may be ignored, with the loss of consistency checking, if
+one uses the cookieless evaluator.
+
+Note that the 8- and 16-bit formats use a bespoke representation, and
+the 8 bit format in particular has a range of (-2.0, +2.0).
+
+On Quasar, use of these routines conflicts with use of the ``vConst``
+constants.
 
 .. code-block:: c++
 

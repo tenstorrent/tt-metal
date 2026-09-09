@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU, TorchExpert
@@ -238,7 +238,7 @@ SINGLE_EXPERT_MODELS = [
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
-    ("kimi_k26", KimiK26Config, True),
+    ("kimi_k2_7", KimiK27Config, True),
 ]
 # Kimi K3 is deliberately absent: _isl_params below takes config.EMB_SIZE as the routed-expert K
 # axis, which holds only for models with no pre-projection. K3's LatentMoE projects 7168 -> 3584
@@ -280,7 +280,7 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
 # Exhaustive sweep: the full range from empty to fully-packed
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
 
 
 def _isl_params(active_sweep, only_models=None):

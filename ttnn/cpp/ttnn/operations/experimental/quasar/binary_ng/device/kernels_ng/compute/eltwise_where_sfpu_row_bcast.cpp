@@ -45,11 +45,10 @@ void kernel_main() {
     DataflowBuffer exp_cb_left(cb_left);
     DataflowBuffer exp_cb_right(cb_right);
 
-    compute_kernel_hw_startup(cb_in0, cb_out);
-    copy_init(cb_in0);
+    compute_kernel_hw_startup(cb_left, cb_out);
+    copy_init(cb_left);
     BINARY_SFPU_INIT
 
-    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_in0.wait_front(num_tiles_per_cycle);
         exp_cb_in1.wait_front(num_tiles_per_cycle);

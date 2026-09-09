@@ -42,7 +42,7 @@ def test_exp2_ULP(input_shapes, low, high, device):
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -132,7 +132,7 @@ def test_exp2_fp32_accuracy(device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 def test_exp2_fp32_special_values(device):
@@ -181,7 +181,7 @@ def test_exp2_fp32_special_values(device):
     assert torch.equal(torch.isnan(result), torch.isnan(golden))
     assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
     assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 # Targeted edge-case coverage for the optimised exp2 (see #44507).
@@ -252,4 +252,4 @@ def test_exp2_special_values(device):
 
     if finite_indices:
         idx = torch.tensor(finite_indices)
-        assert_with_ulp(golden_flat[idx], result[idx], 1)
+        assert_with_ulp(expected_result=golden_flat[idx], actual_result=result[idx], ulp_threshold=1)

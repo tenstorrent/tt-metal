@@ -68,7 +68,7 @@ ALWI void process_tile(
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
-    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
+    reconfig_data_format(cb_bcast, cb_bcast);
     unary_bcast_init<BroadcastType::COL>(cb_bcast);
     exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
@@ -178,7 +178,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
     copy_init(cb_post_lhs);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

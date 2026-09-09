@@ -240,6 +240,10 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
+    // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
+    std::chrono::milliseconds noc_debug_poll_interval{500};
+    std::chrono::milliseconds noc_debug_full_read_interval{4000};
+    std::chrono::milliseconds noc_debug_watermark_margin{3000};
 
     bool checkpoint_enabled = false;
 
@@ -276,7 +280,7 @@ class RunTimeOptions {
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    std::optional<tt_metal::DispatchCoreType> dispatch_core_type_override;
 
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
@@ -384,6 +388,9 @@ class RunTimeOptions {
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
+
+    // NOC API version for Quasar
+    uint32_t quasar_noc_api_version = 2;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -687,6 +694,21 @@ public:
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
+    // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
+    std::chrono::milliseconds get_noc_debug_poll_interval() const { return noc_debug_poll_interval; }
+    void set_noc_debug_poll_interval(std::chrono::milliseconds interval) { noc_debug_poll_interval = interval; }
+    // How often the thread self-triggers a full read + process + report + discharge. Rounded up to a whole number
+    // of poll intervals. Zero disables the self-triggered full read entirely (events are then only processed on a
+    // user read or at device close).
+    std::chrono::milliseconds get_noc_debug_full_read_interval() const { return noc_debug_full_read_interval; }
+    void set_noc_debug_full_read_interval(std::chrono::milliseconds interval) {
+        noc_debug_full_read_interval = interval;
+    }
+    // Bounded-lateness margin held back when processing events mid-run. MUST exceed the poll interval above, which
+    // is what bounds how long a stalled core can stay unrecorded; otherwise a cross-core violation can be judged
+    // before the peer core's earlier event has arrived. Validated in start_debug_dump_thread().
+    std::chrono::milliseconds get_noc_debug_watermark_margin() const { return noc_debug_watermark_margin; }
+    void set_noc_debug_watermark_margin(std::chrono::milliseconds margin) { noc_debug_watermark_margin = margin; }
 
     void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
     bool get_checkpoint_enabled() const { return checkpoint_enabled; }
@@ -738,7 +760,9 @@ public:
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
-    tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
+    std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
+        return dispatch_core_type_override;
+    }
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     bool is_simulator_or_emulated() const {
@@ -914,6 +938,8 @@ public:
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
+
+    uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

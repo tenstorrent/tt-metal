@@ -22,15 +22,6 @@ COUNTER_BANK_NAMES = {
     4: "TDMA_PACK",
 }
 
-# Config word layout (must match counters.h:
-# PERF_CFG_VALID_BIT / PERF_CFG_L1_MUX_SHIFT / PERF_CFG_COUNTER_SHIFT / PERF_CFG_BANK_MASK).
-PERF_CFG_VALID_BIT = 1 << 31
-PERF_CFG_L1_MUX_SHIFT = 17
-PERF_CFG_L1_MUX_MASK = 0x7
-PERF_CFG_COUNTER_SHIFT = 8
-PERF_CFG_COUNTER_MASK = 0x1FF
-PERF_CFG_BANK_MASK = 0xFF
-
 
 # --- Counter id -> name tables, parsed live from the canonical metal hw_counters.h ---
 
@@ -54,6 +45,35 @@ def _metal_root() -> Path:
     raise RuntimeError(
         "Could not locate tt_metal/hw/inc/internal/tt-1xx above this file"
     )
+
+
+_C_LITERAL = r"0[xX][0-9a-fA-F]+|\d+"
+
+
+def _parse_perf_cfg(text: str) -> dict:
+    """PERF_CFG_* constants from counters.h: a literal or literal << literal, u/U suffixes allowed."""
+    cfg = {}
+    for name, expr in re.findall(r"PERF_CFG_([A-Z0-9_]+)\s*=\s*([^;]+);", text):
+        expr = re.sub(rf"({_C_LITERAL})[uUlL]+", r"\1", expr).strip()
+        m = re.fullmatch(rf"({_C_LITERAL})(?:\s*<<\s*({_C_LITERAL}))?", expr)
+        if m is None:
+            raise RuntimeError(
+                f"PERF_CFG_{name} in counters.h is not a plain literal or shift: {expr!r}"
+            )
+        cfg[name] = int(m.group(1), 0) << int(m.group(2) or "0", 0)
+    return cfg
+
+
+# Config word layout, parsed from the device-side header so the two cannot drift apart.
+_PERF_CFG = _parse_perf_cfg(
+    (_metal_root() / "tt_metal/tt-llk/tests/helpers/include/counters.h").read_text()
+)
+PERF_CFG_VALID_BIT = _PERF_CFG["VALID_BIT"]
+PERF_CFG_L1_MUX_SHIFT = _PERF_CFG["L1_MUX_SHIFT"]
+PERF_CFG_L1_MUX_MASK = _PERF_CFG["L1_MUX_MASK"]
+PERF_CFG_COUNTER_SHIFT = _PERF_CFG["COUNTER_SHIFT"]
+PERF_CFG_COUNTER_MASK = _PERF_CFG["COUNTER_MASK"]
+PERF_CFG_BANK_MASK = _PERF_CFG["BANK_MASK"]
 
 
 def _parse_hw_counters(text: str) -> dict:
@@ -265,54 +285,3 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
         all_results.extend(zone_results)
 
     return pd.DataFrame(all_results)
-
-
-def print_counters(results: pd.DataFrame) -> None:
-    """
-    Log all counter results in a readable format.
-
-    Args:
-        results: DataFrame with counter results (from read_counters).
-    """
-    if results.empty:
-        logger.info("No counter results to display.")
-        return
-
-    if "zone" in results.columns:
-        zones = results["zone"].unique()
-        for zone in zones:
-            zone_results = results[results["zone"] == zone]
-            logger.info("\n{}\nZONE: {}\n{}", "═" * 100, zone, "═" * 100)
-            _print_zone_counters(zone_results)
-    else:
-        logger.info("\n{}\nPERFORMANCE COUNTER RESULTS\n{}", "=" * 100, "=" * 100)
-        _print_zone_counters(results)
-
-
-def _print_zone_counters(results: pd.DataFrame) -> None:
-    """Helper to log counters for a single zone."""
-    lines = []
-
-    for bank in ["INSTRN_THREAD", "FPU", "TDMA_UNPACK", "L1", "TDMA_PACK"]:
-        bank_df = results[results["bank"] == bank]
-        if bank_df.empty:
-            continue
-
-        cycles = bank_df["cycles"].iloc[0] if len(bank_df) > 0 else 0
-
-        lines.append(f"\n  ┌─ {bank} (cycles: {cycles:,})")
-        lines.append(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
-        lines.append(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
-
-        for _, row in bank_df.iterrows():
-            name = row["counter_name"]
-            if pd.notna(row["l1_mux"]):
-                name = f"{name} (mux{int(row['l1_mux'])})"
-            count = row["count"]
-            rate = (count / cycles) if cycles else 0.0
-            lines.append(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
-
-        lines.append(f"  └{'─' * 70}")
-
-    if lines:
-        logger.info("\n".join(lines))

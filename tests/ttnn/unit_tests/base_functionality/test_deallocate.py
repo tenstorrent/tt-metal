@@ -11,7 +11,7 @@ import ttnn
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
-def test_deallocate(device, h, w):
+def test_deallocate(device, h, w, expect_error):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
@@ -24,5 +24,5 @@ def test_deallocate(device, h, w):
     output_tensor_reference = ttnn.reshape(output_tensor, (h, w))
 
     ttnn.deallocate(output_tensor)
-    with pytest.raises(RuntimeError) as exception:
+    with expect_error(RuntimeError, r"Input Tensor A is not allocated"):
         output_tensor_reference + output_tensor_reference

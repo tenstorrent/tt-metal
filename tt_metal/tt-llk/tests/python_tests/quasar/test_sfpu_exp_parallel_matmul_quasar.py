@@ -276,7 +276,10 @@ def test_sfpu_exp_parallel_matmul_quasar(
     outcome = configuration.run()
 
     res_exp = torch.tensor(outcome.result, dtype=torch_format)
-    res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)
+    res_matmul = torch.tensor(
+        stimuli.collect_buffer_c_results(TestConfig.TENSIX_LOCATION),
+        dtype=torch_format,
+    )
 
     assert len(res_exp) == len(golden_exp), "exp"
     assert len(res_matmul) == len(golden_matmul), "matmul"

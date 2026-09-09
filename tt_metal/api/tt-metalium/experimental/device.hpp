@@ -28,6 +28,10 @@ uint32_t get_worker_noc_hop_distance(
 
 // Returns the hop distance between two logical worker coordinates on a given NOC
 // NOC distances may vary depending on the target device due to harvesting
+// `mesh_coord` selects the device to measure on. When it maps to a device this rank does not drive
+// (a submesh co-owned by several ranks), the distance is measured on an arbitrary local device
+// instead: exact only when the mesh is homogeneously harvested. Throws if the mesh has no local
+// device to fall back to.
 // This API is experimental and may evolve into a stable Device API in the future
 uint32_t get_worker_noc_hop_distance(
     distributed::MeshDevice* mesh_device,

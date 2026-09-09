@@ -443,8 +443,10 @@ def main():
                 logger.error(f"{testCommand} exited with a non-zero return code")
                 sys.exit(4)
 
+            # Large model traces can take over 15 seconds to save after the test exits.
+            capture_timeout = 120
             try:
-                captureProcess.communicate(timeout=15)
+                captureProcess.communicate(timeout=capture_timeout)
                 # Copy the generated .tracy file to the server's traces folder with a unique name
                 import datetime
 
@@ -496,7 +498,8 @@ def main():
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on a Tracy-enabled build (default)."
+                    f"Tracy capture did not finish within {capture_timeout} seconds after the test exited. "
+                    "Run with -v to see capture output."
                 )
                 sys.exit(1)
 

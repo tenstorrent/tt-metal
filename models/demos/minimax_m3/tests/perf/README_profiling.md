@@ -10,8 +10,8 @@ MLP on the dense layers (0-2), and the full MSA + MoE breakdown on the sparse la
 cd $TT_METAL_HOME
 ```
 
-Needs: the tilized weight cache at `$HF_MODEL/tensor_cache_bfp8_MeshShape([8, 4])` (without it the run
-falls back to the ~869 GB bf16 source read), a golden trace to tile tokens from (defaults to
+Needs: the tilized weight cache at `$HF_MODEL/tensor_cache_bfp8_MeshShape([8, 4])` (the wrapper refuses to start without it;
+`M3_FORCE_LOAD_WEIGHTS=1` populates it from the ~869 GB bf16 source), a golden trace to tile tokens from (defaults to
 `$GOLDEN_DIR/longbook_qa_eng_prefill_56320_nopad`), ~50 GB free disk and ~150 GB free RAM.
 
 ## Two commands
@@ -22,11 +22,16 @@ falls back to the ~869 GB bf16 source read), a golden trace to tile tokens from 
 LEVEL=2 LAYERS=6 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
 ```
 
+Each finished capture is moved out of `generated/profiler/` into
+`prefill_profile_results/<stamp>_stages<S>_stage<k>_layers<..>_cache<N>_<fabric>_<dtype>/` (the ops
+CSV plus a copy of the log), so the tracy intermediates can be wiped between experiments and every
+capture stays re-renderable. `RESULTS_DIR` overrides the root.
+
 **2. View.** Renders the report and serves it — `--open` prints a URL you can click.
 
 ```bash
 python3 models/demos/minimax_m3/tests/perf/visualize_zones.py \
-    "$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)" --open
+    "$(ls -t prefill_profile_results/*/ops_perf_results_*.csv | head -1)" --open
 ```
 
 ```
@@ -71,6 +76,10 @@ Opening that path in an editor shows you HTML source, not the report — it need
 | `EXPERT_DTYPE=bf4\|bf8` | MoE routed-expert weight dtype | bf4 |
 | `NOC_TRACES=1` | + DRAM/NOC utilization per op. Requires tt-npe installed separately (see *Reading the report*) | off |
 | `SKIP_PREFIX=1` | skip the prefill, attend a zeroed cache — fast but MoE routing is unrepresentative | off |
+| `STAGES=1\|2\|4` | intra-galaxy pipeline depth — see *Profiling a pipeline stage* | 1 |
+| `STAGE=k` | which stage's sub-mesh and layer slice to profile | 0 |
+| `FABRIC=1d\|1d_ring\|2d\|2d_torus_xy` | fabric config; ring and torus modes also switch to the torus-XY mesh descriptor | 1d |
+| `RESULTS_DIR=path` | where finished captures are moved | `prefill_profile_results/` |
 
 ### Detail levels
 
@@ -103,6 +112,41 @@ layers, so a 1-sparse-layer run gives you one draw from that distribution rather
 use 6 or 8 layers when the answer depends on them.
 
 Do not scale past ~8 layers — see below.
+
+## Profiling a pipeline stage
+
+The intra-galaxy pipeline (`docs/PIPELINE_PREFILL_TESTING.md`) carves the 8×4 galaxy into 2 stages of
+(4,4) (EP16, 30 layers each) or 4 stages of (2,4) (EP8, 15 layers each). `STAGES=S STAGE=k` profiles
+stage k standalone: the harness opens the whole galaxy, carves stage k's sub-mesh out of it, and builds
+only that stage's layer slice with the sub-mesh's own tilized cache. Same chunk, same zones, same
+report — only the mesh, EP/SP and layer range change.
+
+```bash
+# stage 0 of 2: one dense + one sparse layer, 5k attending 50k, like the whole-galaxy baseline
+TT_CACHE_PATH=<pp-cache-root> STAGES=2 STAGE=0 LAYER_IDS=0,3 CACHE=51200 \
+    ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
+# stage 1 of 2 (layers 30-59, all sparse)
+TT_CACHE_PATH=<pp-cache-root> STAGES=2 STAGE=1 LAYER_IDS=30,33 CACHE=51200 \
+    ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
+```
+
+What to know:
+
+- **Weight cache.** The tilized cache is keyed by mesh shape, so a stage needs
+  `tensor_cache_bfp8_MeshShape([4, 4])` or `([2, 4])`. The checkpoint dir only has stubs for those;
+  point `TT_CACHE_PATH` at a root that carries them (`docs/PIPELINE_PREFILL_TESTING.md` names the
+  currently populated one). The wrapper checks the first requested layer is present before starting.
+- **Layer selection is in global indices.** `LAYER_IDS` must fall inside the stage's range
+  (`[k·60/S, (k+1)·60/S)`); `LAYERS=N` takes the first N of the stage. Only stage 0 has dense layers.
+- **Fabric.** `FABRIC=1d` (default) matches the whole-galaxy baseline, so a stage capture compares
+  like-for-like. The pipeline runner's intra-galaxy bindings use 2D fabric; `FABRIC=2d` /
+  `2d_torus_xy` are passed through for that comparison but not yet validated on a carved sub-mesh.
+- **Every stage embeds its own tokens.** A standalone stage has no upstream stage to hand it a hidden
+  state, and the zero placeholder a real middle rank warms up with would collapse the MoE router onto
+  one expert. So stage k>0 runs real-token embeddings straight into layer 30 (or 15/45): shapes and
+  compute zones are exact, MoE routing is not the real stage's — same caveat as `SKIP_PREFIX`.
+- **Capture volume scales with device count**, so a (4,4) stage halves the trace and the
+  post-process RSS of the table below for the same layer count.
 
 ## Memory and disk
 
@@ -209,6 +253,13 @@ means the device idles waiting for dispatch — an 8-layer chunk measured 5 061 
 unprofiled. `DEVICE KERNEL DURATION` and `DEVICE FW DURATION` are on-device and unaffected;
 `OP TO OP LATENCY` is not, and the report excludes it. Latency numbers come from
 `scripts/run_prefill_perf.sh`.
+
+**`Saving trace...terminate called ... Resource temporarily unavailable`.** The capture tool ran out of
+the per-user process/thread budget (`ulimit -u`, 512 by default on the galaxy hosts, counted across every
+process you own on the node) while spawning its compression threads — after the run, so the whole capture
+is lost. The wrapper raises the soft limit to the hard limit before launching anything, and logs
+`RLIMIT_NPROC soft/hard/in use` in its header. If it still fails, leftover processes are eating the
+budget: `ps -L -u $USER | wc -l`, then kill stale runs and `pkill -f tools/tracy/serve_wasm.py`.
 
 **Tracy caps a trace at 32K source locations.** Each zone entry allocates one, as does each ttnn op.
 A long capture will hit it and silently start dropping zones — use a lower `LEVEL`, fewer `LAYERS`, or

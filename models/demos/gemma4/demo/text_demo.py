@@ -257,6 +257,12 @@ def load_demo_prompt(target_bucket, instruct=True):
     if "context" in entry:
         max_chars = entry.get("max_length")
         context = _load_and_cache_context(entry["context"], max_chars=max_chars)
+        # Honor repeat_context like text_demo_v2: the 256k prompt file repeats
+        # its ~117k-token book to reach the bucket. Ignoring it made this
+        # path's "256k" rows silently pad-run at 131072 (undertesting 2x).
+        repeat_context = int(entry.get("repeat_context", 1))
+        if repeat_context > 1:
+            context = "\n\n".join([context] * repeat_context)
         prompt = "```" + context + "```\n\n" + prompt if instruct else context
     return prompt
 

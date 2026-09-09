@@ -12,7 +12,7 @@ Values from HuggingFace config.json for Kimi-K3 (``text_config``), whose ``model
 the TT stack reads lives under ``text_config``.
 
 K3 is a **hybrid**: of its 93 layers only 24 are full-attention (MLA) layers, the rest are KDA
-linear-attention layers. Only the MLA side is modelled here.
+linear-attention layers. This module owns the text-tower constants shared by MLA, KDA, MoE, and FFN consumers.
 
 MLA deltas vs Kimi-K2.6:
   * 96 attention heads (K2.6: 64)
@@ -93,11 +93,12 @@ class KimiK3Config:
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
     # fmt: on
 
-    # KDA (linear attention) sizing, recorded for completeness; no TT implementation exists yet.
+    # KDA (linear attention) sizing.
     KDA_NUM_HEADS = 96
     KDA_HEAD_DIM = 128
     KDA_SHORT_CONV_KERNEL_SIZE = 4
     KDA_GATE_LOWER_BOUND = -5.0
+    KDA_USE_FULL_RANK_GATE = True
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12

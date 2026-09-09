@@ -71,7 +71,7 @@ DfbInitTimingBenchContext create_dfb_init_timing_bench_context() {
     }
     TT_FATAL(!ids.empty(), "No MMIO devices available");
 
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     auto id_to_device = distributed::MeshDevice::create_unit_meshes(
         ids,
         DEFAULT_L1_SMALL_SIZE,
@@ -270,7 +270,7 @@ void LaunchAndLogDfbInitTiming(
     DfbInitTimingBenchContext& ctx, Program&& program, const CoreCoord& core, const char* benchmark_name) {
     ClearDfbInitTimingL1(ctx.device, core);
     const uint16_t used_slots_mask = DfbInitTimingUsedSlotsMask(program, core);
-    LaunchProgram(*ctx.mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*ctx.mesh_device, std::move(program));
     LogDfbInitTimingFromL1(ctx.device, core, benchmark_name, used_slots_mask);
 }
 }  // namespace

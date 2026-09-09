@@ -122,7 +122,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     static_assert(input_granularity >= 1, "input_granularity must be >= 1");
     constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     std::uint32_t dest_buffer_base   = get_dest_buffer_base();
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + i * 8 * 2 + dest_buffer_base);

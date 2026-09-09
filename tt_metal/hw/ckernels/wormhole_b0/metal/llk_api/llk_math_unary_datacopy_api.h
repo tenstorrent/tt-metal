@@ -7,6 +7,7 @@
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_fast_tilize.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY
@@ -18,6 +19,7 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -32,6 +34,7 @@ template <
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
 
     for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
@@ -49,6 +52,7 @@ template <
     bool is_int_fpu_en = false,
     PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
         "Wormhole B0 math datacopy init: use PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is "
@@ -63,6 +67,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_uninit() {
+    SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>();
 }
 
@@ -71,12 +76,14 @@ inline void llk_math_eltwise_unary_datacopy_uninit() {
  *************************************************************************/
 
 inline void llk_math_fast_tilize_init(const std::uint32_t operand, const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_fast_tilize_init_(unpack_dst_format[operand_id], unit_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_fast_tilize_uninit(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
 }
@@ -86,6 +93,7 @@ inline void llk_math_fast_tilize_block_(
     const std::uint32_t operand,
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);

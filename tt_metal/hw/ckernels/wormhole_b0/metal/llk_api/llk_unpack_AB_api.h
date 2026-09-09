@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB
@@ -13,6 +14,7 @@
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
@@ -31,6 +33,7 @@ inline void llk_unpack_AB_init(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
@@ -41,6 +44,7 @@ inline void llk_unpack_AB(
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;

@@ -8,7 +8,8 @@
 #include <vector>
 #include "profiler_state_manager.hpp"
 #include <tt_stl/assert.hpp>
-#include "hostdevcommon/profiler_common.h"
+#include <impl/debug/noc_debugging.hpp>
+#include "hostdev/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "math.hpp"
@@ -19,6 +20,24 @@ namespace tt::tt_metal {
 
 constexpr static uint32_t DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000;
 constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT = 2;
+
+namespace {
+
+// Convert a wall-time margin into device ticks for the NOC-debug watermark.
+uint64_t noc_debug_margin_to_ticks(const std::vector<IDevice*>& devices, std::chrono::milliseconds margin) {
+    uint32_t aiclk_mhz = 0;
+    for (auto* device : devices) {
+        aiclk_mhz = std::max(
+            aiclk_mhz, static_cast<uint32_t>(MetalContext::instance().get_cluster().get_device_aiclk(device->id())));
+    }
+    if (aiclk_mhz == 0) {
+        aiclk_mhz = 1000;  // conservative nominal clock if the frequency is unavailable
+    }
+    // aiclk_mhz ticks per microsecond -> aiclk_mhz * 1000 ticks per millisecond.
+    return static_cast<uint64_t>(margin.count()) * static_cast<uint64_t>(aiclk_mhz) * 1'000ULL;
+}
+
+}  // namespace
 
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions) {
     std::optional<uint32_t> profiler_program_support_count = rtoptions.get_profiler_program_support_count();
@@ -169,13 +188,41 @@ void ProfilerStateManager::start_debug_dump_thread(
     TT_ASSERT(!this->debug_dump_thread.joinable());
     // Reset stop flag in case it was set by a previous cleanup_device_profilers() call
     this->stop_debug_dump_thread = false;
-    // Faster polling to unblock cores quickly at the expensive of more NoC PCIe traffic
-    constexpr auto interval = std::chrono::milliseconds(500);
+    // Faster polling to unblock cores quickly at the expense of more NoC PCIe traffic.
+    // Tunable via TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS.
+    const auto interval = this->env_.get_rtoptions().get_noc_debug_poll_interval();
+    const auto full_read_interval = this->env_.get_rtoptions().get_noc_debug_full_read_interval();
+    const auto watermark_margin = this->env_.get_rtoptions().get_noc_debug_watermark_margin();
+
+    TT_FATAL(
+        watermark_margin > interval,
+        "TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS ({}) must be greater than TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS ({}); "
+        "the margin has to cover the record-to-host latency bounded by the poll interval.",
+        watermark_margin.count(),
+        interval.count());
+
+    constexpr uint64_t max_margin_ticks = uint64_t(1) << (kernel_profiler::PROFILER_MARKER_TS_BITS - 1);
+    TT_FATAL(
+        noc_debug_margin_to_ticks(active_devices, watermark_margin) < max_margin_ticks,
+        "TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS ({}) is too large: it exceeds half the {}-bit device timestamp wrap "
+        "window, which would silently disable the mid-run watermark.",
+        watermark_margin.count(),
+        kernel_profiler::PROFILER_MARKER_TS_BITS);
+
+    // Convert the full-read period into the number of idle polls the thread counts, rounding up so the configured
+    // period is an upper bound and any non-zero period still yields at least one poll of waiting.
+    const uint32_t full_read_cycles =
+        full_read_interval.count() == 0
+            ? 0
+            : static_cast<uint32_t>((full_read_interval + interval - std::chrono::milliseconds(1)) / interval);
 
     this->debug_dump_thread = std::thread([this,
                                            active_devices = std::move(active_devices),
                                            virtual_cores_map = std::move(virtual_cores_map),
-                                           interval = interval]() {
+                                           interval = interval,
+                                           full_read_cycles = full_read_cycles,
+                                           watermark_margin = watermark_margin]() {
+        uint32_t idle_cycles = 0;
         while (true) {
             {
                 std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
@@ -195,6 +242,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                 bool was_force_read = this->force_read_debug_dump.exchange(false);
                 bool is_stopping = this->stop_debug_dump_thread.load();
 
+                idle_cycles = 0;
                 for (auto* device : active_devices) {
                     {
                         auto profiler_it = this->device_profiler_map.find(device->id());
@@ -226,6 +274,9 @@ void ProfilerStateManager::start_debug_dump_thread(
                         profiler.processResults(
                             device, virtual_cores_map.at(device->id()), state, ProfilerDataBufferSource::DRAM, {});
                     }
+                    if (was_force_read && !profiler.device_markers_per_core_risc_map.empty()) {
+                        profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
+                    }
                     // cleanup_device_profilers() handles the final dump
                 }
 
@@ -236,6 +287,48 @@ void ProfilerStateManager::start_debug_dump_thread(
 
                 if (is_stopping) {
                     break;
+                }
+            } else if (full_read_cycles > 0 && ++idle_cycles >= full_read_cycles) {
+                idle_cycles = 0;
+                std::lock_guard<std::recursive_mutex> map_lock{this->device_profiler_map_mutex};
+                for (auto* device : active_devices) {
+                    auto profiler_it = this->device_profiler_map.find(device->id());
+                    TT_ASSERT(profiler_it != this->device_profiler_map.end());
+                    DeviceProfiler& profiler = profiler_it->second;
+                    profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
+                    detail::ReadDeviceProfilerResultsInternal(
+                        device->get_mesh_device().get(),
+                        device,
+                        virtual_cores_map.at(device->id()),
+                        ProfilerReadState::LAST_FD_READ,
+                        {},
+                        /*include_l1=*/true);
+                    profiler.processResults(
+                        device,
+                        virtual_cores_map.at(device->id()),
+                        ProfilerReadState::LAST_FD_READ,
+                        ProfilerDataBufferSource::DRAM_AND_L1,
+                        {});
+                }
+                if (auto& noc_debug_state = MetalContext::instance().noc_debug_state();
+                    noc_debug_state && !active_devices.empty()) {
+                    // Recomputed each pass rather than hoisted, because the aiclk can change at runtime (DVFS).
+                    const uint64_t margin_ticks = noc_debug_margin_to_ticks(active_devices, watermark_margin);
+                    noc_debug_state->process_accumulated_events_up_to(margin_ticks);
+                    noc_debug_state->report_new_issues();
+                }
+                // Discharge the marker set. This is what keeps host memory bounded on a long run: dumpDeviceResults
+                // consumes the markers and its last statement clears device_markers_per_core_risc_map, which
+                // otherwise grows for the whole run (it is only cleared at device close). Safe to clear here because
+                // the set's other job -- deduplicating the repeated parses of one undrained buffer, which is what
+                // gates pushing NOC-debug events.
+                for (auto* device : active_devices) {
+                    auto profiler_it = this->device_profiler_map.find(device->id());
+                    TT_ASSERT(profiler_it != this->device_profiler_map.end());
+                    DeviceProfiler& profiler = profiler_it->second;
+                    if (!profiler.device_markers_per_core_risc_map.empty()) {
+                        profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
+                    }
                 }
             }
         }
