@@ -756,6 +756,40 @@ class Attention(LightweightModule):
             self._decode_sdpa_progcfg_by_k[k_len] = pc
         return pc
 
+    def _chunked_row_linear(self, x, weight, *, seq_len: int, cap: int, progcfg_by_m: dict):
+        """A row-wise projection run ``cap`` rows at a time, staged through DRAM.
+
+        Exact: every output row depends only on the matching input row, so slicing
+        the sequence changes the launch sizes and nothing else. Used for the fused
+        QKV and the output projection on long prefills, where the full-length
+        matmul's circular buffers no longer fit alongside the layer's resident
+        1024-row tensors on a single chip.
+        """
+        hidden_in = x.shape[-1]
+        src = x if x.memory_config() == ttnn.DRAM_MEMORY_CONFIG else ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        progcfg = progcfg_by_m.get(cap)
+        outs = []
+        for start in range(0, seq_len, cap):
+            piece = ttnn.slice(
+                src, [0, 0, start, 0], [1, 1, start + cap, hidden_in], memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            out = ttnn.linear(
+                piece,
+                weight,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                program_config=progcfg,
+            )
+            ttnn.deallocate(piece)
+            outs.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+            ttnn.deallocate(out)
+        if src is not x:
+            ttnn.deallocate(src)
+        joined = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for o in outs:
+            ttnn.deallocate(o)
+        return joined
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -897,17 +931,43 @@ class Attention(LightweightModule):
                     xqkv = xqkv_padded
                     xqkv_already_sharded_for_split = False
         else:
-            if x.is_sharded():
-                x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            # Long prefill: keep BOTH the fused-QKV matmul's in0 and its output out of
+            # L1. Its circular buffers at M=1024 end at 1171680, and with x (1024 x
+            # 2048 bf16 = 4 MB) resident the highest L1 buffer sits at 1137600 — a
+            # ~34 KB overlap. Moving x out clears it.
+            _attn_cap = int(os.environ.get("QWEN3_TTS_ATTN_L1_SEQ_CAP", "512"))
+            _long_prefill = not is_decode and seq_len > _attn_cap and seq_len % _attn_cap == 0
+            _x_mem = ttnn.DRAM_MEMORY_CONFIG if _long_prefill else ttnn.L1_MEMORY_CONFIG
+            if x.is_sharded() or (_long_prefill and x.memory_config() != _x_mem):
+                x_il = ttnn.to_memory_config(x, _x_mem)
                 ttnn.deallocate(x)
                 x = x_il
-            xqkv = ttnn.linear(
-                x,
-                self.wqkv,
-                compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                program_config=wqkv_progcfg,
-            )
+            if _long_prefill:
+                # Row-chunk the fused QKV projection, staging through DRAM. Two things
+                # do not fit at M=1024 on TP=1: the output (1024 x 4096 bf16 = 8 MB)
+                # and the matmul's own circular buffers, which end at 1171680 and clash
+                # with the layer's resident 1024-row L1 tensors. Running the projection
+                # at M=_attn_cap gives it the circular buffers of a config that is known
+                # to fit, and the concatenated result lives in DRAM.
+                #
+                # A projection is row-wise, so this is exact -- the same arithmetic in
+                # smaller launches. SDPA further down is NOT row-wise and still sees the
+                # whole sequence; only the projections either side of it are chunked.
+                xqkv = self._chunked_row_linear(
+                    x,
+                    self.wqkv,
+                    seq_len=seq_len,
+                    cap=_attn_cap,
+                    progcfg_by_m=self._prefill_wqkv_progcfg,
+                )
+            else:
+                xqkv = ttnn.linear(
+                    x,
+                    self.wqkv,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    program_config=wqkv_progcfg,
+                )
             xqkv_already_sharded_for_split = False
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]

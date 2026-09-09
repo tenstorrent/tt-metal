@@ -474,15 +474,71 @@ class MLP(LightweightModule):
         """Apply SwiGLU MLP.
 
         Decode (mode=="decode" or seq_len==1): DRAM-sharded matmul chain.
-        Prefill: standard 1D-mcast matmul; for seq>=1024 we reshape to fit on device.
+        Prefill: standard 1D-mcast matmul; sequences past QWEN3_TTS_MLP_MM_CAP are
+        run in QWEN3_TTS_MLP_MM_CHUNK-row chunks (exact -- the MLP is row-wise).
         """
         seq_len = x.shape[-2]
         is_decode = mode == "decode" or seq_len == 1
 
-        # Keep activations in L1 for all sequence lengths. Very long sequences
-        # (seq >= 1024) are split into 1024-tile chunks via ttnn.reshape below, so
-        # the per-chunk tensor is always ≤ local_intermediate × 1024 × 2 bytes ≈ 6 MB
-        # on TP=2 (local_intermediate=3072) or 12 MB on TP=1 — both well within L1.
+        # ---- Long prefill: run the chain in row chunks -----------------------
+        # Every step here (gate, up, silu-mul, down, and the row-parallel
+        # all_reduce) is row-wise, so splitting the sequence is EXACT arithmetic in
+        # smaller launches, not an approximation.
+        #
+        # This has to be a loop, not a reshape. Folding rows into the batch dim --
+        # `reshape(x, [1, seq//C, C, -1])`, which is what this function used to do
+        # for seq >= 1024 -- makes num_blocks_total exceed num_cores and the 1D-mcast
+        # matmul rejects it outright ("num_blocks_total <= num_cores"). Chunking by
+        # slice keeps every launch at batch 1 and M = the chunk, which is exactly the
+        # shape each per-bucket program config was tuned for.
+        #
+        # Without this, bucket 1024 could not run at all: at M=1024 the down-proj's
+        # static circular buffers clash with L1 on BOTH N150 and N300, so the top
+        # entry of PREFILL_SEQS was unreachable even though warmup_all_buckets warms
+        # it. Measured bucket by bucket, 512 was the ceiling on both SKUs.
+        #
+        # The cap is the largest M known to fit. Sequences at or below it take the
+        # untouched path, so no bucket that already worked changes shape or config.
+        # Two separate numbers on purpose. The GATE is the longest one-shot prefill
+        # that fits, and it stays at 512 on every SKU so that no bucket which already
+        # worked changes shape or program config. The CHUNK is what a longer sequence
+        # is cut into, and it has to be smaller on one chip: with TP=1 the down-proj
+        # is K=6144 per chip against 3072 on TP=2, and its circular buffers at M=512
+        # clash with L1 once the caller's 1024-row tensors are live (measured: region
+        # ends 721632, highest L1 buffer 678848).
+        _mm_gate = int(os.environ.get("QWEN3_TTS_MLP_MM_CAP", "512"))
+        _mm_chunk = int(os.environ.get("QWEN3_TTS_MLP_MM_CHUNK", "0")) or (
+            256 if self.local_intermediate > 3072 else _mm_gate
+        )
+        if not is_decode and seq_len > _mm_gate and seq_len % _mm_chunk == 0:
+            # The whole chunk pipeline stages through DRAM: the full-length input, each
+            # chunk's result, and the concatenated output. A chunk's matmuls need the
+            # L1 that the full-length tensors would otherwise be holding -- with them
+            # resident, even the M=512 down-proj clashes on TP=1 (K=6144 per chip
+            # against 3072 on TP=2), which is the same op that runs fine as a genuine
+            # 512-token prefill. Keeping the long tensors out of L1 is what makes the
+            # cap a property of the matmul rather than of whatever else is live.
+            hidden_in = x.shape[-1]
+            src = (
+                x if x.memory_config() == ttnn.DRAM_MEMORY_CONFIG else ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            )
+            outs = []
+            for _start in range(0, seq_len, _mm_chunk):
+                piece = ttnn.slice(
+                    src, [0, 0, _start, 0], [1, 1, _start + _mm_chunk, hidden_in], memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                chunk_out = self.forward(piece, mode=mode)
+                ttnn.deallocate(piece)
+                outs.append(ttnn.to_memory_config(chunk_out, ttnn.DRAM_MEMORY_CONFIG))
+                ttnn.deallocate(chunk_out)
+            if src is not x:
+                ttnn.deallocate(src)
+            out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for o in outs:
+                ttnn.deallocate(o)
+            return out
+
+        # Keep activations in L1 for all sequence lengths.
         mem_cfg = ttnn.L1_MEMORY_CONFIG
         if is_decode:
             gate_up_progcfg = self._decode_gate_up_progcfg
@@ -495,10 +551,6 @@ class MLP(LightweightModule):
             down_progcfg = self._short_seq_down_progcfg
         else:
             gate_up_progcfg = down_progcfg = None
-
-        # Reshape for very large sequences to fit on device.
-        if seq_len >= 1024:
-            x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
         # seq <= SHORT_SEQ_LIMIT (32) is exactly ONE tile row, which is the only thing the
         # DRAM-sharded chain asks of M — and every decode config above is already built
@@ -678,8 +730,6 @@ class MLP(LightweightModule):
             program_config=down_progcfg,
         )
         ttnn.deallocate(hidden)
-        if seq_len >= 1024:
-            output = ttnn.reshape(output, [1, 1, seq_len, -1])
         # Row-parallel down-proj on TP>1: each chip has a partial sum; all_reduce gives full hidden.
         if self.tp_size > 1:
             from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
