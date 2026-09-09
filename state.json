@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "timestamp": "2026-09-09T12:30:00Z",
-    "run_id": 34351926998
+    "timestamp": "2026-09-09T21:37:00Z",
+    "run_id": 34389318110
   },
-  "run_id": "34320027304",
+  "run_id": 34389318110,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -63,15 +63,6 @@
       "status": "Open, mergeable_state=behind. No update since 2026-09-02, 2 comments. Low activity - candidate for stale-PR watch next round."
     },
     "54862_ttsim_md": "PR#54862 open, skip-ci docs-only, awaiting maintainer review",
-    "55266_55263_softplus_bias": {
-      "issues": [
-        55266,
-        55263
-      ],
-      "branch": "repo-assist/fix-issue-55266-softplus-bias-activation-param2",
-      "title": "fix(matmul): forward beta_reciprocal to fused-bias SOFTPLUS activation and drop vestigial third param",
-      "status": "opened this run; adds missing activation_param2 to ActivationApplyHelper::apply in bias epilogue (both wormhole and quasar copies), and drops unused 3rd softplus param from unary_op_utils.cpp string table; CI triggered via pr-gate.yaml, outcome unknown yet, docker unavailable in agent env so unverified locally, check next run"
-    },
     "55434_fix_pr": {
       "issue": 55434,
       "title": "Fix WH pack_untilize narrow_row row-stride offset",
@@ -111,8 +102,7 @@
       "status": "Open. 5/5 pre-checks green (RTL Sim CI + 4 Cycode). Awaiting reviewer action / full PR-Gate not yet triggered. mergeable_state=behind. No action needed this run."
     },
     "55293_softplus_bias": {
-      "issue": "55266,55263",
-      "status": "Open, CLEAN. PR-Gate Status = success, ~99 checks all green. Unit test added (test_linear_softplus_with_bias_and_core_grid). CodeOwners: eltwise team approved (mateusznowakTT), mmfusedreduce team still pending. Ready for maintainer merge decision. No repo-assist action needed - just monitor."
+      "status": "MERGED 2026-09-09T11:24:16Z"
     },
     "54792_expm1_upper_clamp": {
       "issue": 54770,
@@ -398,7 +388,11 @@
     "55838": {
       "date": "2026-09-09T06:30:00Z",
       "note": "Quasar NOC_V2_WR_RESP_VC->NOC_OVERLAY_WR_RESP_VC rename issue. Verified against current main (HEAD b7b582aa): grepped noc_nonblocking_api_v2.h and noc_atomic_ops_probe.cpp - zero remaining NOC_V2_WR_RESP_VC references, all call sites correctly use NOC_OVERLAY_WR_RESP_VC. Already fixed by a commit after the issue's cited SHA (likely #55399). No fix PR opened; no comment posted (avoid noise on an issue a maintainer will notice is stale/auto-resolved)."
-    }
+    },
+    "55918_55917": "shield_prefill deadlock/race issues, both fixed via linked PR #55741 (acvejicTT), no repo-assist action",
+    "55965": "Quasar STALLWAIT math-drain, already bug-labeled + assigned amahmudTT, statically-audited findings for Quasar owner",
+    "55920": "eltwise perf-test alignment BH/QSR, already assigned ndivnicTT, tracking issue",
+    "55913": "LLK Sanitizer epic/tracker, assigned sstanisicTT, no action needed"
   },
   "stale_pr_nudges": {
     "34933": {
@@ -652,6 +646,21 @@
     "46578": {
       "last_ping": "2026-09-08",
       "type": "stale_approved_needs_rebase"
+    },
+    "35274": {
+      "date": "2026-09-09",
+      "type": "author_checkin",
+      "note": "merge-conflict (dirty), never previously nudged"
+    },
+    "35279": {
+      "date": "2026-09-09",
+      "type": "author_checkin",
+      "note": "merge-conflict (dirty), never previously nudged"
+    },
+    "35334": {
+      "date": "2026-09-09",
+      "type": "author_checkin",
+      "note": "merge-conflict (dirty), never previously nudged"
     }
   },
   "backlog_cursor": {
@@ -667,7 +676,7 @@
     "task5_maintain_20260825b": "re-verified all 6 tracked PRs (52106/51868/53113/53478/53690/54246) unchanged: still open, blocked on review, no new maintainer feedback, no CI regressions",
     "task6_stale_prs_20260825": "nudged #50661 (author nudge - CI failures ttnn ops fast unit tests/ttnn reduce group, mergeable_state blocked) and #51507 (/codeowners ping - pending CodeOwners group approval, [skip ci], mergeable_state blocked); investigated #38627 (PR Gate Status failure conclusion found, mergeable_state unknown) but deferred nudge to next run pending closer review of failure cause",
     "task1_task2_2026_08_26": "reviewed newest issues 54371(tt-train layernorm fw/bw CB format, already labeled bug+assigned, complex root-cause investigation issue, no action needed)/54365/54362/54361/54360/54359/54358/54357/54356/54355/54354(Metal2.0 architectural port issues, no confirmed defect)/54350/54343(tt-train Galaxy/bh_sc1 instability, HW/infra flakiness, no action)/54346/54344/54342(CI auto-triage, auto-generated)/54334(feature complete, closed by PR#54335)/54332/54330/54329 - no new comments or labels needed this run",
-    "task1_task2": "below #55102 (2026-09-02 run 33600125785)",
+    "task1_task2": "reviewed newest issues down to ~55900 this run (2026-09-09 21:37); next run continue scanning below 55900, or resume oldest-first cursor for task2 commenting",
     "task6": "stale PR scan reached 51544/51567/51558 this run (all nudged); next run resume further down oldest-updated list (51424 skipped - draft)",
     "task1_task2_issues_20260827": "reviewed newest issues 54508 down to 54446; only 54495 was unlabeled+confirmed-bug-worthy; 54485 (log spam) and 54450 (O3 opt-level, has fix PR #54454) left unlabeled/no action; rest already triaged",
     "task1_task2_2026_08_27": "reviewed newest issues 54549 down to 54508; labeled 54524(bug, untilize hang)/54513(bug, reciprocal flush, has fix PR 54514); rest already assigned/covered/CI-auto-triage",
@@ -955,7 +964,12 @@
       "note": "GPT-OSS multi-batch request; already has impl PR #55589"
     },
     "55633": "bug (2026-09-07)",
-    "55609": "docs (2026-09-07)"
+    "55609": "docs (2026-09-07)",
+    "55900": {
+      "label": "bug",
+      "date": "2026-09-09",
+      "note": "DM_DYNAMIC_NOC multicast+read hang on Blackhole (kinginu), reproducible 3/3, mechanism not established, no fix PR - needs device profiling"
+    }
   },
   "issues_commented": {
     "53922": {
@@ -992,6 +1006,11 @@
     "55643": "2026-09-07 - relu_min vInt sign+magnitude bug, root cause confirmed against current code, left fix to maintainer"
   },
   "run_history": [
+    {
+      "run_id": "34389318110",
+      "date": "2026-09-09T21:37:00Z",
+      "summary": "Task1/2: labeled #55900 bug (DM_DYNAMIC_NOC BH multicast/read hang, reproducible, well-documented by kinginu, mechanism not fully established, no fix PR); reviewed #55965 (already bug-labeled+assigned), #55918/#55917 (shield_prefill deadlock/race issues, both already fixed via linked PR #55741, no dup), #55920 (eltwise perf-test alignment tracking, already assigned), #55913 (LLK Sanitizer epic tracker) - no action on any. Task5: re-verified tracked PRs; #55293 (softplus+bias) confirmed MERGED 2026-09-09T11:24:16Z by maintainer; #55847/#55670/#55435/#54932/#53690/#54246/#53113/#54666/#51868 all unchanged (get_check_runs showed 0 new failures across all). Task6: nudged 3 never-before-pinged author-blocked (dirty/merge-conflict) PRs: #35274, #35279, #35334. Task8: updated monthly summary #55015."
+    },
     {
       "run_id": "34320027304",
       "date": "2026-09-09T06:30:00Z",
@@ -1149,7 +1168,12 @@
       "merged_at": "2026-09-03T20:46:55Z"
     },
     "55591": "closed - superseded by community PR #55583 (mouliraj-mcw), narrower scope, HW-verified",
-    "55847_ci_checked": "2026-09-09: build-artifact ran, 2 tilize test failures unrelated to gather change, commented on PR"
+    "55847_ci_checked": "2026-09-09: build-artifact ran, 2 tilize test failures unrelated to gather change, commented on PR",
+    "55293": {
+      "status": "merged",
+      "merged_at": "2026-09-09T11:24:16Z",
+      "note": "softplus bias fix (was PR for issues 55266/55263)"
+    }
   },
   "task5_maintain_20260908": "re-verified check-runs on tracked PRs 55670/55424/54932/54792 (all 5/5 green pre-checks unchanged, no build-artifact.yaml run, no new reviews); 53690/54666/51868/54246/55293 unchanged"
 }
