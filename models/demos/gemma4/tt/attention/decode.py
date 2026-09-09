@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -43,6 +44,58 @@ def _qkv_norm_island_memcfg(batch, use_embedding_rope):
     if batch != 1 or not use_embedding_rope:
         return ttnn.DRAM_MEMORY_CONFIG
     return ttnn.L1_MEMORY_CONFIG
+
+
+def _wh_paged_update_user_cap():
+    """Users per ``paged_update_cache`` call on Wormhole.
+
+    The op needs its update tensor HEIGHT_SHARDED one user per core, and its
+    static CBs land on those same cores. At batch-32 the 32-core grid
+    [0-0, 7-3] does not leave room for both: compile fails outright with
+    "circular buffers ... clash with L1 buffers" (12384 B over), and freeing
+    enough L1 to make it compile (writing K and V one at a time) still wedges
+    the device ~120 decode tokens in. Eight users fit with margin, so batch>8
+    is written in groups of 8. Blackhole has the L1 headroom and is exempt.
+    """
+    return max(1, int(os.environ.get("GEMMA4_WH_PAGED_UPDATE_USERS", "8")))
+
+
+def _wh_user_groups(cache_pos, page_table, batch, cap):
+    """Yield ``(start, end, cache_pos_slice, page_table_slice)`` per user group.
+
+    NOTE (perf): ``cache_pos`` and ``page_table`` are the same two device tensors
+    for every layer of a decode step, so these slices are re-cut once per layer —
+    8 extra dispatches x num_layers per token at batch-32. Hoisting them to once
+    per step belongs in the model's decode entry, where the tensors are owned;
+    doing it here would need a cross-layer memo whose entries can outlive a trace
+    capture. Left per-call deliberately.
+    """
+    pt_cols = page_table.shape[1]
+    for start in range(0, batch, cap):
+        end = min(start + cap, batch)
+        yield (
+            start,
+            end,
+            ttnn.slice(cache_pos, [start], [end]),
+            ttnn.slice(page_table, [start, 0], [end, pt_cols]),
+        )
+
+
+def _height_shard_memcfg(num_users, shard_shape, grid_x=8):
+    """HEIGHT_SHARDED L1 config with one user per core, row-major on an 8-wide grid."""
+    n = int(num_users)
+    if n <= grid_x:
+        core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n - 1, 0))
+    else:
+        rows = n // grid_x
+        if n % grid_x:
+            raise ValueError(f"num_users={n} must divide {grid_x} for a rectangular shard grid")
+        core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, rows - 1))
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.CoreRangeSet([core_range]), list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -118,6 +171,11 @@ def decode_forward(
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
+    # Fused QKV stays live in L1 interleaved otherwise, and at decode batch=32
+    # that allocation sits in the same core range as HEIGHT_SHARDED K/V
+    # ([0-0, 7-3]). ``paged_update_cache`` CBs then clash (~12 KB overlap on
+    # Wormhole). Packed decode already deallocates here.
+    xqkv.deallocate(True)
 
     # 3. Per-head norms. Batch-1 embedding RoPE keeps the staging island in L1;
     # unsupported rotation paths retain the prior DRAM placement.
@@ -220,9 +278,14 @@ def decode_forward(
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
         if not is_kv_shared:
-            # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
-            tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-            tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
+            # After HF-style RoPE, tensors may be in DRAM. HEIGHT_SHARD for the
+            # cache update, except Wormhole batch>8, which writes in groups of
+            # <=8 users and reshards each group itself (_wh_paged_update_user_cap).
+            batch_for_shard = int(tt_k.shape[1])
+            skip_full_shard = (not is_blackhole()) and batch_for_shard > _wh_paged_update_user_cap()
+            if not skip_full_shard:
+                tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
+                tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
             if page_table is not None:
                 # Per-device kv-head count of the layer's input view. When the cache
@@ -234,6 +297,8 @@ def decode_forward(
                 num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
                 eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
                 batch = tt_k.shape[1]
+                wh_user_cap = _wh_paged_update_user_cap()
+                chunk_wh_users = (not is_blackhole()) and batch > wh_user_cap
                 if sequential_kv_write and batch > 1:
                     # Speculative VERIFY: the B candidates sit at consecutive
                     # positions that share ONE paged block (all batch rows of the
@@ -252,12 +317,7 @@ def decode_forward(
                     # so a 1-core config with that same shard shape is exactly the
                     # per-user layout the op expects.
                     _shard_shape = list(q_sharded_mem.shard_spec.shape)
-                    _one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-                    single_user_mem = ttnn.MemoryConfig(
-                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                        ttnn.BufferType.L1,
-                        ttnn.ShardSpec(_one_core, _shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-                    )
+                    single_user_mem = _height_shard_memcfg(1, _shard_shape)
                     k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
                     v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
                     nkv, hd = k_seq.shape[2], k_seq.shape[3]
@@ -288,6 +348,33 @@ def decode_forward(
                         )
                         for t in (kb, vb, pos_b, pt_b):
                             t.deallocate(True)
+                    k_seq.deallocate(True)
+                    v_seq.deallocate(True)
+                elif chunk_wh_users:
+                    # Wormhole batch>8: write <=8 users per call so the update
+                    # tensor's shard grid stays inside what paged_update_cache's
+                    # CBs leave free (see _wh_paged_update_user_cap). K/V are
+                    # already DRAM-interleaved here (skip_full_shard), which is
+                    # also the cheapest place to slice a user range from.
+                    _shard_shape = list(q_sharded_mem.shard_spec.shape)
+                    k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+                    v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+                    nkv, hd = k_seq.shape[2], k_seq.shape[3]
+                    for start, end, pos_b, pt_b in _wh_user_groups(cache_pos, page_table, batch, wh_user_cap):
+                        group_mem = _height_shard_memcfg(end - start, _shard_shape)
+                        for cache, seq in ((k_cache, k_seq), (v_cache, v_seq)):
+                            gb = ttnn.slice(seq, [0, start, 0, 0], [1, end, nkv, hd])
+                            gb = ttnn.to_memory_config(gb, group_mem)
+                            ttnn.experimental.paged_update_cache(
+                                cache,
+                                gb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                                block_size=eff_bs,
+                                num_kv_heads=num_local_kv_heads,
+                                **paged_modulo_kwargs,
+                            )
+                            gb.deallocate(True)
                     k_seq.deallocate(True)
                     v_seq.deallocate(True)
                 else:

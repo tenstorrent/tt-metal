@@ -211,6 +211,14 @@ class Gemma4Model:
     # step re-acquires a fresh semaphore. Non-PLI keeps device token feedback
     # (``_tt_vllm_always_refresh_decode_trace_inputs=False``) for async; the
     # eagerly sampled id is still written into the padded feedback buffer.
+    #
+    # The hazard is specific to the force-argmax gather: only that path calls
+    # ``all_gather_async`` with a semaphore handed out by ``get_and_cycle_*``.
+    # The default top-k path builds ``SamplingGenerator`` with ``tt_ccl=None``
+    # and therefore gathers through stock ``ttnn.all_gather``, which takes no
+    # global semaphore and replays safely. ``__init__`` narrows this to
+    # ``force_argmax`` per instance; the class default stays True so a subclass
+    # that skips that assignment keeps the conservative eager path.
     _tt_disable_sampling_trace = True
 
     def __init__(
@@ -535,6 +543,15 @@ class Gemma4Model:
                 )
                 if force_argmax:
                     _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
+                # Only the force-argmax gather carries the frozen-semaphore
+                # hazard (see ``_tt_disable_sampling_trace``). Keeping the top-k
+                # sampling trace enabled takes the whole topk/all_gather/sampling
+                # chain out of the per-step host dispatch, which is what forced
+                # the blocking decode-trace replay and the demo's pipelined-read
+                # gates. GEMMA4_DISABLE_SAMPLING_TRACE=1 restores eager sampling.
+                self._tt_disable_sampling_trace = force_argmax or os.environ.get(
+                    "GEMMA4_DISABLE_SAMPLING_TRACE", "0"
+                ).strip().lower() in ("1", "true", "yes", "on")
                 self._sampling_logits_in_dram = force_argmax
                 logger.info(
                     f"On-device sampling initialized (vocab={hf_config.vocab_size}, "

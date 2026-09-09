@@ -14,6 +14,7 @@ from models.common.sampling import SamplingParams, slice_sampling_params
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
     maybe_disable_pli_prefill_trace,
@@ -41,6 +42,40 @@ GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 # vLLM token-chunked continuations can land on unaligned start_pos (e.g. 48);
 # align down and re-prefill the prefix (Galaxy SDPA_CHUNK_ALIGN pattern).
 SDPA_CHUNK_ALIGN = 128
+
+# Drain gates for the decode-trace replay. A blocking replay costs real
+# throughput -- it stops the next step's trace from overlapping the current
+# step's sampling -- so each gate is armed only where a non-blocking replay was
+# measured to wedge the device (12B T3K, 200-token runs):
+#
+#   position >= 64Ki : ARMED. 128k unbounded decode wedges mid-generation
+#                      (coherent output, then a blocking .cpu() that never
+#                      returns) at ~73/133/135 tokens across runs. Blocking:
+#                      45.88 ms/tok and completes. 64k (~59k pos) is clean
+#                      non-blocking, so the gate sits above it.
+#   batch > 8        : OFF. Batch-32 was suspected but is stable non-blocking:
+#                      4/4 x 200 tokens at 53.05 ms/tok, versus 73.88 blocking.
+#                      What actually wedged batch-32 was a 32-core paged_update
+#                      shard, fixed in attention/decode.py, not the replay mode.
+_GEMMA4_BLOCKING_DECODE_TRACE_POS = int(os.environ.get("GEMMA4_BLOCKING_DECODE_TRACE_POS", "65536")) or None
+_GEMMA4_BLOCKING_DECODE_TRACE_BATCH = int(os.environ.get("GEMMA4_BLOCKING_DECODE_TRACE_BATCH", "0")) or None
+
+
+def _host_decode_pos_max(current_pos) -> int:
+    """Max host decode position across DP chunks (0 if unknown)."""
+    m = 0
+    for pos in current_pos or ():
+        if pos is None:
+            continue
+        if isinstance(pos, torch.Tensor) and pos.numel():
+            m = max(m, int(pos.reshape(-1).max().item()))
+        else:
+            try:
+                m = max(m, int(pos))
+            except (TypeError, ValueError):
+                pass
+    return m
+
 
 # Keep host page-table widths aligned with captured prefill buffers. Reuse an
 # already-wide table rather than concatenating a fresh padding tensor at every
@@ -934,6 +969,11 @@ class ChunkedPrefillPageTableGuardMixin:
             and page_table is not None
             and kv_cache is not None
             and seq_len > max_chunk
+            # Whole-prompt length, not chunk length. Replaying a per-chunk trace
+            # is a pessimisation once a prompt needs many chunks: 12B / T3K at
+            # 64k (32 chunks of 2048) measured 47.1 s traced vs 20.9 s eager.
+            # Only a prompt just over one chunk is still worth tracing.
+            and seq_len <= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
             and max_chunk in (128, 512, 1024, 2048, 4096)
             and not bool(getattr(self.model[model_id], "hidden_size_per_layer_input", 0))
             # Bounded final-chunk K/V must be stashed eagerly and committed only
@@ -1612,8 +1652,25 @@ class ChunkedPrefillPageTableGuardMixin:
 
         if page_table_changed:
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
+        # Blocking costs a step of host/device overlap, so it is armed only
+        # where a non-blocking replay was measured to wedge -- see the gate
+        # constants for which one is armed and why.
+        blocking_replay = (
+            _GEMMA4_BLOCKING_DECODE_TRACE_BATCH is not None and batch > _GEMMA4_BLOCKING_DECODE_TRACE_BATCH
+        ) or (
+            _GEMMA4_BLOCKING_DECODE_TRACE_POS is not None
+            and _host_decode_pos_max(current_pos) >= _GEMMA4_BLOCKING_DECODE_TRACE_POS
+        )
+        if blocking_replay and not getattr(self, "_logged_blocking_long_decode_trace", False):
+            logger.info(
+                "Blocking decode-trace replay (batch={}, batch_gate={}, pos_gate={})",
+                batch,
+                _GEMMA4_BLOCKING_DECODE_TRACE_BATCH,
+                _GEMMA4_BLOCKING_DECODE_TRACE_POS,
+            )
+            self._logged_blocking_long_decode_trace = True
         for i, trace_id in self.trace_ids_decode[decode_trace_key].items():
-            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=blocking_replay)
         return self.trace_output_decode[decode_trace_key]
 
 

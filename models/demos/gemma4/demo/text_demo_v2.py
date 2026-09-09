@@ -676,9 +676,21 @@ def test_demo_text(
     iteration = 0
     users_decoding = True
 
+    # 2-deep pipelined token reads overlap two decode traces on CQ0.
+    # The batch / ISL ceilings default to "no ceiling": neither batch nor ISL is
+    # what decides whether a run wedges. The mid-decode device hang this used to
+    # guard against reproduces at batch-1 / 128-token ISL too (~1 run in 8, at
+    # token 162), and equally with pipelining off -- it tracks the non-blocking
+    # decode-trace replay, which the generator gates separately. Turning
+    # pipelining off here costs throughput without buying reliability, so the
+    # ceilings exist only for bisecting.
+    _pipe_max_batch = int(os.environ.get("GEMMA4_DECODE_PIPELINE_MAX_BATCH", "0")) or None
+    _pipe_max_isl = int(os.environ.get("GEMMA4_DECODE_PIPELINE_MAX_ISL", "0")) or None
     pipeline_reads = (
         device_sampling_params is not None
         and enable_trace
+        and (_pipe_max_batch is None or batch_size <= _pipe_max_batch)
+        and (_pipe_max_isl is None or max(prefill_lens) <= _pipe_max_isl)
         and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
     )
     pending_reads = []
