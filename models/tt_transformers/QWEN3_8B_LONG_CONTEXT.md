@@ -87,6 +87,17 @@ the tail so they sit at contexts 31,744 -> 32,768):
 pytest models/tt_transformers/tests/test_long_context.py -s -k "32k-b1" --accuracy
 ```
 
+Correctness gate (1024-token reference, about a minute; what tt-optimization-loop runs before
+and after every change it tries -- it reads the `top-1` and `top-5` lines this prints):
+
+```
+TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
+  pytest models/tt_transformers/tests/accuracy/test_model.py -x -q
+```
+
+Measured on the shipped configuration: top-1 0.8516, top-5 0.9785 over 512 teacher-forced
+predictions, against floors of 0.83 and 0.96.
+
 Attributing the per-token host cost (changes nothing about what runs):
 
 ```
