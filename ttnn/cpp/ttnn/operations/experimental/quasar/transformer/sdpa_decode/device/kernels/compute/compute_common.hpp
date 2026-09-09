@@ -854,14 +854,14 @@ void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     DataflowBuffer dfb_in(in_dfb);
     DataflowBuffer dfb_out(out_dfb);
     copy_init(in_dfb);
-    log_tile_init();
+    MATH((log_tile_init()));
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0 /*dst*/);
-        log_tile(0);
+        MATH((log_tile(0)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);

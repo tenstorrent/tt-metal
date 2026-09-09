@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
@@ -31,7 +32,8 @@ void kernel_main() {
     constexpr auto num_cores_per_batch = get_arg(args::num_cores_per_batch);  // num cores per batch
     constexpr auto num_cores = get_arg(args::num_cores);                      // num running cores in total
     // Reducer semaphore lives at the same L1 offset on every core.
-    uint32_t reducer_semaphore_addr = get_semaphore(sem::reducer);  // semaphore for reducer
+    Semaphore reducer_sem(sem::reducer);
+    Semaphore output_sem(sem::output);
     constexpr auto k_chunk_size = get_arg(args::k_chunk_size);
     constexpr auto num_q_heads = get_arg(args::num_q_heads);
     constexpr auto num_kv_heads = get_arg(args::num_kv_heads);
@@ -67,7 +69,6 @@ void kernel_main() {
     // owns writer_cur_pos alone and can always pop it.
     constexpr auto dfb_cur_pos = dfb::cur_pos;
 #endif
-    constexpr auto dfb_col_identity = dfb::col_identity;
     constexpr auto dfb_zero_in = dfb::zero_in;
 #ifdef SLIDING_WINDOW
     constexpr auto dfb_sliding_window_mask_in = dfb::sliding_window_mask_in;
@@ -79,12 +80,12 @@ void kernel_main() {
     constexpr auto dfb_mask_in = dfb::mask_in;
 #endif
     constexpr auto dfb_out_o = dfb::out_o;
-    constexpr auto dfb_out_worker = dfb::out_o;
+    constexpr auto dfb_out_worker = dfb::out_worker;
     constexpr auto dfb_out_m = dfb::out_m;
     constexpr auto dfb_out_l = dfb::out_l;
 #ifdef HAS_INTERMED_OUT
-    // this DFB holds the output intermediates from other worker cores
-    constexpr auto dfb_intermed_out = dfb::intermed_out;
+    // Per-core NOC staging buffer for tree-reduction child->parent transfers (Gen2 scratchpad).
+    constexpr auto scratch_id_intermed_out = scratch::intermed_out;
 #endif
     constexpr auto dfb_out = dfb::out;
 
@@ -231,10 +232,6 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     dataflow_kernel_lib::prepare_zero_tile<dfb_zero_in>();
-    {
-        DataflowBuffer col_identity_buf(dfb_col_identity);
-        generate_bcast_col_scalar(col_identity_buf, identity_scalar_packed);
-    }
 
     // Generate sliding window mask only if we have local data and need it
 #ifdef SLIDING_WINDOW
@@ -270,13 +267,15 @@ void kernel_main() {
     const auto out_writer = TensorAccessor(tensor::out);
 #endif
 
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
-
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
     noc.async_write_barrier();  // #19201 BH hang workaround
+
+#ifdef HAS_INTERMED_OUT
+    Scratchpad<uint8_t> intermed_scratch(scratch_id_intermed_out);
+    const uint32_t intermed_base = intermed_scratch.get_base_address();
+#endif
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
@@ -298,7 +297,7 @@ void kernel_main() {
                     // Each round uses a 4-bit field: round 0 = bits 0-3, round 1 = bits 4-7, etc.
                     while (true) {
                         invalidate_l1_cache();
-                        uint32_t sem_val = *in0_receiver_semaphore_addr_ptr;
+                        uint32_t sem_val = reducer_sem.value();
                         uint8_t step_sem = (sem_val >> step_semaphore_shift[round]) & 0x0F;
                         if (step_sem >= 1) {
                             break;
@@ -306,17 +305,16 @@ void kernel_main() {
                     }
 
                     // Now read the data from the intermediate buffer
-                    constexpr uint32_t tile_bytes_intermed = get_tile_size(dfb_intermed_out);
+                    constexpr uint32_t tile_bytes_intermed = get_tile_size(dfb_out_m);
                     constexpr uint32_t o_read_size = out_chunk_tiles * tile_bytes_intermed;
                     constexpr uint32_t ml_read_size = PNHt * tile_bytes_intermed;
 
                     // Calculate offset based on round (child writes at round offset)
                     uint32_t block_offset = round * (out_chunk_tiles + 2 * PNHt) * tile_bytes_intermed;
-                    DataflowBuffer dfb_intermed(dfb_intermed_out);
                     const uint8_t noc_id = noc.get_noc_id();
                     const uint32_t my_noc_x = my_x[noc_id];
                     const uint32_t my_noc_y = my_y[noc_id];
-                    uint32_t intermed_l1_read_addr = dfb_intermed.get_read_ptr() + block_offset;
+                    uint32_t intermed_l1_read_addr = intermed_base + block_offset;
                     UnicastEndpoint intermed_src;
 
                     // Reserve space in CBs and read data
@@ -369,7 +367,6 @@ void kernel_main() {
             DataflowBuffer dfb_out_w(dfb_out_worker);
             DataflowBuffer dfb_out_m_buf(dfb_out_m);
             DataflowBuffer dfb_out_l_buf(dfb_out_l);
-            DataflowBuffer dfb_intermed(dfb_intermed_out);
             dfb_out_w.wait_front(out_chunk_tiles);
             dfb_out_m_buf.wait_front(PNHt);
             dfb_out_l_buf.wait_front(PNHt);
@@ -382,7 +379,7 @@ void kernel_main() {
             // Get parent's NOC address — reduction_group_core_xs/ys[c] = get_vararg(c) / get_vararg(ncph + c).
             uint32_t parent_noc_x = get_vararg(parent_core_in_group);
             uint32_t parent_noc_y = get_vararg(num_cores_per_head + parent_core_in_group);
-            uint32_t output_write_addr = dfb_intermed.get_write_ptr() + block_offset;
+            uint32_t output_write_addr = intermed_base + block_offset;
             UnicastEndpoint output_dst;
 
             // Send l, m, o to parent (same order as original worker_compute)
@@ -407,9 +404,9 @@ void kernel_main() {
                 {},
                 {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = output_write_addr});
             noc.async_write_barrier();
-            // Reducer semaphore lives at the same L1 offset on every core, so Semaphore<>::up()
+            // Reducer semaphore lives at the same L1 offset on every core, so Semaphore::up()
             // (which encodes the dst NoC addr from local_l1_addr_) is the correct fit here.
-            Semaphore<>(sem::reducer).up(noc, parent_noc_x, parent_noc_y, step_semaphore_inc[send_at_round]);
+            reducer_sem.up(noc, parent_noc_x, parent_noc_y, step_semaphore_inc[send_at_round]);
 
             // pop front
             dfb_out_w.pop_front(out_chunk_tiles);
@@ -449,7 +446,7 @@ void kernel_main() {
                 // read from reducer cores
                 constexpr uint32_t num_reducers_per_output = num_reducer_cores / num_output_cores;
                 constexpr uint32_t num_reducers_to_wait = num_reducers_per_output - 1;
-                Semaphore<>(sem::output).wait(num_reducers_to_wait);
+                output_sem.wait(num_reducers_to_wait);
 
                 uint32_t reduce_core_read_index_start = (cur_batch * num_cores_per_batch) / num_cores_per_head;
 
@@ -505,7 +502,7 @@ void kernel_main() {
                 // tell output core that its output is ready — all_output_noc_x/y[cur_batch]
                 uint32_t output_core_noc_x = get_vararg(output_x_base + cur_batch);
                 uint32_t output_core_noc_y = get_vararg(output_y_base + cur_batch);
-                Semaphore<>(sem::output).up(noc, output_core_noc_x, output_core_noc_y, 1);
+                output_sem.up(noc, output_core_noc_x, output_core_noc_y, 1);
             }
 #endif
         } else {
