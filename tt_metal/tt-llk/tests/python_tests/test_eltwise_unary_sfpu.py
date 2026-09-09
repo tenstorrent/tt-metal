@@ -509,31 +509,21 @@ _CAT_B_DERIVED_DIVERGENCES = frozenset(
 
 _EDGE_DIVERGENCE_REASON = {
     MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
-    "documented contract: SFPSETCC is specified only for inputs that are not negative "
-    "zero (tt-isa-documentation WormholeB0/.../VectorUnit.md). These are the 2 "
-    "unpack-to-dest combinations, the only ones where -0.0 reaches the LREG — the other 6 "
-    "pass vacuously.",
+    "documented SFPSETCC contract, which is specified only for inputs that are not "
+    "negative zero. Scoped to the unpack-to-dest combinations, the only ones where a real "
+    "-0.0 reaches the LREG.",
     MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
     "SFPSETCC negative-zero caveat as Sign, and the same unpack-to-dest scoping.",
-    MathOperation.Reciprocal: "1/NaN returns +0: the kernel does not propagate NaN, where "
-    "IEEE, torch and the golden all give NaN. Every other special agrees (1/±inf = ±0, "
-    "1/±0 = ±inf), so this is the NaN probe alone and it diverges on every combination that "
-    "delivers one. Not prescribed by the ISA, which says only that NaN inputs follow 'the "
-    "usual IEEE754 rules'.",
+    MathOperation.Reciprocal: "1/NaN returns +0; IEEE, torch and the golden all give NaN. "
+    "Every other special agrees, so this is the NaN probe alone, and it diverges on every "
+    "combination that delivers one. Not prescribed by the ISA.",
     MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
-    "NaN. The non-finite guard added with the sqrt_custom(+inf) fix passes non-finite input "
-    "straight through rather than synthesising a NaN, which is right for +inf and NaN and "
-    "wrong for -inf -- a deliberate limit of the minimal fix. The constraint is erfinv, not "
-    "asin/acos: asin/acos seed quiet_NaN() and commit the range-reduced value only under "
-    "v_if(abs(val) <= 1.0f), so a NaN out of sqrt_custom on their |v| > 1 lanes is never "
-    "observable. erfinv's NR undershoot drives tmp + intermediate_result non-positive for "
-    "small in-domain x -- erfinv(1e-6) already reads 0x00000000 -- so a negative-to-NaN "
-    "guard would regress an ordinary input to NaN. Before the fix this combination returned "
-    "+inf, which agreed with the golden by accident: the golden's NaN is itself narrowed to "
-    "inf on a bf16 output. See https://github.com/tenstorrent/tt-metal/issues/52930.",
+    "NaN. The non-finite guard passes non-finite input straight through rather than "
+    "synthesising a NaN, which is right for +inf and NaN and wrong for -inf -- a deliberate "
+    "limit of the minimal fix, since a negative-to-NaN guard would regress erfinv on "
+    "ordinary in-domain inputs. See https://github.com/tenstorrent/tt-metal/issues/52930.",
     MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
-    "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
-    "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
+    "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG.",
     MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
     "and same unpack-to-dest scoping as Sqrt.",
 }
@@ -571,9 +561,8 @@ def _assert_signed_zero_partition_valid():
     # probe never arrived on the datacopy path. negative_zero_delivered() now keeps the probe
     # off those pipelines, so an entry here would be a non-strict xfail that can never fire.
     assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
-        "Signbit's divergences were a stimulus limitation, not a kernel defect. The -0.0 "
-        "probe is no longer sent where it cannot be delivered, so re-adding entries here "
-        "means the delivery gate changed -- re-derive it rather than restoring the table."
+        "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
+        "here means the delivery gate changed -- re-derive it rather than restoring it."
     )
 
     for op, diverges_when_unpack_to_dest in expectations.items():
@@ -589,9 +578,8 @@ def _assert_signed_zero_partition_valid():
             f"{diverges_when_unpack_to_dest}).\n"
             f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
             f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
-            "The signed-zero explanation above rests on this partition — if the "
-            "measurement really moved, re-derive the explanation rather than only "
-            "editing the table."
+            "The comment above rests on this partition -- if the measurement really "
+            "moved, re-derive the explanation rather than only editing the table."
         )
 
     assert set(_EDGE_KNOWN_DIVERGENCES[MathOperation.Sign]) == set(
@@ -754,21 +742,15 @@ def test_sqrt_custom_infinity_regression(request):
     res = torch.tensor(configuration.run().result, dtype=torch.float32)
 
     assert res[0] == float("inf"), (
-        f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. This is the defect the "
-        "non-finite guard in ckernel_sfpu_sqrt_custom.h exists to prevent: the "
-        "fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes it to +0, and the "
-        "next multiply is 0 * -inf = NaN. Every consumer inherits it -- erfinv(+/-1) is "
-        "how it was originally found. See tt-metal issue #52930."
+        f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. The non-finite guard in "
+        "ckernel_sfpu_sqrt_custom.h is what prevents this. See tt-metal issue #52930."
     )
-    # Tolerance, not equality: sqrt_custom is a magic-seed + Newton-Raphson approximation
-    # (~14 correct bits after two iterations), so sqrt_custom(4.0) is near 2.0, not exactly
-    # 2.0. The band only has to be tight enough to separate "computed" from "passed through",
-    # and a pass-through lane would read 4.0.
+    # Tolerance, not equality: sqrt_custom is an approximation, so the band only has to
+    # separate a computed 2.0 from a passed-through 4.0.
     assert torch.allclose(res[1:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
         f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probe "
-        f"(max deviation {(res[1:] - 2.0).abs().max().item():.6g}). The non-finite guard is "
-        "supposed to divert only zero and the 255-exponent lanes; a finite lane reaching the "
-        "pass-through path means the predicate has been widened."
+        f"(max deviation {(res[1:] - 2.0).abs().max().item():.6g}); the non-finite guard's "
+        "predicate has been widened to divert finite lanes."
     )
 
 
@@ -844,19 +826,17 @@ def test_reciprocal_compat_negative_zero_regression():
 
     assert bits[0].item() & 0xFFFFFFFF == 0xFF800000, (
         f"reciprocal_compat(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} "
-        f"({res[0].item()!r}), expected -inf (0xFF800000). _reciprocal_compat_ returns "
-        "|1/in|, so this is the sign restore in _reciprocal_compat_signed_ failing at the "
-        "pole. A 0x7F800000 here means the restore did not fire on a delivered -0.0; a "
-        "0xFEFFFD9E means the pole guard did not fire either."
+        f"({res[0].item()!r}), expected -inf (0xFF800000). A 0x7F800000 means the sign "
+        "restore did not fire on a delivered -0.0; a 0xFEFFFD9E means the pole guard did "
+        "not fire either."
     )
     assert bits[1].item() & 0xFFFFFFFF == 0x7F800000, (
         f"reciprocal_compat(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} "
         f"({res[1].item()!r}), expected +inf. The restore is over-firing: it must move the "
         "input's sign bit, not set one."
     )
-    # The rest of the tile is 1.0, whose reciprocal must stay positive and near 1.0. Catches a
-    # restore widened to every lane. Tolerance, not equality: _reciprocal_compat_ is a
-    # magic-seed Newton-Raphson approximation, so 1/1.0 lands near 1.0, not exactly on it.
+    # The rest of the tile is 1.0, catching a restore widened to every lane. Tolerance, not
+    # equality: _reciprocal_compat_ is an approximation, so 1/1.0 lands near 1.0.
     assert torch.all(bits[2:] >= 0), (
         "reciprocal_compat(1.0) came back negative on some lane; the sign restore is "
         "firing outside the negative inputs."
@@ -1084,23 +1064,16 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     )
 
 
-# Cat E: the shift amount itself. The unary shift ops take their amount as a compile-time
-# immediate, so SFPU_SHIFT_AMOUNT is what makes anything but the hard-coded 3 reachable. The
-# amounts are shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS so
-# the two suites cannot drift. The two unary shifts do not share an out-of-range rule -- see
-# UnarySFPUGolden._shift_amount, which models each kernel separately.
+# Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are
+# shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 
-# The unary sweep takes the shared amounts but collapses the negatives to one: the amount is
-# emitted unsigned, so every negative arrives as a large unsigned and takes the same
-# out-of-range path. One is kept rather than none to pin that wrap.
+# Negatives collapse to one: the amount is emitted unsigned, so they all take the same
+# out-of-range path. One is kept to pin that wrap.
 _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
-# A shift is exact, so the stimulus only has to reach the interesting magnitudes: powers of two
-# around a byte and a half-word, a few odd values to catch a lost low bit, and zero.
-# Non-negative only -- the docstring below says why. 2**30 is here so that a large right shift
-# still has a non-zero operand to work on; the limit filter below drops it from every LeftShift
-# variant that would overflow.
+# Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
+# zero. 2**30 keeps a large right shift working on a non-zero operand.
 _SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
 
 _INT32_MAX = 2**31 - 1
@@ -1251,19 +1224,11 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-# Ops whose behaviour turns on a comparison against a fixed scalar. A plain random float
-# sweep reaches such a scalar with probability ~0, so the one input where a `>` / `>=` slip
-# or a missing branch is visible never gets driven. Keyed by mathop:
-#   logical_not(x) = (x == 0) ? 1 : 0        -> threshold 0.0
-#   unary_eq / unary_ne(x)  compare vs 0.5   -> threshold 0.5
-#   relu_min(x) = max(x, threshold)          -> threshold RELU_MIN_THRESHOLD
-#   relu_max(x) = clamp(x, 0, threshold)     -> threshold RELU_MAX_THRESHOLD
-#
-# The first three collapse to 0/1 and are here because their output would otherwise be a
-# constant. The two clamps are here for the tie itself: their random domains (widened to
-# clear the threshold) already cover both branches, but neither lands *on* the cutoff, and
-# both kernels compare strictly -- `> threshold` for relu_max, and an SFPSWAP fold for
-# relu_min -- so the boundary is exactly where an off-by-one would hide.
+# Ops whose behaviour turns on a comparison against a fixed scalar. A random float sweep
+# reaches such a scalar with probability ~0, so the tie -- the one input where a `>` / `>=`
+# slip is visible -- never gets driven. The 0/1 ops are here because their output would
+# otherwise be constant; the clamps are here for the tie itself. Thresholds come from
+# op_threshold().
 _THRESHOLD_OPS = [
     MathOperation.LogicalNotUnary,
     MathOperation.UnaryEq,
