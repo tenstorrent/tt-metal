@@ -18,7 +18,19 @@ constexpr uint32_t free_window_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t counts_bytes = get_compile_time_arg_val(5);
 constexpr uint32_t free_row_bytes = get_compile_time_arg_val(6);
 constexpr uint32_t free_window_entries = free_window_bytes / sizeof(uint32_t);
-constexpr uint32_t alignment_bytes = NOC_DRAM_READ_ALIGNMENT_BYTES;
+
+// Both sides of every partial transfer take the same offset, so one granularity must satisfy the DRAM
+// and L1 alignments together. Quasar reports one byte; uint32 metadata still needs entry granularity.
+constexpr uint32_t dram_alignment_bytes = NOC_DRAM_READ_ALIGNMENT_BYTES > NOC_DRAM_WRITE_ALIGNMENT_BYTES
+                                              ? NOC_DRAM_READ_ALIGNMENT_BYTES
+                                              : NOC_DRAM_WRITE_ALIGNMENT_BYTES;
+constexpr uint32_t l1_alignment_bytes = NOC_L1_READ_ALIGNMENT_BYTES > NOC_L1_WRITE_ALIGNMENT_BYTES
+                                            ? NOC_L1_READ_ALIGNMENT_BYTES
+                                            : NOC_L1_WRITE_ALIGNMENT_BYTES;
+constexpr uint32_t noc_alignment_bytes =
+    dram_alignment_bytes > l1_alignment_bytes ? dram_alignment_bytes : l1_alignment_bytes;
+constexpr uint32_t alignment_bytes = noc_alignment_bytes > sizeof(uint32_t) ? noc_alignment_bytes
+                                                                            : uint32_t(sizeof(uint32_t));
 constexpr uint32_t alignment_entries = alignment_bytes / sizeof(uint32_t);
 
 struct ByteRange {
@@ -73,6 +85,10 @@ uint32_t read_request_value(const Noc& noc, AccessorArgs accessor_args, uint32_t
         const auto accessor = TensorAccessor(accessor_args, value);
         noc.async_read(accessor, scratch, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
+        // CBs sit at fixed L1 addresses reused by every invocation and trace replay, so the RISC data
+        // cache may hold a prior call's value for this line (barrier orders the DMA, volatile still
+        // reads cache). Force a refetch of the freshly written value.
+        invalidate_l1_cache();
         return scratch[0];
     }
     return value;
@@ -118,6 +134,7 @@ uint32_t read_allocated_pages(const Noc& noc, const MetadataBuffers& buffers, ui
         {.page_id = 0, .offset_bytes = range.begin},
         {.offset_bytes = range.begin});
     noc.async_read_barrier();
+    invalidate_l1_cache();  // same fresh-metadata refetch as above
     return buffers.allocated[slot];
 }
 
@@ -210,6 +227,7 @@ void read_slot_metadata(
             {.offset_bytes = ranges.wrapped_counts.begin});
     }
     noc.async_read_barrier();
+    invalidate_l1_cache();  // same fresh-metadata refetch as above
 }
 
 // Publish only the modified table range and counter cache lines.
@@ -282,6 +300,7 @@ volatile uint32_t& free_list_entry(
         noc.async_read(
             buffers.free_acc, window.data, window.bytes, {.page_id = window.sp, .offset_bytes = window.offset}, {});
         noc.async_read_barrier();
+        invalidate_l1_cache();  // same fresh-metadata refetch as above
     }
     return window.data[index - window.offset / sizeof(uint32_t)];
 }
