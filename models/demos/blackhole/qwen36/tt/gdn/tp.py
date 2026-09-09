@@ -28,10 +28,23 @@ def _softplus_add(a, bias):
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
 
 
-def _silu_mul(x, z, memory_config):
+def _silu_mul(x, z, memory_config, dtype=None):
     """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
-    overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs)."""
-    return ttnn.multiply(x, ttnn.silu(z, memory_config=memory_config), memory_config=memory_config)
+    overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs).
+    dtype: optional output dtype (bf16 for the column-parallel prefill out-proj; default = x's)."""
+    s = ttnn.silu(z, memory_config=memory_config)
+    if dtype is None:
+        return ttnn.multiply(x, s, memory_config=memory_config)
+    return ttnn.multiply(x, s, memory_config=memory_config, dtype=dtype)
+
+
+def gdn_out_colpar_prefill_enabled(args):
+    """PREFILL out-proj as COLUMN-parallel all-gather + matmul (all_gather_minimal_matmul_async) instead
+    of the row-parallel matmul + fp32 reduce-scatter. TP only. QWEN36_GDN_OUT_COLPAR=0 falls back to
+    the fused matmul_reduce_scatter arm (A/B switch; see forward_prefill)."""
+    if getattr(args, "num_devices", 1) <= 1:
+        return False
+    return os.environ.get("QWEN36_GDN_OUT_COLPAR", "1") != "0"
 
 
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
@@ -139,6 +152,21 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=ttnn.bfloat8_b,
     )
+    if gdn_out_colpar_prefill_enabled(args):
+        # COLUMN-parallel copy of the out-proj for prefill: full K=value_dim rows, N=dim/tp columns per
+        # device ([6144,1280] bfp8 at TP=4, +8.4 MB DRAM/layer). all_gather_minimal_matmul_async gathers
+        # the K-sharded gated activation (device d holds heads d*Nv_tp.. -> K rows d*value_dim_tp..,
+        # i.e. natural order, same as the row shard above) and emits the fractured [S, dim/tp] the
+        # residual stream wants -- no cross-device partial sums, so bf16 in/out is numerically fine.
+        # Decode keeps the row-sharded tw["out"] (matmul + all-reduce).
+        tw["out_colpar"] = tpc.shard_w(
+            sd[P + "out_proj.weight"],
+            mesh,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=c("out.colpar"),
+            dtype=ttnn.bfloat8_b,
+        )
     # Per-head params
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
     A_log = tpc.shard_small(sd[P + "A_log"].float(), mesh, c("A_log"))
@@ -211,6 +239,10 @@ class TPGatedDeltaNet:
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
         self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
+        # col-sharded weight was loaded). AG moves 3/4 x [S,1536] bf16 in per device instead of the RS
+        # moving 3/4 x [S,5120] fp32 out + summing; output is bf16 [S, dim/tp] directly (no clone).
+        self._out_colpar_prefill = gdn_out_colpar_prefill_enabled(args) and "out_colpar" in tw
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -648,6 +680,31 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
+        if self._out_colpar_prefill and T > tpc.TILE_SIZE:
+            # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
+            # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
+            # matmul, as every other projection in the model already does; the K=6144 sum stays in
+            # fp32 in the FPU). L1: [S,1536] bf16 = 6 MB at S=2048.
+            gated = _silu_mul(out_f, z, _L1, dtype=ttnn.bfloat16)
+            ttnn.deallocate(out_f)
+            ttnn.deallocate(z)
+            # Runs on the helper's QKV in-proj block tuning (M_block 4, N_block 8, subblock_w 4):
+            # K_local=1536 -> 48 tiles -> agmm_k_block_size picks K_block 8 (Ring needs it to divide
+            # 48); N/tp=1280 -> 40 tiles -> 5 N-blocks. Measured faster than the MMRS arm at every
+            # ISL 8k-256k, so no out-proj-specific retune is carried here.
+            # Output [1,1,S,dim/tp] bf16 in L1 for the residual add; no persistent buffer -> no clone.
+            out = tpc.all_gather_matmul_prefill(
+                gated,
+                tw["out_colpar"],
+                self.tt_ccl,
+                self.cfg,
+                self.args.ccl_topology(),
+                out_memory_config=_L1,
+            )
+            ttnn.deallocate(gated)
+            if return_state:
+                return out, captured[0], captured[1]
+            return out
         gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
