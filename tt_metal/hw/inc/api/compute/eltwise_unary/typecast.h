@@ -426,7 +426,7 @@ ALWI void typecast_tile(uint32_t idst) {
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_typecast_int8_to_int32,
-            (APPROX, 8 /* ITERATIONS */, (out_format == DataFormat::UInt16)),
+            (APPROX, 8 /* ITERATIONS */, (out_format == DataFormat::UInt16) /* CLAMP_TO_UINT16 */),
             idst,
             VectorMode::RC));
     } else if constexpr (

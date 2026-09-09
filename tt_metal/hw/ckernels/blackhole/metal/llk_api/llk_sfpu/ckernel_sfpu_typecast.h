@@ -31,6 +31,9 @@ constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 // -128.0f as the upper 16 bits
 constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
 
+// -128 as SFPIADD's 12-bit signed immediate
+constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
+
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
@@ -995,13 +998,19 @@ inline void calculate_typecast_int8_to_int32() {
         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
         if constexpr (CLAMP_TO_UINT16) {
             TTI_SFPIADD(
-                -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+                TYPECAST_INT8_MINUS_128_IMM12,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
             TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // negatives clamp to 0
             TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
         } else {
             TTI_SFPIADD(
-                -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+                TYPECAST_INT8_MINUS_128_IMM12,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
         }
     }
