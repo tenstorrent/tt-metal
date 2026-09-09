@@ -78,19 +78,32 @@ needed whether or not an activation applies.
 
 - atol. An element's error comes from rounding partial sums, whose size does not
   depend on the dot product they land in, so it is about the same for every
-  element: "r" times the standard deviation of the pre-activation reference, which
-  for independent operands is sqrt(K) times the product of the operands' own
-  standard deviations, so atol grows as sqrt(K). One number therefore serves the
-  whole tensor. It is a sum of many roundings, so it is close to Gaussian. An
-  error can come out too high or too low, and the largest of n such errors, in
-  either direction, sits about sqrt(2 * ln(2n)) standard deviations from zero, for
-  n the number of output elements, so M and N enter only inside that logarithm.
-  The module then shifts every reference value by that distance, up and down,
-  applies the activation to all three values, and keeps the largest change in the
-  activation's output. It does not scale the distance by the activation's
-  slope, because at worst case distance the activation is nowhere near straight;
-  this is why a saturating activation is never assigned more error than its whole
-  output range. The device's own absolute error on the activation is then added.
+  element and one number serves the whole tensor: "r" times the standard deviation
+  of the pre-activation reference, which for independent operands is sqrt(K) times
+  the product of the operands' own standard deviations. Whether atol grows faster
+  than that with K depends on whether "r" grows too. Only two of the terms in "r"
+  depend on K at all, both from rounding a partial sum: the accumulator, and the
+  write out between K blocks. Both grow as sqrt(K) whatever the accumulator holds,
+  and the notes below cover them. The terms they compete with, converting an
+  operand to its device format and the matrix engine truncating its mantissa, are
+  flat in K. A 32 bit accumulator holds the two partial sum terms so far below the
+  flat ones that they never come to matter, leaving "r" flat and atol growing as
+  sqrt(K). A 16 bit accumulator lets them overtake the flat terms at a K in the
+  low thousands, after which atol approaches growing as K. The error is a sum of
+  many roundings, so it is close to Gaussian. It can come out too high or too low,
+  and the largest of n such errors, in either direction, sits about
+  sqrt(2 * ln(2n)) standard deviations from zero, for n the number of output
+  elements, so M and N enter only inside that logarithm. The module then shifts
+  every reference value by that distance, up and down, applies the activation to
+  all three values, and keeps the largest change in the activation's output. It
+  does not scale the distance by the activation's slope, because at worst case
+  distance the activation is nowhere near straight, so the
+  change it finds for a saturating activation cannot exceed that activation's
+  whole output range. atol is larger than the change, though: the device's own
+  absolute error on the activation is added to it, and the safety factor
+  multiplies the total. So for a saturating activation atol is the safety
+  factor times the output range (e.g. atol=2 for sigmoid, which only ever
+  produces values between 0 and 1).
 
 - rtol takes the two contributions that do scale with an element's reference
   value, the abs(reference) the allowance above multiplies: the activation's
