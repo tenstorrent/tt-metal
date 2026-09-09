@@ -555,6 +555,9 @@ inline void noc_async_read(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
+    // A nonzero NOC_PCIE_MASK bit here means src_noc_addr is PCIe-routed; use noc_async_read_pcie() instead,
+    // since this function no longer sets NOC_TARG_ADDR_MID.
+    ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -592,7 +595,8 @@ inline void noc_async_read(
 inline void noc_async_read_pcie(
     uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
     noc_cmd_buf_set_targ_addr_mid_pcie(noc, read_cmd_buf, src_noc_addr);
-    noc_async_read(src_noc_addr, dst_local_l1_addr, size, noc);
+    // MID is already set above. Strip it back out here so this call doesn't trip its own assert.
+    noc_async_read(src_noc_addr & ~(uint64_t(NOC_PCIE_MASK) << 32), dst_local_l1_addr, size, noc);
     noc_cmd_buf_clear_targ_addr_mid(noc, read_cmd_buf);
 }
 
@@ -854,6 +858,9 @@ inline void noc_async_write(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
+    // A nonzero NOC_PCIE_MASK bit here means dst_noc_addr is PCIe-routed; use noc_async_write_pcie() instead,
+    // since this function no longer sets NOC_RET_ADDR_MID (see noc_cmd_buf_set_ret_addr_mid_pcie()).
+    ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted, noc);
     }
@@ -888,7 +895,8 @@ inline void noc_async_write(
 inline void noc_async_write_pcie(
     uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
     noc_cmd_buf_set_ret_addr_mid_pcie(noc, write_cmd_buf, dst_noc_addr);
-    noc_async_write(src_local_l1_addr, dst_noc_addr, size, noc);
+    // MID is already set above. Strip it back out here so this call doesn't trip its own assert.
+    noc_async_write(src_local_l1_addr, dst_noc_addr & ~(uint64_t(NOC_PCIE_MASK) << 32), size, noc);
     noc_cmd_buf_clear_ret_addr_mid(noc, write_cmd_buf);
 }
 
