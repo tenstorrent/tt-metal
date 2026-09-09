@@ -383,10 +383,12 @@ def test_resolve_reference_image_size_match_matches_canvas_area():
     ) == (768, 1344)
 
 
-def test_resolve_reference_image_size_match_does_not_upscale():
-    assert rp.resolve_reference_image_size(
+def test_resolve_reference_image_size_match_upscales_to_canvas_area():
+    height, width = rp.resolve_reference_image_size(
         512, 512, mode="match", target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT
-    ) == (512, 512)
+    )
+    assert (height, width) == (1024, 1024)
+    assert height % p.MINIMAX_H3_CANVAS_MULTIPLE == 0 and width % p.MINIMAX_H3_CANVAS_MULTIPLE == 0
 
 
 def test_resolve_reference_image_size_defaults_to_match():

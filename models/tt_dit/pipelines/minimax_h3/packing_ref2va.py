@@ -21,8 +21,8 @@ audio/video rotary clock. Reordering the same references is a different request.
 Two properties separate this from ``fl2va``:
 
 * **A reference never binds the target geometry.** An image is resized by
-  ``reference_resize_mode`` (default ``match``: area-match the target canvas, never
-  upscale); a video onto the 768 px canvas of its own aspect ratio. Each keeps its own
+  ``reference_resize_mode`` (default ``match``: area-match the target canvas, upscaling
+  included); a video onto the 768 px canvas of its own aspect ratio. Each keeps its own
   aspect-normalized spatial grid. A 2048x2048 reference (the Hugging Face
   ``diffusers`` policy) contributes 4096 vision tokens to the text stream *and* 4096
   video condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's.
@@ -355,8 +355,8 @@ def resolve_reference_image_size(
 ) -> tuple[int, int]:
     """``(height, width)`` a reference image is encoded at, axes rounded to a multiple of 32.
 
-    ``match`` (default) scales down so the pixel area matches the target canvas, never
-    upscaling. ``max`` caps the short edge at 2048 without upscaling. ``diffusers``
+    ``match`` (default) scales so the pixel area matches the target canvas, upscaling
+    included. ``max`` caps the short edge at 2048 without upscaling. ``diffusers``
     always sets the short edge to 2048, upscaling included -- Hugging Face Diffusers.
     """
     if width <= 0 or height <= 0:
@@ -367,7 +367,7 @@ def resolve_reference_image_size(
     if mode == "match":
         if target_width is None or target_height is None:
             raise ValueError("match requires the target canvas (target_width and target_height)")
-        scale = min(1.0, math.sqrt((target_width * target_height) / (width * height)))
+        scale = math.sqrt((target_width * target_height) / (width * height))
     elif mode == "max":
         scale = min(1.0, MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE / min(width, height))
     elif mode == "diffusers":
