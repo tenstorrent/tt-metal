@@ -67,6 +67,16 @@ enum : uint32_t {
 constexpr uint32_t GATHER_ORIGIN_COLUMNS = 16;
 constexpr uint32_t GATHER_ORIGIN_ROW_BYTES = GATHER_ORIGIN_COLUMNS * sizeof(uint32_t);
 
+// cb_mask is sized to a WHOLE work item -- so its pages cycle back to the same L1 addresses every
+// item and the reader can skip rewriting tiles the pages already hold -- only while that block is
+// at most this many bfloat16 tiles (1 MB against a 1.4-1.5 MB L1, next to ~230 KB of other CBs).
+// The shipped 1080p stage-5 shape is 2 bricks x 168 gathered bricks = 336; the unit tests' 2-brick
+// chunks at window 11 are 392-400; a 4-brick chunk would not fit and falls back to a double-buffered
+// cb_mask that is rewritten every chunk. Shared by the program factory (CB sizing) and the reader
+// (skip predicate): there is deliberately no compile arg for the mode, so both must evaluate the
+// same expression against this constant.
+constexpr uint32_t MAX_PERSISTENT_MASK_TILES = 512;
+
 namespace reader_arg {
 enum : uint32_t {
     head_count = 0,

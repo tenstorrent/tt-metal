@@ -234,6 +234,20 @@ void validate_config(const NeighborhoodConfig& config) {
                 "the query region must lie inside the resident region");
         }
     }
+    // CONTRACT: no query brick may start below the volume. A sharded device's resident tensor
+    // begins one halo below its owned columns, so with a negative shard_origin the caller must
+    // restrict the query region to the owned bricks (query_extent/query_origin, as the production
+    // W-sharded path does). Halo queries were once computed and discarded; the reader no longer
+    // supports them (a query below the volume has no window of its own, and the reader's persistent
+    // per-brick mask block has no way to describe one). shard_origin is per-device runtime data on
+    // the device, so this is enforced here, on the host, once per shard's plan.
+    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+        require(
+            static_cast<int32_t>(config.query_origin.by_axis[axis_index]) + config.shard_origin.by_axis[axis_index] >=
+                0,
+            "the query region starts below the volume (query_origin + shard_origin < 0); restrict queries to the "
+            "owned bricks with query_extent/query_origin");
+    }
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         require(config.volume.by_axis[axis_index] > 0, "volume extent must be non-zero on every axis");
         require(config.context_window.by_axis[axis_index] > 0, "context window must be non-zero on every axis");

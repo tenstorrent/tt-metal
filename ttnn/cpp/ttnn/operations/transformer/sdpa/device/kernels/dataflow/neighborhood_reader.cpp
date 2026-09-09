@@ -9,6 +9,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#if defined(DEBUG_PRINT_ENABLED)
+#include "api/debug/dprint.h"
+#endif
 #include "neighborhood_mask_gen.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
@@ -106,10 +109,16 @@ FORCE_INLINE uint32_t relative_table_index(
 // window reaches below local 0, so the origin lands short and the whole mapping shifts. Those
 // bricks are not owned by this device and their output is sliced off, which is why a wrong mask
 // there was harmless -- until reuse let one of them decide the tiles a real brick reads.
-FORCE_INLINE bool gather_is_canonical(
+// The origin half of `gather_is_canonical`: does the gather start exactly at the relative span's
+// low brick on every axis, relative to the query brick at `query_origin_site`? When it does, gather
+// slot g names the same (key_brick - query_brick) offset for every chunk, which is all the
+// per-brick mask block needs to be identical across interior chunks -- its tiles are addressed
+// through relative_table_index / classify_brick, not by slot == table page. It says nothing about
+// the gather's EXTENT: a chunk wider than one brick gathers more than a single brick's span, so
+// the extent test below would fail for it on every chunk.
+FORCE_INLINE bool gather_origin_at_span_low(
     const BrickPoint& gather_origin_brick,
     const Site& query_origin_site,
-    ShapeInBricks gather_bricks,
     const kernel_args::NeighborhoodExtents& extents) {
     const auto brick_sites = extents.brick_sites;
     const auto context_window = extents.context_window;
@@ -117,15 +126,142 @@ FORCE_INLINE bool gather_is_canonical(
 
     for (Axis axis : ALL_AXES) {
         const int32_t low = relative_span_low(context_window[axis], brick_sites[axis]);
-        const int32_t high = relative_span_high(context_window[axis], brick_sites[axis]);
         if (static_cast<int32_t>(gather_origin_brick[axis]) - static_cast<int32_t>(query_brick[axis]) != low) {
             return false;
         }
+    }
+    return true;
+}
+
+FORCE_INLINE bool gather_is_canonical(
+    const BrickPoint& gather_origin_brick,
+    const Site& query_origin_site,
+    ShapeInBricks gather_bricks,
+    const kernel_args::NeighborhoodExtents& extents) {
+    if (!gather_origin_at_span_low(gather_origin_brick, query_origin_site, extents)) {
+        return false;
+    }
+    const auto brick_sites = extents.brick_sites;
+    const auto context_window = extents.context_window;
+    for (Axis axis : ALL_AXES) {
+        const int32_t low = relative_span_low(context_window[axis], brick_sites[axis]);
+        const int32_t high = relative_span_high(context_window[axis], brick_sites[axis]);
         if (gather_bricks[axis] != static_cast<uint32_t>(high - low + 1)) {
             return false;
         }
     }
     return true;
+}
+
+// A WindowClamp represent the boundaries of the context windows for a query chunk.
+// (currently only applicable for neighborhood attention, GNA is not supported yet.)
+// It covers every brick inside the chunk (with a limit of up to MAX_BRICKS_PER_CHUNK),
+// with a group of fields for each brick -- describing every geometric input to that chunk's
+// [brick][slot] mask block.
+//
+// Two chunks with equal WindowClamps produce the same masks, so the reader can leave the mask already
+// in cb_mask untouched (see compute_per_brick_window_clamp for how it is
+// used). It is essentially a cache KEY only: the tiles themselves are always produced from the real coordinates.
+//
+// Why these fields and nothing else: A tile element (query site q, key site k) is visible when, on
+// every axis, origin(q) <= k < origin(q) + window, with origin(q) = clamp(q - half, 0, volume -
+// window). Writing shift(q) = origin(q) - (q - half), that is shift(q) <= (k - q) < shift(q) +
+// window: the pattern depends only on the RELATIVE distance k - q and on the query site's shift.
+// The relative distance of every (query brick r, slot g) pair is fixed by one number per axis, the
+// gather origin's brick offset from the chunk (word 0). The shift is 0 for an unclamped site,
+// half - q at the low edge and (volume - window) - (q - half) at the high edge -- monotone along
+// the axis, so the shifts of a brick's first and last query sites pin the shifts of every site in
+// between (words 1 + 2r and 2 + 2r). Ghost rows (a brick beyond the resident tensor) are generated
+// fully open, whatever the window says, so a flag stands in for their shifts.
+//
+// Word layout (all fields 8-bit, packed low to high):
+//   word[0]        : gather_origin_brick - first_query_brick, per axis: bits 0-7 T, 8-15 H, 16-23 W.
+//   word[1 + 2r]   : brick r, T shift(query_first) | T shift(query_last) << 8
+//                              | H shift(query_first) << 16 | H shift(query_last) << 24.
+//   word[2 + 2r]   : brick r, W shift(query_first) | W shift(query_last) << 8
+//                              | ghost flags << 16 (bit 16 T, 17 H, 18 W).
+// Shifts are signed and stored as their low byte; |shift| <= window/2 < 128, so the byte is exact.
+// The fields never mix across bricks or axes: two clamps are equal iff every word is equal.
+constexpr uint32_t MAX_BRICKS_PER_CHUNK = 8;
+struct WindowClamp {
+    uint32_t word[1 + 2 * MAX_BRICKS_PER_CHUNK];
+};
+
+// The low byte of a small signed value, as the 8-bit field it is stored in.
+FORCE_INLINE uint32_t clamp_field(int32_t value) { return static_cast<uint8_t>(value); }
+
+// Fill `out` with this query chunk's WindowClamp (one call per chunk; the loop inside visits each
+// of its bricks). On return `out` fully determines the chunk's mask block, so a later chunk with an
+// equal WindowClamp may reuse the pages unchanged.
+//
+// Edge case, excluded by contract: a query brick that starts below the volume (query_first < 0, a
+// low-edge halo brick under W-sharding) has no window of its own, and no WindowClamp could describe
+// it. The plan builder rejects such a query region on the host (`require` in build_plan: callers
+// must restrict queries to the owned bricks). It has to be the host: shard_origin is per-device
+// data read from the gather-origin table, so the reader cannot check it at compile time, and a
+// device-side ASSERT is compiled out unless the watcher is on.
+FORCE_INLINE void compute_per_brick_window_clamp(
+    WindowClamp& out,
+    const BrickPoint& gather_origin_brick,
+    const BrickPoint& chunk_origin,
+    ChunkShapeInBricks query_chunk_bricks,
+    const BrickPoint& query_origin_bricks,
+    uint32_t bricks_per_query_chunk,
+    const kernel_args::NeighborhoodExtents& extents) {
+    const auto brick_sites = extents.brick_sites;
+    const auto volume = extents.volume;
+    const auto context_window = extents.context_window;
+    const auto resident = extents.resident;
+    const auto shard_origin = extents.shard_origin;
+
+    // word[0]: where the gather box starts relative to the chunk's first query brick, in bricks.
+    // With the slot -> box-position decode fixed at compile time, this pins key_brick - query_brick
+    // for every (brick, slot) pair in the block.
+    const BrickPoint first_query_brick = chunk_origin + query_origin_bricks;
+    uint32_t offsets = 0;
+    for (Axis axis : ALL_AXES) {
+        const int32_t offset = static_cast<int32_t>(gather_origin_brick[axis] - first_query_brick[axis]);
+        offsets |= clamp_field(offset) << (8u * static_cast<uint32_t>(axis));
+    }
+    out.word[0] = offsets;
+
+    for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
+        const BrickPoint query_brick = layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+        const Site site = first_site_of(query_brick + query_origin_bricks, brick_sites);
+        uint32_t word_th = 0;  // T and H shifts
+        uint32_t word_w = 0;   // W shifts + ghost flags
+        for (Axis axis : ALL_AXES) {
+            const uint32_t axis_index = static_cast<uint32_t>(axis);
+            if (site[axis] + brick_sites[axis] > resident[axis]) {
+                // Ghost brick on this axis: rows generated fully open, so no shift to record.
+                word_w |= 1u << (16u + axis_index);
+                continue;
+            }
+            // Global coordinates, since the window rule clamps against the global volume (>= 0 by the
+            // contract above).
+            const int32_t query_first = static_cast<int32_t>(site[axis]) + shard_origin[axis];
+            const int32_t query_last = query_first + static_cast<int32_t>(brick_sites[axis]) - 1;
+            const uint32_t window = context_window[axis] < volume[axis] ? context_window[axis] : volume[axis];
+            const int32_t half = static_cast<int32_t>(window / 2);
+            // shift(q) = origin(q) - (q - half): 0 when the window centres on q, otherwise how far
+            // the volume edge pushed it. window_origin_on_axis takes and returns unsigned sites.
+            const auto shift_of = [&](int32_t query_site) {
+                const uint32_t origin = ttnn::transformer::neighborhood::window_origin_on_axis(
+                    static_cast<uint32_t>(query_site), 1u, window, volume[axis], 0u);
+                return static_cast<int32_t>(origin) - (query_site - half);
+            };
+            const uint32_t packed = clamp_field(shift_of(query_first)) | (clamp_field(shift_of(query_last)) << 8u);
+            if (axis == Axis::Time) {
+                word_th |= packed;
+            } else if (axis == Axis::Height) {
+                word_th |= packed << 16u;
+            } else {
+                word_w |= packed;
+            }
+        }
+        out.word[1 + 2 * brick_in_chunk] = word_th;
+        out.word[2 + 2 * brick_in_chunk] = word_w;
+    }
 }
 
 // Is this query brick far enough from every volume edge that none of its 32 queries clamps? Only
@@ -323,12 +459,38 @@ void kernel_main() {
     // no writes at all. Only leaving an edge shell dirties them, which at 1080p happens a few
     // dozen times per core against 458 work items.
     //
+    // Per-brick masks (a chunk wider than the stride) reuse the same way: for a chunk whose bricks
+    // are ALL unclamped and whose gather origin sits at the span low, the whole
+    // [brick][slot] block is the same tile-for-tile on every such chunk, so once written it is
+    // never written again until an edge chunk dirties the pages. The block is
+    // bricks_per_query_chunk times bigger, so this only applies while cb_mask fits the shared L1
+    // budget -- the same test the factory sizes the CB by. MEMSET_ONLY keeps writing so that probe
+    // stays a floor on the write cost.
+    //
     // This predicate is ALSO what the program factory sizes cb_mask by, so the two cannot drift:
     // there is no compile arg for the mode. Adding one is not free either -- the reader's five
     // TensorAccessorArgs chain off reader_arg::COUNT, and moving it by one ran the last accessor
-    // off the end of the compile-arg vector.
+    // off the end of the compile-arg vector. (The reader may skip only when the factory sized the
+    // CB persistent; the factory being persistent without the reader skipping is harmless slack.)
+    constexpr uint32_t mask_tiles_per_kv_chunk =
+        per_brick_mask != 0 ? bricks_per_query_chunk * tiles_per_kv_chunk : tiles_per_kv_chunk;
+    constexpr bool per_brick_persistent_fits =
+        mask_tiles_per_kv_chunk * kv_chunk_count <= kernel_args::MAX_PERSISTENT_MASK_TILES;
     const bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 && per_brick_mask == 0;
     bool mask_pages_hold_table = false;
+    // Per-brick: the block resident in cb_mask is whichever chunk wrote it last, identified by its
+    // WindowClamp (see compute_per_brick_window_clamp); the table is not needed for this, generated blocks
+    // persist just the same. MEMSET_ONLY keeps writing so that probe stays a floor on the write cost.
+    // resident_clamp_is_valid says the resident record describes what the pages hold; it is false
+    // until the first work item has written them. Whether the resident block is the one THIS chunk
+    // needs is the word-by-word compare below, not this flag.
+    static_assert(bricks_per_query_chunk <= MAX_BRICKS_PER_CHUNK, "WindowClamp holds at most 8 bricks");
+    constexpr bool persistent_mask_enabled = per_brick_mask != 0 && per_brick_persistent_fits && mask_memset_only == 0;
+    WindowClamp resident_query_brick_window_clamp{};
+    bool resident_clamp_is_valid = false;
+#if defined(DEBUG_PRINT_ENABLED)
+    uint32_t dbg_skipped = 0, dbg_refilled = 0, dbg_generated = 0, dbg_items = 0;
+#endif
 
     uint32_t argument_index = 0;
     const uint32_t query_address = get_arg_val<uint32_t>(argument_index++);
@@ -443,6 +605,41 @@ void kernel_main() {
         // The pages already hold exactly these tiles, so there is nothing to write.
         const bool refill_mask = use_interior_table && !mask_pages_hold_table;
 
+        // Per-brick: skip the whole block when the pages hold a block with this chunk's WindowClamp.
+        WindowClamp query_brick_window_clamp{};
+        bool mask_writes_skippable = false;
+        if constexpr (persistent_mask_enabled) {
+            compute_per_brick_window_clamp(
+                query_brick_window_clamp,
+                gather_origin_brick,
+                chunk_origin,
+                query_chunk_bricks,
+                query_origin_bricks,
+                bricks_per_query_chunk,
+                extents);
+            if (resident_clamp_is_valid) {
+                mask_writes_skippable = true;
+                for (uint32_t word = 0; word < 1 + 2 * bricks_per_query_chunk; ++word) {
+                    if (query_brick_window_clamp.word[word] != resident_query_brick_window_clamp.word[word]) {
+                        mask_writes_skippable = false;
+                        break;
+                    }
+                }
+            }
+        }
+#if defined(DEBUG_PRINT_ENABLED)
+        if constexpr (per_brick_mask != 0) {
+            ++dbg_items;
+            if (mask_writes_skippable) {
+                ++dbg_skipped;
+            } else if (persistent_mask_enabled) {
+                ++dbg_refilled;
+            } else {
+                ++dbg_generated;
+            }
+        }
+#endif
+
         uint32_t resident_mask_pointer = 0;
         if (use_uploaded_mask && relative_mask == 0) {
             resident_mask_pointer = cb_resident_mask.get_write_ptr();
@@ -464,8 +661,6 @@ void kernel_main() {
         for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
             cb_key.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
             cb_value.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
-            constexpr uint32_t mask_tiles_per_kv_chunk =
-                per_brick_mask != 0 ? bricks_per_query_chunk * tiles_per_kv_chunk : tiles_per_kv_chunk;
             cb_mask.reserve_back(mask_tiles_per_kv_chunk);
 
             // K and V are laid out DIFFERENTLY in their circular buffers, and it matters.
@@ -547,66 +742,71 @@ void kernel_main() {
             // subblock. Generated rather than copied from the uploaded set: the upload is keyed on
             // the CHUNK's window regime, which is the wrong window for every brick but the first.
             if (per_brick_mask != 0) {
-                for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
-                    const BrickPoint query_brick =
-                        layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
-                    // Into RESIDENT-local sites: the key origins this is compared against come
-                    // from the gather table, which addresses the resident tensor. Without the
-                    // shift a query sub-region would place every window a halo too low.
-                    const Site query_origin_site =
-                        first_site_of(query_brick + query_origin_bricks, extents.brick_sites);
-                    const uint32_t brick_base = mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
-                    // Resolved per brick, not per slot: the table describes a window that centres
-                    // on its query, which stops being true once the window clamps at a volume edge.
-                    const bool brick_takes_table =
-                        relative_mask != 0 && use_uploaded_mask &&
-                        (table_always != 0 || brick_window_is_unclamped(query_origin_site, extents));
-                    for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
-                        const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                        // DIFFVAE_NA_MASK_MEMSET_ONLY: write every tile as a constant, skipping
-                        // classify_brick AND fill_mask_tile. WRONG OUTPUT -- it exists to split
-                        // "writing N tiles costs X" from "deciding what is in them costs X", which
-                        // no other experiment here separates.
-                        if (mask_memset_only != 0) {
-                            volatile tt_l1_ptr uint32_t* zero_destination =
+                // The pages already hold a block with this chunk's WindowClamp: nothing to write, only
+                // the K/V reads above and the pushes below.
+                if (!mask_writes_skippable) {
+                    for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
+                        const BrickPoint query_brick =
+                            layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+                        // Into RESIDENT-local sites: the key origins this is compared against come
+                        // from the gather table, which addresses the resident tensor. Without the
+                        // shift a query sub-region would place every window a halo too low.
+                        const Site query_origin_site =
+                            first_site_of(query_brick + query_origin_bricks, extents.brick_sites);
+                        const uint32_t brick_base =
+                            mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
+                        // Resolved per brick, not per slot: the table describes a window that centres
+                        // on its query, which stops being true once the window clamps at a volume edge.
+                        const bool brick_takes_table =
+                            relative_mask != 0 && use_uploaded_mask &&
+                            (table_always != 0 || brick_window_is_unclamped(query_origin_site, extents));
+                        for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                            const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+                            // DIFFVAE_NA_MASK_MEMSET_ONLY: write every tile as a constant, skipping
+                            // classify_brick AND fill_mask_tile. WRONG OUTPUT -- it exists to split
+                            // "writing N tiles costs X" from "deciding what is in them costs X", which
+                            // no other experiment here separates.
+                            if (mask_memset_only != 0) {
+                                volatile tt_l1_ptr uint32_t* zero_destination =
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
+                                for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                                    zero_destination[word] = 0x00000000u;
+                                }
+                                continue;
+                            }
+                            const mask_gen::BrickCoverage brick_coverage =
+                                gather_slot >= gather_brick_count
+                                    ? mask_gen::BrickCoverage::NoneVisible
+                                    : mask_gen::classify_brick(query_origin_site, key_origins[slot], extents);
+                            if (brick_coverage == mask_gen::BrickCoverage::Mixed) {
+                                // The uploaded RELATIVE tile, fetched by DMA, replaces ~1024 elements
+                                // of window arithmetic per tile. Everything about the pattern is in
+                                // (key_brick - query_brick), so no gather origin or shard origin
+                                // enters and one table serves every chunk on every shard.
+                                if (brick_takes_table) {
+                                    const uint32_t table_index =
+                                        relative_table_index(query_origin_site, key_origins[slot], extents);
+                                    if (table_index != NO_REGIME) {
+                                        noc.async_read(
+                                            interior_mask_reader,
+                                            CoreLocalMem<uint32_t>(brick_base + slot * tile_bytes),
+                                            tile_bytes,
+                                            {.page_id = table_index},
+                                            {});
+                                        continue;
+                                    }
+                                }
+                                mask_gen::fill_mask_tile(
+                                    brick_base + slot * tile_bytes, query_origin_site, key_origins[slot], extents);
+                                continue;
+                            }
+                            const uint32_t fill =
+                                brick_coverage == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
+                            volatile tt_l1_ptr uint32_t* destination =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
                             for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
-                                zero_destination[word] = 0x00000000u;
+                                destination[word] = fill;
                             }
-                            continue;
-                        }
-                        const mask_gen::BrickCoverage brick_coverage =
-                            gather_slot >= gather_brick_count
-                                ? mask_gen::BrickCoverage::NoneVisible
-                                : mask_gen::classify_brick(query_origin_site, key_origins[slot], extents);
-                        if (brick_coverage == mask_gen::BrickCoverage::Mixed) {
-                            // The uploaded RELATIVE tile, fetched by DMA, replaces ~1024 elements
-                            // of window arithmetic per tile. Everything about the pattern is in
-                            // (key_brick - query_brick), so no gather origin or shard origin
-                            // enters and one table serves every chunk on every shard.
-                            if (brick_takes_table) {
-                                const uint32_t table_index =
-                                    relative_table_index(query_origin_site, key_origins[slot], extents);
-                                if (table_index != NO_REGIME) {
-                                    noc.async_read(
-                                        interior_mask_reader,
-                                        CoreLocalMem<uint32_t>(brick_base + slot * tile_bytes),
-                                        tile_bytes,
-                                        {.page_id = table_index},
-                                        {});
-                                    continue;
-                                }
-                            }
-                            mask_gen::fill_mask_tile(
-                                brick_base + slot * tile_bytes, query_origin_site, key_origins[slot], extents);
-                            continue;
-                        }
-                        const uint32_t fill =
-                            brick_coverage == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
-                        volatile tt_l1_ptr uint32_t* destination =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
-                        for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
-                            destination[word] = fill;
                         }
                     }
                 }
@@ -707,6 +907,17 @@ void kernel_main() {
         // An edge brick wrote generated tiles over the pages, so the next unclamped one must
         // put the table back.
         mask_pages_hold_table = use_interior_table;
+        if constexpr (persistent_mask_enabled) {
+            // Every chunk is persistable by contract, so after the first work item the pages always
+            // hold the block this record names.
+            resident_clamp_is_valid = true;
+            resident_query_brick_window_clamp = query_brick_window_clamp;
+        }
+#if defined(DEBUG_PRINT_ENABLED)
+        if (work_item + 1 == work_item_start + work_item_count) {
+            DPRINT("mp items={} skip={} refill={} gen={}\n", dbg_items, dbg_skipped, dbg_refilled, dbg_generated);
+        }
+#endif
 
         cb_gather_origin.push_back(1);
         cb_gather_origin.pop_front(1);
