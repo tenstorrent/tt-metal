@@ -105,7 +105,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
         tensor_args.input.layout());
     // use_tensor_args unconditionally selects SliceTileTensorArgsProgramFactory, which counts work as
-    // output.physical_volume() / TILE_HW and sizes its CBs with tile_size(). The public slice() entry
+    // output.physical_volume() / TILE_HW and sizes its dataflow buffers with tile_size(). The public slice() entry
     // point already refuses to take this path for a non-TILE input, but ttnn::prim::slice is callable
     // directly, so re-check it here where the factory is actually chosen.
     TT_FATAL(
@@ -168,8 +168,8 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         // create_output_tensors hands the program the caller's tensor verbatim, so the destination's
         // page geometry has to be what the factories were built against. One comparison covers dtype,
         // page_config, memory_config and alignment — including the fields compute_program_hash omits.
-        // page_config is the load-bearing one: the writer's TensorAccessorArgs bakes the destination's
-        // aligned page size in as a compile-time word, and for a tile-paged buffer that size is
+        // page_config is the load-bearing one: the destination's aligned page size is fixed at program
+        // build time, and for a tile-paged buffer that size is
         // tile.get_tile_size(dtype), so two outputs differing only in tile would share one program
         // whose writer addresses the wrong page offsets. A mismatch here is a caller error in every
         // case, so reject it rather than key on it.
@@ -388,8 +388,9 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             st.memory_config());
     }
 
-    // SliceTileTensorArgsProgramFactory gives the end tensor its own TensorAccessorArgs in the reader's
-    // compile-time args, so its memory config picks the bank table and cannot be refreshed on a hit.
+    // SliceTileTensorArgsProgramFactory gives the end tensor its own binding, whose layout metadata
+    // lands in the reader's compile-time args, so its memory config picks the bank table and cannot be
+    // refreshed on a hit.
     if (tensor_args.end_tensor.has_value()) {
         const auto& et = tensor_args.end_tensor.value();
         hash = ttsl::hash::hash_objects(
@@ -414,8 +415,11 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
 
     // compute_output_specs derives the spec above from operation_attributes.output_mem_config, but
     // create_output_tensors hands the program the caller's tensor verbatim when one is supplied, and
-    // every factory bakes a TensorAccessorArgs for that destination buffer into its writer's
-    // compile-time args. Key on the real destination so it cannot alias a differently-placed one.
+    // every factory fixes the destination's page geometry at program build time: the four with a writer
+    // bake it into that writer's compile-time args through the output's tensor binding, and the
+    // height-sharded one, which has no writer and no tensor binding, sizes its borrowed output buffer
+    // from the aligned page size and passes that stride as a compile-time argument. Key on the real
+    // destination so it cannot alias a differently-placed one.
     if (tensor_args.preallocated_output.has_value()) {
         const auto& po = tensor_args.preallocated_output.value();
         hash = ttsl::hash::hash_objects(

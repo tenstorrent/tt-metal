@@ -6,11 +6,11 @@
  * TTNN Slice Operation - Multi-Core Writer Kernel (N-Dimensional Support)
  *
  * This kernel handles the output data writing phase of the slice operation for multi-core
- * execution, writing sliced tensor data from circular buffer to output tensor memory.
+ * execution, writing sliced tensor data from dataflow buffer to output tensor memory.
  * Supports 1D, 2D, 3D, 4D, 5D, etc. tensors with work distribution across cores.
  *
  * Key Responsibilities:
- * - Read sliced data from circular buffer (produced by reader kernel)
+ * - Read sliced data from dataflow buffer (produced by reader kernel)
  * - Write assigned portion of output data to DRAM using TensorAccessor
  * - Handle different tensor dimensions with proper address calculations
  * - Support different data types with proper element size handling
@@ -25,7 +25,7 @@
  * Memory Management:
  * - DRAM alignment: 32-byte boundaries for memory controller optimization
  * - L1 alignment: 16-byte boundaries for L1 cache efficiency
- * - Circular buffer: Double buffering synchronized with reader kernel
+ * - Dataflow buffer: Double buffering synchronized with reader kernel
  *
  * Data Type Support:
  * - Element size determined at compile time for performance
@@ -78,7 +78,7 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
-    // Write each row from circular buffer to output tensor at the correct logical position
+    // Write each row from dataflow buffer to output tensor at the correct logical position
     for (uint32_t local_row = 0; local_row < num_rows_for_this_core; ++local_row) {
         dfb_in.wait_front(1);
         uint32_t l1_read_addr = dfb_in.get_read_ptr();

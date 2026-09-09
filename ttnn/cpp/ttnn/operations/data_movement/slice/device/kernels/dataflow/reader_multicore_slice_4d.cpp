@@ -13,7 +13,7 @@
  * - Apply slice logic (start, end, step) for all dimensions (N, D, H, W)
  * - Handle different data types with proper element size calculations
  * - Process assigned rows for this core based on work distribution
- * - Output sliced rows to circular buffer for writer kernel consumption
+ * - Output sliced rows to dataflow buffer for writer kernel consumption
  *
  * Architecture:
  * - Uses TensorAccessor for efficient DRAM address generation
@@ -25,7 +25,7 @@
  * Memory Management:
  * - DRAM alignment: 32-byte boundaries for memory controller optimization
  * - L1 alignment: 16-byte boundaries for L1 cache efficiency
- * - Circular buffer: Double buffering for continuous data flow
+ * - Dataflow buffer: Double buffering for continuous data flow
  *
  * Data Type Support:
  * - Element size determined at compile time for performance

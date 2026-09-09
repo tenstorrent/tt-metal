@@ -50,7 +50,7 @@ void kernel_main() {
     uint32_t start_indices[num_dims];
     [[maybe_unused]] uint32_t end_indices[num_dims];
 
-    // Read start tensor data using separate circular buffer
+    // Read start tensor data using separate dataflow buffer
     dfb_tensor.reserve_back(1);
     uint32_t start_buffer_l1_addr = dfb_tensor.get_write_ptr();
     noc.async_read(start_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
@@ -67,7 +67,7 @@ void kernel_main() {
     }
     dfb_tensor.pop_front(1);
 
-    // Read end tensor data using separate circular buffer
+    // Read end tensor data using separate dataflow buffer
     dfb_tensor.reserve_back(1);
     uint32_t end_buffer_l1_addr = dfb_tensor.get_write_ptr();
     noc.async_read(end_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
