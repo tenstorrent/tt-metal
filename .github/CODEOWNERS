@@ -125,6 +125,7 @@ tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/hostdevcommon/api/hostdevcommon/dispatch_telemetry_types.hpp @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-runtime
+tt_metal/hostdevcommon/api/hostdevcommon/profiler_zone_id.h @mo-tenstorrent @yusufbashiTT @tenstorrent/metalium-runtime
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT
 tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @nmauriceTT
@@ -133,6 +134,7 @@ tt_metal/hw/firmware/ @abhullar-tt @arikTT @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/api/debug/ @tenstorrent/metalium-developers-triage
 tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
+tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
@@ -186,6 +188,7 @@ tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
+tt_metal/llrt/zone_meta.* @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
 tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhullar-tt
 tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners
@@ -207,13 +210,14 @@ tt_metal/tools/lightmetal_runner @kmabeeTT
 tt_metal/tools/mem_bench @abhullar-tt # should be moved to tests micro benchmark?
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT
 tt_metal/tools/precompile_fw/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra
-tt_metal/tools/profiler/ @mo-tenstorrent @akerteszTT
+tt_metal/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/tools/profiler/event_metadata.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/fabric_event_profiler.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/noc_event_profiler.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/tracy_debug_categories.txt @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/tools/profiler/tracy_debug_zones.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT
+tt_metal/impl/streaming_profiler/ @mo-tenstorrent @yusufbashiTT
 
 # metal misc
 tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
