@@ -77,5 +77,5 @@ void kernel_main() {
 
     // A stale entry-size epoch must not overwrite word[4] with poison_wr_ptr.
     experimental::test_stale_commit_after_resize(dfb, new_entry_size, entry_size, poison_wr_ptr);
-    // ~PrefetcherPipe commits the restored credit-derived cursor under the live E2 epoch.
+    // ~PrefetcherPipe commits the cursor the helper restored, under the live E2 epoch.
 }
