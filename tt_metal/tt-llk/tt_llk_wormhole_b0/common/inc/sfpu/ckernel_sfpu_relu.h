@@ -107,20 +107,10 @@ inline void _relu_max_(T threshold)
     _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
 }
 
-// Contract: the threshold is an *implicit input in LREG2*, not a parameter. Every caller must
-// load it with _sfpu_load_imm32_(p_sfpu::LREG2, ...) before calling. The body is raw TTI, so
-// this dependency cannot be expressed in the signature -- keep it out of the parameter list
-// rather than carrying an argument the body never reads.
-//
-// SFPLOAD_INSTR_MOD is a template parameter rather than a function argument because it feeds
-// the "n" (immediate) operand of TTI_SFPLOAD/TTI_SFPSTORE. Passed by value it compiles only
-// for as long as the optimiser folds the constant into the asm, which makes a hard build
-// requirement out of an optimisation. Measured on this toolchain (sfpi 7.74.0, gcc 15.1.0),
-// both instantiations in one TU: as a runtime argument -O1/-O2/-O3 fold it and -O0 fails with
-// "impossible constraint in 'asm'"; as a template parameter all four levels compile.
-// ComputeConfig::opt_level is user-settable, so that is worth not relying on. Every sibling
-// integer kernel declares the mode constexpr for the same reason (see ckernel_sfpu_add_int.h,
-// ckernel_sfpu_sub_int.h, ckernel_sfpu_topk.h).
+// Contract: the threshold is an implicit input in LREG2, not a parameter -- every caller must
+// load it with _sfpu_load_imm32_ first, which the raw-TTI body cannot express in its signature.
+// SFPLOAD_INSTR_MOD has to stay a template parameter because it feeds an immediate asm operand:
+// as a runtime argument it compiles only while the optimiser folds it, and fails at -O0.
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore SFPLOAD_INSTR_MOD>
 inline void _relu_min_impl_(const int iterations)
 {
@@ -182,11 +172,8 @@ inline void _relu_min_(T threshold)
             if (scalar < 0)
             {
                 // Negate in unsigned: -INT_MIN is signed overflow. INT_MIN has no
-                // sign+magnitude form either -- the magnitude field is 31 bits -- so its
-                // magnitude saturates and the threshold lands on -(2^31 - 1) rather than
-                // round-tripping. The clamp is what makes that happen: masking instead
-                // would take INT_MIN's magnitude of 0x80000000 down to 0, i.e. encode
-                // sign+magnitude negative zero and clamp at 0 instead of at the low end.
+                // sign+magnitude form, so it saturates to -(2^31 - 1); the clamp is what
+                // saturates it, where a mask would encode negative zero and clamp at 0.
                 const std::uint32_t magnitude = -static_cast<std::uint32_t>(scalar);
                 sign_mag                      = 0x80000000u | (magnitude > 0x7FFFFFFFu ? 0x7FFFFFFFu : magnitude);
             }
