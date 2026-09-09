@@ -332,11 +332,13 @@ def test_pow_rpow_zero_base_special_cases(device, dtype):
     rpow_neg = ttnn.to_torch(ttnn.rpow(tt_neg_exp, 0.0))
     assert_zero_power_negative_binary(rpow_neg)
 
+    rpow_pos_zero_exp = ttnn.to_torch(ttnn.rpow(tt_zeros, 0.0))
     rpow_neg_zero_exp = ttnn.to_torch(ttnn.rpow(tt_neg_zero, 0.0))
+    assert torch.equal(rpow_pos_zero_exp, torch.ones_like(rpow_pos_zero_exp)), "pow(+0.0, +0.0) should be 1"
     if dtype == "float32":
-        assert torch.equal(rpow_neg_zero_exp, torch.ones_like(rpow_neg_zero_exp)), "rpow(-0.0, 0.0) should be 1"
+        assert torch.equal(rpow_neg_zero_exp, torch.ones_like(rpow_neg_zero_exp)), "pow(+0.0, -0.0) should be 1"
     else:
-        assert (~torch.isfinite(rpow_neg_zero_exp)).all()
+        assert (~torch.isfinite(rpow_neg_zero_exp)).all(), "pow(+0.0, -0.0) is NaN on bf16"
 
 
 def _bits(v):
