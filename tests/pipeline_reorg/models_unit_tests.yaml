@@ -713,6 +713,15 @@
 - name: GPT-OSS 120B unit tests
   cmd: |
     export TT_METAL_WATCHER=15  # poll less often than the CI default of 2s
+    # TT_METAL_WATCHER=<n> only changes the host poll interval; NOC sanitize, waypoints and the ring
+    # buffer are still compiled into every kernel, and setup-job's TT_METAL_OPERATION_TIMEOUT_SECONDS=5
+    # fires when the dispatcher's command counter does not advance for 5 s, i.e. when ONE program runs
+    # longer than 5 s. Under watcher the MoE experts' SparseMatmul at prefill_4096 on bh_quietbox_2
+    # (1x4) takes >5 s (2.8 s -> 12.7 s measured on the smaller case), so the watchdog declared a hang,
+    # tt-triage halted the RISCs, and every later test (test_rope seq_16384 first) failed on a dead
+    # device -- red since #53594 re-enabled the watcher on 2026-08-21. Real backstops remain: the
+    # 22-min job budget and pytest --timeout 1500.
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=60
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
