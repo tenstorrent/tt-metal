@@ -254,7 +254,9 @@
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
+    export TT_METAL_DISABLE_REALTIME_PROFILER=1
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
@@ -264,7 +266,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
-  test_tags: [kimi_k2_7, transformer]
+  test_tags: [kimi_k2_7, transformer, kimi_chunked_no_trace]
   test_group: module
   skus:
     bh_sc1_high_power:
