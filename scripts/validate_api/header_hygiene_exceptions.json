@@ -1,0 +1,37 @@
+[
+  {
+    "source": "tt-metalium/distributed.hpp",
+    "include": "tt-metalium/experimental/sockets/mesh_socket.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing socket exposure in the stable distributed umbrella header.",
+    "remove_when": "Consumers include the experimental socket header explicitly and distributed.hpp drops this include."
+  },
+  {
+    "source": "tt-metalium/mesh_device_view.hpp",
+    "include": "tt-metalium/experimental/fabric/routing_table_generator.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing stable mesh view dependency on experimental fabric routing types.",
+    "remove_when": "The stable mesh view interface no longer requires the experimental routing header."
+  },
+  {
+    "source": "tt-metalium/program_descriptors.hpp",
+    "include": "tt-metalium/experimental/blaze/named_kernel_args.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing ProgramDescriptor exposes experimental Blaze named kernel arguments.",
+    "remove_when": "Blaze-specific arguments are segregated from the stable descriptor or graduate through design review."
+  },
+  {
+    "source": "tt-metalium/system_mesh.hpp",
+    "include": "tt-metalium/experimental/fabric/routing_table_generator.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing stable system mesh dependency on experimental fabric routing types.",
+    "remove_when": "The stable system mesh interface no longer requires the experimental routing header."
+  },
+  {
+    "source": "tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp",
+    "include": "internal/disaggregation/kv_chunk_address_table.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header retained during the disaggregation move into internal APIs.",
+    "remove_when": "tt-llm-engine and tt-blaze have migrated and the deprecated experimental forwarding header is removed."
+  }
+]

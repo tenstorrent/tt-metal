@@ -78,6 +78,27 @@ permissions:
   actions: read
 
 jobs:
+  api-header-hygiene:
+    name: API header hygiene
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            scripts/validate_api
+            tt_metal/api
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+      - name: Test API header checker
+        run: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
+      - name: Check API headers
+        run: python3 scripts/validate_api/validate_header_hygiene.py
+
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
   # This workflow only needs to pass the platform string to downstream workflows.
 
@@ -589,6 +610,7 @@ jobs:
       }}
     needs:
       - asan-build
+      - api-header-hygiene
       - runtime-smoke-tests
       - ttnn-smoke-tests
       - runtime-examples
@@ -609,7 +631,7 @@ jobs:
         with:
           required-jobs: ""
           optional-jobs: >-
-            asan-build, code-analysis,
+            asan-build, api-header-hygiene, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
             llk-smoke-tests, llk-build-quasar
