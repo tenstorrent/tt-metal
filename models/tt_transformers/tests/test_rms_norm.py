@@ -51,7 +51,10 @@ def test_rms_norm_inference(
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
-    first_layer_prefix = state_dict_prefix + "attention_norm."
+    # Post-norm decoders (EXAONE-4.x, OLMo-2/3) have no input_layernorm: exercise the norm that exists (ffn_norm,
+    # i.e. HF post_attention_layernorm) instead.
+    norm_key = "attention_norm" if f"{state_dict_prefix}attention_norm.weight" in state_dict else "ffn_norm"
+    first_layer_prefix = state_dict_prefix + f"{norm_key}."
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
@@ -60,7 +63,7 @@ def test_rms_norm_inference(
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
-        weight_key="attention_norm",
+        weight_key=norm_key,
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
