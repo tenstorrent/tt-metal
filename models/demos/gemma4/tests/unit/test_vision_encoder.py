@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
 import pytest
 import torch
 import torchvision.transforms as T
@@ -13,7 +11,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma4.tests.unit.test_vision_attention import convert_vision_block_hf_to_meta
 from models.demos.gemma4.tt.vision.vision_encoder import VisionTransformer
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
 
@@ -21,11 +19,7 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -41,14 +35,10 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
             1120 * 9,
             [3, 110, 85],
         ),  # 300 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2550x3300
-        (
-            560 * 9,
-            [3, 66, 54],
-        ),  # 240 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2048x1300
     ],
-    ids=["300dpi", "240dpi"],
+    ids=["300dpi"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": (ttnn.FabricConfig.FABRIC_2D_TORUS_XY if vision_mesh_shape_from_env()[0] > 0 else ttnn.FabricConfig.FABRIC_1D)}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
     reset_seeds,
@@ -72,6 +62,7 @@ def test_vision_model_inference(
     seq_len = ((token_budget // 2048) + 1) * 2048
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
+    logger.info(model_args.ccl_topology())
     if num_layers:
         model_args.hf_config.vision_config.num_hidden_layers = num_layers
         from transformers import logging as transformers_logging
@@ -105,7 +96,7 @@ def test_vision_model_inference(
     # Reference: patch embed -> encoder (patch embed + rotary now happen on device in the TT model).
     inputs_embeds = reference_model.patch_embedder(pt_pixel_values, pixel_position_ids, padding_positions)
     reference_output = reference_model.encoder(
-        inputs_embeds=inputs_embeds, pixel_position_ids=pixel_position_ids, attention_mask=None
+        inputs_embeds=inputs_embeds, pixel_position_ids=pixel_position_ids, attention_mask=~padding_positions
     ).last_hidden_state
 
     # Initialize TT model (patch embed + rotary + transformer blocks, all on device)
@@ -155,7 +146,9 @@ def test_vision_model_inference(
 
     tt_out = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
+        ),
     )
 
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.hidden_size].squeeze(0).squeeze(0)

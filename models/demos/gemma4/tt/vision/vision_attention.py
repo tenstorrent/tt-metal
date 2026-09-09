@@ -11,8 +11,8 @@ Mirrors the LLM TP convention from `tt_transformers.tt.attention`:
   ──▶ column-sharded W_qkv (head-fractured) ──▶ per-device n_local_heads
   ──▶ SDPA → nlp_concat_heads
   ──▶ row-sharded W_o ──▶ partial sums
-  ──▶ tt_all_reduce(dim=3)  -> on T3K this is a reduce_scatter
-  out: fractured along dim=3 (each device owns dim/TP)
+  ──▶ tt_all_reduce / reduce_scatter along TP (axis 1 on 2D, 1D T3K path)
+  out: fractured along dim=3 (each device owns dim/TP); on 2D also DP-sharded on batch
 
 The fractured output then re-enters the next block's DistributedLayerNorm,
 which gathers it back to replicated.
@@ -25,6 +25,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.vision.rms_norm import RMSNorm
+from models.demos.gemma4.tt.vision.vision_model_config import vision_tp_reduce_scatter
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -144,6 +145,12 @@ class VisionAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
+        self.configuration = configuration
+        self.cluster_shape = configuration.cluster_shape
+        # We TP across cluster axis 1. DP (when present) is axis 0.
+        self.tp = configuration.tp
+
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -152,17 +159,17 @@ class VisionAttention(LightweightModule):
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
         self.causal_mask = causal_mask
-        # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
-
-        self.n_local_heads = self.n_heads // self.num_devices_per_group
-        self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        # Each device holds n_heads / tp heads.
+        self.n_local_heads = self.n_heads // self.tp
+        self.n_local_kv_heads = self.n_kv_heads // self.tp
         self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+        # Per-device qkv width = (n_local_heads + 2*n_local_kv_heads) * padded_head_dim
+        self.local_qkv_size = (self.n_local_heads + 2 * self.n_local_kv_heads) * self.padded_head_dim
 
         self.dtype = dtype
 
@@ -178,7 +185,7 @@ class VisionAttention(LightweightModule):
         self.configuration = configuration
         self.decoders_optimizations = configuration.decoders_optimizations
         self.model_config = configuration.get_model_config()
-        self.ccl_topology = configuration.ccl_topology()
+        self.ccl_topology = configuration.ccl_topology(cluster_axis=1)
         self.is_multichip = configuration.is_multichip
         self.activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
@@ -211,7 +218,7 @@ class VisionAttention(LightweightModule):
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}.tp{self.tp}")
 
         wq_str = f"{layer_name}.wq.linear"
         wk_str = f"{layer_name}.wk.linear"
@@ -220,111 +227,74 @@ class VisionAttention(LightweightModule):
         q_norm_str = f"{layer_name}.q_norm"
         k_norm_str = f"{layer_name}.k_norm"
 
-        # Initialize bias tensors as None
-        self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
-        self.wo_bias_decode = None
         self.wo_bias_prefill = None
 
-        # Create combined QKV bias if present in state dict
-        if f"{wq_str}.bias" in self.state_dict:
-            # Helper function to reshape and pad bias chunk if needed
-            def pad_bias_chunk(b):
-                if self.head_dim != self.padded_head_dim:
-                    # Reshape to separate head dimensions
-                    b = b.reshape(self.n_local_heads, self.head_dim)
-                    # Pad the head_dim dimension
-                    b = torch.nn.functional.pad(b, (0, self.padded_head_dim - self.head_dim))
-                    # Reshape back to 1D
-                    result = b.reshape(-1)
-                    return result
-                else:
-                    return b
+        def pad_head_chunk(t, n_local, last_dim_is_in: bool):
+            """Pad a per-device head chunk's head_dim up to padded_head_dim."""
+            if self.head_dim == self.padded_head_dim:
+                return t
+            if last_dim_is_in:  # weight chunk shape [n_local*head_dim, in]
+                t = t.reshape(n_local, self.head_dim, -1)
+                t = torch.nn.functional.pad(t, (0, 0, 0, self.padded_head_dim - self.head_dim))
+                return t.reshape(n_local * self.padded_head_dim, -1)
+            else:  # bias chunk shape [n_local*head_dim]
+                t = t.reshape(n_local, self.head_dim)
+                t = torch.nn.functional.pad(t, (0, self.padded_head_dim - self.head_dim))
+                return t.reshape(-1)
 
-            qkv_bias = torch.concat(
-                [
-                    torch.concat(
-                        [
-                            pad_bias_chunk(
-                                torch.chunk(self.state_dict[f"{wq_str}.bias"], self.num_devices_per_group)[i]
-                            ),
-                            pad_bias_chunk(
-                                torch.chunk(self.state_dict[f"{wk_str}.bias"], self.num_devices_per_group)[i]
-                            ),
-                            pad_bias_chunk(
-                                torch.chunk(self.state_dict[f"{wv_str}.bias"], self.num_devices_per_group)[i]
-                            ),
-                        ],
-                        dim=-1,
-                    )
-                    for i in range(self.num_devices_per_group)
-                ],
-                dim=-1,
+        # Build the *full* wqkv weight so consecutive blocks of `local_qkv_size`
+        # columns belong to consecutive devices. ShardTensor2dMesh along dim=-1
+        # then gives each device its own [Q_local | K_local | V_local].
+        qkv_chunks = []
+        for i in range(self.tp):
+            wq_i = pad_head_chunk(
+                torch.chunk(self.state_dict[f"{wq_str}.weight"], self.tp, dim=0)[i], self.n_local_heads, True
             )
-            # Prefill can use broadcasting on the bias add so wants a 1d tensor
-            self.wqkv_bias_prefill = ttnn.as_tensor(
-                qkv_bias,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+            wk_i = pad_head_chunk(
+                torch.chunk(self.state_dict[f"{wk_str}.weight"], self.tp, dim=0)[i], self.n_local_kv_heads, True
             )
-
-        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
-        assert self.n_heads % self.num_devices_per_group == 0
-        assert self.n_kv_heads % self.num_devices_per_group == 0
-        assert configuration.qkv_size % self.num_devices_per_group == 0
-        assert configuration.dim % self.num_devices_per_group == 0
-
-        # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
-        # wqkv_mem_config = configuration.create_dram_sharded_mem_config(
-        #     configuration.dim, configuration.qkv_size // configuration.num_devices
-        # )
-
-        qkv_list = []
-        for i in range(self.num_devices_per_group):
-            # Chunk weights
-            wq_selected = torch.chunk(self.state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
-
-            # If head_dim needs padding
-            if self.head_dim != self.padded_head_dim:
-                # Helper function to reshape and pad weights
-                def pad_weight(w):
-                    # Reshape to separate head dimensions
-                    w = w.reshape(self.n_local_heads, self.head_dim, -1)
-                    # Pad the head_dim dimension
-                    w = torch.nn.functional.pad(w, (0, 0, 0, self.padded_head_dim - self.head_dim))
-                    # Reshape back to 2D
-                    result = w.reshape(self.n_local_heads * self.padded_head_dim, -1)
-                    return result
-
-                wq_selected = pad_weight(wq_selected)
-                wk_selected = pad_weight(wk_selected)
-                wv_selected = pad_weight(wv_selected)
-
-            # Transpose the selected chunks
-            wq = torch.transpose(wq_selected, -2, -1)
-            wk = torch.transpose(wk_selected, -2, -1)
-            wv = torch.transpose(wv_selected, -2, -1)
-
-            qkv = torch.cat([wq, wk, wv], dim=-1)
-            qkv_list.append(qkv)
-
-        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-
+            wv_i = pad_head_chunk(
+                torch.chunk(self.state_dict[f"{wv_str}.weight"], self.tp, dim=0)[i], self.n_local_kv_heads, True
+            )
+            qkv_i = torch.cat(
+                [torch.transpose(wq_i, -2, -1), torch.transpose(wk_i, -2, -1), torch.transpose(wv_i, -2, -1)], dim=-1
+            )
+            qkv_chunks.append(qkv_i)
+        qkv_cat = torch.cat(qkv_chunks, dim=-1).unsqueeze(0).unsqueeze(0)
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            cache_file_name=cache_name("wqkv"),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+            cache_file_name=cache_name("wqkv_col"),
         )
+
+        if f"{wq_str}.bias" in self.state_dict:
+            bias_chunks = []
+            for i in range(self.tp):
+                bq_i = pad_head_chunk(
+                    torch.chunk(self.state_dict[f"{wq_str}.bias"], self.tp)[i], self.n_local_heads, False
+                )
+                bk_i = pad_head_chunk(
+                    torch.chunk(self.state_dict[f"{wk_str}.bias"], self.tp)[i], self.n_local_kv_heads, False
+                )
+                bv_i = pad_head_chunk(
+                    torch.chunk(self.state_dict[f"{wv_str}.bias"], self.tp)[i], self.n_local_kv_heads, False
+                )
+                bias_chunks.append(torch.cat([bq_i, bk_i, bv_i], dim=-1))
+            qkv_bias = torch.cat(bias_chunks, dim=-1)
+            self.wqkv_bias_prefill = ttnn.as_tensor(
+                qkv_bias,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wqkv_bias_col"),
+            )
 
         def norm_reshard(x, norm, mode):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -374,52 +344,35 @@ class VisionAttention(LightweightModule):
 
         self.v_norm = ttnn.rms_norm
 
-        # For ring topology we can use all gather matmul for wo
-        # self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-
-        # FIXME: workaround until nlp_concat_heads correctly supports sub-tile head dims
-        # We are going to pad the input dim of the output weights with zeros in the places
-        # that nlp_concat_heads inserts garbage values
+        # Pad the full WO (all heads) then row-shard the contraction dim across TP.
+        pt_wo_t = self.state_dict[f"{wo_str}.weight"]  # [dim, n_heads*head_dim]
         if self.head_dim != self.padded_head_dim:
-            # note that torch weights are already transposed to have input in last dim
-            pt_wo_t = self.state_dict[f"{wo_str}.weight"]
-            # pt_wo_t.shape = [1280, 1280]
-            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
-            # heads.shape = [-1, 8, 80]
-            heads = torch.nn.functional.pad(
-                heads, (0, self.padded_head_dim - self.head_dim)
-            )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
-            # pt_wo.shape = [1, 1, 768, 2560]
-
+            heads = pt_wo_t.reshape(-1, self.n_heads, self.head_dim)
+            heads = torch.nn.functional.pad(heads, (0, self.padded_head_dim - self.head_dim))
+            pt_wo = heads.reshape(1, 1, -1, self.n_heads * self.padded_head_dim).transpose(-1, -2)
         else:
-            pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
-
-        # wo_mem_config = configuration.create_dram_sharded_mem_config(
-        #     pt_wo.shape[-2] // configuration.num_devices, pt_wo.shape[-1]
-        # )
-
+            pt_wo = pt_wo_t.transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        # pt_wo shape: [1, 1, n_heads*padded_head_dim, dim]; shard dim=-2 across axis 1.
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            cache_file_name=cache_name("wo"),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -2), mesh_shape=self.cluster_shape),
+            cache_file_name=cache_name("wo_row"),
         )
-        # self.wo.shape = [1, 1, 384, 2560] each device of N300 sharded on dim=2
 
         if f"{wo_str}.bias" in self.state_dict:
-            # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            # Fractured along dim=3 to match the post-reduce_scatter block output.
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wo_bias_prefill_sharded"),
+                cache_file_name=cache_name("wo_bias_frac"),
             )
 
         # The q/k RMSNorm reduces over the tile-padded head_dim (padded_head_dim)
@@ -430,18 +383,16 @@ class VisionAttention(LightweightModule):
         self.scale = self.head_dim / self.padded_head_dim
 
         dram_shard_grid_width = 8
-        target_device_shape = (1, 1)  # each 1x1 device runs a vision model
         self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
             per_core_M=max(
-                1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
-            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=math.ceil(
-                configuration.qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width
-            ),  # N / TILE_WIDTH / grid width
+                1,
+                8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),
+            ),
+            per_core_N=math.ceil(self.local_qkv_size / 32 / dram_shard_grid_width),
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -587,7 +538,8 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        output_11SH = ttnn.linear(
+        # Each device contributes a partial sum of the full output dim.
+        output_partial = ttnn.linear(
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
@@ -595,12 +547,22 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
-
-        if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        return output_11SH
+        if seq_len > 1024:
+            output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
+
+        # Reduce-scatter along TP: fractured along dim=3 -- the vision-block I/O contract.
+        output_frac = vision_tp_reduce_scatter(
+            output_partial,
+            self.mesh_device,
+            self.tt_ccl,
+            self.configuration,
+        )
+        if output_frac is not output_partial:
+            ttnn.deallocate(output_partial)
+
+        if self.wo_bias_prefill is not None:
+            output_frac = output_frac + self.wo_bias_prefill
+
+        return output_frac

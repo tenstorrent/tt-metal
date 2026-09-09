@@ -94,28 +94,32 @@ class VisionPooler(LightweightModule):
         return weights_t, mask
 
     def _to_device(self, torch_tensor):
+        # [1, batch, ...] — shard batch across DP when it lines up with dp ranks.
+        batch = torch_tensor.shape[1]
+        mapper = self.args.dp_mesh_mapper(batch, batch_dim=1) if self.is_mesh_device else None
         return ttnn.from_torch(
             torch_tensor,
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if self.is_mesh_device else None,
+            mesh_mapper=mapper,
         )
 
     def forward(self, hidden_states, pixel_position_ids, padding_positions, output_length):
         """Pool encoder patch features to soft tokens and scale by ``sqrt(hidden_size)``.
 
         Args:
-            hidden_states: ttnn.Tensor ``[1, batch, seq, hidden_size]`` encoder output
-                (replicated across the mesh), with the padding tokens already stripped to the
+            hidden_states: ttnn.Tensor ``[1, batch, seq, hidden_size/TP]`` encoder output
+                (fractured along the hidden dim), with the padding tokens already stripped to the
                 true patch count (``seq == pixel_position_ids.shape[1]``).
             pixel_position_ids: torch.LongTensor ``[batch, seq, 2]`` patch positions.
             padding_positions: torch.BoolTensor ``[batch, seq]`` (True = padding patch).
             output_length: int target number of soft tokens.
 
         Returns:
-            pooled: ttnn.Tensor ``[1, batch, output_length, hidden_size]`` scaled soft tokens.
+            pooled: ttnn.Tensor ``[1, batch, output_length, hidden_size/TP]`` scaled soft tokens
+                (fractured along the hidden dim).
             mask: torch.BoolTensor ``[batch, output_length]`` (True = valid token), for the
                 caller to strip padded soft tokens (``hidden_states[mask]``).
         """

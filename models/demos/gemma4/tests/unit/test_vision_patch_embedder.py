@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 
 import pytest
 import torch
@@ -13,18 +12,14 @@ from transformers import Gemma4ImageProcessor
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.demos.gemma4.tt.vision.vision_patch_embedder import VisionPatchEmbedder
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -99,8 +94,13 @@ def test_vision_patch_embedder_inference(token_budget, batch_size, mesh_device, 
     logger.info("Run VisionPatchEmbedder")
     tt_output = tt_model(tt_input, pixel_position_ids=tt_position_ids, padding_positions=tt_padding_positions)
 
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output)
-    tt_output_torch = tt_output_torch[0]  # [1, batch, num_patches, hidden] -> [batch, num_patches, hidden]
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
+        ),
+    )
+    tt_output_torch = tt_output_torch[:, 0, :, : model_args.dim]  # [batch, num_patches, hidden]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 

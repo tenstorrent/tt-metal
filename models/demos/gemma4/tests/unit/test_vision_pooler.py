@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 
 import pytest
 import torch
@@ -13,18 +12,14 @@ from transformers import Gemma4ImageProcessor
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.demos.gemma4.tt.vision.vision_pooler import VisionPooler
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -73,15 +68,16 @@ def test_vision_pooler_inference(token_budget, batch_size, mesh_device, reset_se
 
     tt_model = VisionPooler(mesh_device=mesh_device, args=model_args, dtype=dtype)
 
-    # Pooler expects [1, batch, seq, hidden] replicated across the mesh.
-    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    # Pooler consumes encoder output fractured along the hidden dim.
     tt_input = ttnn.from_torch(
         hidden_states.unsqueeze(0),
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape
+        ),
     )
 
     logger.info("Run VisionPooler")
@@ -92,9 +88,13 @@ def test_vision_pooler_inference(token_budget, batch_size, mesh_device, reset_se
         output_length=output_length,
     )
 
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output)
-    # [1, batch, output_length, hidden] -> [batch, output_length, hidden]
-    tt_output_torch = tt_output_torch[0]
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
+        ),
+    )
+    tt_output_torch = tt_output_torch[:, 0, :, :hidden_size]  # [batch, output_length, hidden]
 
     # The validity mask is pure metadata and must match the reference exactly.
     assert torch.equal(tt_mask, reference_mask), "Pooler validity mask does not match reference."

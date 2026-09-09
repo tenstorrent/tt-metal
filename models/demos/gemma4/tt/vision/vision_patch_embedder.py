@@ -37,12 +37,19 @@ class VisionPatchEmbedder(LightweightModule):
         self.position_embedding_size = vision_config.position_embedding_size
 
         self.is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.is_mesh_device else None
+        # Column-shard along the hidden dim so the embedder output is already
+        # fractured (dim/TP per device), matching the vision-block I/O contract.
+        hidden_mapper = (
+            ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=args.cluster_shape)
+            if self.is_mesh_device
+            else None
+        )
 
         def cache_name(name):
             if args.dummy_weights or weight_cache_path is None:
                 return None
-            return weight_cache_path / f"{state_dict_prefix}{name}"
+            tp = args.tp
+            return weight_cache_path / f"{state_dict_prefix}{name}.tp{tp}"
 
         # input_proj weight is [hidden_size, in_dim]; transpose to [in_dim, hidden_size] for x @ W.
         proj_weight = state_dict[f"{state_dict_prefix}input_proj.weight"]
@@ -52,7 +59,7 @@ class VisionPatchEmbedder(LightweightModule):
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=hidden_mapper,
             cache_file_name=cache_name("input_proj"),
         )
 
@@ -67,7 +74,7 @@ class VisionPatchEmbedder(LightweightModule):
                     device=mesh_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=mesh_mapper,
+                    mesh_mapper=hidden_mapper,
                     cache_file_name=cache_name(f"position_embedding_table_{axis}"),
                 )
             )
@@ -90,7 +97,8 @@ class VisionPatchEmbedder(LightweightModule):
                 (nonzero = padding patch).
 
         Returns:
-            ttnn.Tensor ``[1, batch, num_patches, hidden_size]`` patch embeddings.
+            ttnn.Tensor ``[1, batch, num_patches, hidden_size]`` patch embeddings,
+            fractured along the hidden dim (each device owns hidden_size/TP).
         """
         batch, num_patches, _ = pixel_position_ids.shape
 

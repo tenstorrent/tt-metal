@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import torch
 from loguru import logger
@@ -11,7 +9,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma4.tt.vision.vision_mlp import Gemma4VisionMLP
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
@@ -20,11 +18,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -64,11 +58,11 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     )
     torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
-    # MLP receives replicated input (DistributedLayerNorm all-gathers before handing off to MLP)
+    # MLP receives replicated input (DistributedNorm all-gathers before handing off to MLP)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -77,8 +71,9 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 
-    # Output is fractured along dim=3 (intermediate/TP axis); concat across TP devices to recover
-    # full hidden dim. Axis 0 of the mesh is always replicated so concat on dim=1 and slice [:1].
+    # Output is fractured along dim=3 (TP axis); concat across TP devices to recover
+    # full hidden dim. On 2D, dim=1 concatenates DP ranks (replicated copies for
+    # this unit test's batch=1 input); slice [:1] keeps the first rank.
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(

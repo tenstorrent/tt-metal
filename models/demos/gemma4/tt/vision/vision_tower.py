@@ -50,6 +50,7 @@ class VisionTower(LightweightModule):
         super().__init__()
         self.args = args
         self.mesh_device = args.mesh_device
+        self.tt_ccl = tt_ccl
 
         vision_config = args.hf_config.vision_config
         self.pooling_kernel_size = vision_config.pooling_kernel_size
@@ -75,25 +76,48 @@ class VisionTower(LightweightModule):
             self.std_scale = self._load_affine(state_dict[f"{prefix}.std_scale"], weight_cache_path, "std_scale")
 
     def _load_affine(self, weight, weight_cache_path, name):
-        """Load a ``[hidden_size]`` standardize buffer as a ``[1, 1, 1, hidden_size]`` ttnn tensor."""
+        """Load a ``[hidden_size]`` standardize buffer, fractured along the hidden dim."""
         cache_name = None
         if not self.args.dummy_weights and weight_cache_path is not None:
-            cache_name = weight_cache_path / f"visual.{name}"
+            cache_name = weight_cache_path / f"visual.{name}.tp{self.args.tp}"
+        mapper = (
+            ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
+            if self.is_mesh_device
+            else None
+        )
         return ttnn.as_tensor(
             weight.reshape(1, 1, 1, -1),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._replicate_mapper(),
+            mesh_mapper=mapper,
             cache_file_name=cache_name,
         )
 
-    def _replicate_mapper(self):
-        return ttnn.ReplicateTensorToMesh(self.mesh_device) if self.is_mesh_device else None
+    @staticmethod
+    def _pad_batch_to_dp(pixel_values, pixel_position_ids, dp):
+        """Pad dummy users so ``batch`` is a multiple of ``dp``. Dummy images
+        are zeros with position ids of ``-1`` (padding patches)."""
+        batch = pixel_values.shape[0]
+        pad_n = (dp - batch % dp) % dp
+        if pad_n == 0:
+            return pixel_values, pixel_position_ids, batch
+        pv_pad = torch.zeros(pad_n, *pixel_values.shape[1:], dtype=pixel_values.dtype)
+        pos_pad = torch.full(
+            (pad_n, *pixel_position_ids.shape[1:]),
+            -1,
+            dtype=pixel_position_ids.dtype,
+        )
+        return torch.cat([pixel_values, pv_pad], dim=0), torch.cat([pixel_position_ids, pos_pad], dim=0), batch
 
     def forward(self, pixel_values, pixel_position_ids, seq_len):
         """Encode image patches to pooled soft tokens.
+
+        On 1D meshes this is single-user TP on the hidden dim: a batched call
+        is split along the batch axis. On 2D meshes (DP on axis 0, TP on axis 1)
+        the batch is padded to a multiple of ``dp`` and packed so each DP rank
+        holds one image.
 
         Args:
             pixel_values (torch.Tensor): Flattened patch pixels ``[batch, num_patches, 3*patch_size^2]``.
@@ -102,22 +126,91 @@ class VisionTower(LightweightModule):
             seq_len (int): Padded sequence length the encoder blocks run at (>= num_patches).
 
         Returns:
-            pooled (ttnn.Tensor): ``[1, batch, output_length, hidden_size]`` scaled soft tokens.
+            pooled (ttnn.Tensor): ``[1, batch, output_length, hidden_size/TP]`` scaled soft tokens,
+                fractured along the hidden dim (and, on 2D, sharded on batch along DP).
             mask (torch.BoolTensor): ``[batch, output_length]`` (True = valid token); use it to strip
                 padded soft tokens (``pooled[mask]``), matching ``Gemma4VisionModel``.
         """
+        dp = self.args.dp
+        batch = pixel_values.shape[0]
+        if dp <= 1:
+            if batch == 1:
+                return self._forward_on_mesh(pixel_values, pixel_position_ids, seq_len)
+            pooled_list, mask_list = [], []
+            for i in range(batch):
+                pooled, mask = self._forward_on_mesh(
+                    pixel_values[i : i + 1],
+                    pixel_position_ids[i : i + 1],
+                    seq_len,
+                )
+                pooled_list.append(pooled)
+                mask_list.append(mask)
+            out = ttnn.concat(pooled_list, dim=1)
+            for t in pooled_list:
+                if t is not out:
+                    ttnn.deallocate(t)
+            return out, torch.cat(mask_list, dim=0)
+
+        padded_pv, padded_ids, orig_batch = self._pad_batch_to_dp(pixel_values, pixel_position_ids, dp)
+        n = padded_pv.shape[0]
+        if n == dp:
+            pooled, mask = self._forward_on_mesh(padded_pv, padded_ids, seq_len)
+            return pooled, mask[:orig_batch]
+
+        # More users than DP ranks: run sequential DP groups, then all-gather
+        # batch along axis 0 so groups can be concatenated in user order.
+        pooled_list, mask_list = [], []
+        for start in range(0, n, dp):
+            pooled, mask = self._forward_on_mesh(
+                padded_pv[start : start + dp],
+                padded_ids[start : start + dp],
+                seq_len,
+            )
+            pooled = self._gather_dp_batch(pooled)
+            pooled_list.append(pooled)
+            mask_list.append(mask)
+        out = ttnn.concat(pooled_list, dim=1)
+        for t in pooled_list:
+            if t is not out:
+                ttnn.deallocate(t)
+        return out, torch.cat(mask_list, dim=0)[:orig_batch]
+
+    def _gather_dp_batch(self, tensor):
+        """All-gather dim=1 along DP (axis 0). Used to stitch sequential DP groups."""
+        cluster_axis = 0
+        gathered = ttnn.experimental.all_gather_async(
+            tensor,
+            persistent_output_buffer=None,
+            dim=1,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=self.tt_ccl.get_num_links(cluster_axis),
+            cluster_axis=cluster_axis,
+            topology=self.args.ccl_topology(cluster_axis),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        if gathered is not tensor:
+            ttnn.deallocate(tensor)
+        return gathered
+
+    def _forward_on_mesh(self, pixel_values, pixel_position_ids, seq_len):
+        """Encode a packed group: local batch is 1 after DP sharding (or the
+        full batch on 1D, which is always 1 because the 1D path serializes)."""
         padding_positions = (pixel_position_ids == -1).all(dim=-1)  # [batch, num_patches]
         num_patches = pixel_position_ids.shape[1]
         output_length = num_patches // (self.pooling_kernel_size**2)
+        batch = pixel_values.shape[0]
 
-        mapper = self._replicate_mapper()
         pixel_values_tt = ttnn.from_torch(
             pixel_values.unsqueeze(0),  # [1, batch, num_patches, in_dim]
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
+            mesh_mapper=self.args.dp_mesh_mapper(batch, batch_dim=1),
         )
         position_ids_tt = ttnn.from_torch(
             pixel_position_ids.to(torch.int32),
@@ -125,7 +218,7 @@ class VisionTower(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
+            mesh_mapper=self.args.dp_mesh_mapper(batch, batch_dim=0),
         )
         padding_positions_tt = ttnn.from_torch(
             padding_positions.to(torch.int32),
@@ -133,7 +226,7 @@ class VisionTower(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
+            mesh_mapper=self.args.dp_mesh_mapper(batch, batch_dim=0),
         )
 
         # Encoder: patch embed + rotary + transformer blocks. Output is sliced back to the true

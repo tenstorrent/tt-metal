@@ -150,6 +150,9 @@ class Gemma4ModelArgs:
     # Layer pattern
     layer_types: tuple = None
     model_cache_path: Path | None = None
+    # Multimodal (top-level Gemma4Config, not text_config)
+    image_token_id: int | None = None
+    pad_token_id: int = 0
 
     def __post_init__(self):
         if self.layer_types is None:
@@ -204,6 +207,8 @@ class Gemma4ModelArgs:
             tie_word_embeddings=getattr(tc, "tie_word_embeddings", True),
             attention_bias=getattr(tc, "attention_bias", False),
             layer_types=layer_types,
+            image_token_id=getattr(hf_config, "image_token_id", None),
+            pad_token_id=getattr(tc, "pad_token_id", None) or getattr(hf_config, "pad_token_id", None) or 0,
         )
 
     @staticmethod

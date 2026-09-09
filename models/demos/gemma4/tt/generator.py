@@ -1106,6 +1106,7 @@ class ChunkedPrefillPageTableGuardMixin:
             kv_cache=kv_cache,
             batch_size=batch_size,
             valid_seq_lens=valid_seq_lens,
+            **kwargs,
         )
 
     def _gemma4_eager_token_feedback_buffer(self, model_id: int):

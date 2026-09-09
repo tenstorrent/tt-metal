@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
 import pytest
 import torch
 import torchvision.transforms as T
@@ -16,7 +14,7 @@ from models.demos.gemma4.tests.unit.test_vision_attention import (
     convert_vision_block_hf_to_meta,
 )
 from models.demos.gemma4.tt.vision.vision_block import VisionBlock
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
@@ -25,11 +23,7 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -148,10 +142,13 @@ def test_vision_block_inference(
             rot_mats=rot_mats,
         )
 
-        # Process the output
+        # Process the output. The block output is fractured along dim=3 (the
+        # hidden dim); concat along that axis to reassemble the full output.
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
+            ),
         )
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
 

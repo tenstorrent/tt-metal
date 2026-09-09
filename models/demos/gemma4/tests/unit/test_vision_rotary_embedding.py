@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 
 import pytest
 import torch
@@ -14,18 +13,14 @@ from transformers import Gemma4ImageProcessor
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma4.tests.unit.test_vision_attention import convert_rope_style_hf_to_meta_md
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.demos.gemma4.tt.vision.vision_rotary_embedding import VisionRotaryEmbedding
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize(

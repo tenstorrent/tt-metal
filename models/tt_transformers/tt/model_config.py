@@ -770,9 +770,7 @@ class ModelArgs:
                 }
             )
             if self.num_devices == 32:
-                lm_head_num_rows = 4
-                while self.dim % (self.num_devices * ttnn.TILE_SIZE * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
+                lm_head_num_rows = 8
             else:
                 lm_head_num_rows = 8
             lm_head_cores_per_row = 8

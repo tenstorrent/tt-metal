@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.vision.vision_block import VisionBlock
@@ -103,15 +105,23 @@ class VisionTransformer(LightweightModule):
                 (int32, ROW_MAJOR; padding patches are ``(-1, -1)``).
             padding_positions (ttnn.Tensor): ``[batch, num_patches]`` (uint32/int32, nonzero = padding).
             unpadded_seq_len (int): True number of patches (output is sliced back to this).
-            seq_len (int): Padded sequence length the blocks run at.
+            seq_len (int): Requested padded sequence length; rounded up to a multiple of
+                ``MAX_QKV_MM_SEQ_LEN`` for the block matmuls.
 
         Returns:
-            ttnn.Tensor: Encoder output ``[1, batch, unpadded_seq_len, hidden_dim]``.
+            ttnn.Tensor: Encoder output ``[1, batch, unpadded_seq_len, hidden_dim/TP]``,
+            fractured along the hidden dim.
         """
         num_patches = pixel_position_ids.shape[1]
 
+        # The blocks fold the sequence into fixed row blocks for their matmuls: MAX_QKV_MM_SEQ_LEN
+        # rows for QKV, 1024 for WO, 512 for the MLP. Round the padded length up to a multiple of
+        # the largest of those (they all divide it) so any caller-supplied seq_len works.
+        mm_align = self.args.MAX_QKV_MM_SEQ_LEN
+        seq_len = math.ceil(max(seq_len, num_patches, mm_align) / mm_align) * mm_align
+
         # Patch embedding (projected patches + 2D positional embeddings), then pad seq -> seq_len.
-        x = self.patch_embedder(pixel_values, pixel_position_ids, padding_positions)  # [1, B, num_patches, H]
+        x = self.patch_embedder(pixel_values, pixel_position_ids, padding_positions)  # [1, B, num_patches, H/TP]
         if seq_len > num_patches:
             x = ttnn.pad(x, [(0, 0), (0, 0), (0, seq_len - num_patches), (0, 0)], value=0.0)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -136,4 +146,5 @@ class VisionTransformer(LightweightModule):
             )
 
         x = x[:, :, :unpadded_seq_len, :]
+        print("hello", unpadded_seq_len)
         return x

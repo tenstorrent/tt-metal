@@ -137,6 +137,7 @@ def create_tt_model(
     # above so the cache identity and the model share one value.
     precision = _precision_for_variant
 
+    model_args.ckpt_dir = model_path
     model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,

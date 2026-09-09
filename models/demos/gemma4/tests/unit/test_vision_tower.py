@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
 import pytest
 import torch
 import torchvision.transforms as T
@@ -12,7 +10,7 @@ from transformers import Gemma4ImageProcessor
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma4.tests.unit.test_vision_attention import convert_vision_block_hf_to_meta
-from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs, vision_mesh_shape_from_env
 from models.demos.gemma4.tt.vision.vision_tower import VisionTower
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
@@ -21,11 +19,7 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [vision_mesh_shape_from_env()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -100,7 +94,7 @@ def test_vision_tower_inference(
     # strip padded soft tokens exactly as Gemma4VisionModel does.
     inputs_embeds = reference_model.patch_embedder(pt_pixel_values, pixel_position_ids, padding_positions)
     encoder_output = reference_model.encoder(
-        inputs_embeds=inputs_embeds, attention_mask=None, pixel_position_ids=pixel_position_ids
+        inputs_embeds=inputs_embeds, attention_mask=~padding_positions, pixel_position_ids=pixel_position_ids
     ).last_hidden_state
     pooled_ref, pooler_mask = reference_model.pooler(
         hidden_states=encoder_output,
@@ -123,9 +117,15 @@ def test_vision_tower_inference(
 
     tt_pooled, tt_mask = tt_model(pt_pixel_values, pixel_position_ids, seq_len)
 
-    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
-    tt_pooled_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled)[0]) if is_mesh else ttnn.to_torch(tt_pooled)
-    tt_pooled_torch = tt_pooled_torch[0]  # [1, batch, output_length, hidden] -> [batch, output_length, hidden]
+    tt_pooled_torch = ttnn.to_torch(
+        tt_pooled,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
+        ),
+    )
+    # Fractured along hidden (dim=3). On 2D, dim=1 concatenates DP ranks; the
+    # real image is packed onto DP rank 0 (dummy users pad the rest).
+    tt_pooled_torch = tt_pooled_torch[:, 0, :, : model_args.dim]  # [batch, output_length, hidden]
 
     # Strip padded soft tokens the same way the reference does (hidden_states[pooler_mask]).
     tt_output_torch = tt_pooled_torch[tt_mask]  # [num_valid, hidden]

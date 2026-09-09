@@ -38,6 +38,7 @@ from models.demos.gemma4.utils.substate import substate
 # tt_transformers Generator (the model returns logits in sampling layout),
 # so it is profiled there / by op name (SamplingDeviceOperation, TopK).
 LM_HEAD_SIGNPOST = "gemma4_lm_head"
+from loguru import logger
 
 
 def _compute_per_device_vocab(vocab_size, num_tp):
@@ -218,6 +219,51 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
                 f"{attn_prefix}.k_norm.weight",
                 torch.ones((cfg.head_dim,), dtype=norm_dtype),
             )
+
+
+def _split_vision_state_dict(state_dict, ckpt_dir):
+    """Split a full Gemma4 checkpoint into vision-tower and embed_vision dicts.
+
+    Tower keys are remapped to the ``visual.*`` prefix ``VisionTower`` /
+    ``VisionTransformer`` load. ``embed_vision`` keys are returned with the
+    ``embedding_projection.weight`` leaf name.
+
+    Prefers on-disk safetensors when ``ckpt_dir`` is set so warm-cache
+    placeholder tensors in the text ``state_dict`` are never used as weights.
+    """
+    from pathlib import Path
+
+    from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
+
+    raw = {}
+    if ckpt_dir:
+        from safetensors import safe_open
+
+        for shard in sorted(Path(ckpt_dir).glob("*.safetensors")):
+            with safe_open(str(shard), framework="pt") as sf:
+                for k in sf.keys():
+                    if "vision_tower" in k or "embed_vision" in k or k.startswith("visual."):
+                        raw[k] = sf.get_tensor(k)
+    if not raw and state_dict:
+        for k, v in state_dict.items():
+            if getattr(v, "is_placeholder", False):
+                continue
+            if "vision_tower" in k or "embed_vision" in k or k.startswith("visual."):
+                raw[k] = v
+
+    vis, embed = {}, {}
+    if not raw:
+        return vis, embed
+
+    sd = standardize_hf_keys_multimodal(raw)
+    for k, v in sd.items():
+        if k.startswith("visual."):
+            vis[k] = v
+        elif k.startswith("vision_tower."):
+            vis["visual." + k[len("vision_tower.") :]] = v
+        elif "embed_vision" in k:
+            embed[k.split("embed_vision.", 1)[-1]] = v
+    return vis, embed
 
 
 class Gemma4Model:
@@ -604,6 +650,20 @@ class Gemma4Model:
         self.prefill_valid_len_dev = None
         if bounded_sliding_kv_cache:
             self._init_prefill_valid_len_dev()
+
+        # Optional vision tower + multimodal projector. Attached lazily by
+        # ``init_vision_model()`` so the text-only path does not load them.
+        self.vision_model = None
+        self.vision_args = None
+        self.embed_vision_weight = None
+        self.embed_vision_eps = 1e-6
+        self._prefill_pixel_values = None
+        self._prefill_image_position_ids = None
+        self._vision_tokens_cache = None
+        self._vision_tokens_cache_key = None
+        self._vision_scatter_offset = 0
+        self.image_token_id = getattr(hf_config, "image_token_id", None)
+        self.pad_token_id = getattr(hf_config, "pad_token_id", 0) or 0
 
     def _init_prefill_valid_len_dev(self):
         """Allocate the persistent valid_seq_len tensor and stash it on every
@@ -1015,7 +1075,6 @@ class Gemma4Model:
                 hidden_states,
                 rope_mats=layer_rope,
                 position_idx=position_idx,
-                page_table=layer_page_table,
                 page_table=layer_page_table,
                 kv_cache=kv_cache,
                 is_decode=is_decode,
@@ -1602,6 +1661,7 @@ class Gemma4Model:
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
+        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
@@ -1626,6 +1686,14 @@ class Gemma4Model:
         """
         import torch.nn.functional as F
 
+        # Stash per-request vision inputs so ``ttnn_prefill_forward`` can fuse
+        # image tokens even when Generator does not thread multimodal kwargs
+        # through (the prepare→forward split). Generator already indexes
+        # ``pixel_values[user]`` into local_kwargs for sequential prefill.
+        self._prefill_pixel_values = kwargs.pop("pixel_values", None)
+        self._prefill_image_position_ids = kwargs.pop("image_position_ids", None)
+        if self._prefill_image_position_ids is None:
+            self._prefill_image_position_ids = kwargs.pop("pixel_position_ids", None)
         del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
 
         device = None if trace_enabled else self.mesh_device
@@ -1708,7 +1776,7 @@ class Gemma4Model:
             tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
-        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table
+        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
@@ -1743,17 +1811,360 @@ class Gemma4Model:
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
+    def init_vision_model(self, state_dict=None, dtype=ttnn.bfloat8_b):
+        """Build and attach the TT vision tower + ``embed_vision`` projector.
+
+        Idempotent. The tower runs on the same mesh as the text model. Vision
+        weights are remapped to the ``visual.*`` prefix the tower modules
+        expect; the multimodal projector (RMSNorm + Linear vision_H → text_H)
+        is loaded separately from ``model.embed_vision.*``.
+        """
+        if self.vision_model is not None:
+            return self.vision_model
+
+        from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+        from models.demos.gemma4.tt.vision.vision_tower import VisionTower
+        from models.demos.gemma4.tt.vision.vision_weight_convert import convert_vision_block_hf_to_meta
+        from models.tt_transformers.tt.ccl import TT_CCL
+
+        ckpt_dir = getattr(self.hf_config, "ckpt_dir", None) or os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH")
+        prev_hf = os.environ.get("HF_MODEL")
+        if ckpt_dir:
+            os.environ["HF_MODEL"] = str(ckpt_dir)
+        try:
+            vision_args = VisionModelArgs(
+                self.mesh_device,
+                dummy_weights=False,
+                max_batch_size=1,
+                max_seq_len=self.max_seq_len,
+            )
+        finally:
+            if prev_hf is None:
+                os.environ.pop("HF_MODEL", None)
+            else:
+                os.environ["HF_MODEL"] = prev_hf
+
+        vis_sd, embed_sd = _split_vision_state_dict(state_dict, ckpt_dir)
+        vis_sd = convert_vision_block_hf_to_meta(
+            vis_sd, vision_args.n_heads, vision_args.n_kv_heads, vision_args.head_dim
+        )
+
+        weight_cache_path = vision_args.weight_cache_path(dtype)
+        tt_ccl = TT_CCL(self.mesh_device)
+        self.vision_args = vision_args
+        self.vision_model = VisionTower(
+            args=vision_args,
+            dtype=dtype,
+            state_dict=vis_sd,
+            tt_ccl=tt_ccl,
+            weight_cache_path=weight_cache_path,
+        )
+        self._init_embed_vision(embed_sd, vision_args, weight_cache_path)
+        if self.image_token_id is None:
+            logger.warning(
+                "Gemma4 image_token_id is unset; vision tokens will not be scattered into text embeddings"
+            )
+        logger.info(
+            f"Vision tower attached (depth={vision_args.hf_config.vision_config.num_hidden_layers}, "
+            f"vision_H={vision_args.dim}, text_H={self.hidden_size})"
+        )
+        return self.vision_model
+
+    def _init_embed_vision(self, embed_sd, vision_args, weight_cache_path):
+        """Load HF ``Gemma4MultimodalEmbedder``: scaleless RMSNorm + Linear vis_H → text_H."""
+        vision_config = vision_args.hf_config.vision_config
+        self.embed_vision_eps = getattr(vision_config, "rms_norm_eps", 1e-6)
+
+        proj_key = "embedding_projection.weight"
+        if proj_key not in embed_sd:
+            for k in (
+                "model.embed_vision.embedding_projection.weight",
+                "embed_vision.embedding_projection.weight",
+            ):
+                if k in embed_sd:
+                    proj_key = k
+                    break
+        if proj_key not in embed_sd:
+            raise KeyError(
+                "embed_vision.embedding_projection.weight not found in checkpoint; "
+                f"available keys={list(embed_sd.keys())}"
+            )
+        proj_w = embed_sd[proj_key]  # [text_H, vis_H]
+        is_mesh = hasattr(self.mesh_device, "shape")
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        cache_name = None
+        if weight_cache_path is not None:
+            cache_name = str(weight_cache_path / "embed_vision.embedding_projection")
+        self.embed_vision_weight = ttnn.as_tensor(
+            proj_w.transpose(0, 1).unsqueeze(0).unsqueeze(0).contiguous(),  # [1, 1, vis_H, text_H]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+            cache_file_name=cache_name,
+        )
+
+    def get_image_features(self, pixel_values, image_position_ids):
+        """Run the vision tower + embed_vision projector; keep tokens on device.
+
+        Mirrors HF ``Gemma4Model.get_image_features``: vision tower then
+        ``embed_vision`` (RMSNorm + Linear into text hidden). Padded soft
+        tokens are stripped on device — vision activations never round-trip
+        through host.
+        """
+        assert self.vision_model is not None, "init_vision_model() must be called before get_image_features()"
+        if pixel_values.dim() == 2:
+            pixel_values = pixel_values.unsqueeze(0)
+        if image_position_ids.dim() == 2:
+            image_position_ids = image_position_ids.unsqueeze(0)
+        num_patches = int(image_position_ids.shape[1])
+        tile = int(getattr(self.vision_args, "MAX_QKV_MM_SEQ_LEN", 2048))
+        seq_len = max(tile, ((num_patches + tile - 1) // tile) * tile)
+        pooled, mask = self.vision_model(pixel_values, image_position_ids, seq_len)
+        if self.mesh_config is not None and self.mesh_config.tp > 1:
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            pooled = ccl_allgather(pooled, self.mesh_config, self.ccl_manager)
+            logger.info(pooled.shape)
+        compacted = self._compact_valid_vision_tokens(pooled, mask)
+        if compacted is not pooled:
+            ttnn.deallocate(pooled)
+        return self._apply_embed_vision(compacted)
+
+    @staticmethod
+    def _relayout(tensor, layout):
+        """``(view, owned)`` view of ``tensor`` in ``layout``.
+
+        ``ttnn.to_layout`` is a no-op when the layout already matches, but it
+        still hands back a fresh Python wrapper over the *caller's* device
+        buffer. ``result is not tensor`` is therefore not a safe test for
+        "this is a temporary I may deallocate" -- deallocating such a view
+        frees the caller's tensor and the next use of it dies with
+        "bad optional access". ``owned`` is True only for a real conversion.
+        """
+        if tensor.layout == layout:
+            return tensor, False
+        return ttnn.to_layout(tensor, layout), True
+
+    def _compact_valid_vision_tokens(self, pooled, mask):
+        """Strip padded soft tokens on device using the host validity mask.
+
+        ``pooled`` is ``[1, B, L, H]``; ``mask`` is ``[B, L]`` (True = valid).
+        Returns ``[n_valid, H]``. Does not read vision values back to host.
+        """
+        hidden = int(pooled.shape[-1])
+        length = int(pooled.shape[2])
+        batch = int(pooled.shape[1])
+        flat_mask = mask.reshape(-1)
+        n_valid = int(flat_mask.sum().item())
+        rows = batch * length
+        x2d = ttnn.reshape(pooled, (rows, hidden))
+        if n_valid == 0 or n_valid == rows:
+            return x2d
+        prefix = bool(flat_mask[:n_valid].all()) and not bool(flat_mask[n_valid:].any())
+        x2d_rm, rm_owned = self._relayout(x2d, ttnn.ROW_MAJOR_LAYOUT)
+        if prefix:
+            out = x2d_rm[:n_valid, :]
+            if rm_owned:
+                ttnn.deallocate(x2d_rm)
+            return out
+        pos = torch.nonzero(flat_mask, as_tuple=False).reshape(-1).to(torch.int32)
+        is_mesh = hasattr(self.mesh_device, "shape")
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        idx = ttnn.from_torch(
+            pos.view(1, n_valid),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        gathered = ttnn.embedding(idx, x2d_rm, dtype=ttnn.bfloat16)
+        ttnn.deallocate(idx)
+        if rm_owned:
+            ttnn.deallocate(x2d_rm)
+        return ttnn.reshape(gathered, (n_valid, hidden))
+
+    def _apply_embed_vision(self, vision_tokens):
+        """Scaleless RMSNorm + Linear into text hidden, matching HF embed_vision."""
+        n_valid = int(vision_tokens.shape[0])
+        vis_h = int(vision_tokens.shape[-1])
+        x = ttnn.reshape(vision_tokens, (1, 1, n_valid, vis_h))
+        pad = (32 - n_valid % 32) % 32
+        if pad:
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.rms_norm(x, epsilon=self.embed_vision_eps)
+        x = ttnn.linear(x, self.embed_vision_weight)
+        if pad:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = x[:, :, :n_valid, :]
+        return ttnn.reshape(x, (n_valid, int(x.shape[-1])))
+
+    def _iter_user_vision_inputs(self, pixel_values, image_position_ids, batch_size):
+        """Yield ``(user_idx, pixel_values, image_position_ids)`` for users with images."""
+        if pixel_values is None:
+            return
+        if isinstance(pixel_values, (list, tuple)):
+            for i, pv in enumerate(pixel_values):
+                if pv is None:
+                    continue
+                if isinstance(image_position_ids, (list, tuple)):
+                    pos = image_position_ids[i] if i < len(image_position_ids) else None
+                else:
+                    pos = image_position_ids
+                yield i, pv, pos
+            return
+        if batch_size <= 1:
+            yield 0, pixel_values, image_position_ids
+            return
+        n = int(pixel_values.shape[0])
+        for i in range(min(n, batch_size)):
+            pos = image_position_ids[i : i + 1] if image_position_ids is not None else None
+            yield i, pixel_values[i : i + 1], pos
+
+    def _scatter_vision_tokens(self, x, token_ids, vision_tokens, user_idx=0):
+        """On-device splice of vision embeddings at ``image_token_id`` positions.
+
+        Equivalent of HF ``inputs_embeds.masked_scatter(image_mask, image_features)``.
+        Uses ``ttnn.scatter`` like qwen36: place packed vision rows into a zero
+        buffer at the placeholder indices, then ``ttnn.where`` to merge with the
+        text embeddings. Vision activations stay on device.
+
+        For chunked prefill, ``token_ids`` is the current chunk; a running offset
+        into ``vision_tokens`` consumes rows in image-token order.
+        """
+        if vision_tokens is None or self.image_token_id is None:
+            return x
+        orig_shape = tuple(x.shape)
+        hidden = orig_shape[-1]
+        rows = 1
+        for d in orig_shape[:-1]:
+            rows *= d
+
+        ids = token_ids
+        if ids.dim() == 1:
+            ids = ids.unsqueeze(0)
+        if ids.shape[0] > 1:
+            ids = ids[user_idx : user_idx + 1]
+        flat_ids = ids.reshape(-1)
+        mask_bool = flat_ids == int(self.image_token_id)
+        pos_in_user = torch.nonzero(mask_bool, as_tuple=False).reshape(-1)
+        n = int(pos_in_user.numel())
+        if n == 0:
+            return x
+
+        offset = int(self._vision_scatter_offset)
+        vis_n = int(vision_tokens.shape[0])
+        assert offset + n <= vis_n, (
+            f"input_ids has {n} image-token positions at offset {offset} but "
+            f"vision_tokens has only {vis_n} rows"
+        )
+        src, src_owned = self._prepare_scatter_src(vision_tokens, offset, n, x.dtype)
+        self._vision_scatter_offset = offset + n
+
+        row_base = user_idx * int(flat_ids.numel()) if rows > int(flat_ids.numel()) else 0
+        pos = (pos_in_user + row_base).to(torch.int32)
+        index = pos.view(n, 1).expand(n, hidden).contiguous()
+        mask_col = torch.zeros(rows, 1, dtype=torch.bool)
+        mask_col[pos.long()] = True
+
+        is_mesh = hasattr(self.mesh_device, "shape") and self.mesh_device.get_num_devices() > 1
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        index_tt = ttnn.from_torch(
+            index,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        mask_tt = ttnn.from_torch(
+            mask_col,
+            dtype=x.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        x_2d = ttnn.reshape(x, (rows, hidden))
+        vision_placed = ttnn.scatter(ttnn.zeros_like(x_2d), 0, index_tt, src)
+        ttnn.deallocate(index_tt)
+        out = ttnn.where(mask_tt, vision_placed, x_2d)
+        ttnn.deallocate(vision_placed)
+        ttnn.deallocate(mask_tt)
+        if src_owned:
+            ttnn.deallocate(src)
+        return ttnn.reshape(out, orig_shape)
+
+    def _prepare_scatter_src(self, vision_tokens, offset, n, dtype):
+        """Rows ``[offset, offset + n)`` of ``vision_tokens`` as TILE ``dtype``.
+
+        Returns ``(src, owned)``. ``owned`` is False only while ``src`` still
+        aliases ``vision_tokens``, which belongs to the caller: chunked
+        prefill scatters into the same ``vision_tokens`` once per chunk, so
+        freeing it here breaks every chunk after the first.
+        """
+        src, owned = vision_tokens, False
+        if offset > 0 or n < int(vision_tokens.shape[0]):
+            rm, rm_owned = self._relayout(vision_tokens, ttnn.ROW_MAJOR_LAYOUT)
+            src, owned = rm[offset : offset + n, :], True
+            if rm_owned:
+                ttnn.deallocate(rm)
+        if src.dtype != dtype:
+            cast = ttnn.typecast(src, dtype)
+            if owned:
+                ttnn.deallocate(src)
+            src, owned = cast, True
+        tiled, tiled_owned = self._relayout(src, ttnn.TILE_LAYOUT)
+        if tiled_owned and owned:
+            ttnn.deallocate(src)
+        return tiled, owned or tiled_owned
+
+    def _fuse_vision_into_prefill(
+        self, x, input_ids_torch, pixel_values, image_position_ids, batch_size, chunk_start_idx
+    ):
+        """Per-user vision encode + on-device scatter into text embeddings."""
+        if pixel_values is None or self.vision_model is None or input_ids_torch is None:
+            return x, input_ids_torch
+        start = 0
+        if chunk_start_idx is not None and not isinstance(chunk_start_idx, ttnn.Tensor):
+            start = int(chunk_start_idx)
+        if start == 0:
+            self._vision_scatter_offset = 0
+            self._vision_tokens_cache = None
+            self._vision_tokens_cache_key = None
+
+        fused = x
+        for user_idx, pv, pos in self._iter_user_vision_inputs(pixel_values, image_position_ids, batch_size):
+            if pos is None:
+                logger.warning(f"User {user_idx} has pixel_values but no image_position_ids; skipping vision")
+                continue
+            cache_key = (id(pv), id(pos), user_idx)
+            if self._vision_tokens_cache is None or self._vision_tokens_cache_key != cache_key:
+                self._vision_tokens_cache = self.get_image_features(pv, pos)
+                self._vision_tokens_cache_key = cache_key
+                self._vision_scatter_offset = 0
+            fused = self._scatter_vision_tokens(
+                fused, input_ids_torch, self._vision_tokens_cache, user_idx=user_idx
+            )
+
+        # PLI (E2B/E4B): HF replaces multimodal placeholders with PAD so per-layer
+        # inputs do not look up the image-token embedding. Mirror that on host.
+        if self.hidden_size_per_layer_input and input_ids_torch is not None and self.image_token_id is not None:
+            pad_id = int(self.pad_token_id)
+            input_ids_torch = torch.where(
+                input_ids_torch == int(self.image_token_id),
+                torch.tensor(pad_id, dtype=input_ids_torch.dtype),
+                input_ids_torch,
+            )
+        return fused, input_ids_torch
+
     def ttnn_prefill_forward(
         self,
         x,
         rot_mats_global=None,
         rot_mats_local=None,
-        rot_mats_global=None,
-        rot_mats_local=None,
         user_id=0,
         page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
@@ -1788,7 +2199,21 @@ class Gemma4Model:
         *before* lm_head — slicing after would still allocate full-seq
         logits first. ``valid_seq_lens`` is the per-slot real token count for
         batched prefill KV fill (hetero prompts in one pad bucket).
+
+        Multimodal: ``pixel_values`` / ``image_position_ids`` (kwargs or the
+        stash from ``prepare_inputs_prefill``) trigger a per-user vision-tower
+        forward and an on-device ``ttnn.scatter`` of the projected image tokens
+        over the text embeddings, matching HF ``masked_scatter``. Vision
+        activations never leave the device.
         """
+        pixel_values = kwargs.pop("pixel_values", None)
+        if pixel_values is None:
+            pixel_values = self._prefill_pixel_values
+        image_position_ids = kwargs.pop("image_position_ids", None)
+        if image_position_ids is None:
+            image_position_ids = kwargs.pop("pixel_position_ids", None)
+        if image_position_ids is None:
+            image_position_ids = self._prefill_image_position_ids
         del rot_mats_global, rot_mats_local, kwargs
         if input_ids_torch is None:
             input_ids_torch = self._prefill_input_ids_torch
@@ -1797,6 +2222,14 @@ class Gemma4Model:
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+        x, input_ids_torch = self._fuse_vision_into_prefill(
+            x,
+            input_ids_torch,
+            pixel_values,
+            image_position_ids,
+            batch_size,
+            chunk_start_idx,
+        )
         return self(
             hidden_states=x,
             position_idx=None,
@@ -2084,7 +2517,6 @@ class Gemma4Model:
         kv_cache=None,
         on_device_logits=False,
         pli_combined=None,
-        page_tables_per_layer=None,
         page_tables_per_layer=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.

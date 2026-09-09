@@ -68,6 +68,54 @@ def test_ccl_topology_env_override_beats_device_count(monkeypatch):
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
 
 
+def _vision_args(is_2d, cluster_shape):
+    """VisionModelArgs with only the fields ``ccl_topology`` reads (no device)."""
+    from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+
+    args = object.__new__(VisionModelArgs)
+    args.is_2d_mesh = is_2d
+    args.cluster_shape = cluster_shape
+    return args
+
+
+@pytest.mark.parametrize(
+    "cluster_shape,cluster_axis,expected",
+    [
+        # BHGLX 8x4: TP axis is 4 wide, so Ring would need a D0↔D3 wraparound
+        # that FABRIC_1D does not route ("no forwarding direction" TT_FATAL).
+        ((8, 4), 1, ttnn.Topology.Linear),
+        ((8, 4), None, ttnn.Topology.Linear),  # default axis is TP
+        ((8, 4), 0, ttnn.Topology.Ring),  # DP axis is 8 wide
+        ((4, 8), 1, ttnn.Topology.Ring),  # TG_4x8: TP is the wide axis
+        ((4, 8), 0, ttnn.Topology.Linear),
+    ],
+)
+def test_vision_ccl_topology_gated_on_gathered_axis(monkeypatch, cluster_shape, cluster_axis, expected):
+    monkeypatch.setattr(
+        "models.tt_transformers.tt.model_config.ModelArgs.ccl_topology",
+        lambda self: ttnn.Topology.Ring,
+    )
+    assert _vision_args(True, cluster_shape).ccl_topology(cluster_axis) == expected
+
+
+def test_vision_ccl_topology_unchanged_on_1d_mesh(monkeypatch):
+    """T3K 1x8 / P150x4 keep the base policy — those rings are physical."""
+    monkeypatch.setattr(
+        "models.tt_transformers.tt.model_config.ModelArgs.ccl_topology",
+        lambda self: ttnn.Topology.Ring,
+    )
+    assert _vision_args(False, (1, 8)).ccl_topology() == ttnn.Topology.Ring
+    assert _vision_args(False, (1, 4)).ccl_topology() == ttnn.Topology.Ring
+
+
+def test_vision_ccl_topology_never_upgrades_to_ring(monkeypatch):
+    monkeypatch.setattr(
+        "models.tt_transformers.tt.model_config.ModelArgs.ccl_topology",
+        lambda self: ttnn.Topology.Linear,
+    )
+    assert _vision_args(True, (8, 4)).ccl_topology(0) == ttnn.Topology.Linear
+
+
 def test_ccl_async_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_CCL_ASYNC", raising=False)
     assert ccl_async_enabled() is False
