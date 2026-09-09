@@ -175,7 +175,7 @@ struct kernel_config_msg_t {
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
     // Reclaim 8 padding bytes on odd-processor architectures for the reload field and pad3,
     // preserving local_cb_mask's 8-byte alignment and the total launch-message size.
-    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4]; // CODEGEN:skip
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4];  // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;

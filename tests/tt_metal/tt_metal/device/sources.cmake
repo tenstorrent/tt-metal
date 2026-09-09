@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_DEVICE_SMOKE_SOURCES
     test_device_init_and_teardown.cpp
+    test_rtoptions_fw_src_brisc.cpp
     test_device_cluster_api.cpp
     test_device_pool.cpp
     test_device.cpp
