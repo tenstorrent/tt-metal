@@ -362,6 +362,7 @@ void DispatchSKernel::CreateKernel() {
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
+            {"DISPATCH_KERNEL", "1"},
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
             {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
             {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
