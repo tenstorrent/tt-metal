@@ -41,8 +41,8 @@ DataflowBufferSpec make_dfb(
     };
 }
 
-// TILE-native factory (unreachable): tile-index math only correct for (N,32,32,C≤32); composite untilizes before
-// dispatch. Rewrite would remove the untilize hop.
+// TILE-native factory: reader batches (W_tiles * C_tiles) tiles per input-H row, untilize produces RM sticks in L1,
+// writer scatters each pixel's `c_bytes` into its patch slot (`patch_idx * c_bytes`) inside the output stick.
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
@@ -87,16 +87,15 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_padded_shape);
     log_debug(tt::LogOp, "output_tensor_shape: {}", output_padded_shape);
 
-    // Memory layout parameters
-    auto stick_nbytes = output_padded_shape[3] * tt::datum_size(datatype_to_dataformat_converter(output.dtype()));
+    // Fold on logical C (matches compute_output_specs); untilize row stride uses padded C.
+    const uint32_t c_bytes = input_tensor.logical_shape()[-1] * tt::datum_size(out_dfb_data_format);
     uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t tiles_per_channel_dim = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
     uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
     uint32_t tiles_per_complete_row = tiles_per_width_dim * tiles_per_channel_dim;
-    // Total number of blocks for batch * height
     uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / (tiles_per_complete_row));
 
-    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, TILE_WIDTH * tt::datum_size(out_dfb_data_format));
+    const uint32_t c_padded_bytes = tiles_per_channel_dim * TILE_WIDTH * tt::datum_size(out_dfb_data_format);
     log_debug(
         tt::LogOp, "tiles_per_channel_dim: {}, ntiles: {}, num_blocks: {}", tiles_per_channel_dim, ntiles, num_blocks);
 
@@ -145,32 +144,32 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
             {{"input_width", input_width},
              {"stride_height", stride_h},
              {"stride_width", stride_w},
-             {"stick_nbytes", stick_nbytes},
-             {"aligned_stick_nbytes", aligned_stick_nbytes},
+             {"c_bytes", c_bytes},
+             {"c_padded_bytes", c_padded_bytes},
              {"tiles_per_channel_dim", tiles_per_channel_dim},
-             {"tiles_per_width_dim", tiles_per_width_dim},
-             {"element_size", datum_size(out_dfb_data_format)}},
+             {"tiles_per_width_dim", tiles_per_width_dim}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_block_id", "num_blocks", "patch_height_offset", "output_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    // Compute kernel (untilize). One KernelSpec per legacy compute KernelDescriptor (main + cliff),
-    // preserving the per-group block-count multiplicity. ComputeConfig set directly (Style B):
-    // only fp32_dest_acc_en was set by the legacy op -> enable_32_bit_dest.
+    // Compute kernel (untilize). Match legacy untilize op's fp32 setup — `UnpackToDest` + `DST_ACCUM_MODE=1`
+    // — else fp32 dest truncates mantissa and `torch.equal` fails vs the untilize→RM composite path.
     const bool fp32_dest_acc_en = dfb_data_format == tt::DataFormat::Float32;
     auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
         ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        // The compute kernel consumes SRC0. When SRC0 is Float32 and enable_32_bit_dest is set,
-        // the validator requires an explicit unpack mode. Legacy set none (default) -> UnpackToSrc.
         if (fp32_dest_acc_en) {
-            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToSrc});
+            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
+        }
+        KernelSpec::CompilerOptions::Defines compute_defines;
+        if (fp32_dest_acc_en) {
+            compute_defines.insert({"DST_ACCUM_MODE", "1"});
         }
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{COMPUTE_UNTILIZE},
             // KernelSpec defaults to O2; compute kernels use O3 (legacy KernelDescriptor default).
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
@@ -202,15 +201,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     auto ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, true);
 
-    const uint32_t patch_size = stride_h * stride_w;       // Size of each patch
-    const uint32_t output_width = input_width / stride_w;  // Output width
+    const uint32_t output_width = input_width / stride_w;
     for (auto core : cores) {
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        // Total output height * width
-        uint32_t output_offset =
-            (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
+        // `output_offset` is the output page id of (n, h/sh, 0); writer emits `patch_idx * c_bytes` intra-page.
+        uint32_t output_offset = curr_output_height_idx * output_width;
         if (!full_cores.contains(core)) {
             continue;
         }
@@ -232,8 +229,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        uint32_t output_offset =
-            (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
+        uint32_t output_offset = curr_output_height_idx * output_width;
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
         AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,

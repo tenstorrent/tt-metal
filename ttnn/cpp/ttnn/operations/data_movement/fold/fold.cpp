@@ -539,8 +539,9 @@ Tensor fold(
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
-        if (processed_tensor.layout() == Layout::TILE) {
-            // TILE-native factory is broken (see fold_multi_core_tiled_interleaved) → untilize→RM.
+        // TILE-native factory handles aligned (C * elem_size); fall back to untilize→RM only when it can't.
+        if (processed_tensor.layout() == Layout::TILE &&
+            !operations::data_movement::is_tile_native_fold_supported(processed_tensor)) {
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 
