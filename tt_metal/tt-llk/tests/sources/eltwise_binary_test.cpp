@@ -101,7 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef EN_DEST_REUSE
     const std::uint32_t num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
 #else
-    const std::uint32_t num_total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
+    const std::uint32_t num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
 #endif
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
@@ -168,8 +168,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
     const std::uint8_t num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const TensorShape tensor_shape     = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-    constexpr bool ACC_TO_DEST         = false;
-    const std::uint32_t loop_factor    = params.LOOP_FACTOR;
+    constexpr bool ACCUMULATE_TO_DEST =
+#ifdef EN_DEST_REUSE
+        false;
+#else
+        ACC_TO_DEST;
+#endif
+    const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
     {
         ZONE_SCOPED("INIT")
@@ -177,7 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 #ifndef EN_DEST_REUSE
         constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::NONE;
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACCUMULATE_TO_DEST);
 #endif
         PROFILER_SYNC();
     }
@@ -211,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
 
                     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-                        tensor_shape, ACC_TO_DEST);
+                        tensor_shape, ACCUMULATE_TO_DEST);
                     for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
                     {
                         LLK_ASSERT(
@@ -226,7 +231,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile, false);
                     }
 
-                    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+                    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACCUMULATE_TO_DEST);
                     for (std::uint32_t n = 1; n < num_tiles_accumulations; ++n)
                     {
                         for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
@@ -247,17 +252,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 #else
-        const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
-        const std::uint32_t num_blocks     = params.NUM_BLOCKS;
-        const std::uint32_t num_tiles      = tiles_in_block * num_blocks;
-        constexpr auto REUSE_DEST_TYPE     = ckernel::EltwiseBinaryReuseDestType::NONE;
+        const std::uint32_t input_tiles_in_block  = params.INPUT_NUM_TILES_IN_BLOCK;
+        const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
+        const std::uint32_t num_blocks            = params.INPUT_NUM_BLOCKS;
+        const std::uint32_t num_input_tiles       = input_tiles_in_block * num_blocks;
+        LLK_ASSERT(output_tiles_in_block > 0, "Output block must contain at least one tile");
+        LLK_ASSERT(input_tiles_in_block % output_tiles_in_block == 0, "Input tiles must divide evenly among accumulated output tiles");
+        const std::uint32_t tiles_per_accumulation = input_tiles_in_block / output_tiles_in_block;
+        constexpr auto REUSE_DEST_TYPE             = ckernel::EltwiseBinaryReuseDestType::NONE;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(loop_factor, num_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_source_handshakes<false, BROADCAST_TYPE>(loop_factor, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
@@ -269,13 +278,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_wait_for_dest_available_<dest_sync>();
                     }
-                    for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
-                            tensor_shape, tile, false);
+                        for (std::uint32_t accumulation = 0; accumulation < tiles_per_accumulation; ++accumulation)
+                        {
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                                tensor_shape, tile, false);
+                        }
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
@@ -317,13 +329,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool narrow_tile          = (tensor_shape.num_faces_c_dim == 1);
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
-#ifdef EN_DEST_REUSE
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
-#else
-    const std::uint32_t output_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t output_num_blocks     = params.NUM_BLOCKS;
-#endif
 
     {
         ZONE_SCOPED("INIT")
