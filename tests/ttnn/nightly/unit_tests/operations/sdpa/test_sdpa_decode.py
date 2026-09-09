@@ -3,7 +3,11 @@
 
 import pytest
 import numpy as np
+import torch
+from loguru import logger
+
 import ttnn
+from models.common.utility_functions import comp_pcc
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_multi_pos,
@@ -20,11 +24,12 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("nh", [32, 64], ids=["1_tile_row", "2_tile_rows"])
+@pytest.mark.parametrize("nh", [16, 32, 64], ids=["half_tile_row", "1_tile_row", "2_tile_rows"])
 def test_sdpa_decode_row_major_q_interleaved(device, nh):
     """ROW_MAJOR Q in interleaved DRAM: the reader must fill cb_q_rm for compute to tilize from,
     and must page Q by head row rather than by tile. Used to deadlock on cb_q_rm. nh=64 covers the
-    multi-band tilize, where the head rows span more than one Q tile row."""
+    multi-band tilize, where the head rows span more than one Q tile row; nh=16 covers the 16x32
+    tiny tile, where one band is half a tile and the output is untilized from half tiles."""
     run_test_sdpa_decode_single_iter(
         device,
         b=1,
@@ -40,6 +45,69 @@ def test_sdpa_decode_row_major_q_interleaved(device, nh):
         sharded_out=False,
         q_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major_q", "tile_q"])
+def test_sdpa_decode_attention_sink_sub_tile_heads(device, q_layout):
+    """Attention sink with fewer heads than a tile, for both Q layouts.
+
+    The sink is a [heads-rounded-to-a-tile, TILE_WIDTH] tensor whose column 0 carries one logit
+    per head, so with <=16 heads the kernel reads it as the top half of a full tile -- the same
+    16x32 tiny tile it gives Q. ROW_MAJOR Q additionally reaches the sink through the on-chip
+    tilize path, which nothing else covers.
+    """
+    torch.manual_seed(1234)
+    b, nh, nkv, s, d = 1, 16, 1, 128, 128
+    cur_pos = s // 2
+    scale = d**-0.5
+
+    Q = torch.randn(1, b, nh, d)
+    K = torch.randn(b, nkv, s, d)
+    V = torch.randn(b, nkv, s, d)
+    # Only column 0 of each row is read; the kernel scales the sink alongside the QK logits.
+    sink = torch.randn(nh, 1)
+    sink_padded = torch.nn.functional.pad(sink, (0, ttnn.TILE_SIZE - 1, 0, ttnn.TILE_SIZE - nh))
+
+    def as_tt(t, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
+        as_tt(Q, q_layout),
+        as_tt(K),
+        as_tt(V),
+        attention_sink=as_tt(sink_padded),
+        cur_pos_tensor=ttnn.Tensor(torch.tensor([cur_pos] * b), ttnn.int32).to(device),
+        scale=scale,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 1),
+            q_chunk_size=ttnn.TILE_SIZE,
+            k_chunk_size=get_chunk_size(cur_pos + 1, s),
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        ),
+    )
+    assert tt_out.layout == q_layout, "SDPA decode keeps Q's layout on its output"
+    got = ttnn.to_torch(tt_out)[:, :, :nh, :].permute(1, 2, 0, 3).float()  # b, nh, 1, d
+
+    # The sink is one more logit in the softmax denominator, contributing no value row.
+    q_ref = Q[:, :, :nh, :].permute(1, 2, 0, 3).float()  # b, nh, 1, d
+    k_ref = K[:, :, : cur_pos + 1, :].expand(b, nh, cur_pos + 1, d).float()
+    v_ref = V[:, :, : cur_pos + 1, :].expand(b, nh, cur_pos + 1, d).float()
+    logits = torch.cat([q_ref @ k_ref.transpose(-1, -2), sink.view(1, nh, 1, 1).expand(b, nh, 1, 1)], dim=-1)
+    weights = torch.softmax(logits * scale, dim=-1)
+    expect = weights[..., : cur_pos + 1] @ v_ref
+
+    passing, pcc_message = comp_pcc(expect, got, 0.99)
+    logger.info(f"[sdpa decode sink {q_layout}] PCC: {pcc_message}")
+    assert passing, f"attention sink PCC too low for {q_layout}: {pcc_message}"
 
 
 @pytest.mark.parametrize(
