@@ -765,13 +765,30 @@ class Attention(LightweightModule):
         if in_dtype != ttnn.bfloat16:
             xqkv = ttnn.typecast(xqkv, ttnn.bfloat16)
         d0, d1, rows = xqkv.shape[0], xqkv.shape[1], xqkv.shape[2]
-        q = ttnn.slice(xqkv, [0, 0, 0, 0], [d0, d1, rows, q_w])
-        k = ttnn.slice(xqkv, [0, 0, 0, q_w], [d0, d1, rows, q_w + kv_w])
-        v = ttnn.slice(xqkv, [0, 0, 0, q_w + kv_w], [d0, d1, rows, q_w + 2 * kv_w])
+        # The norm inputs live in DRAM: in decode the residual stream and QKV activations already occupy L1 and the
+        # interleaved rms_norm kernel's circular buffers for a 5120-wide row clash with them (dataflow-buffer /
+        # L1-buffer overlap). The slices are tiny in decode (32 rows) and DRAM-resident anyway in prefill.
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        q = ttnn.slice(xqkv, [0, 0, 0, 0], [d0, d1, rows, q_w], memory_config=dram)
+        k = ttnn.slice(xqkv, [0, 0, 0, q_w], [d0, d1, rows, q_w + kv_w], memory_config=dram)
+        v = ttnn.slice(xqkv, [0, 0, 0, q_w + kv_w], [d0, d1, rows, q_w + 2 * kv_w], memory_config=dram)
         ttnn.deallocate(xqkv)
-        q_n = self.q_norm_fw(q, mode)
+        if mode == Mode.DECODE and self.num_devices == 1 and q_w == self.args.dim:
+            # Decode: the interleaved rms_norm kernel's circular buffers for a 5120-wide row clash with the L1-resident
+            # decode activations (residual, clones, KV updates). Use the model's width-sharded decode norm path — the
+            # q block is exactly `dim` wide (n_heads * head_dim == hidden), so the residual-norm program config applies.
+            cfg = self.args.get_norm_config("attn", Mode.DECODE, None)
+            q_sh = ttnn.to_memory_config(q, cfg["sharded_output_config"])
+            ttnn.deallocate(q)
+            q_n = self.q_norm_fw(q_sh, mode, in_sharded=True, out_sharded=True, norm_config=cfg)
+            ttnn.deallocate(q_sh)
+            q_n = ttnn.sharded_to_interleaved(q_n, ttnn.DRAM_MEMORY_CONFIG)
+            q = None
+        else:
+            q_n = self.q_norm_fw(q, mode)
         k_n = self.k_norm_fw(k, mode)
-        ttnn.deallocate(q)
+        if q is not None:
+            ttnn.deallocate(q)
         ttnn.deallocate(k)
         out = ttnn.concat([q_n, k_n, v], dim=3, memory_config=mem_cfg)
         for t in (q_n, k_n, v):

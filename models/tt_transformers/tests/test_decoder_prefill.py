@@ -92,11 +92,13 @@ def test_decoder_inference(
         prefetcher=prefetcher,
         use_hf_rope=False,
     )
-    model_args.n_layers = 1
+    model_args.n_layers = int(os.environ.get("TT_TEST_LAYER_NUM", "0")) + 1  # unit test: layers up to the tested one
 
     state_dict = model_args.load_state_dict()
 
-    reference_model = model_args.reference_decoder(load_checkpoint=True)
+    reference_model = model_args.reference_decoder(
+        load_checkpoint=True, layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    )
 
     generation_start_pos = 0
     generation_length = 1
@@ -167,7 +169,7 @@ def test_decoder_inference(
         tt_ccl=tt_ccl,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0")),  # bring-up aid: pick a layer kind
         dtype=dtype,
         transformation_mats=transformation_mats,
         args=model_args,

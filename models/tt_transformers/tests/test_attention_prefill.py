@@ -87,7 +87,7 @@ def test_attention_inference(
     model_args = ModelArgs(
         mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=use_hf_rope
     )
-    model_args.n_layers = 1
+    model_args.n_layers = int(os.environ.get("TT_TEST_LAYER_NUM", "0")) + 1  # unit test: layers up to the tested one
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -95,7 +95,18 @@ def test_attention_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = model_args.reference_attention(load_checkpoint=True)
+    layer_num = int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    reference_model = model_args.reference_attention(load_checkpoint=True, layer_num=layer_num)
+    # Hybrid-attention models: rope follows the tested layer's type (sliding -> local/unscaled rope), and the
+    # HF reference rotates with the same layer type.
+    layer_type = model_args.layer_types[layer_num] if getattr(model_args, "layer_types", None) else None
+    is_sliding_layer = layer_type == "sliding_attention"
+    if layer_type is not None and hasattr(reference_model, "rope_layer_type"):
+        reference_model.rope_layer_type = layer_type
+    rope_theta = (
+        model_args.rope_theta_local if (is_sliding_layer and model_args.rope_theta_local) else model_args.rope_theta
+    )
+    rope_scaling = getattr(model_args, "rope_scaling_local", None) if is_sliding_layer else model_args.rope_scaling
 
     rot_mats_fn = get_rot_mats_hf if model_args.use_hf_rope else get_rot_mats
 
@@ -104,8 +115,8 @@ def test_attention_inference(
         head_dim=model_args.head_dim,
         device=mesh_device,
         seq_len=max_seq_len,
-        theta=model_args.rope_theta,
-        rope_scaling=model_args.rope_scaling,
+        theta=rope_theta,
+        rope_scaling=rope_scaling,
     )
 
     transformation_mats = {}
@@ -156,7 +167,7 @@ def test_attention_inference(
         model_args,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=layer_num,
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,

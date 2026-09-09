@@ -4473,9 +4473,10 @@ class ModelArgs:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
-    def reference_decoder(self, load_checkpoint=False):
+    def reference_decoder(self, load_checkpoint=False, layer_num=0):
+        # layer_num: which decoder layer to wrap (hybrid models: layer kind and weights differ per layer)
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
-        layer = model.model.layers[0]
+        layer = model.model.layers[layer_num]
         use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
@@ -4763,7 +4764,10 @@ class HfDecoderWrapper:
             # sliding_attention per layer). Layer 0 is sliding, so computing global rope here (as the
             # default above does) feeds the wrong rope and the reference diverges from the TT decoder
             # (which applies the correct per-layer rope). Recompute with this layer's own layer_type.
-            _layer_type = getattr(getattr(self.decoder, "self_attn", None), "layer_type", None)
+            _attn = getattr(self.decoder, "self_attn", None)
+            _layer_type = getattr(_attn, "layer_type", None) or getattr(
+                _attn, "attention_type", None
+            )  # Olmo3: attention_type
             if (
                 self.rotary_emb is not None
                 and _layer_type is not None
