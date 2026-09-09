@@ -660,7 +660,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "add",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 1;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
     }
 }
@@ -674,7 +674,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "sub",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 1;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
     }
 }
@@ -688,7 +688,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "mul",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 1;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
     }
 }
@@ -702,7 +702,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "add",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 1;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
     }
 }
@@ -716,7 +716,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "sub",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 1;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
     }
 }
@@ -730,7 +730,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "mul",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 1;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
     }
 }
@@ -744,7 +744,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "add_with_dest_reuse",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 4;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -762,7 +762,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "sub_with_dest_reuse",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 4;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -780,7 +780,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "mul_with_dest_reuse",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 4;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -901,7 +901,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "add",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 4;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -919,7 +919,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "sub",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 4;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -937,7 +937,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .binary_op = "mul",
         .math_fidelity = GetParam()};
     test_config.num_tiles = 4;
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -957,7 +957,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .acc_to_dest = true,
         .math_fidelity = GetParam(),
     };
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -977,7 +977,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .acc_to_dest = true,
         .math_fidelity = GetParam(),
     };
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
@@ -997,7 +997,7 @@ TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCo
         .acc_to_dest = true,
         .math_fidelity = GetParam(),
     };
-    for (auto& device : this->devices_) {
+    for (const auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
         // TODO: Remove early return once back-to-back tests are passing on Quasar
         if (this->arch_ == ARCH::QUASAR) {
