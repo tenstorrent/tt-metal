@@ -171,7 +171,7 @@ def test_binary_atan2_large_magnitude_all_bitpatterns(ttnn_dtype, torch_dtype, o
         golden, output = golden[keep], output[keep]
 
     # The fp32 minimax polynomial itself is good to ~2.5 ULP (see test_unary_fp32.py::test_atan).
-    assert_with_ulp(golden, output, ulp_threshold=3, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=output, ulp_threshold=3, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
