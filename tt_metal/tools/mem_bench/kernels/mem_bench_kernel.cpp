@@ -64,7 +64,7 @@ void kernel_main() {
     while (total_bytes_read + total_bytes_written < my_total_work) {
         if constexpr (my_rd_dst_addr) {
             uint64_t host_src_addr = pcie_noc_xy_encoding | rd_ptr;
-            noc_async_read(host_src_addr, my_rd_dst_addr, pcie_rd_transfer_size);
+            noc_async_read_pcie(host_src_addr, my_rd_dst_addr, pcie_rd_transfer_size);
             rd_ptr += pcie_rd_transfer_size;
             total_bytes_read += pcie_rd_transfer_size;
             if (rd_ptr >= pcie_rd_end) {
@@ -73,7 +73,7 @@ void kernel_main() {
         }
         if constexpr (pcie_wr_size) {
             uint64_t host_dst_addr = pcie_noc_xy_encoding | wr_ptr;
-            noc_async_write(
+            noc_async_write_pcie(
                 wr_ptr,  // Any data
                 host_dst_addr,
                 pcie_wr_transfer_size);
