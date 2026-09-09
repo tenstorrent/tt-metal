@@ -43,35 +43,58 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
-// Upper bound on how many slot addresses a channel tabulates. The table is a channel member and the
-// channels are locals of the router kernel, so this caps their contribution to its stack frame.
+// Channels at or below this depth tabulate every slot address. A table load is the cheapest
+// addressing mode available -- two instructions, and with a power-of-two depth the whole slot
+// advance comes out branchless -- so every channel that fits keeps its table.
 //
-// Blackhole tabulates fewer than Wormhole. Its router runs against a 1912 B stack budget
-// (-Werror=stack-usage, bh_hal.cpp) that a 2D-torus config was already exceeding: the local-worker
-// injection channel absorbs whatever slots the uniform channel depth strands, so its depth -- and
-// with it the table -- grows as the configured packet payload shrinks. Capping the table at 8 keeps
-// that channel's frame contribution flat once it crosses the bound, instead of stepping up to a
-// full 16-entry table plus a stride word. Wormhole is unchanged.
-#ifdef ARCH_BLACKHOLE
-constexpr uint8_t MAX_TABULATED_SLOTS = 8;
-#else
-constexpr uint8_t MAX_TABULATED_SLOTS = 16;
-#endif
+// Deeper channels drop the table rather than grow it. The channels are locals of the router kernel,
+// so their tables land in its stack frame, and the Blackhole router builds against a 1912 B budget
+// (-Werror=stack-usage, bh_hal.cpp) that a 2D-torus config was already exceeding.
+//
+// The bound is 32 because that is the deepest channel the allocator's slot tables hand out (see the
+// per-VC buffer slot options in fabric_static_sized_channels_allocator.cpp -- Blackhole's depths are
+// powers of two up to 32), so every ordinary channel keeps its table and its addressing is
+// unchanged. Exactly one channel can exceed the bound: the worker-connected VC0 sender additionally
+// absorbs whatever slots the uniform channel depth strands (configure_buffer_slots_helper), so its
+// depth grows as the configured packet payload shrinks. That one channel loses its table and holds
+// a flat 16 B instead, which is what keeps the frame inside the budget.
+//
+// Which mode a channel uses is resolved from NUM_BUFFERS at compile time. Neither mode tests a slot
+// index at runtime, so lowering this bound trades stack for a multiply and never for a branch.
+constexpr uint8_t MAX_TABULATED_SLOTS = 32;
 
 template <uint8_t NUM_BUFFERS>
-inline constexpr uint8_t tabulated_slot_count = NUM_BUFFERS < MAX_TABULATED_SLOTS ? NUM_BUFFERS : MAX_TABULATED_SLOTS;
+inline constexpr bool tabulates_all_slots = NUM_BUFFERS <= MAX_TABULATED_SLOTS;
 
-// Slot stride, stored only by channels deeper than the table. Empty otherwise, so that with
-// [[no_unique_address]] fully tabulated channels keep their original layout.
-template <bool Needed>
-struct SlotStride {
-    FORCE_INLINE void set(size_t) {}
+// Slot addressing for a channel that tabulates: one stored address per slot.
+template <uint8_t NUM_BUFFERS, bool Tabulate = tabulates_all_slots<NUM_BUFFERS>>
+struct SlotAddresses {
+    FORCE_INLINE void init(size_t channel_base_address, size_t slot_stride) {
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+            this->addresses[i] = channel_base_address + i * slot_stride;
+        }
+    }
+    [[nodiscard]] FORCE_INLINE size_t operator[](uint8_t slot) const { return this->addresses[slot]; }
+    [[nodiscard]] FORCE_INLINE size_t base() const { return this->addresses[0]; }
+
+    std::array<size_t, NUM_BUFFERS> addresses;
 };
 
-template <>
-struct SlotStride<true> {
-    size_t value;
-    FORCE_INLINE void set(size_t stride) { this->value = stride; }
+// Slot addressing for a channel too deep to tabulate: base plus stride, computed on demand. Both
+// erisc targets have a hardware multiplier (rv32im_zmmul), so this is a mul and an add.
+template <uint8_t NUM_BUFFERS>
+struct SlotAddresses<NUM_BUFFERS, false> {
+    FORCE_INLINE void init(size_t channel_base_address, size_t stride) {
+        this->base_address = channel_base_address;
+        this->slot_stride = stride;
+    }
+    [[nodiscard]] FORCE_INLINE size_t operator[](uint8_t slot) const {
+        return this->base_address + slot * this->slot_stride;
+    }
+    [[nodiscard]] FORCE_INLINE size_t base() const { return this->base_address; }
+
+    size_t base_address;
+    size_t slot_stride;
 };
 
 // This class implements the interface for static sized sender channels.
@@ -88,11 +111,9 @@ public:
     FORCE_INLINE void init_impl(
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         this->next_packet_buffer_index = BufferIndex{0};
-        this->slot_stride.set(max_eth_payload_size_in_bytes);
-        for (uint8_t i = 0; i < TABULATED_SLOTS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
-        }
-        // Slots past the table have no stored address, so walk a cursor to zero every header.
+        this->slot_addresses.init(channel_base_address, max_eth_payload_size_in_bytes);
+        // A channel too deep to tabulate stores no per-slot address, so walk a cursor to zero
+        // every header rather than reading one back.
         size_t slot_addr = channel_base_address;
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
 // need to avoid unrolling to keep code size within limits
@@ -103,7 +124,7 @@ public:
             slot_addr += max_eth_payload_size_in_bytes;
         }
         if constexpr (NUM_BUFFERS) {
-            cached_next_buffer_slot_addr = this->buffer_addresses[0];
+            cached_next_buffer_slot_addr = this->slot_addresses.base();
         }
     }
 
@@ -114,32 +135,20 @@ public:
 
     // For sender channel, only need a get_next_packet style
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl() const {
-        return address_of_slot(next_packet_buffer_index.get());
+        return this->slot_addresses[next_packet_buffer_index.get()];
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
         next_packet_buffer_index = BufferIndex{wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get())};
-        this->cached_next_buffer_slot_addr = address_of_slot(next_packet_buffer_index.get());
+        this->cached_next_buffer_slot_addr = this->slot_addresses[next_packet_buffer_index.get()];
     }
 
 private:
-    static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
-
-    [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
-        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
-            return this->buffer_addresses[slot];
-        } else {
-            return slot < TABULATED_SLOTS ? this->buffer_addresses[slot]
-                                          : this->buffer_addresses[0] + slot * this->slot_stride.value;
-        }
-    }
-
-    std::array<size_t, TABULATED_SLOTS> buffer_addresses;
+    SlotAddresses<NUM_BUFFERS> slot_addresses;
     std::size_t cached_next_buffer_slot_addr;
     BufferIndex next_packet_buffer_index;
-    [[no_unique_address]] SlotStride<(NUM_BUFFERS > MAX_TABULATED_SLOTS)> slot_stride;
 };
 
 // A base Ethernet channel buffer interface class that will be specialized for different
@@ -215,10 +224,9 @@ public:
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
-        for (uint8_t i = 0; i < TABULATED_SLOTS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-        }
-        // Slots past the table have no stored address, so walk a cursor to zero every header.
+        this->slot_addresses.init(channel_base_address, this->max_eth_payload_size_in_bytes);
+        // A channel too deep to tabulate stores no per-slot address, so walk a cursor to zero
+        // every header rather than reading one back.
         size_t slot_addr = channel_base_address;
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
 // need to avoid unrolling to keep code size within limits
@@ -230,7 +238,7 @@ public:
         }
 
         if constexpr (NUM_BUFFERS) {
-            set_cached_next_buffer_slot_addr_impl(this->buffer_addresses[0]);
+            set_cached_next_buffer_slot_addr_impl(this->slot_addresses.base());
         }
     }
 
@@ -239,12 +247,12 @@ public:
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return address_of_slot(buffer_index.get());
+        return this->slot_addresses[buffer_index.get()];
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(address_of_slot(buffer_index.get()));
+        return reinterpret_cast<volatile T*>(this->slot_addresses[buffer_index.get()]);
     }
 
     template <typename T>
@@ -272,22 +280,10 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
-    FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(this->buffer_addresses[0]); }
+    FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(this->slot_addresses.base()); }
 
 private:
-    static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
-
-    // Reuses max_eth_payload_size_in_bytes as the stride, so needs no SlotStride member.
-    [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
-        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
-            return this->buffer_addresses[slot];
-        } else {
-            return slot < TABULATED_SLOTS ? this->buffer_addresses[slot]
-                                          : this->buffer_addresses[0] + slot * this->max_eth_payload_size_in_bytes;
-        }
-    }
-
-    std::array<size_t, TABULATED_SLOTS> buffer_addresses;
+    SlotAddresses<NUM_BUFFERS> slot_addresses;
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
