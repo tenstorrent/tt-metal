@@ -2782,7 +2782,7 @@ def test_softcap_small_magnitude_all_bitpatterns(beta, device):
     normal = (golden.abs() >= 2.0**-126) & torch.isfinite(golden)
     assert not (result[normal] == 0).any()
 
-    assert_with_ulp(golden[normal], result[normal], ulp_threshold=SOFTCAP_ULP)
+    assert_with_ulp(expected_result=golden[normal], actual_result=result[normal], ulp_threshold=SOFTCAP_ULP)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
