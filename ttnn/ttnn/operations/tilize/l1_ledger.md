@@ -30,7 +30,7 @@ predicate establishing it.
 | Symbol | Bound | Predicate establishing the bound |
 |--------|-------|----------------------------------|
 | `tile_h` | `{1, 2, 4, 8, 16, 32}`; Phase 0 `= 32` | `tile=` validation: height must be a power-of-two fraction of 32 and width must be 32 (raises `ValueError` otherwise). Phase 0 additionally pins it via `SUPPORTED["tile_height"] = [32]`. |
-| `block_width_tiles` | `1 <= block_width_tiles <= min(255, W_FIT)` | `W_FIT = clamp((budget - WRITE_BATCH_MIN_TILES*tb_out) // (2*tb_in + 2*tb_out), 1, FAST_TILIZE_WIDTH_CAP)` with `budget = ttnn.get_max_worker_l1_unreserved_size()` and `FAST_TILIZE_WIDTH_CAP = 255` from `can_use_fast_tilize`'s `block_width_tiles < 256` (`tilize_helpers.inl:77`). Under `low_l1=True` the additional cap `LOW_L1_WIDTH_CAP` (a host constant, independent of every tensor dimension) applies. `block_width_tiles` is the coarsest **divisor of `C`** that is `<= min(W_CAP, C / num_w_chunks_target)` with `num_w_chunks_target >= ceil(C / W_CAP)`, so the bound holds by construction. (The divisor constraint replaces the design's `ceil` — see "Deviations".) **On the shard-driven plan (Refinement 1) it is not solved at all: `= shard_cols_tiles`, read off the shard spec.** The bound still holds — a shard column is a whole number of tiles by construction, and the non-native side's DEPTH knobs (not the block) are what shrink if the pair overruns the budget. `low_l1` is inert there: the shard, not `W_CAP`, fixes the extent. **On a sub-row-paged source it must additionally divide the page width in tiles**, so a block's row segment sits inside ONE source page; expressed as `_largest_divisor_at_most(gcd(C, page_width_tiles), width_limit)`, which degenerates to the C-divisor rule exactly when a page is a whole row. |
+| `block_width_tiles` | `1 <= block_width_tiles <= min(255, W_FIT)` | `W_FIT = clamp((budget - WRITE_BATCH_MIN_TILES*tb_out) // (2*tb_in + 2*tb_out), 1, FAST_TILIZE_WIDTH_CAP)` with `budget = ttnn.get_max_worker_l1_unreserved_size()` and `FAST_TILIZE_WIDTH_CAP = 255` from `can_use_fast_tilize`'s `block_width_tiles < 256` (`tilize_helpers.inl:77`). Under `low_l1=True` the additional cap `LOW_L1_WIDTH_CAP` (a host constant, independent of every tensor dimension) applies. `block_width_tiles` is the coarsest **divisor of `C`** that is `<= min(W_CAP, C / num_w_chunks_target)` with `num_w_chunks_target >= ceil(C / W_CAP)`, so the bound holds by construction. (The divisor constraint replaces the design's `ceil` — see "Deviations".) **On the shard-driven plan (Refinement 1) it is not solved at all: `= shard_cols_tiles`, read off the shard spec.** The bound still holds — a shard column is a whole number of tiles by construction, and the non-native side's DEPTH knobs (not the block) are what shrink if the pair overruns the budget. `low_l1` is inert there: the shard, not `W_CAP`, fixes the extent. **On a sub-row-paged source it must additionally divide the page width in tiles**, so a block's row segment sits inside ONE source page; expressed as `_largest_divisor_at_most(gcd(C, page_width_tiles), width_limit)`, which degenerates to the C-divisor rule exactly when a page is a whole row. **Refinement 3:** `num_w_chunks_target` is no longer just the occupancy cut — it is `max(w_chunks_for_l1, ceil(num_cores * waves / R))` evaluated at the largest `waves <= PIPELINE_WAVES_PER_CORE` whose resulting `block_row_bytes >= MIN_BLOCK_ROW_BYTES`, falling back to `waves = 1`. The bound is unaffected (a larger target can only make the divisor SMALLER), and so is every capacity expression below — the wave rule spends L1, never asks for more. |
 | `block_width_tail_tiles` | **does not exist in the implementation** | `block_width_tiles` divides `C` exactly, so `num_w_chunks = C / block_width_tiles` and every w-chunk is exactly `block_width_tiles` wide. There is no ragged column tail, hence no second CT instantiation of `compute_kernel_lib::tilize` and no second CB quantum. Forced by the wrap requirement — see "Deviations". |
 | `write_rows_per_barrier` | `1 <= write_rows_per_barrier <= WRITE_BATCH_MIN_TILES = 4` | `= max(1, ceil(WRITE_BATCH_MIN_TILES / block_width_tiles))`; since `block_width_tiles >= 1`, the ceiling is at most `WRITE_BATCH_MIN_TILES`. |
 | `input_depth_rows` | `= 2` (Phase 0); `>= 2` in general. **Measured across {1,2,3,4} and flat at every value** on both shapes the design's overlap lamp names — kept at 2 as the smallest value that overlaps at all and the cheapest in L1 of those; still a live knob. Evidence and the bottleneck it implies (DRAM-bandwidth-bound, ~183 GB/s on `[1,1,2048,2048]`) are in `tilize_program_descriptor.INPUT_DEPTH_ROWS`. | Fixed host constant. Lower bound 2 is required by the overlap it buys and by `read_sticks_for_tilize`'s capacity assert `width_in_tiles <= cb_capacity` (`tilize_helpers_dataflow.inl:105-107`) plus `compute_kernel_lib::tilize`'s `get_dfb_num_pages(input_dfb) >= block_width_tiles` (`tilize_helpers.inl:220-222`). |
@@ -38,6 +38,9 @@ predicate establishing it.
 | `tb_in` | `= tile_h * 32 * element_size(in_dtype)`; `<= 32*32*4 = 4096` B | `tile_h <= 32` (above) and `element_size <= 4` over `TARGET["dtype"]` (widest is `uint32`/`int32`/`float32`). |
 | `tb_out` | `= output_tensor.buffer_page_size()`; `<= 32*32*4 = 4096` B | Same: `tile_h <= 32`, and the widest format in `TARGET["output_dtype"]` is 4 B/element. Block-float outputs are *smaller* (`Bfp8_b` = 1088 B for a 32x32 tile). |
 | `WRITE_BATCH_MIN_TILES` | `= 4`, a host constant | Named constant, single source. **MEASURED on device, not taken from the catalog:** the design's lamp asked whether 8 sits past the knee and it does. `[1,1,16384,32]` (C == 1, so this constant *is* `write_rows_per_barrier`), median device kernel ns over 3 fresh-cache runs at 64/64 cores — wb=1 **24430** (the one-write-per-barrier trap), wb=2 22519, wb=4 **20723**, wb=8 22568, wb=16 22403. The plateau is at 4, which is exactly where `double_buffer/report.md` put it; 4 is 1.18x over the trap and 1.09x over the design's 8, and costs *less* L1. Harness: `tests/ttnn/unit_tests/operations/tilize/test_tilize_lever_write_batch.py`. Not a tensor dimension. |
+| `PIPELINE_WAVES_PER_CORE` | `= 4`, a host constant | The CAP on how many pipeline WAVES (one wave = one tile-row of the block, i.e. one reader push / one compute call / one writer wait) the column cut is allowed to buy. A core overlaps its DRAM reads against its DRAM writes only above one wave, and the tensor holds `R * num_w_chunks` tile-rows, so `waves_per_core = R * num_w_chunks / num_cores` — the wave demand and the occupancy demand are ONE expression on the column axis, this constant being the factor between them. Past 4 the pipe is full. |
+| `MIN_BLOCK_ROW_BYTES` | `= 512`, a host constant, in BYTES | The read-transaction floor that stops the wave trade: a wave is bought by HALVING the block width, so it only pays while the read stays large enough to amortize the NoC/DRAM per-transaction cost. Measured across five geometries — see the constant's own comment in `tilize_program_descriptor.py` and `tests/.../tilize/test_tilize_lever_pipeline_waves.py`. In bytes rather than tiles so it means the same thing at every element size. |
+| `COMPUTE_SKIP_FORMAT_RECONFIG`, `COMPUTE_AMORTIZE_INIT` | `= True`, host constants | Compute-side per-call overhead knobs, both **capacity-neutral**: they change which `compute_kernel_lib::tilize` template arguments the kernel instantiates, not any CB size. `COMPUTE_AMORTIZE_INIT` is additionally gated at emission time on `max blocks per core > 1`, because the three extra instantiations grow the TRISC binary. |
 | `FAST_TILIZE_WIDTH_CAP` | `= 255`, a host constant | `can_use_fast_tilize` requires `block_width_tiles < 256` (`tilize_helpers.inl:77`). |
 | `LOW_L1_WIDTH_CAP` | `= 4`, a host constant | Named constant, single source, **independent of every tensor dimension** — that independence is what makes the `low_l1=True` contract structural rather than a percentage. Yields 40 KB at bf16 / 80 KB at fp32 regardless of `W`. |
 | `budget` | device-reported, `> 0` | `ttnn.get_max_worker_l1_unreserved_size()` (`ttnn/ttnn/device.py:20`) — read at runtime, never a literal. **Refinement 1 correction:** that call reports the worker L1 *arena*, not what is free in it, and an L1-resident operand sits in the same arena the CBs are cut from. `derive_plan` now subtracts the per-core resident bytes of both operands (`_resident_l1_bytes`: the shard's bank size for a sharded tensor, `total / num_cores` for an L1-interleaved one, 0 for DRAM), floored at one page pair. Inert on `dram_to_dram`; it binds on `l1_to_l1` / `dram_to_l1`, and every sharded operand is L1-resident by definition. |
@@ -105,18 +108,29 @@ the binding constraint here, the grid is). `bw` is `block_width_tiles`, `wrpb` i
 `write_rows_per_barrier`; the L1 column is `TilizePlan.l1_per_core_bytes`, i.e.
 the number the code actually allocates, not a hand recomputation:
 
-| Shape | `bw` | `wrpb` | cores reached | `L1_per_core` |
-|-------|------|--------|---------------|---------------|
-| `[1,1,32,32]` single tile | 1 | 4 | 1 (only 1 tile exists) | **20 KB** |
-| `[1,1,2048,2048]` square_large | 64 | 1 | 64 / 64 | **512 KB** |
-| `[1,1,1024,1024]` square_large | 16 | 1 | 64 / 64 | **128 KB** |
-| `[1,1,32,16384]` **perf focus** | 8 | 1 | 64 / 64 | **64 KB** |
-| `[1,1,32,32768]` | 16 | 1 | 64 / 64 | **128 KB** |
-| `[1,1,32,2048]` short_wide | 1 | 4 | 64 / 64 | **20 KB** |
-| `[1,1,2048,64]` tall_narrow | 2 | 2 | 64 / 64 | **24 KB** |
-| `[1,1,16384,32]` tall_narrow | 1 | 4 | 64 / 64 | **20 KB** |
-| `[1,1,32,8192]` fp32, `low_l1=False` | 4 | 1 | 64 / 64 | **64 KB** |
-| `[1,1,32,8192]` fp32, `low_l1=True` | `min(4, LOW_L1_WIDTH_CAP)` = 4 | 1 | 64 / 64 | **64 KB**, and independent of `W` |
+**Refinement 3 rebuilt this table**: `block_width_tiles` is now the coarsest
+divisor that both fills the grid AND leaves the read at or above
+`MIN_BLOCK_ROW_BYTES` while buying up to `PIPELINE_WAVES_PER_CORE` pipeline waves
+(see the symbol table). Where the wave rule fires it makes the block NARROWER,
+so every changed row is strictly SMALLER than it was; nothing grew.
+
+| Shape | `bw` | `wrpb` | waves/core | read | cores reached | `L1_per_core` |
+|-------|------|--------|-----------|------|---------------|---------------|
+| `[1,1,32,32]` single tile | 1 | 4 | 1 | 64 B | 1 (only 1 tile exists) | **20 KB** |
+| `[1,1,2048,2048]` square_large | 16 | 1 | 4 | 1024 B | 64 / 64 | **128 KB** (was 512 KB at `bw = 64`) |
+| `[1,1,1024,1024]` square_mid | 8 | 1 | 2 | 512 B | 64 / 64 | **64 KB** (was 128 KB at `bw = 16`) |
+| `[1,1,32,16384]` **perf focus** | 8 | 1 | 1 | 512 B | 64 / 64 | **64 KB** (unchanged — a 2nd wave would cost a 256 B read) |
+| `[1,1,32,32768]` short_wide_wide | 8 | 1 | 2 | 512 B | 64 / 64 | **64 KB** (was 128 KB at `bw = 16`) |
+| `[1,1,32,2048]` short_wide | 1 | 4 | 1 | 64 B | 64 / 64 | **20 KB** |
+| `[1,1,2048,64]` full_width | 2 | 2 | 1 | 128 B | 64 / 64 | **24 KB** |
+| `[1,1,16384,32]` tall_narrow | 1 | 4 | 8 | 64 B | 64 / 64 | **20 KB** |
+| `[1,1,32,8192]` fp32, `low_l1=False` | 4 | 1 | 1 | 512 B | 64 / 64 | **64 KB** |
+| `[1,1,32,8192]` fp32, `low_l1=True` | `min(4, LOW_L1_WIDTH_CAP)` = 4 | 1 | 1 | 512 B | 64 / 64 | **64 KB**, and independent of `W` |
+
+The two fp32 rows are derived rather than read (fp32 is Refinement 5): at
+`elem = 4` the read is `128 * bw` bytes, so the 512 B floor needs `bw >= 4`, the
+occupancy cut already gives exactly 4 at `C = 256`, and no wave factor clears
+the floor — the row is unchanged from Phase 0 by construction.
 
 The `low_l1` pair is the load-bearing row: at `C = 256` the two settings agree on
 every single number, because `low_l1=False` was *already* dimension-independent —
@@ -135,8 +149,14 @@ the padding path:
 | `[1,1,1,2048]` single stick, 31 pad rows / tile-row | 1 | 4 | 64 / 64 | 20 KB | 64 B | **20 KB** |
 | `[1,1,32,4090]` short_wide W tail | 2 | 2 | 64 / 64 | 24 KB | 128 B | **24 KB** |
 | `[1,1,1,50304]` logits row, C=1572 | 12 | 1 | 64 / 64 | 96 KB | 768 B | **97 KB** |
-| `[8,1,249,2048]` H tail through the fold | 64 | 1 | 64 / 64 | 512 KB | 4096 B | **516 KB** |
+| `[8,1,249,2048]` H tail through the fold | 16 | 1 | 64 / 64 | 128 KB | 1024 B | **129 KB** (was 516 KB at `bw = 64`) |
 | `[1,1,50,50]`, `low_l1=True` | 1 | 4 | 4 | 20 KB | 64 B | **20 KB** (identical to `False`) |
+| `[1,1,1,50304]`, `low_l1=True` | 4 | 1 | 64 / 64 | 32 KB | 256 B | **32 KB** |
+
+Refinement 3's wave rule reaches the padded path through the same solved column
+cut, which is why `[8,1,249,2048]` (an `R = 64 x C = 64` grid, geometrically the
+same as `square_large`) shrank by the same 4x. `cb_pad_row` shrinks with it — it
+is one block ROW — so the padding overhead stays under 1% of the total.
 
 The pad row is `<= 0.8%` of the total on every one of them, it holds no tensor
 dimension, and the `low_l1` pair is again bit-for-bit the same footprint — the
@@ -289,9 +309,24 @@ touch DRAM. The one thing padding adds per kernel is the seed, and it is
 deliberately `log2`-many DM transfers rather than a `block_row_bytes` store loop —
 which is the whole reason `cb_pad_row` exists as a buffer rather than as a loop.
 
-Read transactions are the only term the split moves, which is why `num_w_chunks` is
-**minimized** rather than maximized: `max(w_chunks_for_l1, w_chunks_for_occupancy)`
-takes the smallest value that both fits L1 and fills the grid, and never more.
+Read transactions are the only term the split moves, which is why `num_w_chunks` was
+**minimized** rather than maximized at Phase 0: `max(w_chunks_for_l1,
+w_chunks_for_occupancy)` takes the smallest value that both fits L1 and fills the
+grid, and never more.
+
+**Refinement 3 qualified that (measured).** Transaction COUNT is not the only thing
+the split moves — it also moves the number of pipeline WAVES a core owns, and a core
+with one wave reads, computes and writes strictly in series, so its DRAM read stream
+and its DRAM write stream never overlap. Ablating `[1,1,32,16384]` (all payloads
+stubbed 660 ns; + compute 1515; + reads 8241; + writes 9459; full op 13247) shows the
+two halves are BALANCED (6726 ns of reads against 7944 ns of writes) and overlap by
+only 2938 ns of the 14670 they would take in series. So the split now takes the
+smallest `num_w_chunks` that fits L1, fills the grid AND gives each core up to
+`PIPELINE_WAVES_PER_CORE` waves — but only while the resulting read stays at or above
+`MIN_BLOCK_ROW_BYTES`, because each extra wave is bought by halving the read. Both
+terms of that trade are measured, and the floor is set at the largest value that is
+never the wrong call. DRAM crossings are untouched (still 1 in / 1 out): the wave
+rule re-partitions the same bytes, it does not re-fetch any.
 
 **Where the divisor constraint costs read transactions (verifier-added).** The
 minimization above is over a *continuous* chunk count; Deviation 1 restricts
@@ -340,8 +375,22 @@ perf gate names (8x8 Wormhole, `WRITE_BATCH_MIN_TILES = 4`, fresh-cache medians)
 
 | Shape | tiles | block | cores | read | ns | achieved GB/s |
 |-------|-------|-------|-------|------|-----|---------------|
-| `[1,1,32,16384]` **perf focus** | 512 | 1 x 8 | **64 / 64** | 512 B/stick | ~13900 | ~151 |
-| `[1,1,16384,32]` transposed pair | 512 | 8 x 1 | **64 / 64** | 64 B/stick | ~21000 | ~100 |
+| `[1,1,32,16384]` **perf focus** | 512 | 1 x 8 | **64 / 64** | 512 B/stick | ~13500 | ~155 |
+| `[1,1,16384,32]` transposed pair | 512 | 8 x 1 | **64 / 64** | 64 B/stick | ~20900 | ~100 |
+| `[1,1,2048,2048]` square_large | 4096 | 4 x 16 | **64 / 64** | 1024 B/stick | ~87400 | ~192 |
+| `[1,1,1024,1024]` square_mid | 1024 | 2 x 8 | **64 / 64** | 512 B/stick | ~22300 | ~188 |
+| `[1,1,32,32768]` short_wide_wide | 1024 | 1 x 8 | **64 / 64** | 512 B/stick | ~24400 | ~172 |
+
+**Calibration for those numbers (Refinement 3).** A production `ttnn.clone`
+(pure whole-tile-page DRAM -> DRAM copy) on the SAME box and the same 64 cores
+takes **15268 ns to move 2 MiB** (137 GB/s) and **87375 ns to move 16 MiB**
+(192 GB/s). So 192 GB/s is this part's asymptotic ceiling and it is only reachable
+at the large size; at 2 MiB the ramp and the ~660 ns dispatch floor cap a copy at
+~137 GB/s. `[1,1,32,16384]` moves its 2 MiB in ~13500 ns = ~155 GB/s, i.e. **1.13x
+faster than a plain copy of the same size** — the perf-focus shape is
+data-movement-saturated, not under-tuned. `[1,1,2048,2048]` at ~192 GB/s is AT the
+copy ceiling. The transposed pair at ~100 GB/s is the one genuinely off the
+ceiling, and its 64 B read is why (Refinement 6).
 
 Re-measured by the verification pass on the same box (`--profile`, two dispatches
 each, `GenericOpDeviceOperation` rows): perf focus **13106 / 14133 ns** at 64/64

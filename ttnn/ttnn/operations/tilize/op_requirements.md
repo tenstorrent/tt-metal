@@ -273,7 +273,7 @@ refinement too (on the `alignment` gate), and now fail with the intended `ValueE
 
 ---
 
-### [ ] Refinement 3 — Speed up the perf-flagged attention profile
+### [x] Refinement 3 — Speed up the perf-flagged attention profile
 
 **Type**: perf
 
@@ -313,6 +313,38 @@ at minimum `[1,1,2048,64]` (`grid2d_full_width`, `num_w_chunks == 1`),
 `[1,1,32,2048]` (`grid2d_width_chunked`), `[1,1,2048,2048]` (`bw = 64`, the widest
 block), `[1,1,16384,32]` (`bw = 1`, where `write_rows_per_barrier` is the whole knob),
 plus one sharded and one padded representative if Refinements 1 and 2 have landed.
+
+**Outcome**: **The flagged config is data-movement-saturated; the headroom estimate
+in the Goal was measured against the wrong regime.** Ablated whole (8x8 Wormhole,
+64/64 cores, `[1,1,32,16384]`): all payloads stubbed **660 ns**, + compute **1515**,
++ reads **8241**, + writes **9459**, full op **13247** — so reads (6726 ns, 156 GB/s)
+and writes (7944 ns, 132 GB/s) are BALANCED and already overlap by 2938 of the 14670
+ns they would take in series. Calibrated on the same box: a production `ttnn.clone`
+moves the same 2 MiB in **15268 ns (137 GB/s)** and 16 MiB in **87375 ns
+(192 GB/s)`** — 192 GB/s (the `double_buffer` figure the Goal quoted) is the
+asymptotic ceiling and is only reachable at >= 16 MiB, so tilize's 162 GB/s at 2 MiB
+is **1.15x faster than a plain tiled copy of the same size**, not 1.19x short of
+anything. Levers landed and measured: (1) **`PIPELINE_WAVES_PER_CORE` x
+`MIN_BLOCK_ROW_BYTES`** — a core with one tile-row-tall block cannot overlap its own
+read against its own write, so the column cut now buys up to 4 pipeline waves while
+the read stays >= 512 B; **1.08x on `[1,1,2048,2048]`** (94481 -> ~87400 ns, and
+512 KB -> 128 KB of L1), **1.05x on `[1,1,32,32768]`**, 1.04x on `[1,1,1024,1024]`,
+and correctly INERT on the flagged shape because its second wave would cost a 256 B
+read (measured: 512 B 13759 ns vs 256 B 13620 ns vs 128 B 15204 ns — the pair either
+side of the floor is a tie, the one below it is a 1.12x loss). (2) tilize-helper
+**`NoReconfigure`** + **init/uninit amortized across the core's block loop**, both
+measured flat here (compute is 855 of 13247 ns) and both kept as live knobs; the
+amortization is emission-gated on blocks-per-core > 1 after its dead instantiations
+cost 4% of the wall on a 4 us kernel. (3) **one-packet NoC issue path** on the writer
+— flat, kept. Tried and rejected: staggering the read row order per core to
+de-conflict DRAM banks (13708 vs 12587, no effect — 32 outstanding reads already
+spread), `WRITE_BATCH_MIN_TILES` 4/8/16 at every wave setting (flat), CB depths
+{2,4}x{2,4} (flat). **What is left and why I did not take it**: the only way to
+enlarge the flagged shape's 512 B read at 64/64 cores is to have several cores share
+one wider DRAM read and redistribute it core-to-core (mcast or peer unicast), which
+is a topology change, adds 0.75 MiB of cross-core NoC, and is chasing at most the
+~1.13x gap to a ceiling this op is already above. `[1,1,16384,32]` (~100 GB/s at a
+64 B read) is the genuinely off-ceiling geometry and it is Refinement 6's subject.
 
 ---
 

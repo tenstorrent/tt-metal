@@ -113,6 +113,63 @@ INPUT_DEPTH_ROWS = 2
 # fills the next one, and keeps the capacity an exact multiple of the batch so
 # a full batch never straddles the FIFO wrap.
 OUTPUT_DEPTH_BATCHES = 2
+# Pipeline waves a core should own, where ONE WAVE is one tile-row of the block —
+# the reader's push quantum, the compute helper's per-call unit and the writer's
+# minimum wait. A core overlaps its DRAM reads against its DRAM writes only if it
+# owns MORE THAN ONE wave; with exactly one it reads, then computes, then writes,
+# strictly in series, and with every core in lockstep the device alternates a
+# read-only phase with a write-only phase instead of sustaining both.
+#
+# The wave count is fully determined by the column cut, because the tensor holds
+# `R * num_w_chunks` tile-rows in total:
+#     waves_per_core = R * num_w_chunks / num_cores
+# so `w_chunks_for_occupancy` (fill the grid) and `w_chunks_for_waves` (fill the
+# pipe) are the SAME expression, this constant being the factor between them —
+# which is why there is one knob here and not two. At 1 it is byte-identical to
+# the occupancy-only cut.
+#
+# This constant is the CAP on how deep the pipe is allowed to get; the value
+# actually taken is the deepest one whose read transaction still clears
+# `MIN_BLOCK_ROW_BYTES` below, because a wave is bought by HALVING the block
+# width. Past 4 the pipe is full and the extra waves only shrink the read.
+# MEASURED on the `attention:` LOOSE_CASE `[1,1,32,16384]` (R = 1, so a core
+# owns exactly one wave at 1) and on `[1,1,2048,2048]` — see
+# tests/.../tilize/test_tilize_lever_pipeline_waves.py and the ablation in
+# changelog.md Refinement 3.
+PIPELINE_WAVES_PER_CORE = 4
+# The read-transaction floor that stops the trade above. A wave is bought by
+# HALVING the block width, so it is only worth buying while the resulting read
+# stays large enough that the NoC/DRAM per-transaction cost is still amortized.
+# MEASURED across five geometries (device kernel ns, 64/64 cores throughout,
+# medians where the numbers were close; harness
+# tests/.../tilize/test_tilize_lever_pipeline_waves.py). Read size per wave
+# setting, then the wall:
+#   [1,1,32,16384]  512/256/128/64 B  -> 13759 / 13620 / 15204 / 26947
+#   [1,1,32,32768] 1024/512/256/128 B -> 25267 / 24077 / 23757 / 28964
+#   [1,1,1024,1024]1024/512/256/128 B -> 23322 / 23555 / 24436 / 23895
+#   [1,1,2048,2048]4096/2048/1024/512 -> 92722 / 89365 / 86085 / 85380
+#   [1,1,2048,64]   128/64 B          ->  4797 /  6146
+# 512 B is the largest value that is never the wrong call: every geometry whose
+# read stays at or above it either improves (1.08x on `[1,1,2048,2048]`, 1.05x
+# on `[1,1,32,32768]`) or lands inside the +-3% run-to-run band, and every
+# geometry that would have to go BELOW it to buy a wave loses (128 B on
+# `[1,1,32,16384]`, 64 B on `[1,1,2048,64]`, 256 B on `[1,1,1024,1024]`).
+# In BYTES rather than tiles so it means the same thing at every element size.
+MIN_BLOCK_ROW_BYTES = 512
+# Drop the tilize helper's per-call unpack+pack data-format reconfig
+# (`ReconfigureRegisterDatatypeMode::NoReconfigure`). Correct in THIS kernel
+# because `compute_kernel_hw_startup(cb_in, cb_out)` programs srcA/srcB and the
+# pack format once and nothing else runs on the TRISCs, so every per-call
+# reconfig rewrites the value already in the register — including on the casting
+# diagonal, where the cast is carried by the two CBs' formats and not by the
+# reconfig. Exposed as a knob rather than hardcoded because a refinement that
+# adds a SECOND compute phase to this kernel would have to turn it back on.
+COMPUTE_SKIP_FORMAT_RECONFIG = True
+# Pay the tilize LLK init + uninit once per core instead of once per block
+# (`InitUninitMode::InitOnly / Neither / UninitOnly`). Gated at emission time on
+# a core actually owning more than one block — see the compute kernel's
+# `amortize_init` comment for why the dead instantiations are not free.
+COMPUTE_AMORTIZE_INIT = True
 
 # Legal output tile heights (power-of-two fractions of 32).
 LEGAL_TILE_HEIGHTS = (1, 2, 4, 8, 16, 32)
@@ -625,17 +682,15 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         w_fit = max(1, min(headroom // denom, FAST_TILIZE_WIDTH_CAP))
         w_cap = min(w_fit, LOW_L1_WIDTH_CAP) if low_l1 else w_fit
 
-        # Step 1 (occupancy) and step 2 (L1 fit) -> the smallest column split that
-        # satisfies both. num_w_chunks is MINIMIZED: a column cut multiplies the
-        # read transaction count, so it is spent only where it is required.
+        # Step 1 (occupancy + pipeline waves) and step 2 (L1 fit) -> the smallest
+        # column split that satisfies both. num_w_chunks is MINIMIZED: a column cut
+        # multiplies the read transaction count, so it is spent only where it is
+        # required. The tensor holds `R * num_w_chunks` tile-rows, so ONE
+        # expression covers both demands on the column axis — fill the grid
+        # (`waves == 1`) and fill each core's pipe (`waves > 1`, which is what
+        # buys read/write overlap on a geometry whose R cannot supply a second
+        # wave by itself).
         w_chunks_for_l1 = math.ceil(tensor_col_tiles / w_cap)
-        w_chunks_for_occupancy = min(tensor_col_tiles, math.ceil(num_cores / tensor_row_blocks))
-        num_w_chunks_target = max(w_chunks_for_l1, w_chunks_for_occupancy)
-
-        # Coarsest DIVISOR of C that both fits L1 and yields >= the target chunks.
-        # A divisor (rather than a ceil) is what removes the ragged column tail —
-        # see this module's docstring for the mechanism cap that forces it.
-        width_limit = min(w_cap, tensor_col_tiles // num_w_chunks_target)
         # On a sub-row-paged source the width must ALSO divide the page width in
         # tiles, so `w_chunk * block_row_bytes` lands at a page boundary plus an
         # offset that leaves the whole segment inside that page. Expressed by
@@ -644,7 +699,27 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         # degenerates to C exactly when a page is a whole row.
         page_width_tiles = in_page_width_elems // TILE_WIDTH if input_pages_per_row > 1 else tensor_col_tiles
         width_source = math.gcd(tensor_col_tiles, page_width_tiles)
-        block_width_tiles = _largest_divisor_at_most(width_source, width_limit)
+
+        def _width_at(waves: int) -> int:
+            """Coarsest DIVISOR of C that fits L1 and yields >= the target chunks.
+
+            A divisor (rather than a ceil) is what removes the ragged column tail —
+            see this module's docstring for the mechanism cap that forces it.
+            """
+            w_chunks_for_waves = min(tensor_col_tiles, math.ceil(num_cores * waves / tensor_row_blocks))
+            target = max(w_chunks_for_l1, w_chunks_for_waves)
+            return _largest_divisor_at_most(width_source, min(w_cap, tensor_col_tiles // target))
+
+        # The wave count is bought FROM the column axis, so each doubling halves
+        # the read transaction — the trade this knob makes. `MIN_BLOCK_ROW_BYTES`
+        # is where the trade stops paying; take the deepest pipe whose read still
+        # clears it, and fall back to the occupancy-only cut when none does.
+        block_width_tiles = _width_at(1)
+        for waves in range(PIPELINE_WAVES_PER_CORE, 1, -1):
+            candidate = _width_at(waves)
+            if candidate * TILE_WIDTH * elem_size >= MIN_BLOCK_ROW_BYTES:
+                block_width_tiles = candidate
+                break
         num_w_chunks = tensor_col_tiles // block_width_tiles  # exact, no tail
 
         num_row_groups = min(tensor_row_blocks, max(1, math.ceil(num_cores / num_w_chunks)))
@@ -865,6 +940,11 @@ def create_program_descriptor(
         plan.tensor_row_blocks,
         plan.num_row_groups,
         plan.num_w_chunks,
+        int(COMPUTE_SKIP_FORMAT_RECONFIG),
+        # The init/uninit amortization is only emitted where a core can actually
+        # own more than one block; at one block per core its three extra
+        # instantiations are dead code that still costs binary-dispatch time.
+        int(COMPUTE_AMORTIZE_INIT and max(a[2] for a in plan.assignment) > 1),
     ]
 
     reader_rt_args = ttnn.RuntimeArgs()

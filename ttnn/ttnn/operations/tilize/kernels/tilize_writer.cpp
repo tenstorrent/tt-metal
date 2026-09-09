@@ -104,7 +104,12 @@ void kernel_main() {
                 // leading dims (R = num_images * rows_per_image).
                 const uint32_t page_base = (row_start + rows_done + r) * tensor_col_tiles + col_base;
                 for (uint32_t i = 0; i < block_width_tiles; ++i) {
-                    noc_async_write(l1_read_addr, out_acc.get_noc_addr(page_base + i), out_tile_bytes);
+                    // `out_tile_bytes` as `max_page_size` takes the ONE-PACKET
+                    // issue path (dataflow_api.h:838): a whole tile page is
+                    // always <= NOC_MAX_BURST_SIZE, so the generic
+                    // `*_any_len` multi-packet setup this defaults to is pure
+                    // RISC issue cost with nothing to show for it.
+                    noc_async_write<out_tile_bytes>(l1_read_addr, out_acc.get_noc_addr(page_base + i), out_tile_bytes);
                     l1_read_addr += out_tile_bytes;
                 }
             }

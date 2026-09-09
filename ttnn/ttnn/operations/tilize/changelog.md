@@ -333,3 +333,164 @@
   two's-complement bit_cast at the element width. Plus the two malformed-request refusals
   (target smaller than the input; target not a whole number of tiles).
   **117 / 117 passing** across `tests/ttnn/unit_tests/operations/tilize/`.
+
+---
+
+## Refinement 3 — Speed up the perf-flagged attention profile
+
+- **Date**: 2026-09-09
+- **What was done**: a **measurement-first** perf pass on the `attention:` LOOSE_CASE
+  `[1,1,32,16384]` (bf16 → bf16, interleaved DRAM→DRAM, R=1 × C=512). Three levers
+  landed, all kept, plus a calibration that reframes the target.
+
+  **The ablation came first, whole-op.** 8×8 Wormhole, 64/64 cores, fresh cache:
+
+  | variant | device kernel ns | implies |
+  |---|---|---|
+  | all payloads stubbed (dispatch + CB scaffolding only) | **660** | fixed floor |
+  | + compute payload (`tilize`) | **1515** | compute = 855 ns |
+  | + read payload only (writes stubbed) | **8241** | reads = 6726 ns (156 GB/s) |
+  | + write payload only (reads stubbed) | **9459** | writes = 7944 ns (132 GB/s) |
+  | full op | **13247** | 2 MiB @ 162 GB/s |
+
+  Reads and writes are **balanced** (6726 vs 7944) and overlap by only 2938 of the
+  14670 ns they would take in series — because a core owns exactly ONE tile-row-tall
+  block, so it reads, computes and writes strictly in sequence with no second
+  pipeline wave to overlap against.
+
+  **The calibration is what reframes the goal.** A production `ttnn.clone` — a pure
+  whole-tile-page DRAM→DRAM copy, the simplest possible move — on the same box and
+  the same 64 cores takes **15268 ns for 2 MiB (137 GB/s)** and **87375 ns for
+  16 MiB (192 GB/s)**. So 192 GB/s (the `double_buffer` figure the refinement's
+  1.19×-headroom estimate was taken against) is this part's *asymptotic* ceiling and
+  is only reachable at ≥16 MiB; at 2 MiB the ramp plus the 660 ns dispatch floor cap
+  even a plain copy at ~137 GB/s. tilize's 162 GB/s at 2 MiB is therefore **1.15×
+  faster than a plain tiled copy of the same size** — the flagged shape is
+  data-movement-saturated, not under-tuned.
+
+  **Lever 1 — `PIPELINE_WAVES_PER_CORE` × `MIN_BLOCK_ROW_BYTES` (the one that wins).**
+  A WAVE is one tile-row of the block: the reader's push quantum, the compute
+  helper's per-call unit, the writer's minimum wait. The tensor holds
+  `R * num_w_chunks` tile-rows, so `waves_per_core = R * num_w_chunks / num_cores` —
+  which means "fill the grid" and "fill each core's pipe" are the **same expression**
+  on the column axis, differing only by a factor. That factor is the knob, and
+  `w_chunks_for_occupancy` became `w_chunks_for_waves` rather than gaining a sibling.
+  Each extra wave is bought by HALVING the block width, i.e. by halving the read
+  transaction, so the value taken is the deepest pipe whose read still clears
+  `MIN_BLOCK_ROW_BYTES`. Both terms measured, five geometries, read size → wall ns:
+
+  | shape | w1 | w2 | w4 | w8 |
+  |---|---|---|---|---|
+  | `[1,1,32,16384]` | 512 B **13759** | 256 B 13620 | 128 B 15204 | 64 B 26947 |
+  | `[1,1,32,32768]` | 1024 B 25267 | 512 B **24077** | 256 B 23757 | 128 B 28964 |
+  | `[1,1,1024,1024]` | 1024 B **23322** | 512 B 23555 | 256 B 24436 | 128 B 23895 |
+  | `[1,1,2048,2048]` | 4096 B 92722 | 2048 B 89365 | 1024 B **86085** | 512 B 85380 |
+  | `[1,1,2048,64]` | 128 B **4797** | 64 B 6146 | — | — |
+
+  512 B is the largest floor that is never the wrong call: every geometry that stays
+  at or above it improves or lands inside the ±3% band, and every one that would
+  have to go below it to buy a wave loses. Shipped as `PIPELINE_WAVES_PER_CORE = 4`
+  (cap) × `MIN_BLOCK_ROW_BYTES = 512` (floor, in BYTES so it means the same at every
+  element size).
+
+  **Lever 2 — compute per-call overhead**, both of them the tilize helper's own
+  documented parameters, neither replacing it with raw LLK.
+  `ReconfigureRegisterDatatypeMode::NoReconfigure` is correct here because
+  `compute_kernel_hw_startup(cb_in, cb_out)` programs srcA/srcB and the pack format
+  once and nothing else runs on the TRISCs — including on the casting diagonal,
+  where the cast is carried by the two CBs' formats, not by the per-call reconfig.
+  `InitUninitMode::InitOnly / Neither / UninitOnly` pays the tilize LLK init+uninit
+  once per core instead of once per block.
+
+  **Lever 3 — one-packet NoC issue path on the writer.** `noc_async_write` defaults
+  `max_page_size` to `NOC_MAX_BURST_SIZE + 1` and so takes the generic multi-packet
+  `*_any_len` setup; a whole tile page never needs it. `noc_async_write<out_tile_bytes>`
+  is the one-token fix.
+
+- **Measured result** (medians of 3 fresh-cache runs, 64/64 cores on every row —
+  a number taken on a fraction of the grid would describe the split, not the kernel):
+
+  | shape | before | after | ratio | L1/core |
+  |---|---|---|---|---|
+  | `[1,1,32,16384]` **the flagged config** | 13247 | 13498 | **1.00** (tie; program unchanged) | 64 KB |
+  | `[1,1,2048,2048]` square_large | 94481 | 87373 | **1.08×** | 512 → **128 KB** |
+  | `[1,1,32,32768]` short_wide_wide | 25267 | 24472 | **1.03×** | 128 → **64 KB** |
+  | `[1,1,1024,1024]` square_mid | 23322 | 22339 | **1.04×** | 128 → **64 KB** |
+  | `[1,1,2048,64]` full_width | 4793 | 4743 | 1.01 | 24 KB |
+  | `[1,1,32,2048]` width_chunked | 3790 | 3876 | 0.98 (noise) | 20 KB |
+  | `[1,1,16384,32]` tall_narrow | 20615 | 20937 | 0.98 (noise) | 20 KB |
+  | `[8,1,249,2048]` padded | — | 86901 | — | 516 → **129 KB** |
+  | `[1,1,2048,2048]` height-sharded | — | 4791 | — | zero-copy |
+
+  The flagged config is a **measured tie**: at the shipped floor its program is the
+  Phase-0 one (bw=8, 64 chunks), and the alternative (bw=4, 2 waves, 256 B reads) was
+  measured against it in isolated sessions — w1 13759/13252/13793 vs w2
+  13620/13815/13252 — dead even. The wins are on the geometries whose read stays
+  large while the pipe deepens, and they come with **4× less L1** on the widest ones.
+
+- **Accuracy achieved**: PCC = **1.0**, rtol = **0**, atol = **0** — `torch.equal`
+  bit-identity on every case. tilize does no arithmetic, so any deviation is a bug,
+  not a budget; every lever variant in both new harnesses asserts equality, not
+  tolerance. 161/161 passing across `tests/ttnn/unit_tests/operations/tilize/`.
+
+- **Golden test progress**: `test_golden.py` **53 passed, 0 failed, 0 XPASS** —
+  identical to Refinement 2, with the three loud categories still at 0.
+  `test_golden_main_tests.py` **127 passed / 32 failed / 2 errors** — also identical
+  (all 32 honest `dtype` refusals for Refinement 5, plus the 2 pre-existing
+  `use_module_device` × `device_params` collection errors). No SUPPORTED change: this
+  is a perf refinement.
+
+- **Issues encountered**:
+  1. **The Goal's 1.19× headroom estimate was against the wrong regime.** It compared
+     a 2 MiB transfer to `double_buffer/report.md`'s 190.8 GB/s, which is a 16 MiB-scale
+     number. Establishing the same-size `ttnn.clone` baseline (137 GB/s) is what turned
+     "1.19× to go" into "already 1.15× past the reference", and it is the single most
+     load-bearing measurement in this refinement.
+  2. **The init/uninit amortization's DEAD instantiations cost 4% of the wall.**
+     Emitting the InitOnly/Neither/UninitOnly variants on a kernel where every core
+     owns one block grows the TRISC binary the dispatcher ships; `[1,1,32,2048]`
+     (a ~3.8 µs kernel) went 3790 → ~3940 ns consistently across four runs. Fixed by
+     gating the emission on `max blocks per core > 1`, which put it back to
+     3790/3815/3835. The lever is unchanged where it can actually fire.
+  3. **The first floor value (256 B) regressed `[1,1,1024,1024]` by ~5%.** Caught only
+     because the guard set was widened to the two geometries whose 1-wave read is
+     1024 B — the sizes *between* the flagged shape's 512 B and square_large's 4096 B.
+     A floor calibrated on two shapes would have shipped that regression.
+  4. **Tried and rejected, each measured**: staggering the per-core read row order to
+     de-conflict DRAM banks (13708 vs 12587 control — 32 outstanding reads already
+     spread across banks); the one-packet path on the reader (flat, and it would have
+     cost the `read_sticks_for_tilize` helper call, so reverted); `WRITE_BATCH_MIN_TILES`
+     ∈ {4,8,16} at every wave setting, i.e. the writer twin of the wave lever
+     (13580–14001, flat — at bw ≥ 4 the writes are already past the in-flight knee);
+     CB depths {2,4} × {2,4} (13711–14104, flat).
+
+- **Recorded gap**: `read_sticks_for_tilize` has no `max_page_size` hook, so the
+  reader's stick reads still take the generic `*_any_len` issue path. Measured flat on
+  this op (it is bandwidth-bound, not issue-bound), so it was not worth bypassing the
+  helper for — but a defaulted `max_page_size` template parameter would close it
+  upstream for readers that ARE issue-bound.
+
+- **What is left, and why I did not take it** (a finding, not a queued task): the only
+  remaining way to enlarge the flagged shape's 512 B read at 64/64 cores is to have
+  several cores share one wider DRAM read and redistribute it core-to-core — a
+  multicast/peer-unicast topology change that adds ~0.75 MiB of cross-core NoC to chase
+  at most the ~1.13× gap to a ceiling this op is already above. The genuinely
+  off-ceiling geometry is the transposed pair `[1,1,16384,32]` at ~100 GB/s, whose 64 B
+  read is forced by `C = 1`; that is Refinement 6's subject and it needs the two-disjoint-
+  core-range restructure already recorded in `l1_ledger.md`, not another knob.
+
+- **Tests added**:
+  `tests/ttnn/unit_tests/operations/tilize/test_tilize_perf_attention.py` — 9 cases:
+  the flagged config measured exactly (pinned at R=1 × C=512 and 64/64 cores, so a
+  later plan change that drops occupancy fails here rather than hiding in the ns), plus
+  one representative per distinct kernel path × placement (full-width, width-chunked,
+  square_large, tall_narrow, square_mid, short_wide_wide, padded, height-sharded). Every
+  case asserts `torch.equal`.
+  `tests/ttnn/unit_tests/operations/tilize/test_tilize_lever_pipeline_waves.py` — 27
+  cases: the raw wave sweep with the floor disabled (the measurement), the writer-twin
+  grid `waves × WRITE_BATCH_MIN_TILES` (because reader and writer are one pipeline and a
+  wave doubling halves the writes in flight unless the batch moves with it), and
+  `test_production_wave_choice`, which pins the `(block_width_tiles, num_w_chunks)` the
+  shipped rule picks on six geometries — that last one is what stops a later plan edit
+  from silently reverting the tuning.
+  **161 / 161 passing** across `tests/ttnn/unit_tests/operations/tilize/`.
