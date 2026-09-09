@@ -52,6 +52,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
+from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
 
 
 def _raise_nproc_limit():
@@ -216,12 +218,12 @@ def main():
             flush=True,
         )
 
-    # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology. Defaults match the production
-    # runner (FABRIC_1D, Linear). FABRIC_1D_RING / FABRIC_2D_TORUS_* need the torus_xy mesh graph
+    # M3_FABRIC / M3_CCL_TOPOLOGY (utils/fabric_env.py): fabric config and legacy-CCL topology. Defaults
+    # match the production runner (1d, linear). 1d_ring / 2d_torus_xy need the torus_xy mesh graph
     # descriptor (the wrapper scripts pick it); measurements in PR #55668.
-    ccl_topology = getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear"))
-    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D")))
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
+    ccl_topology = ccl_topology_from_env()
+    ttnn.set_fabric_config(fabric_config_from_env())
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE)
     print(
         f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "
         f"fabric={ttnn.get_fabric_config()} ccl_topology={ccl_topology}",

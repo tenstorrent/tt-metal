@@ -328,11 +328,14 @@ class TtPrefillRuntime:
         assert (
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
-        # The block-cyclic SP cache and the MSA cache read address the prefix in whole chunks: a resumed
-        # prefix must be chunk-aligned (fail here, not as a scrambled cache read deep in attention).
-        assert (
-            actual_start % self.config.chunk_size == 0
-        ), f"actual_start={actual_start} must be a multiple of chunk_size={self.config.chunk_size}"
+        # The block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3 does
+        # not support multi-turn continuation from a prefix that is not chunk-aligned (the shared
+        # producer's PREFILL_PRODUCER_MULTI_TURN_PROB mode resumes at a 32-token boundary). Fail here,
+        # not as a scrambled cache read deep in attention.
+        assert actual_start % self.config.chunk_size == 0, (
+            f"actual_start={actual_start} must be a multiple of chunk_size={self.config.chunk_size}: MiniMax-M3 "
+            f"does not support resuming (multi-turn continuation) from a non-chunk-aligned prefix"
+        )
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.

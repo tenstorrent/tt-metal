@@ -12,7 +12,7 @@ from transformers import AutoConfig
 import ttnn
 
 from ..config import MeshConfig
-from ..tt.ccl import CCLManager
+from ..tt.ccl import L1_SMALL_SIZE, CCLManager
 from ..tt.model_config import ModelArgs
 from ..utils.general_utils import get_default_num_links
 
@@ -141,7 +141,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, "trace_region_size": 100000000},
+                {"fabric_config": None, "trace_region_size": 100000000, "l1_small_size": L1_SMALL_SIZE},
                 id="1x1",
                 marks=pytest.mark.skip(reason="No supported minimax_m3 mesh shape fits on this system"),
             )
@@ -157,6 +157,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
                 {
                     "fabric_config": (None if shape == (1, 1) else multidev_fabric),
                     "trace_region_size": 100000000,
+                    "l1_small_size": L1_SMALL_SIZE,
                 },
                 id=f"{shape[0]}x{shape[1]}",
             )

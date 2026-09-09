@@ -65,6 +65,11 @@ Every variable the M3 prefill code and its harnesses read. The production runner
 (`models/demos/common/prefill/`) has its own `PREFILL_*` set, documented there; the ones the M3 adapter /
 runtime consume are listed here.
 
+Limitation: the block-cyclic SP KV cache and the MSA cache read address the prefix in whole chunks, so M3
+does not support multi-turn continuation from a prefix that is not a multiple of the chunk size. The
+runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) resumes at a 32-token boundary and fails
+the `prefill_chunk` alignment assert on M3.
+
 **Model / weights** (read by `tt/`, apply to every harness and the production runner)
 
 | Variable | Default | Effect |
@@ -89,9 +94,8 @@ runtime consume are listed here.
 | Variable | Default | Effect |
 |---|---|---|
 | `TT_MESH_GRAPH_DESC_PATH` | script-picked | Mesh graph descriptor. `FABRIC_1D` runs on `single_bh_galaxy_mesh_graph_descriptor.textproto`; ring / torus fabrics need `single_bh_galaxy_torus_xy_graph_descriptor.textproto` (the scripts pick it). |
-| `M3_FABRIC` | `FABRIC_1D` | `ttnn.FabricConfig` name for `tests/galaxy_prefill_kv_pcc.py` / `scripts/run_prefill_perf.sh`. The MSA `high_bw_all_gather` rings by itself on a ring/torus fabric (measurements in PR #55668). |
-| `M3_CCL_TOPOLOGY` | `Linear` | `ttnn.Topology` for the legacy CCLs (`all_gather_async`, `reduce_scatter_minimal_async`) in both harnesses. `Ring` needs a ring/torus fabric. |
-| `PROFILE_FABRIC` / `FABRIC` | `1d` | Zone-profiler fabric: `1d`, `1d_ring`, `2d`, `2d_torus_xy` (`tests/perf/profile_prefill.py` / `scripts/run_prefill_profile.sh`). |
+| `M3_FABRIC` | `1d` | Fabric for both harnesses and their wrapper scripts: `1d`, `1d_ring`, `2d`, `2d_torus_xy` (`utils/fabric_env.py`; same names as the runner's `PREFILL_FABRIC_MODE`). The MSA `high_bw_all_gather` rings by itself on a ring/torus fabric (measurements in PR #55668). |
+| `M3_CCL_TOPOLOGY` | `linear` | Topology of the legacy CCLs (`all_gather_async`, `reduce_scatter_minimal_async`) in both harnesses: `linear` or `ring`. `ring` needs a ring/torus fabric. |
 
 **KV-PCC / perf harness** (`tests/galaxy_prefill_kv_pcc.py`, driven by `scripts/run_prefill_perf.sh`)
 

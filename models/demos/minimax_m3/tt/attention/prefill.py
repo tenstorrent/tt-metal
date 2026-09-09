@@ -199,20 +199,16 @@ def attention_forward(
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
             # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). Chunks are
             # chunk-aligned (asserted by the runtime), so cached_len is a whole number of chunks.
-            sp = mesh_device.shape[mesh_config.sp_axis]
-            chunk_local = seq_len  # current chunk per-chip rows
-            n_chunks = cached_len // (seq_len * sp) + 1  # chunks now in the cache (incl. current)
             slot = user_id * kv_cache.num_layers + layer_idx
             tt_sdpa_out = msa_sp_attention_cache_read(
                 tt_q,
                 tt_iq,
                 kv_cache,
                 slot=slot,
-                n_chunks=n_chunks,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
-                chunk_local=chunk_local,
+                chunk_local=seq_len,  # current chunk per-chip rows
                 scale=config.head_dim**-0.5,
                 block_size=config.msa_block_size,
                 topk_blocks=config.msa_topk_blocks,

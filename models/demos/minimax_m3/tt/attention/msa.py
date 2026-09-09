@@ -281,7 +281,6 @@ def msa_sp_attention_cache_read(
     kv_cache,
     *,
     slot,
-    n_chunks,
     mesh_config,
     ccl_manager,
     cached_len,
@@ -304,11 +303,17 @@ def msa_sp_attention_cache_read(
     device = ccl_manager.mesh_device
     sp = device.shape[sp_axis]
     assert sp > 1, "msa_sp_attention_cache_read needs sp > 1 (high_bw_all_gather rejects a one-device axis)"
+    # The replicated cache tensors carry a 1-D tensor topology, and high_bw_all_gather requires
+    # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
+    assert sp_axis == 0, f"msa_sp_attention_cache_read needs sp_axis == 0 (got {sp_axis})"
     seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
-    n_rows = n_chunks * chunk_local  # per-device rows written so far (incl. the current chunk)
-    assert n_rows <= seq_local, f"cache read past capacity: {n_chunks} chunks x {chunk_local} rows > {seq_local}"
-    kv_len = n_rows * sp  # natural-position valid prefix == cached_len + this chunk
-    assert kv_len == cached_len + chunk_local * sp, (kv_len, cached_len, chunk_local, sp)
+    chunk_global = chunk_local * sp
+    assert (
+        cached_len % chunk_global == 0
+    ), f"cached_len={cached_len} must be a whole number of {chunk_global}-token chunks"
+    n_rows = cached_len // sp + chunk_local  # per-device rows written so far (incl. the current chunk)
+    assert n_rows <= seq_local, f"cache read past capacity: {n_rows} rows > {seq_local}"
+    kv_len = cached_len + chunk_global  # natural-position valid prefix (== n_rows * sp)
 
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)

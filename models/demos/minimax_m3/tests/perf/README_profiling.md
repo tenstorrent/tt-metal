@@ -292,19 +292,20 @@ pkill -f tools/tracy/serve_wasm.py     # tracy leaves a WASM server on :8080
 Sanity references for "does my capture look right", **not** CI targets — they are per-zone kernel
 times from a deliberately partial 6-layer build, so they do not belong in `models/model_targets.yaml`
 (which holds CI-enforced end-to-end model metrics). Nothing validates these; they are here to catch a
-broken capture. A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, measured three
-times across two days:
+broken capture. A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, `1d` fabric,
+after the `high_bw_all_gather` cache read (#55668, measured 2026-09-07):
 
 | | expected |
 |---|---|
-| dense layer | 4.33 - 4.35 ms |
-| sparse layer | 9.9 - 10.3 ms |
-| `attn/ring_joint_sdpa` | 1.952 ms |
-| `attn/sparse_sdpa` | 1.717 ms |
-| firmware multiplier | ~1.35x |
-| 60-layer projection | 860 - 875 ms |
+| dense layer | 4.0 - 4.1 ms |
+| sparse layer | 7.6 - 7.8 ms |
+| `attn/ring_joint_sdpa` | 1.954 ms |
+| `attn/sparse_sdpa` | 0.96 ms |
+| `attn/ag_kv` + `attn/ag_index_k` | 0.39 ms (0.29 ms on `1d_ring`) |
+| 60-layer chunk wall-clock (perf harness, 5k @ 25k) | 840 - 850 ms |
 
-Compute zones land within ~1%. The collectives (`combine`, `dispatch`, `moe_reduce`) move by tens of
+Captures from before #55668 (whole-cache de-shard on every sparse layer, bf16 K/V copies) read
+sparse 9.9 - 10.3 ms and `attn/sparse_sdpa` 1.717 ms. Compute zones land within ~1%. The collectives (`combine`, `dispatch`, `moe_reduce`) move by tens of
 percent between runs — that variance is real cross-chip skew, not a broken capture.
 
 ## The MSA cache read (`ag_kv` + `ag_index_k`)

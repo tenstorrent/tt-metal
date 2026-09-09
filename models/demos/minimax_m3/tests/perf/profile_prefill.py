@@ -49,7 +49,8 @@ Env:
   PROFILE_STAGE       which stage to profile, 0..PROFILE_STAGES-1. Stage k owns global layers
                       [k*60/S, (k+1)*60/S); PROFILE_LAYER_IDS must fall inside that range and
                       PROFILE_NUM_LAYERS takes the first N of it                             [default 0]
-  PROFILE_FABRIC      fabric config: 1d | 1d_ring | 2d | 2d_torus_xy                        [default 1d]
+  M3_FABRIC           fabric config: 1d | 1d_ring | 2d | 2d_torus_xy (utils/fabric_env.py)     [default 1d]
+  M3_CCL_TOPOLOGY     legacy-CCL topology: linear | ring (ring needs a ring/torus fabric)   [default linear]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                  [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
   M3_PROFILE_ZONES    set to 1 by this script before the model is imported
@@ -91,6 +92,8 @@ os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
+from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
+from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
 
 
 def _raise_nproc_limit():
@@ -112,13 +115,6 @@ MSA_MIN_TOKENS = 16 * 128  # 2048
 
 # sparse_attention_freq marks layers 0-2 dense and 3-59 sparse (tt/layer.py).
 FIRST_SPARSE_LAYER = 3
-
-FABRIC_CONFIGS = {
-    "1d": ttnn.FabricConfig.FABRIC_1D,
-    "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
-    "2d": ttnn.FabricConfig.FABRIC_2D,
-    "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-}
 
 
 def load_tokens(n: int):
@@ -250,7 +246,7 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
         weight_cache_path=cache_path,
         first_layer_idx=first_layer_idx,
         layer_indices=layer_ids,
-        topology=getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear")),
+        topology=ccl_topology_from_env(),
         is_first_rank=True,
         is_last_rank=is_last_stage,
     )
@@ -275,10 +271,7 @@ def main():
     stage = int(os.getenv("PROFILE_STAGE", "0"))
     assert stages in (1, 2, 4), f"PROFILE_STAGES must be 1, 2 or 4 (got {stages})"
     assert 0 <= stage < stages, f"PROFILE_STAGE={stage} out of range for {stages} stages"
-    fabric_name = os.getenv("PROFILE_FABRIC", "1d")
-    assert (
-        fabric_name in FABRIC_CONFIGS
-    ), f"PROFILE_FABRIC must be one of {sorted(FABRIC_CONFIGS)} (got {fabric_name!r})"
+    fabric_config = fabric_config_from_env()
 
     n_chunks, cache, total = plan(chunk, cache_req)
     print(
@@ -297,11 +290,11 @@ def main():
     # 2d / 2d_torus_xy are wired through but not yet validated on a carved sub-mesh (torus also needs the
     # matching *_torus_xy mesh graph descriptor). M3_CCL_TOPOLOGY=Ring puts the legacy CCLs on the ring
     # (measured in PR #55668); high_bw_all_gather derives its own from the fabric.
-    ttnn.set_fabric_config(FABRIC_CONFIGS[fabric_name])
-    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+    ttnn.set_fabric_config(fabric_config)
+    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
     print(
-        f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_name} "
-        f"ccl_topology={os.getenv('M3_CCL_TOPOLOGY', 'Linear')}",
+        f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_config} "
+        f"ccl_topology={ccl_topology_from_env()}",
         flush=True,
     )
     mesh = galaxy
@@ -406,7 +399,7 @@ def main():
 
         print(
             f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers "
-            f"(stage {stage}/{stages}, mesh {sp}x{tp}, fabric {fabric_name})\n"
+            f"(stage {stage}/{stages}, mesh {sp}x{tp}, fabric {fabric_config})\n"
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
