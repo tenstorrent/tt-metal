@@ -38,6 +38,7 @@ def run_layernorm_part_2(
     gamma_beta_dtype,
     fp32_enabled=False,
     use_welford=False,
+    stats_dtype=None,
 ):
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -111,7 +112,7 @@ def run_layernorm_part_2(
         )
         tt_stats = torch2tt_tensor(
             stats_tiles,
-            tt_dtype=input_dtype,
+            tt_dtype=input_dtype if stats_dtype is None else stats_dtype,
             tt_device=device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
@@ -237,6 +238,30 @@ def test_layer_norm_post_all_gather_welford_with_program_cache(device, input_dty
         gamma_beta_dtype=input_dtype,
         fp32_enabled=True,
         use_welford=True,
+    )
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize(
+    "input_dtype,stats_dtype",
+    [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)],
+    ids=["bf16_input_fp32_stats", "fp32_input_bf16_stats"],
+)
+@pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
+@pytest.mark.parametrize("n_devices", [1, 4], ids=["one_stats_pair", "four_stats_pairs"])
+def test_post_all_gather_mixed_stats_dtype_with_program_cache(device, input_dtype, stats_dtype, is_rmsnorm, n_devices):
+    """The reduction auxiliary format must follow its own tensor, including mixed input/statistics dtypes."""
+    device.clear_program_cache()
+    run_layernorm_part_2(
+        (1, 1, 32, 128 * n_devices),
+        n_devices,
+        is_rmsnorm,
+        input_dtype,
+        input_dtype,
+        device,
+        gamma_beta_dtype=input_dtype,
+        fp32_enabled=True,
+        stats_dtype=stats_dtype,
     )
     assert device.num_program_cache_entries() == 1
 

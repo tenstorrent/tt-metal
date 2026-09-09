@@ -35,7 +35,6 @@ const m2::DFBSpecName POSTWF_STATS{"postwf_stats"};
 const m2::DFBSpecName POSTWF_GAMMA{"postwf_gamma"};
 const m2::DFBSpecName POSTWF_BETA{"postwf_beta"};
 const m2::DFBSpecName POSTWF_EPS{"postwf_eps"};
-const m2::DFBSpecName POSTWF_REDUCE{"postwf_reduce"};
 const m2::DFBSpecName POSTWF_STATS_REDUCED{"postwf_stats_reduced"};
 const m2::DFBSpecName POSTWF_RECIP_SQRT_VAR{"postwf_recip_sqrt_var"};
 const m2::DFBSpecName POSTWF_X_MINUS_MEAN{"postwf_x_minus_mean"};
@@ -70,18 +69,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
+    TT_FATAL(
+        operation_attributes.norm_type == LayerNormDistributedType::LAYERNORM,
+        "The Welford post-all-gather factory only supports LayerNorm");
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
-    // Logical (un-padded) width is used for the normalization scaler so that
-    // non-tile-aligned widths normalise by the true N, not the tile-padded N.
-
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
     const uint32_t stats_tiles_cols = stats.padded_shape()[-1] / tile_width;
-    const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
+    constexpr uint32_t tile_cols_per_device = 2;
     const uint32_t num_devices = stats_tiles_cols / tile_cols_per_device;
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
     TT_FATAL(
@@ -90,7 +88,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     uint32_t num_tile_rows = NC * Ht;
 
     log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
-    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
     log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
@@ -151,7 +148,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     const uint32_t in2_tiles = cb_length;
     const uint32_t in3_tiles = cb_length;
     const uint32_t in4_tiles = 1;  // epsilon
-    const uint32_t in5_tiles = 1;  // reduce scalar
 
     const uint32_t intermed0_tiles = tile_cols_per_device;
     const uint32_t intermed4_tiles = 1;
@@ -289,13 +285,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
     }
-    // RMSNorm is rejected together with Welford before the factory runs, so only the Welford
-    // compute kernel is reachable here; the buffer set and argument schema below are its.
     const auto* compute_kernel_file =
-        is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
-                     "rmsnorm_post_allgather_metal2.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-                     "layernorm_post_allgather_welford.cpp";
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+        "layernorm_post_allgather_welford.cpp";
 
     uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
@@ -332,7 +324,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         dfbs.push_back(make_dfb(POSTWF_BETA, in3_tiles, beta_single_tile_size, beta_cb_data_format));
     }
     dfbs.push_back(make_dfb(POSTWF_EPS, in4_tiles, bfloat16_tile_size, tt::DataFormat::Float16_b));
-    dfbs.push_back(make_dfb(POSTWF_REDUCE, in5_tiles, single_tile_size, cb_data_format));
     // [mean(x**2), mean(x)], recombined from the per-device Welford partials
     dfbs.push_back(make_dfb(POSTWF_STATS_REDUCED, intermed0_tiles, single_tile_size, cb_data_format));
     // 1/sqrt(var + epsilon)
@@ -386,10 +377,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    // Welford derives its own scaling, so the shared reader must not decode an
-    // auxiliary recipe. Keep the unused shared binding as a reader self-loop.
+    // Welford derives its own scaling, so the shared reader has no auxiliary buffer or recipe.
     reader.compiler_options.defines.emplace("USE_WELFORD", "1");
-    bind_self_loop(reader, POSTWF_REDUCE, "reduce");
     if (gamma.has_value()) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
@@ -476,15 +465,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     // then incompatible with unpacking to SRCA/B, and on Wormhole/Blackhole that combination
     // produces garbage in SrcA (not silent TF32 truncation as one might assume).
     //
-    // The input is consumed only by sub_tiles_bcast_cols (layernorm welford kernel) or by
-    //   mul_tiles_bcast_cols (rmsnorm kernel), both of which are FPU ops. Do NOT enable
-    //   UnpackToDest for it.
-    // The stats buffer:
-    //   - layernorm welford path: consumed only by copy_tile inside combine_welford_partials.
-    //     Set UnpackToDest when stats are FP32 to preserve precision into the per-row mean/M2
-    //     recombine.
-    //   - rmsnorm path: consumed by reduce_tile (FPU). Must NOT enable UnpackToDest.
-    if (!is_rmsnorm && fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
+    // The input is consumed by sub_tiles_bcast_cols, an FPU op. Do NOT enable UnpackToDest for it.
+    // Stats are consumed only by copy_tile inside combine_welford_partials. Set UnpackToDest
+    // when they are FP32 to preserve precision into the per-row mean/M2 recombine.
+    if (fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
         unpack_via_dest(compute_gen1, POSTWF_STATS);
     }
     // The rest of the Float32 buffers this kernel consumes take the SrcA/B path, each stated
@@ -502,14 +486,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         if (uses_times_gamma_out) {
             unpack_via_src(compute_gen1, POSTWF_TIMES_GAMMA_OUT);
         }
-        // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b, and the
-        // reduce-scalar buffer never reaches this kernel (the reader is its only endpoint).
+        // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b.
         if (in_data_format == tt::DataFormat::Float32) {
             unpack_via_src(compute_gen1, POSTWF_INPUT);
-        }
-        // A Float32 stats buffer on the layernorm path already took UnpackToDest just above.
-        if (stats_data_format == tt::DataFormat::Float32 && is_rmsnorm) {
-            unpack_via_src(compute_gen1, POSTWF_STATS);
         }
         if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
             unpack_via_src(compute_gen1, POSTWF_GAMMA);

@@ -4,8 +4,8 @@
   "scope": "Numerical sanity subset of unit_test_suite.json. One primary case per coverable kernel, deduplicated across shared coverage. Includes compute, dataflow helper callers and the 17 manual auxiliary readers.",
   "exact_cases": true,
   "counting": {
-    "test_cases": 76,
-    "python_cases": 61,
+    "test_cases": 77,
+    "python_cases": 62,
     "cpp_cases": 15,
     "kernel_entries": 144,
     "covered_kernel_entries": 130,
@@ -16,7 +16,7 @@
       "manual auxiliary reader": 17
     },
     "cases_by_lane": {
-      "common": 57,
+      "common": 58,
       "wormhole": 4,
       "blackhole": 5,
       "quasar": 2,
@@ -1940,8 +1940,32 @@
       "expected_cases": 1,
       "require_pass": true,
       "full_suite_group": "T036",
-      "test_line": 227,
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py:227"
+      "test_line": 228,
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py:228"
+    },
+    {
+      "id": "SM077",
+      "kind": "pytest",
+      "source": "tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py",
+      "family": "distributed RMS norm",
+      "factories": [
+        "F085"
+      ],
+      "tests": [
+        "test_post_all_gather_mixed_stats_dtype_with_program_cache[one_stats_pair-rmsnorm-bf16_input_fp32_stats]"
+      ],
+      "kernel_ids": [
+        "S090",
+        "DF044"
+      ],
+      "selection": "One-device RMSNorm post-all-gather with BF16 input/weights, FP32 statistics and destination; guards the planned auxiliary buffer unpack format.",
+      "lane": "common",
+      "hardware": "One device. Statistics emulate one shard; no collective required.",
+      "expected_cases": 1,
+      "require_pass": true,
+      "full_suite_group": "T036",
+      "test_line": 252,
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py:252"
     }
   ],
   "kernels": [
@@ -2523,14 +2547,16 @@
       "kind": "compute",
       "path": "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather_metal2.cpp",
       "factories": [
-        "F085",
-        "F086"
+        "F085"
       ],
       "evidence": "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather_metal2.cpp:91; ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather_metal2.cpp:101",
       "case": "SM011",
       "status": "selected",
       "selection": "One-device pre/post RMSNorm pipeline [1,1,32,64], num_devices=1; post uses metal2 compute.",
-      "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:704"
+      "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:704",
+      "additional_cases": [
+        "SM077"
+      ]
     },
     {
       "id": "S091",
@@ -3300,7 +3326,8 @@
       "selection": "One-device pre/post RMSNorm pipeline [1,1,32,64], num_devices=1; post uses metal2 compute.",
       "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:704",
       "additional_cases": [
-        "SM076"
+        "SM076",
+        "SM077"
       ]
     },
     {
@@ -3858,6 +3885,7 @@
   ],
   "migration_updates": [
     "2026-09-09: SM006 now selects the existing small sharded groupnorm BF8-mask/FP32-destination case that exposed the native mean format transition. The previous C++ smoke case remains in the full T159 group. Total sanity case and kernel-coverage counts are unchanged.",
-    "2026-09-09: SM076 adds the Welford factory variant of shared reader DF044 after review found its missing auxiliary-argument gate. SM011 invokes the non-Welford RMS path, so it no longer claims F086. Total kernel coverage is unchanged; sanity is 76 cases, including 62 available on N300."
+    "2026-09-09: SM076 adds the Welford factory variant of shared reader DF044 after review found its missing auxiliary-argument gate. SM011 invokes the non-Welford RMS path, so it no longer claims F086. Total kernel coverage is unchanged; sanity is 76 cases, including 62 available on N300.",
+    "2026-09-09: SM077 guards mixed BF16 input / FP32 statistics in the RMSNorm post factory. Its auxiliary format follows statistics, independently of input. SM011 retains the pre/post pipeline case. S090 now lists only its reachable factory F085. Sanity is 77 cases, including 63 available on N300; kernel-entry coverage is unchanged."
   ]
 }
