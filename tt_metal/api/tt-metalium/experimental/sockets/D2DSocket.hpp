@@ -50,9 +50,10 @@ struct L1Map {
     uint32_t store_dest(uint32_t dest_offset, bool is_store) const {
         return is_store ? (payload_addr + dest_offset) : 0u;
     }
-    uint32_t verify_at(uint32_t dest_offset, bool is_store) const {
-        return is_store ? (payload_addr + dest_offset) : 0u;
-    }
+    // commented out b/c deadcode -- never called, and byte-identical to store_dest() above
+    // uint32_t verify_at(uint32_t dest_offset, bool is_store) const {
+    //     return is_store ? (payload_addr + dest_offset) : 0u;
+    // }
 
     std::string describe() const;
 };
@@ -110,7 +111,8 @@ public:
     const std::string& clock_rate_detail() const { return clock_rate_detail_; }
     const VolumeLadder& ladder() const { return ladder_; }
     HostRegion& region() const;
-    D2H2H2DSocket& inner() const { return *inner_; }
+    // commented out b/c deadcode
+    // D2H2H2DSocket& inner() const { return *inner_; }
     Transport* primary_transport() const { return primary_.get(); }
     Deliverer* deliverer() const { return deliverer_.get(); }
     uint32_t peer_count() const { return static_cast<uint32_t>(1 + mesh_peers_.size()); }

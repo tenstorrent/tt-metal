@@ -191,12 +191,14 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     SocketConfig sc;
     sc.ladder = s->ladder_.enabled ? &s->ladder_ : nullptr;
     sc.ladder_sync = (s->ladder_.enabled && s->ladder_.quiesced) ? &s->ladder_sync_ : nullptr;
-    sc.payload_bytes = cfg.payload_bytes;
+    // commented out b/c deadcode
+    // sc.payload_bytes = cfg.payload_bytes;
     sc.chip = cfg.chip;
     sc.cores = cfg.cores;
     sc.workers = cfg.workers;
     sc.pin = cfg.pin;
-    sc.roundtrip = false;
+    // commented out b/c deadcode
+    // sc.roundtrip = false;
     sc.send_window = cfg.send_window;
     sc.send_blocking = cfg.send_blocking;
     sc.ns_per_cycle = s->ns_per_cycle_;

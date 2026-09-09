@@ -52,7 +52,7 @@ enum : uint32_t {
     // notice the same slot carries the DESTINATION UVA (host_scan.cpp reads it from
     // kNoticeUvaOffset, service_rx reads it back as dest_uva).
     kArgOriginCore = 3,
-    kArgCount = 4,
+    kArgCount = 4
 };
 
 struct SocketConfig {
@@ -64,12 +64,14 @@ struct SocketConfig {
     // Payload. Needed only to size the receive-slot sweep: the number of
     // slots a message of this size leaves in an arena is what the scanner should look at, not
     // the maximum.
-    uint32_t payload_bytes = 0;
+    // commented out b/c deadcode
+    // uint32_t payload_bytes = 0;
     uint32_t chip = 0;     // our own chip index, for the origin selector a notice carries
     uint32_t cores = 0;    // cores in use; bounds the stall dump and the local check
     uint32_t workers = 0;  // 0 => one per CPU, capped at cores
     bool pin = true;
-    bool roundtrip = false;
+    // commented out b/c deadcode
+    // bool roundtrip = false;
 
     // `send_window` 0 means unset -> cores-in-use; `send_blocking` selects
     // post-and-wait and implies a window of 1. The window caps concurrency; the shape decides
@@ -272,8 +274,11 @@ private:
 
     // ---- the middle hop --------------------------------------------------
 
+    // commented out b/c deadcode -- the trailing `bool reply` is always false
+    // uint64_t deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core, uint64_t length,
+    //                         uint64_t accumulated_ns, bool reply);
     uint64_t deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core, uint64_t length,
-                            uint64_t accumulated_ns, bool reply);
+                            uint64_t accumulated_ns);
 
     bool start_transport(std::string& err);
     void stop_transport();
@@ -315,7 +320,8 @@ private:
         uint32_t dest_core = 0;
         uint64_t length = 0;
         uint64_t accumulated_ns = 0;
-        bool reply = false;
+        // commented out b/c deadcode
+        // bool reply = false;
         uint64_t t_queued = 0;
         // The effective address, forwarded unmodified. Zero means "not a store".
         uint64_t dest_uva = 0;
@@ -350,7 +356,8 @@ private:
         // Which of the destination core's receive slots this sender owns. DERIVED from the
         // source, not claimed -- so a slot has one lifetime source and needs no ticket, no
         // tail pointer and no lap check.
-        uint32_t rx_slot = 0;
+        // commented out b/c deadcode -- always 0; send_arm_notice() now passes the literal
+        // uint32_t rx_slot = 0;
     };
 
     // Single outstanding credit measurement per core, and one is all a core can have: its
@@ -360,6 +367,7 @@ private:
     // Armed when the notice retires (we know the message's absolute count there) and disarmed by
     // the sender loop's credit pass. Owned by the sender thread ALONE: nothing else reads or
     // writes it, which is why it needs no lock and no atomics.
+    //
     struct CreditWatch {
         bool armed = false;
         bool timed = false;      // the message passed the straddler test when it was posted
@@ -451,6 +459,17 @@ private:
     static constexpr std::chrono::microseconds kCreditFlushInterval{100};
     std::chrono::steady_clock::time_point last_credit_flush_{};
     std::atomic<uint64_t> credit_flushes_{0};
+    // RX-SIDE CREDIT GATE INSTRUMENTATION. deliver_remote() only returns a credit
+    // when the arriving ctrl word carries kFlagRemoteNotice. The stall dump's ctrl_rx is read
+    // from the region at dump time, so it cannot tell "the flag never arrived" from "the word
+    // was consumed and cleared". These record what was actually seen at consumption.
+    std::atomic<uint64_t> rx_deliveries_{0};        // times deliver_remote() reached the gate
+    std::atomic<uint64_t> rx_remote_notice_{0};     // ... of those, how many had the flag
+    std::atomic<uint64_t> rx_first_ctrl_{0};        // the first ctrl word consumed, verbatim
+    std::atomic<uint64_t> rx_credits_posted_{0};    // times return_credit() was ENTERED
+    std::atomic<uint64_t> rx_credits_done_{0};      // ... and times it RETURNED
+    std::atomic<uint64_t> rx_origin_host_{~0ull};   // origin_host the last credit resolved to
+    std::atomic<uint64_t> rx_origin_sel_{0};        // the selector it came from
 
     std::thread sender_;
     WorkerStats sender_stats_{};

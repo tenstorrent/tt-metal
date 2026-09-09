@@ -3,23 +3,24 @@
 
 The CSV that test_oneway_volume writes has one row per stage per run:
 
-    stage,samples,payload_bytes,window_ns,bandwidth_gb_per_s,latency_us,
-    total_ns,bytes_per_message,cores,run_id,host_ident
+    stage,samples,payload_bytes,window_ns,hop_window_ns,bandwidth_gb_per_s,
+    messages_per_second,latency_us,total_ns,bytes_per_message,cores,run_id,host_ident
 
-This pivots it into the two tables you actually read, one row per payload size.
+This pivots it into TWO tables, one row per payload size: BANDWIDTH and LATENCY.
 
 EVERY NUMBER IS RECOMPUTED FROM THE RAW COLUMNS -- the derived columns in the file
 are checked, not trusted:
 
-    per-hop bandwidth  == payload_bytes / total_ns      (bytes over time spent in that hop)
-    end-to-end         == payload_bytes / window_ns     (completion-bounded throughput)
-    latency_us         == total_ns / samples / 1000
-    payload_bytes      == samples * bytes_per_message   (the integrity check)
+    BANDWIDTH, the legs == payload_bytes / hop_window_ns (that leg's own elapsed window)
+    BANDWIDTH, e2e      == payload_bytes / window_ns     (completion-bounded throughput)
+    LATENCY             == total_ns / samples / 1000     (mean per-message duration)
+    payload_bytes       == samples * bytes_per_message   (the integrity check)
 
-1 byte/ns == 1 GB/s decimal, so every one of these is one division, no scale factor.
+Neither it nor the concurrency factor is printed. Both are one division away if you want them,
+and S/W == (S/T) x (T/W) closes on the row:
 
-If any of those disagree the row is flagged instead of printed as fact, because a
-number nobody can reproduce by hand is not an answer to a pointed question.
+    payload_bytes / total_ns  =  per-core push rate     (S/T)
+    total_ns / hop_window_ns  =  messages in flight     (T/W)
 
 Usage:
     ./show_results.py results.csv [more.csv ...]
@@ -32,10 +33,16 @@ import csv
 import sys
 from collections import defaultdict
 
+H2H = "host->remote_host"
+
 # CSV stage name -> column header. Order here is the column order in the tables.
+#
+# PLAIN `h2h`, NOT `h2h delivered`. The qualifier existed to distinguish it from `h2h moving`
+# in the pair below; with one column there is nothing to distinguish it from, and a qualifier
+# that names no alternative reads as a hedge about the number.
 STAGES = [
     ("t6->host", "t6->host"),
-    ("host->remote_host", "host->remote_host"),
+    (H2H, "h2h"),
     ("remote_host->remote_t6", "remote_host->remote_t6"),
     ("END_TO_END", "end-to-end"),
 ]
@@ -52,9 +59,11 @@ def to_float(s):
 
 
 def load(paths):
-    """Return {bytes_per_message: {stage: {"bw":, "lat":, "row":}}} plus a list of problems."""
+    """Return {(bytes, cores): {stage: {...}}}, a list of problems, and the set of
+    (path, stage) pairs whose rate had to fall back to the old total_ns denominator."""
     data = defaultdict(dict)
     problems = []
+    stale_window = set()
     for path in paths:
         with open(path, newline="") as fh:
             for lineno, row in enumerate(csv.DictReader(fh), start=2):
@@ -64,6 +73,7 @@ def load(paths):
                 samples = to_int(row.get("samples"))
                 payload = to_int(row.get("payload_bytes"))
                 window = to_int(row.get("window_ns"))
+                hop_window = to_int(row.get("hop_window_ns"))
                 total = to_int(row.get("total_ns"))
                 per_msg = to_int(row.get("bytes_per_message"))
                 if not samples or not payload:
@@ -71,47 +81,58 @@ def load(paths):
 
                 where = f"{path}:{lineno} {stage}"
 
-                # Recompute, do not trust.
-                #
-                # TWO DIFFERENT RATES, AND THE PER-HOP ONE IS NOT payload/window.
-                # payload/window is ACHIEVED throughput. Under backpressure every hop moves
-                # the same bytes through the same window, so that formula makes all four
-                # columns restate the pipeline rate -- a t6->host column that can never say
-                # anything about t6->host. Useless.
-                #
-                # A HOP's rate is payload/total_ns: bytes over the time actually spent inside
-                # that hop. That is what the libfabric/mpi-rma tables reported, and it is the
-                # number comparable to them (t6->host 3.295, host->host 9.593, ...).
-                #
-                # END_TO_END keeps payload/window, because the whole path IS the pipeline and
-                # its completion-bounded throughput is the real answer there.
                 if stage == "END_TO_END":
                     bw = payload / window if window else None
+                    bw_formula = "payload_bytes/window_ns"
+                elif hop_window:
+                    bw = payload / hop_window
+                    bw_formula = "payload_bytes/hop_window_ns"
+                elif window:
+                    stale_window.add((path, stage))
+                    bw = payload / window
+                    bw_formula = "payload_bytes/window_ns [fallback]"
                 else:
-                    bw = payload / total if total else None
-                lat = total / samples / 1000.0 if samples else None
+                    stale_window.add((path, stage))
+                    bw = None
+                    bw_formula = "no elapsed denominator on this row"
 
-                # Check 1: the file's bandwidth matches ours.
+                lat = total / samples / 1000.0 if samples else None
+                den = window if stage == "END_TO_END" else (hop_window or window)
+                msgs = samples * 1e9 / den if den else None
+
                 file_bw = to_float(row.get("bandwidth_gb_per_s"))
-                # The csv column is payload/window on every row, so it is the achieved rate.
-                # Only END_TO_END prints that, so only END_TO_END cross-checks against it.
-                if (stage == "END_TO_END" and bw is not None and file_bw is not None
-                        and abs(bw - file_bw) > 1e-6 * max(1.0, abs(bw))):
+                mismatch = (bw is not None and file_bw is not None
+                            and abs(bw - file_bw) > 1e-6 * max(1.0, abs(bw)))
+
+                if (mismatch and hop_window is None and stage != "END_TO_END"
+                        and total and file_bw is not None
+                        and abs(payload / total - file_bw) <= 1e-6 * max(1.0, payload / total)):
+                    mismatch = False
+                if mismatch:
                     problems.append(f"{where}: bandwidth column {file_bw:.6f} != "
-                                    f"payload_bytes/window_ns {bw:.6f}")
+                                    f"{bw_formula} {bw:.6f}")
                 # Check 2: the file's latency matches ours.
                 file_lat = to_float(row.get("latency_us"))
                 if lat is not None and file_lat is not None and abs(lat - file_lat) > 1e-3:
                     problems.append(f"{where}: latency column {file_lat:.3f} != "
                                     f"total_ns/samples/1000 {lat:.3f}")
-                # Check 3: THE INTEGRITY CHECK. Bytes and samples must count the same
-                # population. If this fails the row is counting two different things.
+                # Check 2b: and the messages/second column, where the file carries one. Absent on
+                # files written before 2026-09-07, which is not a defect -- .get() returns None
+                # and the check does not run.
+                file_msgs = to_float(row.get("messages_per_second"))
+                if (msgs is not None and file_msgs is not None
+                        and abs(msgs - file_msgs) > 1e-3 * max(1.0, msgs)):
+                    problems.append(f"{where}: messages_per_second column {file_msgs:.1f} != "
+                                    f"samples x 1e9 / denominator {msgs:.1f}")
+                if bw is not None and msgs is not None and per_msg:
+                    closed = msgs * per_msg / 1e9
+                    if abs(bw - closed) > 1e-6 * max(1.0, bw):
+                        problems.append(f"{where}: bandwidth {bw:.6f} != messages_per_second x "
+                                        f"bytes_per_message/1e9 {closed:.6f}")
                 if per_msg and payload != samples * per_msg:
                     problems.append(f"{where}: payload_bytes {payload} != samples {samples} "
                                     f"x bytes_per_message {per_msg} "
                                     f"(= {samples * per_msg}, off by {payload - samples * per_msg})")
-                # Sanity bound: time spent inside a stage cannot exceed the window times
-                # the number of cores working in it.
                 cores = to_int(row.get("cores"))
                 if total and window and cores:
                     occ = total / (window * cores)
@@ -119,16 +140,13 @@ def load(paths):
                         problems.append(f"{where}: occupancy {occ:.2f} > 1 -- total_ns exceeds "
                                         f"window_ns x cores; window or samples are wrong")
 
-                # KEYED ON (bytes, cores), NOT bytes alone. A csv holding a 110-core sweep and
-                # a 1-core sweep has both at every payload size, and keying on size alone made
-                # one silently overwrite the other and report every row as a duplicate.
                 key = (per_msg if per_msg else 0, cores if cores else 0)
                 prev = data[key].get(stage)
                 if prev and (prev["bw"], prev["lat"]) != (bw, lat):
                     problems.append(f"{where}: repeat run at {key[0]} B / {key[1]} cores, "
                                     f"showing the last one")
                 data[key][stage] = {"bw": bw, "lat": lat}
-    return data, problems
+    return data, problems, stale_window
 
 
 def table(title, formula, data, field, fmt):
@@ -155,17 +173,33 @@ def main(argv):
     if len(argv) < 2:
         print(__doc__)
         return 2
-    data, problems = load(argv[1:])
+    data, problems, stale_window = load(argv[1:])
     if not data:
         print("no rows with data -- did both roles write their CSV?", file=sys.stderr)
         return 1
 
-    table("BANDWIDTH (GB/s)",
-          "per-hop = payload_bytes / total_ns      end-to-end = payload_bytes / window_ns",
+    legs = ("payload/window_ns [FALLBACK -- no hop_window_ns in the file(s); too wide by "
+            "pipeline fill and drain]" if stale_window else "payload/hop_window_ns")
+    table("BANDWIDTH (GB/s)   aggregate bytes over one elapsed interval",
+          f"legs = {legs}   end-to-end = payload/window_ns",
           data, "bw", ".3f")
-    table("LATENCY (us)", "= total_ns / samples / 1000", data, "lat", ".2f")
+    table("LATENCY (us)   mean per-message duration at that stage",
+          "= total_ns / samples / 1000", data, "lat", ".2f")
 
     print()
+    print("  note: total_ns is RESIDENCE -- per-message durations summed over every core, so it")
+    print("        exceeds elapsed time by the number of messages in flight. It is the latency")
+    print("        numerator above and nothing else. payload_bytes/total_ns is a PER-CORE push")
+    print("        rate, not a link rate, and it does not become one multiplied by `cores`.")
+    if stale_window:
+        print()
+        print(f"  FELL BACK to payload/window_ns on {len(stale_window)} (file, stage) pair(s)")
+        print("  with no hop_window_ns value -- written before that leg carried a window. Right")
+        print("  shape, wrong width: window_ns is the whole run's bracket, so it is wider than a")
+        print("  leg's own envelope by that leg's pipeline fill and drain. Rerun for the real")
+        print("  span; do NOT quote these as the leg's measured bandwidth:")
+        for p, st in sorted(stale_window):
+            print(f"    {p}  [{st}]")
     if problems:
         print(f"CHECKS FAILED ({len(problems)}) -- the numbers above do not reproduce:")
         for p in problems:

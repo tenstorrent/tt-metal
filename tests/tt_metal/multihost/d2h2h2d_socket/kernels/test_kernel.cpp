@@ -100,6 +100,30 @@ inline void push_to_host(
 // destination is a 64 B-aligned register, so bits [3:0] are zero and the source must match.
 constexpr uint32_t kStageSlotBytes = 16;
 
+// THE LANDING PROBE. A non-posted read of the last bytes we just pushed, issued after the write
+// fence, whose only purpose is to come back.
+//
+// noc_async_write_barrier() waits for the NOC to acknowledge the payload writes, and on a push
+// to host the party that acknowledges is the PCIe TILE -- so the fence means "accepted for
+// transmission", not "in host memory". At small payloads the whole push fits in the tile's
+// outstanding-write credits and the fence returns before a single byte has crossed the link:
+// 16 KiB on 110 cores measured 3.191 us, which is 565 GB/s of aggregate push against a link
+// that carries about 15.
+//
+// PCIe forbids a read completion from passing previously posted writes on the same path, so the
+// data coming back is proof the writes ahead of it landed. 16 bytes because the probe's SIZE is
+// irrelevant -- it is the round trip that carries the guarantee -- and 16 keeps source and
+// destination agreeing in bits [3:0], which the NOC requires for a narrow transfer.
+constexpr uint32_t kLandingProbeBytes = 16;
+
+// Reads `size` from host offset `src_pcie` into L1. Same shape as the pull kernel's
+// noc_read_page_chunked (test_kernel_pull.cpp:27) -- the 4-argument noc_read_with_state is the
+// only read form that takes a 64-bit host offset, as pinned_memory.hpp's NocAddr says.
+inline void read_from_host(uint32_t pcie_xy_enc, uint64_t src_pcie, uint32_t dst_l1, uint32_t size) {
+    noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+        NOC_INDEX, pcie_xy_enc, src_pcie, dst_l1, size);
+}
+
 inline void write_reg64(
     uint32_t stage_addr, uint32_t slot, uint64_t value, uint64_t io_base, uint32_t pcie_xy_enc,
     uint64_t reg_off) {
@@ -130,6 +154,17 @@ void kernel_main() {
     constexpr uint32_t flags = get_compile_time_arg_val(10);
     constexpr uint32_t await_completion = get_compile_time_arg_val(11);
     constexpr uint32_t completion_addr = get_compile_time_arg_val(12);  // rdma_completion: my request retired
+
+    // --- Landing verification (off by default) -----------------------------
+    //
+    // OPT-IN, AND IT HAS TO BE. The probe puts a full PCIe round trip on every message's
+    // critical path -- instrumentation that changes the thing it measures, which this file's
+    // WorkerStats padding exists to avoid elsewhere. With it off the bracket is what it always
+    // was and a bandwidth run is bit-for-bit unchanged; with it on stage 1 is honest and the
+    // throughput number from that run must not be quoted. That is the split the latency mode
+    // exists to enforce.
+    constexpr uint32_t verify_landing = get_compile_time_arg_val(13);
+    constexpr uint32_t landing_addr = get_compile_time_arg_val(14);  // 16 B scratch for the probe
 
     // The destination UVA's selector. Runtime, not compile-time: it is DATA -- which core
     // on which host the bytes are for -- and unlike this core's own identity it is
@@ -329,10 +364,33 @@ void kernel_main() {
         // before the control word joins the queue behind it.
         noc_async_write_barrier();
 
-        // The push is complete and fenced, so this is the honest end of stage 1. Written
-        // AFTER the fence and before the trigger: the elapsed value must be visible to the
-        // host, and the trigger is what makes it so.
-        write_reg64(stage_addr, 2, wall_clock() - t_push0, io_base, pcie_xy_enc, my_reg2);
+        // THE FENCE IS NOT LANDING, and until 2026-09-08 stage 1 ended here anyway. See
+        // kLandingProbeBytes: the barrier above is acknowledged by the PCIe tile, so what it
+        // proves is that the writes were accepted, not that they crossed. The probe below is
+        // what closes that gap, and it is measured separately because it is the instrument's
+        // cost rather than the transfer's.
+        const uint64_t t_fenced = wall_clock();
+        uint64_t visibility = 0;
+        if constexpr (verify_landing != 0) {
+            // The TAIL of what we just pushed. The last bytes are the last to be accepted, so a
+            // read that returns them has flushed everything ahead of it on this path.
+            read_from_host(pcie_xy_enc, io_base + my_tx_arena + payload_bytes - kLandingProbeBytes,
+                           landing_addr, kLandingProbeBytes);
+            noc_async_read_barrier();
+            visibility = wall_clock() - t_fenced;
+        }
+
+        // Written AFTER the fence and before the trigger: the elapsed value must be visible to
+        // the host, and the trigger is what makes it so.
+        //
+        // BOTH HALVES IN ONE REGISTER -- total in the low 32 bits, the probe's own cost in the
+        // high 32, per kFlagElapsedSplit. The host reports the total as t6->host and the probe
+        // as diag:d2h-visibility, so neither number hides inside the other. When the probe is
+        // off the high half is zero and the total is the old fence-only bracket, which is why
+        // the driver must not set kFlagElapsedSplit's companion expectation without it.
+        write_reg64(stage_addr, 2,
+                    tt::tt_metal::experimental::elapsed_pack((t_fenced - t_push0) + visibility, visibility),
+                    io_base, pcie_xy_enc, my_reg2);
         noc_async_write_barrier();
 
         // The sequence number is what distinguishes a re-armed word from the one the host

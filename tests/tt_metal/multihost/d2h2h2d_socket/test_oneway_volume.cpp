@@ -77,6 +77,15 @@ struct Options {
     // shared host_socket.cpp) but could not ISSUE one, so half the pair was untestable.
     uint32_t dest_offset = 0;
     bool store = false;
+    // --verify-landing: end the device's stage-1 bracket on a read-back that PROVES the payload
+    // reached host memory, instead of on the write fence -- which the PCIe tile acknowledges,
+    // not host DRAM. See kLandingProbeBytes in the kernel.
+    //
+    // OFF BY DEFAULT AND IT MUST STAY OFF FOR BANDWIDTH. The probe is a full PCIe round trip on
+    // every message's critical path, so a run with it on measures a slower pipeline than the one
+    // under test. It exists so the LATENCY of t6->host can be trusted; the throughput of a
+    // --verify-landing run must not be quoted. The banner says so at run time.
+    bool verify_landing = false;
     // The L1 map as the executor needs to see it, to bound a store's address.
     uint32_t l1_lo = 0, l1_hi = 0, l1_signal = 0, l1_completion = 0, l1_stop = 0, l1_dest_word = 0;
     // --csv-rotate PATH: archive an existing CSV and exit. No mode, no device. Present
@@ -135,6 +144,22 @@ struct Options {
     // Time the payload write post -> completion on the progress thread, without waiting.
     // Adds the diag:h2h-retire row. See ../MEASURING-BANDWIDTH.md.
     bool measure_retire = false;
+    // --measure-credit: watch each message's credit come home, adding h2h:credit-raw (post ->
+    // the peer has delivered and told us) and h2h:net (that minus the turnaround the peer
+    // reported). SocketConfig::measure_credit is the gate; this is the only thing that opens it.
+    //
+    // OFF BY DEFAULT FOR THE SAME REASON --measure-retire IS. It puts work on the SENDER
+    // THREAD, which is this path's measured bottleneck (~14k msg/s flat from 16 KiB to
+    // 256 KiB), and a bandwidth run must not pay for a row it does not print. One
+    // credit_total() read per IN-FLIGHT message per lap: noise at --send-window 1, up to
+    // `cores` cache lines per lap at window 110 -- and window 110 is the shape that wants
+    // throughput, not this.
+    //
+    // ITS COST IS NOT SUBTRACTED and cannot honestly be. hop_window_ns is an elapsed envelope,
+    // not a sum of accounted work, so there is no line item to remove; taking a per-thread
+    // duration out of a wall-clock span is the S/T-into-S/W confusion the stripped CSV was
+    // rebuilt to eliminate. Not paying the cost is exact. See SocketConfig::measure_credit.
+    bool measure_credit = false;
     bool roundtrip = false;
     double ns_per_cycle = 0.0;
 
@@ -206,12 +231,30 @@ HOST-TO-HOST
    csv files carry provider=mpi-rma no matter what the tag or the flag said.
    make_transport() returns MpiRmaTransport unconditionally -- see host_transport.cpp.)
   --same-host              both processes on one box: skip clock sync
+  --verify-landing         end the device's stage-1 bracket on a READ-BACK proving the payload
+                           reached host memory, not on the write fence -- which only the PCIe
+                           tile acknowledges. Fixes t6->host understating at small payloads
+                           (16 KiB on 110 cores read 3.191 us, i.e. 565 GB/s against a ~15 GB/s
+                           link). The probe's own cost is reported apart, as
+                           diag:d2h-visibility, so it can be subtracted.
+                           IT SLOWS THE PIPELINE: a PCIe round trip per message on the critical
+                           path. Use it for latency; DO NOT quote bandwidth from such a run.
   --measure-retire         time each payload write from POST to COMPLETION, reported as
                            diag:h2h-retire. Nothing waits. Needs more than one rank.
                            NOTE the row pools payload retires with 40-byte notice retires,
                            so its mean is the per-op cost of neither. It is also POST to
                            LOCAL completion under MPI, which is not the transfer: see
                            host_transport.cpp flush() and MEASURING-BANDWIDTH.md.
+  --measure-credit         watch each message's credit return, adding two rows: h2h:credit-raw
+                           (post -> the peer has delivered AND told us -- the only sender-side
+                           bracket that ends on the far side having ACTED) and h2h:net, which
+                           subtracts the turnaround the peer measured on its own clock and sent
+                           back in the credit word. Needs more than one rank.
+                           PAIR IT WITH --send-window 1. The credit is POLLED once per lap, so
+                           raw over-reads by up to a lap: a few us at window 1, ~100 us at
+                           window 110, where the row becomes a residence and not a latency.
+                           IT COSTS SENDER-THREAD TIME, which is the bottleneck -- use it for
+                           latency; DO NOT quote bandwidth from such a run.
   --h2d socket             ACCEPTED AND REDUNDANT. Host-to-device delivery is always
                            tt-metal's H2DSocket in DEVICE_PULL: the device reads the payload
                            out of pinned host memory, and ring aliasing puts the peer's RMA
@@ -363,6 +406,8 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--chip") { o.chip = std::stoul(next(i)); }
         else if (a == "--same-host") { o.same_host = true; }
         else if (a == "--measure-retire") { o.measure_retire = true; }
+        else if (a == "--measure-credit") { o.measure_credit = true; }
+        else if (a == "--verify-landing") { o.verify_landing = true; }
         else if (a == "--csv") { o.csv = next(i); }
         else if (a == "--csv-append") { o.csv_append = true; }
         else if (a == "--tag") { o.tag = next(i); }
@@ -396,6 +441,16 @@ bool parse(int argc, char** argv, Options& o) {
                   << ".\n"
                      "  Locally routed messages are delivered by memcpy, so there is no posted\n"
                      "  operation to time.\n";
+        return false;
+    }
+    if (o.measure_credit && !o.use_transport) {
+        std::cerr << "error: --measure-credit needs a transport, which means a job of TWO MPI\n"
+                     "  RANKS -- launch with `mpirun -n 2`. This process is rank " << o.host_ident
+                  << " of " << o.host_num
+                  << ".\n"
+                     "  A credit is the RECEIVER telling the sender it consumed the slot, and a\n"
+                     "  UVA that resolves to this host is refused outright, so with one rank no\n"
+                     "  credit is ever returned and the watch would never close.\n";
         return false;
     }
     // SYMMETRIC OPERATION IS NATIVE AND ASSUMED, so this is not conditional on a flag: the
@@ -701,14 +756,17 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     SocketConfig sc;
     sc.ladder = ladder.enabled ? &ladder : nullptr;
     sc.ladder_sync = (ladder.enabled && ladder.quiesced) ? &ladder_sync : nullptr;
-    sc.payload_bytes = o.bytes;
+    // commented out b/c deadcode
+    // sc.payload_bytes = o.bytes;
     sc.chip = o.chip;
     sc.cores = o.cores;
     sc.workers = o.workers;
     sc.pin = o.pin;
-    sc.roundtrip = o.roundtrip;
+    // commented out b/c deadcode
+    // sc.roundtrip = o.roundtrip;
     sc.send_window = o.send_window;
     sc.send_blocking = o.send_blocking;
+    sc.measure_credit = o.measure_credit;
     sc.ns_per_cycle = o.ns_per_cycle;
 
     sc.record_from_start = o.warmup == 0;
@@ -866,7 +924,11 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     // drains.
     if (transport != nullptr) {
         for (Transport* t : sock->peers_for_barrier()) {
-            if (const std::string be = t->barrier(barrier_ms); !be.empty()) {
+            // NO TIMEOUT ARGUMENT: Transport::barrier() takes none (host_transport.hpp:213).
+            // This call site passed barrier_ms and the end-of-send one above did not, so the
+            // file disagreed with itself and with the interface. barrier_ms is still live --
+            // drain_credits() above uses it -- it just is not the barrier's to take.
+            if (const std::string be = t->barrier(); !be.empty()) {
                 std::cerr << "  end-of-receive barrier failed (host " << t->peer().host_id << "): " << be
                           << "\n";
             }
@@ -973,6 +1035,32 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     //   std::printf("  replies   %llu\n", (unsigned long long)cn.replies.load());
     //   std::printf("  home      %llu   (replies delivered back to the originating core)\n",
     //               (unsigned long long)cn.home_done.load());
+    // FLUSH BATCHING. Each MPI_Win_flush is a network round trip; the sender defers it to a
+    // once-per-lap pass so one call retires every payload queued behind it. This says whether
+    // that is working: slots/call near 1 means every message paid its own round trip.
+    {
+        const unsigned long long fc = cn.flush_calls.load();
+        const unsigned long long fs = cn.flush_slots.load();
+        if (fc > 0) {
+            std::printf("  flush     %llu calls, %llu payloads  =>  %.2f payloads per flush\n", fc, fs,
+                        (double)fs / (double)fc);
+        }
+    }
+    // THE CREDIT ROUND TRIP, and how much of it turned into an h2h number.
+    //
+    // h2h:credit-raw is post -> the peer has delivered and told us. h2h:net subtracts the
+    // turnaround the peer reported in the credit word. These two counts are why a reader can
+    // trust the difference between the row's sample count and credit-raw's: `no-resp` means the
+    // peer sent no measurement, `skew` means it sent an impossible one and the sample was
+    // dropped rather than clamped.
+    {
+        const unsigned long long nr = cn.credit_net_no_resp.load();
+        const unsigned long long sk = cn.credit_net_skew.load();
+        if (nr > 0 || sk > 0) {
+            std::printf("  h2h:net   %llu dropped: %llu no turnaround, %llu clock skew (resp >= raw)\n",
+                        nr + sk, nr, sk);
+        }
+    }
     std::printf("  errors    %llu\n", (unsigned long long)cn.errors.load());
     if (transport != nullptr) {
         // THE TRANSPORT'S FINAL STATE, not just its state 5 s into a stall. `retired` versus
@@ -1190,6 +1278,25 @@ int run_device(Options& o) {
                     ? "unlimited"
                     : (std::to_string(limits.rlimit_memlock >> 20) + " MiB").c_str());
     std::printf("  want pinned   %llu MiB\n", (unsigned long long)(pinned_bytes_for(o.cores) >> 20));
+    if (o.verify_landing) {
+        std::printf("  landing       VERIFIED -- stage 1 ends on a read-back, not the write fence.\n");
+        std::printf("                A PCIe round trip per message is on the critical path:\n");
+        std::printf("                this run's LATENCY is honest, its BANDWIDTH is not. Do not quote it.\n");
+    }
+    if (o.measure_credit) {
+        // THE WINDOW IS THE WHOLE CONDITION FOR THIS ROW MEANING ANYTHING, so the banner prints
+        // the window rather than just naming the flag. `send_window` 0 is unset -> cores in use.
+        const uint32_t win = o.send_window != 0 ? o.send_window : o.cores;
+        std::printf("  credit        WATCHED -- h2h:credit-raw and h2h:net are being sampled.\n");
+        std::printf("                Sender-thread work per lap: this run's BANDWIDTH is not\n");
+        std::printf("                quotable.\n");
+        if (win != 1) {
+            std::printf("                WARNING: send window is %u, not 1. The credit is polled\n", win);
+            std::printf("                once per lap, so h2h:credit-raw over-reads by up to one\n");
+            std::printf("                lap and h2h:net inherits it. Those rows are RESIDENCE\n");
+            std::printf("                under load here, not latency. Re-run with --send-window 1.\n");
+        }
+    }
 
     const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t payload_addr = (l1_base + 0x3F) & ~0x3Fu;
@@ -1198,6 +1305,9 @@ int run_device(Options& o) {
     const uint32_t completion_addr = signal_addr + 64;  // own cache line, own meaning
     const uint32_t stop_addr = completion_addr + 64;
     const uint32_t dest_word_addr = stop_addr + 64;
+    // The landing probe's destination. Its own cache line, past everything the protocol uses:
+    // the probe is scratch whose CONTENTS are never read, so it must not alias a word that is.
+    const uint32_t landing_addr = dest_word_addr + 64;
     const uint32_t deliver_addr = payload_addr;
 
     const uint32_t l1_size = static_cast<uint32_t>(device->l1_size_per_core());
@@ -1230,7 +1340,7 @@ int run_device(Options& o) {
     if (payload_addr + copies * o.bytes + (deliver_addr - payload_addr - (copies - 1) * o.bytes) > l1_size ||
         deliver_addr + o.bytes > l1_size) {
         const uint32_t overhead =
-            stage_addr - payload_addr - static_cast<uint32_t>(o.bytes) + 5 * 16 + 128;
+            stage_addr - payload_addr - static_cast<uint32_t>(o.bytes) + 5 * 16 + 128 + 64;
         const uint32_t ceiling = ((l1_size - payload_addr - overhead) / copies) & ~0x3Fu;
         std::cerr << "error: --bytes " << o.bytes << " does not fit L1 on this core.\n"
                   << "  L1 per core        " << l1_size << " B\n"
@@ -1251,7 +1361,17 @@ int run_device(Options& o) {
         H2DSocketConfig scfg;
         scfg.page_size = o.bytes;  // one page per message; see kernels/test_kernel_pull.cpp
         // ALWAYS. Ring aliasing was a #define already fixed at 1; the import resolved it.
-        const bool alias_requested = true;
+        //
+        // DIAGNOSTIC ESCAPE HATCH: D2H_NO_ALIAS=1 turns the overlay off
+        // for one run. It exists to test where kFlagRemoteNotice is being lost -- the
+        // receiver delivers the payload but never sees the flag, so return_credit()
+        // (D2H2H2DSocket.cpp:317) never fires and the sender idles after one window with
+        // credit_in=0. Default is UNCHANGED: aliasing on.
+	//
+        const bool alias_requested = (std::getenv("D2H_NO_ALIAS") == nullptr);
+        if (!alias_requested) {
+            std::cerr << "D2H_NO_ALIAS=1: ring aliasing DISABLED for this run (diagnostic)\n";
+        }
         // THE RING IS THE L1 MIRROR, so under aliasing it is sized to a whole arena rather
         // than to the payload.
         //
@@ -1294,7 +1414,7 @@ int run_device(Options& o) {
         // reserved_base(), not region.base(): there is no region yet, which is the point.
         // The storage is a static array, so this is already the pointer base() will return.
         // Checked immediately after provision() below.
-        scfg.alias_region_base = HostRegion::reserved_base();
+        scfg.alias_region_base = alias_requested ? HostRegion::reserved_base() : nullptr;
         deliverer = make_h2d_socket_deliverer(mesh_device, g.width, o.cores, l1_layout, scfg, derr);
     } else {
         deliverer = make_device_deliverer(device, g.width, o.cores, l1_layout, derr);
@@ -1372,12 +1492,19 @@ int run_device(Options& o) {
                 // it never writes the buffer the host delivers into.
                 (o.host_ident != 0) ? 0u : o.iters,
                 kernel_opcode,
-                static_cast<uint32_t>(kFlagStamped),
+                // kFlagElapsedSplit UNCONDITIONALLY, because the kernel writes the packed form
+                // unconditionally -- the probe only decides whether the high half is nonzero,
+                // not whether the register is split. Making the flag follow --verify-landing
+                // would leave the host unpacking a packed word as a plain count on every
+                // bandwidth run, which is wrong by 2^32 times the probe cost.
+                static_cast<uint32_t>(kFlagStamped | kFlagElapsedSplit),
                 // AWAIT THE DOORBELL. The kernel's control word is a single slot; without
                 // this it arms iteration i+1 before a host worker has read iteration i and
                 // the duplicate filter drops the skipped message.
                 1u,
                 completion_addr,
+                o.verify_landing ? 1u : 0u,
+                landing_addr,
             }});
 
     for (uint32_t i = 0; i < o.cores; ++i) {

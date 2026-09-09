@@ -310,18 +310,29 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     ladder_note_message(ws, rec, length);
     counters_.delivered.fetch_add(1, std::memory_order_relaxed);
 
-    // A remotely-armed notice needs a credit returned: the sender cannot see that this slot is
+    // A remotely-loaded (armed) notice needs a credit returned: the sender cannot see that this slot is
     // free any other way, and without it the next message overwrites an RX control word we have
     // not read yet. Locally-armed notices need none -- the producer is in this process and can
     // see the counter directly.
+    // Instrumentation: sample the gate's input before branching on it.
+    rx_deliveries_.fetch_add(1, std::memory_order_relaxed);
+    {
+        uint64_t expect_zero = 0;
+        rx_first_ctrl_.compare_exchange_strong(expect_zero, job.ctrl, std::memory_order_relaxed);
+    }
     if ((ctrl_flags(job.ctrl) & kFlagRemoteNotice) != 0) {
+        rx_remote_notice_.fetch_add(1, std::memory_order_relaxed);
         // origin selector -- it names the peer as well as its core, which is what
         // a bare core index could not do once there was more than one peer.
         const uint32_t origin_sel =
             job.operand_count > 2 ? static_cast<uint32_t>(job.operand[2])
                                   : t6_global_selector(topo_.ident, cfg_.chip, job.core, topo_.chips_per_host);
         // The turn around travels with the credit.
+	// Entered vs returned: if these differ, the call is wedged inside, not failing.
+	rx_origin_sel_.store(origin_sel, std::memory_order_relaxed);
+	rx_credits_posted_.fetch_add(1, std::memory_order_relaxed);
 	return_credit(origin_sel, stage_ns);
+	rx_credits_done_.fetch_add(1, std::memory_order_relaxed);
     }
     return length;
 }
@@ -336,10 +347,9 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     const uint64_t carried_ns = job.operand[1];
 
     // there is no homeward leg and this delivery is always the
-    // remote-host-to-remote-T6 stage. The reply arm and the host-side turnaround that used to
-    // live here are gone: the turnaround armed `ctrl_tx(job.core)`, the far core's OWN TX
-    // control register, which that core's kernel also writes -- two writers on one word. The
-    // full text of what was removed is in host_socket.cpp's service_rx().
+    // remote-host-to-remote-T6 stage. The reply load (arm) and the host-side turnaround that used to
+    // live here are gone: the turnaround load (armed) `ctrl_tx(job.core)`, the far core's OWN TX
+    // control register, which that core's kernel also writes -- two writers on one word.
     const uint32_t stage = kHopRemoteHostToRemoteT6;
 
     uint64_t stage_ns = 0;
@@ -391,10 +401,13 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
     bool usable = false;
     uint64_t visibility_ns = 0;
     uint64_t accumulated = elapsed_ns_of(job, usable, visibility_ns);
-    const bool returning = (ctrl_flags(job.ctrl) & kFlagReply) != 0;
+    // commented out b/c deadcode
+    // const bool returning = (ctrl_flags(job.ctrl) & kFlagReply) != 0;
     if (!usable) {
         accumulated = 0;
-    } else if (!returning && accumulated > 0) {
+    // commented out b/c deadcode
+    // } else if (!returning && accumulated > 0) {
+    } else if (accumulated > 0) {
         add_sample_with_window(ws, rec, kHopT6ToHost, accumulated, length, timed_start_ns(), now_ns());
         if (visibility_ns > 0) {
             add_sample(ws, rec, kHopD2HVisibility, visibility_ns);
@@ -442,7 +455,9 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
 
         case kHostReachRemote:
             counters_.routed_remote.fetch_add(1, std::memory_order_relaxed);
-            return deliver_remote(job, ws, dest_core, length, accumulated, returning);
+            // commented out b/c deadcode
+            // return deliver_remote(job, ws, dest_core, length, accumulated, returning);
+            return deliver_remote(job, ws, dest_core, length, accumulated);
 
         default:
             fail("unclassifiable host reach");
@@ -558,6 +573,7 @@ void D2H2H2DSocket::stop_transport() {
 void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_ns) {
     const uint32_t origin_host = t6_selector_host(origin_selector, topo_.chips_per_host);
     const uint32_t origin_core = t6_selector_core(origin_selector);
+    rx_origin_host_.store(origin_host, std::memory_order_relaxed);
     if (origin_host >= credit_out_.size()) {
         fail("credit: origin selector names host " + std::to_string(origin_host) +
              " which is outside the configured topology");
@@ -581,15 +597,20 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_
     }
 }
 
+// commented out b/c deadcode -- the trailing `bool reply` is always false
+// uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core,
+//                                        uint64_t length, uint64_t accumulated_ns, bool reply) {
 uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core,
-                                       uint64_t length, uint64_t accumulated_ns, bool reply) {
-    (void)ws;
+                                       uint64_t length, uint64_t accumulated_ns) {
+    (void)ws; // trick to pass compile b/c while not used it's part of the interface
+
     // host_reach() says only local/remote, so at three hosts a UVA naming host 2 classifies
     // exactly like one naming host 1 and would be posted down whichever transport exists. The
     // bytes land on the WRONG HOST and the run still passes: the destination is pre-filled with
     // the complement of what should arrive, so a payload delivered to the wrong place verifies
     // as correct where it did arrive, and no counter moves. Counted as routed_nowhere because it
     // is a provisioning gap, not a corrupt address.
+    //
     const uint32_t want_host = uva_target_host(job.operand[kArgDestUva], topo_);
     {
         uint32_t why = kPeerOk;
@@ -603,23 +624,27 @@ uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t
             return 0;
         }
     }
-    // The send path waits on
-    // completions, and a worker inside it cannot scan, so it cannot deliver the peer's inbound
-    // traffic, so the peer never returns the credit it is waiting for. At one core the pool has
-    // one worker and the stall is total.
+
+    // The send path waits on completions, and a worker inside it cannot scan, so it cannot deliver
+    // the peer's inbound traffic, so the peer never returns the credit it is waiting for. At one
+    // core the pool has one worker and the stall is total.
     //
     // tx_done and the completion doorbell move to the sender thread WITH the work: both mean
     // "these bytes have left", so incrementing them here -- before anything has been sent --
     // would free the kernel to overwrite an arena the transport has not read.
+    //
     SendReq r;
     r.src_core = job.core;
     r.dest_core = dest_core;
     r.length = length;
     r.accumulated_ns = accumulated_ns;
-    r.reply = reply;
+    // commented out b/c deadcode
+    // r.reply = reply;
     r.t_queued = now_ns();
+
     // Register kArgDestUva holds the destination in BOTH store encodings: the immediate form
     // spends its saved register on the length, not on the address.
+    //
     r.dest_uva = ctrl_op_is_store(ctrl_opcode(job.ctrl)) ? job.operand[kArgDestUva] : 0ull;
     r.dest_host = want_host;
     {
@@ -700,22 +725,26 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
 
     const uint64_t local_off = HostRegion::tx_arena_off(r.src_core);
     const uint32_t store_off = (r.dest_uva != 0) ? uva_offset(r.dest_uva) : 0u;
-    // CHECKED BY THE SENDER TOO, not only by the receiver: past the arena is the next core's TX
+    // checked by tx/rx endpoints - past the arena is the next core's TX
     // arena, and that is this side's memory.
     if (static_cast<uint64_t>(store_off) + r.length > kArenaBytes) {
         std::ostringstream m;
         m << "store fault: destination offset 0x" << std::hex << store_off << std::dec << " + length "
           << r.length << " runs past the " << kArenaBytes << " B arena and into the next core's";
         fail(m.str());
-        if (!r.reply) {
-            counters_.tx_done.fetch_add(1, std::memory_order_release);
-            retire_tx(r.src_core);
-        }
+        // commented out b/c deadcode
+        // if (!r.reply) {
+        counters_.tx_done.fetch_add(1, std::memory_order_release);
+        retire_tx(r.src_core);
+        // commented out b/c deadcode
+        // }
         return false;
     }
     // ONE RECEIVE SLOT. The aliased ring's data region is exactly one payload, so the arena
     // start is the only place a payload can land.
-    slot.rx_slot = 0;
+    //
+    // commented out b/c deadcode
+    // slot.rx_slot = 0;
     const uint64_t remote_off = HostRegion::rx_arena_off(r.dest_core) + store_off;
 
     // The endpoint for this message's destination, resolved on the posting thread.
@@ -723,10 +752,12 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
     Transport* const tp = peers_.for_host(r.dest_host, why);
     if (tp == nullptr) {
         fail("send: host " + std::to_string(r.dest_host) + ": " + peer_why_name(why));
-        if (!r.reply) {
-            counters_.tx_done.fetch_add(1, std::memory_order_release);
-            retire_tx(r.src_core);
-        }
+        // commented out b/c deadcode
+        // if (!r.reply) {
+        counters_.tx_done.fetch_add(1, std::memory_order_release);
+        retire_tx(r.src_core);
+        // commented out b/c deadcode
+        // }
         return false;
     }
 
@@ -741,10 +772,12 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
         fail("transport post: " + e);
         transport_failed_.store(true, std::memory_order_release);
         sender_state_.store(0, std::memory_order_relaxed);
-        if (!r.reply) {
-            counters_.tx_done.fetch_add(1, std::memory_order_release);
-            retire_tx(r.src_core);
-        }
+        // commented out b/c deadcode
+        // if (!r.reply) {
+        counters_.tx_done.fetch_add(1, std::memory_order_release);
+        retire_tx(r.src_core);
+        // commented out b/c deadcode
+        // }
         return false;
     }
     slot.phase = SendSlot::kAwaitPayload;
@@ -827,10 +860,12 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
                 ws.timed_bytes += moved;
                 trace_add(ws, rec, timed_start_ns(), moved, stage_ns);
             }
-            if (!slot.r.reply) {
-                counters_.tx_done.fetch_add(1, std::memory_order_release);
-                retire_tx(slot.r.src_core);
-            }
+            // commented out b/c deadcode
+            // if (!slot.r.reply) {
+            counters_.tx_done.fetch_add(1, std::memory_order_release);
+            retire_tx(slot.r.src_core);
+            // commented out b/c deadcode
+            // }
             slot.phase = SendSlot::kIdle;
             return true;
         }
@@ -845,19 +880,24 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
 void D2H2H2DSocket::send_fail_slot(SendSlot& slot) {
     transport_failed_.store(true, std::memory_order_release);
     sender_state_.store(0, std::memory_order_relaxed);
-    if (!slot.r.reply) {
-        counters_.tx_done.fetch_add(1, std::memory_order_release);
-        retire_tx(slot.r.src_core);
-    }
+    // commented out b/c deadcode
+    // if (!slot.r.reply) {
+    counters_.tx_done.fetch_add(1, std::memory_order_release);
+    retire_tx(slot.r.src_core);
+    // commented out b/c deadcode
+    // }
     slot.phase = SendSlot::kIdle;
 }
 
 bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
     sender_state_.store(3, std::memory_order_relaxed);
     if (const std::string e = slot.tp->post_notice(
-            slot.r.dest_core, slot.rx_slot, slot.r.length,
+            // commented out b/c deadcode
+            //   slot.rx_slot -> 0        (the field was always 0)
+            //   slot.r.reply -> false    (nothing ever set it)
+            slot.r.dest_core, /*rx_slot=*/0u, slot.r.length,
             t6_global_selector(topo_.ident, cfg_.chip, slot.r.src_core, topo_.chips_per_host),
-            slot.r.accumulated_ns + (now_ns() - slot.t0), slot.r.reply, my_stage_slot(),
+            slot.r.accumulated_ns + (now_ns() - slot.t0), /*reply=*/false, my_stage_slot(),
             slot.notice_op, slot.r.dest_uva);
         !e.empty()) {
         fail("transport notice: " + e);
@@ -1017,6 +1057,19 @@ void D2H2H2DSocket::sender_loop() {
             std::this_thread::yield();
             continue;
         }
+
+        // idle, no other MPI calls. A receive-only peer's credit MPI_Put cannot complete until
+	// this side turns the progress engine, and without this it waits for the teardown barrier
+	// with the credit holding credit_m_ the whole time.
+	//
+        for (Transport* const tp : peers_.all()) {
+            if (const std::string e = tp->progress(); !e.empty()) {
+                fail("progress: " + e);
+                transport_failed_.store(true, std::memory_order_release);
+                break;
+            }
+        }
+
         std::unique_lock<std::mutex> g(send_m_);
         if (send_stop_ && send_depth_.load(std::memory_order_acquire) == 0) {
             return;
@@ -1079,7 +1132,11 @@ void D2H2H2DSocket::dump_transport(std::string& into) const {
     for (Transport* tp_i : peers_.all()) {
         const TransportDiag d = tp_i->diag();
         m << "    transport[host " << tp_i->peer().host_id << "]: posted=" << d.posted
-          << " retired=" << d.retired << " injected=" << d.injected << " outstanding=" << d.outstanding
+          << " retired=" << d.retired << " injected=" << d.injected
+          // commented out b/c the wedge markers are commented out; nothing sets the field any
+          // more, so printing it would claim word_phase=0 -- "no credit wedged" -- always.
+          // << " word_phase=" << d.word_phase
+          << " outstanding=" << d.outstanding
           << " unmatched=" << d.unmatched << " abandoned=" << d.abandoned;
         if (d.outstanding != 0) {
             m << " oldest_tag=" << d.oldest_tag;
@@ -1113,6 +1170,13 @@ std::string D2H2H2DSocket::stall_dump(const char* where) const {
       << " errors=" << counters_.errors.load() << "\n";
     m << "    sender: " << sender_state_.load() << "  (0=idle 1=credit-wait 2=payload 3=notice)\n";
     m << "    credit_flushes=" << credit_flushes_.load(std::memory_order_relaxed) << "\n";
+    m << "    rx_gate: deliveries=" << rx_deliveries_.load(std::memory_order_relaxed)
+      << " with_remote_notice=" << rx_remote_notice_.load(std::memory_order_relaxed)
+      << " credits_entered=" << rx_credits_posted_.load(std::memory_order_relaxed)
+      << " credits_returned=" << rx_credits_done_.load(std::memory_order_relaxed)
+      << " origin_host=" << static_cast<int64_t>(rx_origin_host_.load(std::memory_order_relaxed))
+      << std::hex << " origin_sel=0x" << rx_origin_sel_.load(std::memory_order_relaxed)
+      << " first_ctrl=0x" << rx_first_ctrl_.load(std::memory_order_relaxed) << std::dec << "\n";
     std::string t;
     dump_transport(t);
     m << t;

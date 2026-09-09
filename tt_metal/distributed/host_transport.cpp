@@ -420,22 +420,67 @@ public:
         return {};
     }
 
+    // This used to flush only win() and then clear dirty_, which silently dropped every
+    // credit. staged_word() puts the credit onto credit_win(), a SEPARATE window created on
+    // credit_comm_ (see open()), and settles for MPI_Win_flush_local -- local completion
+    // only. The sender loop duly called this, which flushed the payload window -- a different
+    // window, owing nothing -- and marked the debt paid.
+    //
+    // The credit therefore never completed remotely. The locks are taken in sequence, never
+    // nested. Flushing the credit window under mpi_m_ would put credit traffic behind the
+    // payload flush, which is the one thing the mpi_m_/credit_m_ split exists to prevent
+    // (see the note on credit_m_ below).
+    //
     std::string flush() override {
-        std::lock_guard<std::mutex> g(mpi_m_);
-        const int rc = MPI_Win_flush(peer_rank_, MpiWindow::instance().win());
-        if (rc != MPI_SUCCESS) {
-            std::string e = mpi_error_text("MPI_Win_flush", rc);
-            set_last_error(e);
-            if (!MpiWindow::instance().fault_tolerant()) {
-                MpiWindow::instance().fatal(e);
+        {
+            std::lock_guard<std::mutex> g(mpi_m_);
+            const int rc = MPI_Win_flush(peer_rank_, MpiWindow::instance().win());
+            if (rc != MPI_SUCCESS) {
+                std::string e = mpi_error_text("MPI_Win_flush", rc);
+                set_last_error(e);
+                if (!MpiWindow::instance().fault_tolerant()) {
+                    MpiWindow::instance().fatal(e);
+                }
+                return e;
             }
-            return e;
         }
+
+        // MPI_WIN_NULL only if the credit window failed to open, and open() turns that into a
+        // connect failure -- so a live transport always has one. Guarded anyway: a null window
+        // here would abort inside MPI rather than report.
+        if (const MPI_Win cwin = MpiWindow::instance().credit_win(); cwin != MPI_WIN_NULL) {
+            std::lock_guard<std::mutex> g(credit_m_);
+            const int crc = MPI_Win_flush(peer_rank_, cwin);
+            if (crc != MPI_SUCCESS) {
+                std::string e = mpi_error_text("MPI_Win_flush(credit)", crc);
+                set_last_error(e);
+                if (!MpiWindow::instance().fault_tolerant()) {
+                    MpiWindow::instance().fatal(e);
+                }
+                return e;
+            }
+        }
+
+        // Only now is everything staged_word() and the payload path owed actually at the peer.
         dirty_.store(false, std::memory_order_release);
         return {};
     }
 
     bool needs_flush() const override { return dirty_.load(std::memory_order_acquire); }
+
+    // Drives opal_progress without touching either window, so it cannot block and cannot
+    // contend with staged_word() on credit_m_ -- which matters, because the thing this exists
+    // to unblock is a peer wedged inside MPI_Put while holding that very lock. MPI_COMM_SELF
+    // keeps it local: no message can ever match, the call just turns the progress engine.
+    std::string progress() override {
+        int flag = 0;
+        const int rc = MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_SELF, &flag,
+                                  MPI_STATUS_IGNORE);
+        if (rc != MPI_SUCCESS) {
+            return mpi_error_text("MPI_Iprobe(progress)", rc);
+        }
+        return {};
+    }
 
     std::string post_notice(uint32_t dest_core, uint32_t rx_slot, uint64_t length,
                             uint32_t origin_selector, uint64_t elapsed_ns, bool reply,
@@ -631,6 +676,8 @@ public:
         d.unmatched = unmatched_.load(std::memory_order_relaxed);
         d.abandoned = abandoned_.load(std::memory_order_relaxed);
         d.injected = injected_.load(std::memory_order_relaxed);
+        // commented out b/c the wedge markers below are commented out -- see staged_word()
+        // d.word_phase = word_phase_.load(std::memory_order_relaxed);
         uint64_t oldest = UINT64_MAX;
         for (const auto& op : ops_) {
             if (op->state.load(std::memory_order_acquire) == kOpFree) {
@@ -817,7 +864,7 @@ private:
     // removes a class of runtime bug from the picture.
     std::mutex mpi_m_;
 
-    // CREDITS TAKE THIS ONE, NOT mpi_m_. Separate lock over a separate window, so a credit
+    // credits use credit_m_, NOT mpi_m_. Separate lock over a separate window, so a credit
     // never queues behind the payload path's MPI_Win_flush. Both credit operations end in
     // MPI_Win_flush_local, which is local-only, so nothing held under this lock ever waits
     // for the network.

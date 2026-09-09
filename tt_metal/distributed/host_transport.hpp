@@ -40,9 +40,6 @@ struct TransportConfig {
 
     // Geometry, sent in the bootstrap hello so the peer can check we agree before a byte moves.
     //
-    // host_id IS NOT HERE. It is the MPI rank, read from DistributedContext by connect_mesh(),
-    // because two sources for one fact is how the peer table and the communicator end up
-    // disagreeing about which host this process is.
     uint32_t host_id = 0;  // set by connect_mesh() from the rank; not for callers to choose
     uint32_t chips_per_host = 1;
     uint32_t grid_width = 0;
@@ -104,6 +101,11 @@ struct TransportDiag {
     uint64_t abandoned = 0;   // ops a waiter timed out on and left to the provider
     uint64_t injected = 0;    // sent inline, no completion expected -- see OpHandle
     uint64_t oldest_tag = 0;  // caller tag of the longest-outstanding op
+    // commented out b/c the wedge markers that fed it are commented out -- see staged_word()
+    // in host_transport.cpp. Uncomment this, the stores there, and the diag() line together.
+    // Which step of a credit write is in flight, 0 when none. Nonzero in a stall dump means a
+    // credit is wedged: 1 entered, 2 holds credit_m_, 3 past MPI_Put, 4 past flush_local.
+    // uint32_t word_phase = 0;
     std::string last_error;
 };
 
@@ -115,6 +117,15 @@ public:
 
     virtual std::string post(uint64_t local_offset, uint64_t remote_offset, uint64_t bytes, uint64_t tag,
                              OpHandle& op) = 0;
+
+    // MPI Progress. An idle sender makes no MPI calls at all, and one-sided operations
+    // still need the TARGET side to progress before they complete -- so a peer's credit
+    // MPI_Put blocks until this side happens to call into MPI. Cheap, and safe to call from
+    // any thread on a transport that permits it.
+    //
+    // Empty by intent to conform to an inherited interface.
+    //
+    virtual std::string progress() { return {}; }
 
     virtual bool needs_flush() const = 0;
 
