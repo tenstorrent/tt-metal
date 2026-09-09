@@ -4639,6 +4639,7 @@ class HfAttentionWrapper:
                 self.rope_layer_type
                 if self.rope_layer_type is not None
                 else getattr(self.attention, "layer_type", None)
+                or getattr(self.attention, "attention_type", None)  # Olmo3Attention names it attention_type
             )
             if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
                 position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
