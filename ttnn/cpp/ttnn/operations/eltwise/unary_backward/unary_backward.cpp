@@ -1677,12 +1677,48 @@ std::vector<Tensor> prod_bw(
     }
 
     if (all_dimensions) {
+        // #54551: reciprocal(0) = inf and prod(input) = 0 once the input holds an exact zero, so the
+        // previous reciprocal(input) * broadcast(prod * grad) computed inf * 0 = non-finite there.
+        // The autograd definition dy/dx_i = grad * prod_{j != i} x_j is finite for finite inputs:
+        //   - no zeros:       grad * prod / x_i                (previous formula)
+        //   - exactly 1 zero: grad * prod(non-zero inputs) at the zero position, 0 elsewhere
+        //   - >= 2 zeros:     0 everywhere
+        Tensor is_zero = ttnn::eqz(input, output_memory_config);
+        Tensor safe_input = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+        Tensor prod_no_zeros = ttnn::prod(safe_input, dim, keepdim, output_memory_config);
+        Tensor zero_count = ttnn::sum(is_zero, std::nullopt, false, output_memory_config);
+        if (prod_no_zeros.layout() == Layout::ROW_MAJOR && prod_no_zeros.storage_type() == StorageType::DEVICE) {
+            prod_no_zeros =
+                ttnn::operations::unary_backward::change_layout_to_tile(prod_no_zeros, output_memory_config);
+        }
+        if (zero_count.layout() == Layout::ROW_MAJOR && zero_count.storage_type() == StorageType::DEVICE) {
+            zero_count = ttnn::operations::unary_backward::change_layout_to_tile(zero_count, output_memory_config);
+        }
         Tensor temp = ttnn::multiply(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
+        Tensor fill_prod_no_zeros = ttnn::fill_first_val_into_tensor<::bfloat16>(
+            ttnn::multiply(prod_no_zeros, grad, std::nullopt, output_memory_config),
+            prod_no_zeros.dtype(),
+            prod_no_zeros.layout(),
+            prod_no_zeros.device(),
+            output_memory_config);
+        // Broadcast the scalar zero count to the input shape (grad is zero except at [0,0,0,0],
+        // so multiply against an all-ones tensor instead).
+        Tensor fill_zero_count = ttnn::multiply(
+            zero_count,
+            ttnn::ones_like(is_zero, std::nullopt, std::nullopt, std::nullopt, output_memory_config),
+            std::nullopt,
+            output_memory_config);
+        Tensor grad_no_zero = ttnn::multiply(
             ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+        Tensor grad_single_zero = ttnn::where(is_zero, fill_prod_no_zeros, 0.0f, output_memory_config);
+        Tensor all_dimension_result = ttnn::where(
+            ttnn::eq(fill_zero_count, 1.0f, std::nullopt, output_memory_config),
+            grad_single_zero,
+            ttnn::where(ttnn::eqz(fill_zero_count, output_memory_config), grad_no_zero, 0.0f, output_memory_config),
+            output_memory_config);
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;
     }
@@ -1719,7 +1755,13 @@ std::vector<Tensor> prod_bw(
             }
         }
     }
+    // #54551 (per-dimension): same zero-aware gradient as the all-dimensions path above. The
+    // existing bcast(reciprocal, prod * grad) term stays correct for slices without zeros; masking
+    // the reciprocal at exact zeros makes it evaluate to 0 (instead of inf * 0) for slices with
+    // zeros, and a reduced-shape correction adds grad * prod(non-zero inputs) at the single zero.
+    Tensor is_zero = ttnn::eqz(input, output_memory_config);
     Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
+    reciprocal_input = ttnn::where(is_zero, 0.0f, reciprocal_input, output_memory_config);
     Tensor temp = ttnn::multiply(
         prod_result,
         (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
@@ -1728,28 +1770,60 @@ std::vector<Tensor> prod_bw(
     if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
+    Tensor safe_input = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+    Tensor prod_no_zeros = ttnn::prod(safe_input, dim, true, output_memory_config);
+    Tensor zero_count = ttnn::sum(is_zero, *dim, true, output_memory_config);
+    if (prod_no_zeros.layout() == Layout::ROW_MAJOR && prod_no_zeros.storage_type() == StorageType::DEVICE) {
+        prod_no_zeros = ttnn::operations::unary_backward::change_layout_to_tile(prod_no_zeros, output_memory_config);
+    }
+    if (zero_count.layout() == Layout::ROW_MAJOR && zero_count.storage_type() == StorageType::DEVICE) {
+        zero_count = ttnn::operations::unary_backward::change_layout_to_tile(zero_count, output_memory_config);
+    }
+    Tensor single_zero_temp = ttnn::where(
+        ttnn::eq(zero_count, 1.0f, std::nullopt, output_memory_config),
+        ttnn::multiply(
+            prod_no_zeros,
+            (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
+            std::nullopt,
+            output_memory_config),
+        0.0f,
+        output_memory_config);
+    if (single_zero_temp.layout() == Layout::ROW_MAJOR) {
+        single_zero_temp =
+            ttnn::operations::unary_backward::change_layout_to_tile(single_zero_temp, output_memory_config);
+    }
     if (*dim == 3 || *dim == -1) {
         Tensor grad_result =
             ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
+        // Broadcast the single-zero correction into full shape; is_zero is 1 exactly at the zero
+        // positions, so this is prod_no_zeros * grad there and 0 elsewhere.
+        Tensor single_zero_result =
+            ttnn::bcast(is_zero, single_zero_temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
+        grad_tensor.emplace_back(ttnn::add(grad_result, single_zero_result, std::nullopt, output_memory_config));
         return grad_tensor;
     }
     if (*dim == 2 || *dim == -2) {
         Tensor grad_result =
             ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
+        Tensor single_zero_result =
+            ttnn::bcast(is_zero, single_zero_temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
+        grad_tensor.emplace_back(ttnn::add(grad_result, single_zero_result, std::nullopt, output_memory_config));
         return grad_tensor;
     }
     if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
+        Tensor corr_1_temp = is_zero;  // #54551: same shape as reciprocal_input
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
             tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
+            corr_1_temp = ttnn::pad(is_zero, padding, 0, true, std::nullopt);
         }
         ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
         Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
+        Tensor corr_1 = ttnn::permute(corr_1_temp, after_permute_dims, output_memory_config);
+        Tensor corr_2 = ttnn::permute(single_zero_temp, after_permute_dims, output_memory_config);
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
@@ -1757,6 +1831,7 @@ std::vector<Tensor> prod_bw(
         // tensor_2 is always TILE layout (from permute of TILE temp)
         // Only need to convert if tensor_1 is ROW_MAJOR
         tensor_2 = tensor_2.to_device(tensor_1.device());
+        corr_2 = corr_2.to_device(corr_1.device());
         if (tensor_1.layout() == Layout::ROW_MAJOR) {
             // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
             // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
@@ -1772,11 +1847,30 @@ std::vector<Tensor> prod_bw(
                     tensor_1.memory_config());
             }
         }
+        if (corr_1.layout() == Layout::ROW_MAJOR) {
+            corr_2 = ttnn::untilize(corr_2, corr_1.memory_config());
+            if (corr_2.padded_shape() != padded_shape) {
+                corr_2 = ttnn::pad(
+                    corr_2,
+                    padded_shape.to_array_4D(),
+                    ttnn::Array4D({0, 0, 0, 0}),
+                    0.0f,
+                    false,
+                    corr_1.memory_config());
+            }
+        }
         // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
-            ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+            ttnn::add(
+                ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+                // #54551: broadcast the single-zero correction along the reduced dim; is_zero is 1
+                // exactly at the zero positions, so this contributes grad * prod(non-zero inputs)
+                // there and 0 elsewhere.
+                ttnn::bcast(corr_1, corr_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+                std::nullopt,
+                output_memory_config),
             after_permute_dims,
             output_memory_config);
         Tensor grad_result = result;
@@ -1792,14 +1886,18 @@ std::vector<Tensor> prod_bw(
     }
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
+    Tensor corr_1_temp = is_zero;  // #54551: same shape as reciprocal_input
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
         ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
+        corr_1_temp = ttnn::pad(is_zero, padding, 0, false, std::nullopt);
     }
     ttsl::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
     Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
+    Tensor corr_1 = ttnn::permute(corr_1_temp, after_permute_dims, output_memory_config);
+    Tensor corr_2 = ttnn::permute(single_zero_temp, after_permute_dims, output_memory_config);
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
@@ -1807,6 +1905,7 @@ std::vector<Tensor> prod_bw(
     // tensor_2 is always TILE layout (from permute of TILE temp)
     // Only need to convert if tensor_1 is ROW_MAJOR
     tensor_2 = tensor_2.to_device(tensor_1.device());
+    corr_2 = corr_2.to_device(corr_1.device());
     if (tensor_1.layout() == Layout::ROW_MAJOR) {
         // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
         // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
@@ -1822,10 +1921,24 @@ std::vector<Tensor> prod_bw(
                 tensor_1.memory_config());
         }
     }
+    if (corr_1.layout() == Layout::ROW_MAJOR) {
+        corr_2 = ttnn::untilize(corr_2, corr_1.memory_config());
+        if (corr_2.padded_shape() != padded_shape) {
+            corr_2 = ttnn::pad(
+                corr_2, padded_shape.to_array_4D(), ttnn::Array4D({0, 0, 0, 0}), 0.0f, false, corr_1.memory_config());
+        }
+    }
     // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
     Tensor result = ttnn::permute(
-        ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+        ttnn::add(
+            ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+            // #54551: broadcast the single-zero correction along the reduced dim; is_zero is 1
+            // exactly at the zero positions, so this contributes grad * prod(non-zero inputs)
+            // there and 0 elsewhere.
+            ttnn::bcast(corr_1, corr_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+            std::nullopt,
+            output_memory_config),
         after_permute_dims,
         output_memory_config);
     Tensor grad_result = result;
