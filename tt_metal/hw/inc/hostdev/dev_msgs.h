@@ -447,7 +447,7 @@ struct mailboxes_t {
 };
 
 // DevicePrintMemoryLayout asserts
-static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+static_assert(sizeof(DevicePrintMemoryLayout) == DEVICE_PRINT_BUFFER_SIZE);
 static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
