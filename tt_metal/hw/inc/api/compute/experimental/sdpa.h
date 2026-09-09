@@ -9,6 +9,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/custom_pack_untilize.h"
 #include "api/compute/experimental/pack_block.h"
 #include "api/compute/experimental/sdpa_custom_mm.h"
 #include "api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h"
@@ -129,6 +130,51 @@ template <std::uint32_t num_tiles, bool skip_signalling = false, std::uint32_t o
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(std::uint32_t dst_tile_index) {
     sdpa_bcast_col_srca_srcb_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, skip_signalling, output_granularity>(
         dst_tile_index);
+}
+
+template <MathFidelity math_fidelity, std::uint32_t num_tiles, bool skip_addrmod = false>
+ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init_fidelity(std::uint32_t icb0) {
+    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<
+          EltwiseBinaryType::ELWMUL,
+          num_tiles,
+          math_fidelity,
+          skip_addrmod>(icb0, icb0, false)));
+}
+
+template <
+    MathFidelity math_fidelity,
+    std::uint32_t num_tiles,
+    bool skip_signalling = false,
+    std::uint32_t output_granularity>
+ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_fidelity(std::uint32_t dst_tile_index) {
+    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse<
+          EltwiseBinaryType::ELWMUL,
+          num_tiles,
+          DST_ACCUM_MODE,
+          math_fidelity,
+          skip_signalling,
+          output_granularity>(dst_tile_index)));
+}
+
+// Per-call fidelity override used by fused programs. 255 preserves the old
+// behavior and follows the program-wide MATH_FIDELITY; the other values match
+// MathFidelity's underlying representation.
+constexpr std::uint32_t SDPA_FIDELITY_PROGRAM_DEFAULT = 255;
+
+template <std::uint32_t fidelity_sel>
+constexpr MathFidelity sdpa_fidelity_from_sel() {
+    static_assert(
+        fidelity_sel == 0 || fidelity_sel == 2 || fidelity_sel == 3 || fidelity_sel == 4,
+        "invalid SDPA fidelity selector");
+    if constexpr (fidelity_sel == 0) {
+        return MathFidelity::LoFi;
+    } else if constexpr (fidelity_sel == 2) {
+        return MathFidelity::HiFi2;
+    } else if constexpr (fidelity_sel == 3) {
+        return MathFidelity::HiFi3;
+    } else {
+        return MathFidelity::HiFi4;
+    }
 }
 
 template <DataFormat format>
@@ -268,7 +314,8 @@ template <
     // separate_v=false: single-CB (MLA) layout — V is read from cb_k at stride num_tiles_k.
     // separate_v=true:  two-CB (GQA) layout — V is read from its own cb_v at stride num_tiles_v
     //                   (V tiles contiguous in cb_v), and cb_v is waited on / popped separately.
-    bool separate_v = false>
+    bool separate_v = false,
+    bool configure_mask_extent = false>
 void compute_sdpa_chunk(
     std::uint32_t cb_q,
     std::uint32_t cb_k,
@@ -303,7 +350,12 @@ void compute_sdpa_chunk(
     static_assert(
         num_tiles_k >= 2 && num_tiles_k % 2 == 0,
         "compute_sdpa_chunk: num_tiles_k (QK-matmul kt_dim) must be even and >= 2 for the custom-MM unpack");
-    static_assert(chunk_size + 1 <= 15, "compute_sdpa_chunk: chunk_size + 1 must be with tensix semaphore range");
+    static_assert(
+        chunk_size / qk_signal_granularity + 1 <= 15,
+        "compute_sdpa_chunk: QK posts (chunk_size/qk_signal_granularity)+1 must fit the 4-bit semaphore");
+    static_assert(
+        chunk_size / exp_signal_granularity + 1 <= 15,
+        "compute_sdpa_chunk: bcast-sub posts (chunk_size/exp_signal_granularity)+1 must fit the 4-bit semaphore");
     static_assert(
         num_tiles_v / output_granularity <= 15,
         "compute_sdpa_chunk: num_tiles_v / output_granularity must be with tensix semaphore range");
@@ -313,7 +365,7 @@ void compute_sdpa_chunk(
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k, qk_signal_granularity>(
+    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent>(
         cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)
@@ -412,16 +464,34 @@ void compute_sdpa_chunk(
     }
 }
 
-template <std::uint32_t num_tiles_v, bool exp_approx_mode, std::uint32_t scale_fp32, std::uint32_t output_granularity>
+template <
+    std::uint32_t num_tiles_v,
+    bool exp_approx_mode,
+    std::uint32_t scale_fp32,
+    std::uint32_t output_granularity,
+    std::uint32_t fidelity_sel = SDPA_FIDELITY_PROGRAM_DEFAULT>
 void compute_sdpa_recip(
     std::uint32_t cb_q, std::uint32_t sum_dst_offset, std::uint32_t recip_dst_offset, std::uint32_t mm2_dst_offset) {
     constexpr std::uint16_t scale_bf16 = scale_fp32 >> 16;
     PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset, recip_dst_offset)));
     PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
-    sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
+    if constexpr (fidelity_sel == SDPA_FIDELITY_PROGRAM_DEFAULT) {
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
+    } else {
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init_fidelity<sdpa_fidelity_from_sel<fidelity_sel>(), num_tiles_v>(
+            cb_q);
+    }
     MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
     sdpa_bcast_col_srca_srcb_reuse_preamble(recip_dst_offset);
-    sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, output_granularity>(mm2_dst_offset);
+    if constexpr (fidelity_sel == SDPA_FIDELITY_PROGRAM_DEFAULT) {
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, output_granularity>(mm2_dst_offset);
+    } else {
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles_fidelity<
+            sdpa_fidelity_from_sel<fidelity_sel>(),
+            num_tiles_v,
+            false,
+            output_granularity>(mm2_dst_offset);
+    }
     MATH((t6_semaphore_get<p_stall::MATH>(SFPU_FPU)));
 }
 
@@ -620,7 +690,8 @@ template <
     std::uint32_t scale_fp32,
     VectorMode vector_mode = VectorMode::C,
     bool dense = false,
-    bool untilize = false>
+    bool untilize = false,
+    bool explicit_untilize_geometry = false>
 ALWI void sdpa_tail(
     std::uint32_t cb_worker_max_sum,
     std::uint32_t cb_prev_max_sum,
@@ -648,13 +719,18 @@ ALWI void sdpa_tail(
         // Canonical pack_untilize with configure_remap=false: skips the MATH remap reconfig, which
         // clobbers state when this fused block runs after another compute op on the same core. The
         // face geometry (8-row faces, 2/4 faces) is derived from cb_l_out's CB configuration.
-        pack_untilize_dest_init<
-            block_size,
-            num_blocks * block_size,
-            false /*narrow_row*/,
-            TILE_C_DIM,
-            dense,
-            false /*configure_remap*/>(cb_l_out);
+        if constexpr (explicit_untilize_geometry) {
+            custom_pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(
+                cb_l_out, 8, dense ? 2 : 4);
+        } else {
+            pack_untilize_dest_init<
+                block_size,
+                num_blocks * block_size,
+                false /*narrow_row*/,
+                TILE_C_DIM,
+                dense,
+                false /*configure_remap*/>(cb_l_out);
+        }
         cb_reserve_back(cb_l_out, block_size * num_blocks);
     }
     // When normalize=true, first block uses regs still held from MS phase
