@@ -16,6 +16,7 @@
 # === Evaluated ===
 #
 # google-build-using-namespace, google-global-names-in-headers:
+# readability-named-parameter, cppcoreguidelines-avoid-non-const-global-variables:
 #   Enabled for Metalium host API header verification only, through
 #   cmake/clang-tidy.d/metalium-api/.clang-tidy. Ordinary source scans keep
 #   these checks disabled.

@@ -1,12 +1,16 @@
 ---
 # Applied to CMake's generated tt_metal header verification translation units.
-# Keep the normal checks, then re-enable namespace checks for host API headers.
+# Keep the normal checks, then add stricter hygiene checks for host API headers.
 InheritParentConfig: true
 Checks: >
   google-global-names-in-headers,
-  google-build-using-namespace
+  google-build-using-namespace,
+  readability-named-parameter,
+  cppcoreguidelines-avoid-non-const-global-variables
 HeaderFilterRegex: '(^|/)tt_metal/api/'
 
 # google-global-names-in-headers checks using declarations/directives, not all
 # global declarations or aliases. Tier-specific namespace placement remains
 # API-owner review. Function-local using declarations are allowed.
+# readability-named-parameter checks definitions and overrides; declaration-only
+# APIs without a visible definition still need parameter-name review.
