@@ -164,26 +164,6 @@ static void prepare_bidir(
 }
 
 [[maybe_unused]]
-static void wait_to_finish(
-    tt_metal::Program send_program,
-    tt_metal::Program recv_program,
-    const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
-    const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device) {
-    /* ==================== */
-    bool same_device = send_mesh_device == recv_mesh_device;
-
-    [[maybe_unused]] distributed::MeshWorkload send_workload =
-        LaunchProgramAsync(*send_mesh_device, std::move(send_program));
-    [[maybe_unused]] distributed::MeshWorkload recv_workload =
-        same_device ? distributed::MeshWorkload() : LaunchProgramAsync(*recv_mesh_device, std::move(recv_program));
-
-    distributed::Finish(send_mesh_device->mesh_command_queue());
-    if (!same_device) {
-        distributed::Finish(recv_mesh_device->mesh_command_queue());
-    }
-}
-
-[[maybe_unused]]
 static void track_eth_progress_timeout(
     tt::tt_metal::IDevice* const send_device,
     tt::tt_metal::IDevice* const recv_device,
@@ -259,6 +239,10 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
     }
 }
 
+// The helpers below launch every program with the non-blocking `LaunchProgramAsync` and only wait afterwards, so all
+// programs are co-resident regardless of dispatch mode. This is why they need no per-device thread, unlike
+// `launch_on_eth_pair` in tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp, which uses the blocking
+// `LaunchProgram` under slow dispatch.
 [[maybe_unused]]
 static void wait_to_finish_eth_timeout_cores(
     std::span<struct core_setup> cores,

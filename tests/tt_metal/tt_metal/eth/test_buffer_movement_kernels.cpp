@@ -87,8 +87,8 @@ void launch_on_eth_pair(
 }
 
 bool chip_to_chip_dram_buffer_transfer(
-    std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     const size_t& byte_size,
@@ -211,8 +211,8 @@ bool chip_to_chip_dram_buffer_transfer(
 }
 
 bool chip_to_chip_interleaved_buffer_transfer(
-    std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,

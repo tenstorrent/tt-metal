@@ -9,7 +9,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <cstdint>
 #include <thread>
-#include <cstdlib>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -29,8 +28,8 @@ using namespace tt::test_utils;
 namespace unit_tests::erisc::direct_send {
 
 static void eth_direct_send_multi_txq_rxq(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& receiver_mesh_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     uint32_t data_txq_id,
