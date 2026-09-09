@@ -2657,6 +2657,14 @@ class MiniMaxH3Pipeline:
         )
         latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
         vae.log_profile = self._log_generation
+        if self.vae_output_type == "float":
+            # The ImageNet de-normalization and the `[0, 1]` clamp run inside the decode, chunk by
+            # chunk, in place, overlapped with the decode of the chunks still in flight -- the same
+            # per-element ops as the whole-video `_denormalize(...).clamp(0, 1)` below (bit-identical),
+            # minus three full-size temporaries and the serial tail they made.
+            return vae.decode(
+                latents, output_type="float", pixel_postprocess=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+            )
         video = vae.decode(latents, output_type="yuv420" if self.vae_output_type == "yuv420" else "float")
         if self.vae_output_type == "yuv420":
             # De-normalized, clamped and colour-converted on device; nothing left to do on host.
