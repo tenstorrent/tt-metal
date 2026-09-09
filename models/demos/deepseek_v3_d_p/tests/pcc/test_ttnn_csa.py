@@ -7,7 +7,7 @@ PCC tests for the DeepSeek-V4 Compressed Sparse Attention (CSA) block (prefill),
 reference modeling_deepseek_v4.py.
 
 Every test drives a public forward -- no TtCSA private method is called directly:
-  - TtCSA.forward, single-shot     4 prompt lengths
+  - TtCSA.forward, single-shot     1 per-chip prompt length
   - TtCSA.forward, chunked         TtCSAState across chunks, 3 scenarios
 
 Both run on both V4 variants, flash and pro.
@@ -42,10 +42,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _SEED = 42
-# Real (pre-pad) prompt lengths. prepare_input pads each up to the slab alignment, so the ragged ones
-# exercise the pad + trim + mask path. 128 is the shortest legal prompt, 130 and 2047 are the padding
-# cases, 1024 needs none on any mesh here.
-_SHAPES = [128, 130, 1024, 2047]
+# PER-CHIP prompt length, not global: the test multiplies it by the mesh's SP factor, so every box runs
+# the same local shape and the two variants stay comparable across meshes. 640 is five slabs on every
+# mesh here -- csa_slab_align is compress_rate * TILE_SIZE * sp_factor throughout V4_MESH_CONFIGS, so
+# 640 * sp_factor is a whole number of slabs and prepare_input pads nothing.
+_LOCAL_SHAPES = [640]
 # The stored entries, checked at the end of a chunked run. They are written once and never recomputed,
 # so this holds no matter how deep the run goes.
 _CACHE_PCC = 0.998
@@ -60,7 +61,9 @@ def _config(model_config, num_hidden_layers=1, min_index_topk=0):
     the wrong model.
 
     ``min_index_topk`` raises the top-k capacity to whatever keeps a run inside the reach-every-entry
-    regime; the single-shot tests leave it alone, so each variant's real value is exercised there."""
+    regime. It is a floor rather than an override, so a variant's real value still stands wherever it
+    already reaches every entry -- which on the smaller meshes, where the run writes fewer entries than
+    the stock capacity, it does."""
     m = model_config
     cfg = DeepseekV4Config(
         hidden_size=m.EMB_SIZE,
@@ -172,22 +175,25 @@ def _download(mesh_device, tensor):
     )  # sp -> seq (dim2), tp -> hidden (dim3)
 
 
-@pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
+@pytest.mark.parametrize("local_seq_len", _LOCAL_SHAPES, ids=[f"local{s}" for s in _LOCAL_SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
     V4_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("model_config, forward_pcc", _MODEL_CONFIGS_FORWARD)
-def test_csa_forward_mesh(mesh_device, device_params, topology, seq_len, model_config, forward_pcc, tmp_path):
-    """Single-shot TtCSA.forward, SP+TP sharded, for an ARBITRARY prompt length. This is where padding
-    awareness is proven: pad-derived compressed entries stay masked and pad query rows are dropped."""
+def test_csa_forward_mesh(mesh_device, device_params, topology, local_seq_len, model_config, forward_pcc, tmp_path):
+    """Single-shot TtCSA.forward, SP+TP sharded, at a fixed PER-CHIP prompt length: the global length is
+    scaled by the mesh's SP factor so every mesh runs the same local shape."""
     torch.manual_seed(_SEED)
 
     batch = 1
-    config = _config(model_config)
     sp_factor, tp_factor = mesh_device.shape[0], mesh_device.shape[1]
-    compress_rate = config.compress_rates["compressed_sparse_attention"]
+    compress_rate = model_config.COMPRESS_RATES["compressed_sparse_attention"]
+    seq_len = local_seq_len * sp_factor
+    # Scaling the prompt with the mesh outruns a variant's stock index_topk on the wider ones, so ask
+    # for a capacity that covers every entry this run writes.
+    config = _config(model_config, min_index_topk=seq_len // compress_rate)
 
     ref = _reference(config)
     hidden = torch.randn(batch, seq_len, config.hidden_size)

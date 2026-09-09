@@ -26,7 +26,10 @@ _COMPRESS_RATE = 4
 _HEAD_DIM = 512
 _INDEX_HEAD_DIM = 128
 _STATE_ROWS = CSA_STATE_ROWS
-_LOCAL_SEQ_LEN = 128
+# Per-chip slab width; the global one is this times sp_factor. Matches the per-chip shape
+# tests/pcc/test_ttnn_csa.py and tests/pcc/test_ttnn_csa_compressor.py run, so a profile taken here
+# describes the same work the block-level tests do.
+_LOCAL_SEQ_LEN = 640
 _PCC = 0.999
 
 # (remainder, first_token_position). ``remainder`` moves the partial-window boundary inside the chunk;

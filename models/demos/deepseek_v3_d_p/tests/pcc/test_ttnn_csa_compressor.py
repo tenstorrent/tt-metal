@@ -10,7 +10,10 @@ output are checked bit-exactly against a torch reference in
 end-to-end against ``ref.compressor(...)`` by the cache-PCC leg of ``tests/pcc/test_ttnn_csa.py``.
 That wrapper does not vary with the prompt length or the model variant, so this runs one ragged shape
 on flash only, once per mesh. The ragged length is the interesting one: it leaves a partial
-compression window, so the trim to ``valid_entries`` has something to trim."""
+compression window, so the trim to ``valid_entries`` has something to trim.
+
+The length is given per chip and scaled by the mesh's SP factor, so every mesh runs the same local
+shape and a profile taken on one box describes the others."""
 
 import pytest
 import torch
@@ -27,7 +30,11 @@ from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_csa import _SEED, _config
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import CSA_STATE_ROWS, TtCSACompressor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-_SHAPES = [34]
+# PER-CHIP padded prompt length, not global, matching tests/pcc/test_ttnn_csa.py.
+_LOCAL_SHAPES = [640]
+# How far short of a whole slab the real prompt stops. prepare_input pads it straight back up, so the
+# per-chip shape is exactly _LOCAL_SHAPES while the last rank still ends mid-window.
+_RAGGED_TAIL = 2
 _PCC = 0.999
 
 
@@ -56,13 +63,13 @@ def _golden(reference, hidden_states, seq_len_actual, compress_rate, sp_factor, 
     return compressed, kv_state, score_state
 
 
-@pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
+@pytest.mark.parametrize("local_seq_len", _LOCAL_SHAPES, ids=[f"local{s}" for s in _LOCAL_SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
     V4_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_csa_compressor_mesh(mesh_device, device_params, topology, seq_len):
+def test_csa_compressor_mesh(mesh_device, device_params, topology, local_seq_len):
     torch.manual_seed(_SEED)
 
     config = _config(DeepSeekV4FlashConfig)
@@ -71,6 +78,7 @@ def test_csa_compressor_mesh(mesh_device, device_params, topology, seq_len):
         reference.position_bias.normal_(0.0, 0.02)
         reference.kv_norm.weight.uniform_(0.5, 1.5)
 
+    seq_len = local_seq_len * mesh_device.shape[0] - _RAGGED_TAIL
     hidden = torch.randn(1, seq_len, config.hidden_size)
     compress_rate = config.compress_rates["compressed_sparse_attention"]
     hidden_padded, seq_len_actual = TtCSACompressor.prepare_input(hidden, mesh_device.shape[0], compress_rate)
