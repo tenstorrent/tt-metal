@@ -237,7 +237,10 @@ def test_model_inference(
         if model_name == "Mistral-7B":
             encoded_prompts = [[1619, 1117, 1032, 2137]] * model_args.max_batch_size
         else:
-            encoded_prompts = [[128000, 2028, 374, 264, 1296]] * model_args.max_batch_size
+            # Llama-3 ids; fold into the model's vocab for smaller vocabularies (e.g. OLMo-3: 100278)
+            encoded_prompts = [
+                [t % model_args.vocab_size for t in [128000, 2028, 374, 264, 1296]]
+            ] * model_args.max_batch_size
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
         tokenizer = model_args.tokenizer
