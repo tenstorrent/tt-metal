@@ -91,6 +91,7 @@ namespace reuse_mcast_1d_optimized_helpers {
 void override_program_parameters(
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<ttnn::operations::experimental::TensorPrefetcherPipes>& prefetcher_pipes,
     Program& program,
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& tensor_return_value);

@@ -353,7 +353,8 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
         std::nullopt,   // output_tile
         std::nullopt,   // optional_output_tensor
         std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,   // sub_device_id
+        std::nullopt);  // prefetcher_pipes
 
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
     EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
@@ -397,7 +398,8 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         std::nullopt,   // output_tile
         std::nullopt,   // optional_output_tensor
         std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,   // sub_device_id
+        std::nullopt);  // prefetcher_pipes
 
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
@@ -420,6 +422,7 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
         std::make_optional(captured),  // explicit config = the captured one
+        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -477,7 +480,8 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         std::nullopt,   // output_tile
         std::nullopt,   // optional_output_tensor
         std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,   // sub_device_id
+        std::nullopt);  // prefetcher_pipes
 
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
@@ -499,6 +503,7 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         width_sharded,
         DataType::BFLOAT16,
         std::make_optional(captured),  // explicit config = the captured one
+        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
