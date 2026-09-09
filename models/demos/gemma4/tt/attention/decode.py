@@ -632,6 +632,114 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
     ttnn.deallocate(merged)
 
 
+def _packed_seq_kv_enabled():
+    """Write P new KV rows with serialized ``paged_update_cache`` instead of
+    embedding-merge + ``paged_fill_cache`` of the whole hot block. Default on;
+    ``GEMMA4_PACKED_VERIFY_SEQ_KV=0`` restores staging fill."""
+    return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _packed_fused_kv_enabled():
+    """One ``paged_fused_update_cache`` per position instead of separate K then V.
+    Default on; ``GEMMA4_PACKED_FUSED_KV=0`` restores two ``paged_update_cache`` ops."""
+    return os.environ.get("GEMMA4_PACKED_FUSED_KV", "1").lower() not in ("0", "false", "no", "off")
+
+
+_PACKED_KV_MEM_CACHE: dict = {}
+
+
+def _packed_kv_user_mem(q_sharded_mem):
+    """HEIGHT_SHARDED batch=1 layouts for packed KV writes."""
+    shard_shape = tuple(q_sharded_mem.shard_spec.shape)
+    cached = _PACKED_KV_MEM_CACHE.get(shard_shape)
+    if cached is not None:
+        return cached
+    k_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    v_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    k_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(k_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    v_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(v_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    _PACKED_KV_MEM_CACHE[shard_shape] = (k_mem, v_mem)
+    return k_mem, v_mem
+
+
+def _write_packed_kv_sequential(
+    tt_k, tt_v, kv_cache, page_table, pos_cache, q_sharded_mem, head_dim, nkv_local, P, kv_write_pack=None
+):
+    """Race-safe write of P consecutive positions that share one paged block."""
+    k_cache_w, v_cache_w = kv_cache
+    eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
+    cache_bs = int(k_cache_w.padded_shape[2])
+    cache_nkv = int(k_cache_w.padded_shape[1])
+    use_fused = _packed_fused_kv_enabled() and eff_bs == cache_bs and nkv_local == cache_nkv
+    tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_src, v_src = tt_k_bp, tt_v_bp
+    if tt_k_bp.shape[1] != P:
+        k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, P, nkv_local, head_dim])
+        v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, P, nkv_local, head_dim])
+    k_mem, v_mem = _packed_kv_user_mem(q_sharded_mem)
+    if not use_fused:
+        v_mem = k_mem
+    nkv, hd = nkv_local, head_dim
+    owns_pack = kv_write_pack is None
+    if owns_pack:
+        pt_b = ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]])
+        pos_bs = None
+    else:
+        pt_b, pos_bs = kv_write_pack
+    for p in range(P):
+        kb = ttnn.slice(k_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
+        vb = ttnn.slice(v_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
+        kb = ttnn.to_memory_config(kb, k_mem)
+        vb = ttnn.to_memory_config(vb, v_mem)
+        pos_b = ttnn.slice(pos_cache, [p], [p + 1]) if pos_bs is None else pos_bs[p]
+        if use_fused:
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache_w,
+                kb,
+                v_cache_w,
+                vb,
+                update_idxs_tensor=pos_b,
+                page_table=pt_b,
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                k_cache_w,
+                kb,
+                update_idxs_tensor=pos_b,
+                page_table=pt_b,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache_w,
+                vb,
+                update_idxs_tensor=pos_b,
+                page_table=pt_b,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+            )
+        for t in (kb, vb):
+            t.deallocate(True)
+        if pos_bs is None:
+            pos_b.deallocate(True)
+    if owns_pack:
+        pt_b.deallocate(True)
+    if k_src is not tt_k_bp:
+        k_src.deallocate(True)
+        v_src.deallocate(True)
+    tt_k_bp.deallocate(True)
+    tt_v_bp.deallocate(True)
+
+
 def packed_decode_forward(
     hidden_states,
     cos_cache,
@@ -717,7 +825,14 @@ def packed_decode_forward(
     # emits; the spec depends only on shape constants, so probe once and cache.
     cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
-    if q_sharded_mem is None and kv_staging is None and not is_kv_shared:
+    seq_kv = (
+        _packed_seq_kv_enabled()
+        and position_idx_cache is not None
+        and page_table is not None
+        and B == 1
+        and int(page_table.shape[0]) == P
+    )
+    if q_sharded_mem is None and not is_kv_shared and (kv_staging is None or seq_kv):
         probe = ttnn.slice(xqkv, [0, 0, 0, 0], [1, 1, B, qkv_dim])
         q_probe, k_probe, v_probe = split_qkv_heads_decode(
             probe, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
@@ -759,8 +874,30 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
 
-    # ── ⑤ KV write — loop-free persistent staging (primary) ────────────────
-    if not is_kv_shared and kv_staging is not None and embed_idx is not None:
+    skip_kv_write = os.environ.get("GEMMA4_PACKED_VERIFY_SKIP_KV_WRITE", "0") == "1"
+
+    # ── ⑤ KV write ─────────────────────────────────────────────────────────
+    if not is_kv_shared and skip_kv_write:
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tt_k)
+        ttnn.deallocate(tt_v)
+    elif not is_kv_shared and seq_kv:
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        _write_packed_kv_sequential(
+            tt_k,
+            tt_v,
+            kv_cache,
+            page_table,
+            position_idx_cache,
+            q_sharded_mem,
+            head_dim,
+            nkv_local,
+            P,
+            kv_write_pack=kv_write_pack,
+        )
+        ttnn.deallocate(tt_k)
+        ttnn.deallocate(tt_v)
+    elif not is_kv_shared and kv_staging is not None and embed_idx is not None:
         # Park Q off L1 (idle until the SDPA pack ⑥); merge intermediates live
         # in DRAM and Q never re-enters L1 before the SDPA call.
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
@@ -850,6 +987,51 @@ def packed_decode_forward(
         ttnn.deallocate(tt_v_bp)
 
     k_cache_use, v_cache_use = kv_cache
+
+    # P-as-batch SDPA: native decode batch axis + per-row positions (MTP fast
+    # path). Requires position_idx_cache; callers without it (e.g. DFlash verify
+    # with device-built masks + kv_write_idxs) fall through to packed-head SDPA.
+    if (
+        os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in ("0", "false", "no", "off")
+        and position_idx_cache is not None
+    ):
+        tt_q_decode = ttnn.transpose(tt_q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tt_q)
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(device_grid.x, device_grid.y),
+            q_chunk_size=32,
+            k_chunk_size=64,
+            exp_approx_mode=False,
+        )
+        sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
+        sliding_window = config.sliding_window if config.is_sliding else None
+        tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            tt_q_decode,
+            k_cache_use,
+            v_cache_use,
+            cur_pos_tensor=position_idx_cache,
+            page_table_tensor=page_table,
+            scale=1.0,
+            sliding_window_size=sliding_window,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
+                block_size=effective_block_size(k_cache_use, head_dim, nkv_local),
+                num_kv_heads=nkv_local,
+            ),
+        )
+        ttnn.deallocate(tt_q_decode)
+        tt_out = concat_heads(
+            tt_sdpa,
+            is_decode_mode=True,
+            num_heads=H_local,
+            head_dim=head_dim,
+            mesh_device=mesh_device,
+        )
+        tt_out = apply_output_projection(tt_out, weights)
+        return apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     # ── ⑥ Head-major pack Q → [1, B, H_local*P, head_dim] → SDPA ────────────
     # ROW_MAJOR on purpose: P (< 32) never lands on a tile axis, so the

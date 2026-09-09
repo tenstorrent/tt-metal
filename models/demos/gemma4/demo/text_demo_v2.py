@@ -1083,11 +1083,6 @@ def _run_spec_decode(
         f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
         f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
     )
-    # Capture the fused graph after prefill / assistant load, before the decode
-    # timer. Decode: already excludes this; wall should too so 200-token demos
-    # are not dominated by one-time compile. Setup is still logged separately.
-    if use_fused and spec._use_trace:
-        spec.prepare_fused_trace(anchor_token, anchor_pos)
     t0 = time.time()
     if use_fused:
         generated, accepts = spec.generate_fused(
@@ -1118,8 +1113,7 @@ def _run_spec_decode(
     tok_s = tok_s_u * batch_size
     ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
     ms_per_iter = (steady_elapsed * 1000.0 / n_iters) if n_iters else 0.0
-    wall_elapsed = elapsed + (setup_elapsed if use_fused and spec._use_trace else 0.0)
-    wall_tok_s_u = n_tokens / wall_elapsed if wall_elapsed > 0 else 0.0
+    wall_tok_s_u = n_tokens / elapsed if elapsed > 0 else 0.0
 
     logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
     logger.info("=== Speculative decoding metrics ===")
@@ -1134,14 +1128,15 @@ def _run_spec_decode(
         )
     logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
     logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
-    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
+    verify_time_s = getattr(spec, "_verify_time_s", 0.0)
+    draft_time_s = getattr(spec, "_draft_time_s", 0.0)
+    if verify_time_s > 0 or draft_time_s > 0:
         logger.info(
-            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
-            f"({spec._verify_time_s * 1000.0 / n_iters:.2f} ms/iter)"
+            f"Target verify: {verify_time_s * 1000.0:.1f} ms total " f"({verify_time_s * 1000.0 / n_iters:.2f} ms/iter)"
         )
         logger.info(
-            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
-            f"({spec._draft_time_s * 1000.0 / n_iters:.2f} ms/iter, {draft_len} tokens/iter)"
+            f"MTP (drafter) parallel-token generation: {draft_time_s * 1000.0:.1f} ms total "
+            f"({draft_time_s * 1000.0 / n_iters:.2f} ms/iter, {draft_len} tokens/iter)"
         )
     else:
         logger.info(
@@ -1370,14 +1365,16 @@ def _run_spec_decode_batched(
         f"({'traced' if spec._use_trace else 'untraced'})"
     )
     n_batched_iters = max(max((len(a) for a in accepts), default=0), 1)
-    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
+    verify_time_s = getattr(spec, "_verify_time_s", 0.0)
+    draft_time_s = getattr(spec, "_draft_time_s", 0.0)
+    if verify_time_s > 0 or draft_time_s > 0:
         logger.info(
-            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
-            f"({spec._verify_time_s * 1000.0 / n_batched_iters:.2f} ms/iter)"
+            f"Target verify: {verify_time_s * 1000.0:.1f} ms total "
+            f"({verify_time_s * 1000.0 / n_batched_iters:.2f} ms/iter)"
         )
         logger.info(
-            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
-            f"({spec._draft_time_s * 1000.0 / n_batched_iters:.2f} ms/iter, {draft_len} tokens/iter/user)"
+            f"MTP (drafter) parallel-token generation: {draft_time_s * 1000.0:.1f} ms total "
+            f"({draft_time_s * 1000.0 / n_batched_iters:.2f} ms/iter, {draft_len} tokens/iter/user)"
         )
     else:
         logger.info(
