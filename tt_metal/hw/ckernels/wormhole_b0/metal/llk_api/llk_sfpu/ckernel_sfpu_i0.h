@@ -46,9 +46,15 @@ namespace ckernel::sfpu {
 // as many terms as its own arithmetic can resolve.
 //
 // Code shape (chosen to relieve SFPI LRA budget), mirroring i1:
-//   1. Compute polynomial result unconditionally and store to DST.
-//      Polynomial-path intermediates die at the store, freeing LRegs.
-//   2. v_if (|x|>6): overwrite DST with asymptotic result.
+//   1. Compute the region-1 result into a local `val`, inside a nested
+//      scope; the scope's closing brace retires `t`'s LReg immediately,
+//      freeing it for the asymptotic block below. No intermediate DST
+//      store/reload is involved -- unlike the store-then-reload idiom
+//      ckernel_sfpu_erfinv.h / ckernel_sfpu_gelu.h use for the same
+//      purpose.
+//   2. v_if (|x|>6): overwrite `val` (not DST) with the asymptotic result.
+//   3. One store: `dst_reg[0] = val`, after the overflow/NaN branch and
+//      the optional BF16 downconvert below.
 //
 // No input clamp: abs_x is never clamped to 88.5 before use. Every lane
 // a clamp would change is a lane
@@ -60,10 +66,18 @@ namespace ckernel::sfpu {
 // the store, this is safe and costs nothing.
 //
 // Overflow and +/-inf both resolve to +inf here: multiplying by infinity
-// rather than assigning it lets one predicate cover both. Finite
-// |x| > 88.5 gives +inf (FP32 exp() saturates at 88.7228, matching torch's
-// identical limitation — cf. the note on torch.sinh in test_unary_fp32.py);
-// +/-inf gives +inf. NaN survives regardless of which branch it takes:
+// rather than assigning it lets one predicate cover both. This branch
+// fires for any finite |x| > 88.5 -- stricter than exp() itself needs.
+// FP32 exp() doesn't saturate until 88.7228 (cf. the note on torch.sinh
+// in test_unary_fp32.py), so for x in (88.5, 88.7228] the true value is
+// still finite and representable (I0(88.6) ~= 1.28e37) and
+// torch.special.i0 returns it, but this kernel returns +inf anyway: 88.5
+// is where Q's own Remez fit ends, not where exp() saturates. The gap is
+// invisible in BF16 (test_i0_all_bfloat16_bitpatterns in test_unary_i0.py:
+// no representable BF16 value lands inside that 0.22-wide window) and
+// only costs FP32 accuracy, on a band already deep in i0's exponential
+// blow-up. +/-inf gives +inf regardless. NaN survives regardless of
+// which branch it takes:
 // lanes the compare excludes propagate NaN through ordinary arithmetic in
 // region 1, lanes it includes propagate NaN through this SFPMUL the same
 // way _sfpu_exp_fp32_accurate_ relies on 0*inf = NaN -- so correctness
@@ -92,7 +106,7 @@ inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
 #ifdef INP_FLOAT32
     const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
 #else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
+    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true /* is_fp32_dest_acc_en */>(abs_x);
 #endif
 
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
