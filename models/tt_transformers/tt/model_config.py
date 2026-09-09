@@ -4244,7 +4244,9 @@ class ModelArgs:
         # Always HuggingFace since we only support HF_MODEL now
         model = self.reference_transformer(wrap=False)
         layers = getattr(model, "layers", getattr(model, "model", {}).layers)
-        layer = layers[0].input_layernorm
+        # Post-norm decoders (EXAONE-4.x, OLMo-2/3) have no input_layernorm; their post_attention_layernorm is the
+        # norm the TT side calls ffn_norm (see test_rms_norm.py).
+        layer = getattr(layers[0], "input_layernorm", None) or layers[0].post_attention_layernorm
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
