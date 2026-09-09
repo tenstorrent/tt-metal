@@ -196,6 +196,48 @@ class Qwen36Generator(ReadinessGenerator):
             raise ValueError("logical prompt length is outside the supported context")
         if not any(prompt_lens):
             raise ValueError("prefill requires at least one active prompt")
+        # QWEN36_PREFILL_PER_REQUEST=1 prefills one request per model call
+        # instead of one padded multi-row call.
+        #
+        # Multi-active-row prefill hangs under vLLM: at max_num_seqs 32, k=7
+        # completes but k=15 and k=31 do not, with identical [32, S] shapes --
+        # the same program and dimensions, only prompt_lens content differs.
+        # The same multi-row call completes standalone (k=31, full model,
+        # 17.8 s), and max_num_seqs=1 at concurrency 16 completes 16/16 in
+        # 171 s with sixteen k=1 calls. So the computation is correct and the
+        # failure is specific to issuing it as one batched call inside the
+        # server.
+        #
+        # gemma-4 gates this explicitly (can_batch_prefill, plus a
+        # disable_batched_prefill kill switch, plus a prefill-trace-unsafe
+        # check whose comment warns of paged ops binding to the wrong KV
+        # slots); this adapter had no such gate and always batched.
+        per_request = os.environ.get("QWEN36_PREFILL_PER_REQUEST", "0") == "1"
+        if per_request and not return_all_logits and sum(1 for length in prompt_lens if length) > 1:
+            rows = {}
+            for slot, length in enumerate(prompt_lens):
+                if not length:
+                    continue
+                only = [0] * batch
+                only[slot] = length
+                host_row = self.prefill_forward(
+                    tokens,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    prompt_lens=only,
+                    read_from_device=True,
+                )
+                rows[slot] = host_row[slot].clone()
+            width = next(iter(rows.values())).shape[-1]
+            assembled = torch.zeros((batch, 1, width), dtype=next(iter(rows.values())).dtype)
+            for slot, row in rows.items():
+                assembled[slot] = row
+            self._slots_requiring_prefill.difference_update(rows)
+            if read_from_device:
+                return assembled
+            # The device-sampling path wants a device tensor; _sampler_ready_prefill_logits
+            # reshapes to (1, 1, batch, vocab), so the element count must match.
+            return self._upload(assembled, dtype=ttnn.bfloat16)
         # vLLM prefills one request per scheduler step, so the fixed slot count
         # is almost always 31/32 padding. Narrow every downstream tensor to the
         # one active row: positions, masks, selectors, the page table and the
