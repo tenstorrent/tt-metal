@@ -122,10 +122,17 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_phy
 template <typename TargetNode, typename GlobalNode>
 class MappingConstraints {
 public:
-    /// A set of (target, global) node pairs used in one cardinality constraint.
+    /// A set of unique (target, global) pairs for the unweighted cardinality overload.
     using CardinalityPairSet = std::set<std::pair<TargetNode, GlobalNode>>;
-    /// One cardinality constraint: (pair_set, min_count).
-    using CardinalityConstraintEntry = std::pair<CardinalityPairSet, size_t>;
+    /// Input for the weighted overload: each fulfilled pair adds this weight toward min_count.
+    using CardinalityPairWeights = std::map<std::pair<TargetNode, GlobalNode>, size_t>;
+    /// Stored cardinality constraint. `mapping_pairs` lists each pair once per unit of weight, so
+    /// `mapping_pairs.size()` is the total weight and `min_count` is how many listings must match
+    /// the mapping. Unweighted constraints list each pair once.
+    struct CardinalityConstraintEntry {
+        std::vector<std::pair<TargetNode, GlobalNode>> mapping_pairs;
+        size_t min_count = 0;
+    };
     /// The full list of cardinality constraints stored by this object.
     using CardinalityConstraintList = std::vector<CardinalityConstraintEntry>;
 
@@ -329,6 +336,22 @@ public:
     bool add_cardinality_constraint(const CardinalityPairSet& mapping_pairs, size_t min_count = 1);
 
     /**
+     * @brief Add cardinality constraint with per-pair weights
+     *
+     * Same as the unweighted overload, except each fulfilled pair adds `pair_weights[pair]` toward
+     * `min_count` instead of 1. Stored as that many listings of the same pair (not as a parallel
+     * weight map). The mapping still uses each pair at most once.
+     *
+     * Every weight must be >= 1. `min_count` is the minimum total weight (not the minimum number of
+     * pairs). An unweighted call is equivalent to setting every weight to 1.
+     *
+     * @param pair_weights Map of (target, global) pairs to their weights
+     * @param min_count Minimum total weight that must be achieved
+     * @return true if constraint was successfully added, false if constraint is invalid or unsatisfiable
+     */
+    bool add_cardinality_constraint(const CardinalityPairWeights& pair_weights, size_t min_count);
+
+    /**
      * @brief Add many-to-many cardinality constraint (convenience method)
      *
      * Generates all possible (target, global) pairs from the Cartesian product of the two sets
@@ -437,7 +460,8 @@ public:
     /**
      * @brief Get all cardinality constraints (for solver access)
      *
-     * @return Vector of (mapping_pairs, min_count) tuples representing cardinality constraints
+     * @return Stored cardinality constraints. Each entry is (pair listings, min_count); a pair that
+     *         appears N times is worth N toward min_count.
      */
     const CardinalityConstraintList& get_cardinality_constraints() const;
 
@@ -536,8 +560,8 @@ private:
     // Allows add_forbidden_constraint to work without seeding valid_mappings_.
     std::set<std::pair<TargetNode, GlobalNode>> forbidden_pairs_;
 
-    // Cardinality constraints: each entry requires that at least min_count of its
-    // (target, global) node pairs must be satisfied by the mapping.
+    // Cardinality constraints: each listing of a (target, global) pair that matches the mapping
+    // counts as 1 toward min_count (repeat a pair to give it more weight).
     CardinalityConstraintList cardinality_constraints_;
 
     // Same-group constraint: targets in a target group map to at most one global group
@@ -577,9 +601,9 @@ private:
 enum class ConnectionValidationMode {
     /// Strict mode: require exact channel counts, fail if not met
     STRICT,
-    /// Relaxed mode: allow insufficient channels (warnings) but prefer mappings with better-matched physical link
-    /// capacity. Current DFS biases search via candidate ordering; SAT/MaxSAT backend should add automatic weighted
-    /// soft objectives for channel alignment (see migration plan).
+    /// Relaxed mode: allow insufficient channels (warnings). Callers that want a wider seating add preferred
+    /// mappings (or let solve_topology_mapping inject highest-degree globals when none are set). DFS still
+    /// biases candidate order by channel match; SAT honors preferred hits, not a separate channel objective.
     RELAXED
 };
 
@@ -632,10 +656,15 @@ struct MappingResult {
 
     /// Statistics about the solving process
     struct Stats {
-        size_t dfs_calls = 0;                      ///< Number of DFS calls made
-        size_t backtrack_count = 0;                ///< Number of backtracks performed
-        size_t memoization_hits = 0;               ///< Number of times memoization cache was hit
-        std::chrono::microseconds elapsed_time{};  ///< Time taken to solve (microsecond resolution)
+        size_t dfs_calls = 0;                         ///< Number of DFS recursive visits (0 for SAT)
+        size_t backtrack_count = 0;                   ///< Number of backtracks performed (0 for SAT)
+        size_t memoization_hits = 0;                  ///< Number of times memoization cache was hit (0 for SAT)
+        std::chrono::microseconds elapsed_time{};     ///< Wall-clock time for this solve / enumeration
+        bool used_sat = false;                        ///< True when the SAT backend ran this call
+        size_t sat_solve_calls = 0;                   ///< CaDiCaL solve() / solve_limited() calls (0 for DFS)
+        size_t sat_hard_constraint_encode_calls = 0;  ///< Successful hard-constraint CNF encodings (0 for DFS)
+        size_t n_target = 0;                          ///< Target graph node count
+        size_t n_global = 0;                          ///< Global graph node count
     } stats;
 };
 
@@ -665,19 +694,19 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
  * @brief Solve topology mapping using constraint satisfaction
  *
  * Stateless function that performs constraint satisfaction search to find a valid
- * mapping from target graph to global graph. Enforces required constraints first,
- * then optimizes for preferred constraints. In RELAXED mode, the search also favors
- * embeddings that better match target edge channel counts on the physical graph
- * (more capacity satisfied is preferred over less), without requiring explicit
- * preferred constraints for that behavior.
+ * mapping from target graph to global graph. Implemented as `solve_topology_mapping_n`
+ * with `max_solutions = 1`. Enforces required constraints first, then optimizes for
+ * preferred constraints. In RELAXED mode, if the caller did not set any preferred
+ * mappings, highest-degree global nodes are added as preferred so the engines sit on
+ * the fattest remaining chips.
  *
  * @tparam TargetNode The type used to identify nodes in the target graph (must be explicitly specified)
  * @tparam GlobalNode The type used to identify nodes in the global graph (must be explicitly specified)
  * @param target_graph The target graph (subgraph pattern to find)
  * @param global_graph The global graph (larger host graph that contains the target)
  * @param constraints The mapping constraints to satisfy
- * @param connection_validation_mode STRICT fails on insufficient channels; RELAXED allows them but still prefers
- *        stronger channel alignment among feasible mappings (default: RELAXED)
+ * @param connection_validation_mode STRICT fails on insufficient channels; RELAXED allows them and, when no
+ *        preferred mappings were given, prefers highest-degree global nodes (default: RELAXED)
  * @param quiet_mode If true, log errors at debug level instead of error level (useful for auto-discovery)
  * @param solver_engine Auto uses TT_TOPOLOGY_SOLVER_ENGINE; Dfs/Sat force that backend regardless of env.
  * @return MappingResult containing success status, bidirectional mappings, and warnings
@@ -826,11 +855,11 @@ struct GraphIndexData {
     void print_adjacency_maps() const;
 };
 
-/// A cardinality constraint in index form: at least @c min_count of the
-/// (target_idx, global_idx) @c pairs must be satisfied by the final mapping.
+/// A cardinality constraint in index form: at least @c min_count listings in @c pairs must match
+/// the mapping. The same (target_idx, global_idx) may appear more than once (weight).
 struct IndexedCardinalityConstraint {
-    std::set<std::pair<size_t, size_t>> pairs;  ///< (target_idx, global_idx) index pairs
-    size_t min_count = 0;                        ///< Minimum number of pairs that must be mapped
+    std::vector<std::pair<size_t, size_t>> pairs;  ///< (target_idx, global_idx); repeats are weight
+    size_t min_count = 0;                          ///< Minimum number of listings that must match
 };
 
 /**
@@ -853,8 +882,7 @@ struct ConstraintIndexData {
     // Used for optimization, doesn't restrict valid mappings
     std::vector<std::vector<size_t>> preferred_global_indices;
 
-    // Cardinality constraints: each entry requires that at least min_count of its
-    // (target_idx, global_idx) pairs are satisfied by the mapping.
+    // Cardinality constraints: at least min_count listings in pairs must match (repeats = weight).
     std::vector<IndexedCardinalityConstraint> cardinality_constraints;
 
     // Same-group: target_idx/global_idx -> group_id (-1 or SIZE_MAX if not in any group)
@@ -1272,6 +1300,9 @@ struct TopologySearchState {
     size_t dfs_calls = 0;                        // DFS call count (0 for SAT)
     size_t backtrack_count = 0;                  // DFS backtracks (0 for SAT)
     size_t memoization_hits = 0;                 // DFS memoization hits (0 for SAT)
+    bool used_sat = false;                       // True when the SAT backend ran
+    size_t sat_solve_calls = 0;                  // CaDiCaL solve() calls (0 for DFS)
+    size_t sat_hard_constraint_encode_calls = 0;  // Successful hard CNF encodings (0 for DFS)
     std::string error_message;                   // Error message if search fails
 };
 
@@ -1373,23 +1404,11 @@ private:
 };
 
 /**
- * @brief SAT (CaDiCaL) search engine using hard CNF encoding plus preferred-hit maximization
+ * @brief SAT (CaDiCaL) search engine using hard CNF encoding
  *
- * Encodes domain, degree, injectivity, edge preservation, same-rank groups, and cardinality, then searches for a
- * model that **maximizes the number of targets** whose chosen global lies in that target's preferred set (same notion
- * as `ConstraintIndexData::compute_constraint_stats` for `preferred_satisfied`). This uses auxiliary indicator
- * literals and repeated solves with an at-least-k cardinality over those indicators (small instance cap). When the
- * cap is exceeded or cardinality encoding is too large, falls back to a single satisfiability solve without that
- * objective. DFS still returns the **first** complete feasible mapping under its heuristic order, which can satisfy
- * strictly fewer preferred targets on the same instance.
- *
- * Channel/STRICT checks are still applied by MappingValidator after decode.
- *
- * In RELAXED mode, after locking the preferred-hit count (when that optimization runs), a second pass maximizes
- * auxiliary literals for per-edge channel thresholds so the embedding maximizes the same sum as DFS's relaxed
- * channel ordering objective (sum of min(required, actual) over target edges). When the number of threshold
- * literals exceeds a small cap, that k-descent pass is skipped (one final satisfiability solve still returns a valid
- * embedding). Other caps may also skip encoding or cardinality on very large instances.
+ * `search()` is `search_n` with max_solutions=1. Both encode domain, degree, injectivity, edge
+ * preservation, same-rank groups, cardinality, and a hard host-group cap when set. Preferred globals
+ * are listed first in each assignment row. There is no separate preferred-hit or channel-count objective.
  */
 template <typename TargetNode, typename GlobalNode>
 class SatSearchEngine {
