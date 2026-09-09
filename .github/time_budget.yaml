@@ -407,11 +407,6 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    # 536, up from the 500 #55279 set: blaze_models_prefill adds the traced twin of the GLM-5.2 chunked
-    # prefill accuracy job (36 min, same timeout as its untraced twin). #55279 left this line at exactly
-    # the sum of the declared timeouts, so any new bh_sc1 job needs the budget raised with it. The 36 is
-    # not padding on this pool -- both GLM accuracy jobs measure ~18 min of test wall time, but bh_sc1
-    # intermittently lands work on slow pods where the host weight build alone runs 4x longer.
     bh_sc1: 536
     bh_sc1_high_power: 166
     wh_n150: 500
