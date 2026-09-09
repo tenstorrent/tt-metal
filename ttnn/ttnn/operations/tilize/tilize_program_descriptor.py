@@ -173,6 +173,41 @@ COMPUTE_AMORTIZE_INIT = True
 
 # Legal output tile heights (power-of-two fractions of 32).
 LEGAL_TILE_HEIGHTS = (1, 2, 4, 8, 16, 32)
+# A tile's FACE is 16 wide at every legal tile height, and `min(tile_h, 16)`
+# tall (`tt_metal/impl/data_format/tile.cpp:TILE_FACE_HW_CHOICES`). A tile of
+# height `h` is therefore `h / min(h,16)` face-ROWS of two faces each, laid out
+# face-row-major, elements row-major inside a face. Everything the retile block
+# operation does is derived from that one fact.
+FACE_WIDTH = 16
+
+
+def retile_copy_unit(in_tile_h: int, out_tile_h: int) -> tuple:
+    """(rows, cols) of the largest run that is CONTIGUOUS IN BOTH tile layouts.
+
+    This is the whole retile algorithm in one expression, and it is what makes
+    the re-tile a pure NoC gather/scatter with no compute stage at all: the
+    output tile's bytes are assembled directly out of the input tiles' faces.
+
+    Let `a = min(h, 16)` be a layout's face height.
+
+      * `a_in == a_out`: face `(fr, 0)` and face `(fr, 1)` are ADJACENT in both
+        layouts, so a whole face-PAIR SLAB (`a` consecutive rows x all 32
+        columns, stored left-face-then-right-face — NOT row-major) is one byte
+        run with the same internal order on both sides. Consecutive slabs stay
+        contiguous while they remain inside one input tile AND one output tile,
+        so the run extends to `min(in_tile_h, out_tile_h)` rows.
+      * `a_in != a_out`: the slabs interleave differently, and the largest
+        common run is a single face FRAGMENT — `min(in_tile_h, out_tile_h)`
+        rows x 16 columns. (When the face heights differ, that minimum is
+        always < 16 and divides both face heights, both being powers of two.)
+
+    Verified exhaustively against the layout formula for all 36 legal
+    (in_tile_h, out_tile_h) pairs; see probes/probe_024.py.
+    """
+    a_in = min(int(in_tile_h), FACE_WIDTH)
+    a_out = min(int(out_tile_h), FACE_WIDTH)
+    rows = min(int(in_tile_h), int(out_tile_h))
+    return rows, (TILE_WIDTH if a_in == a_out else FACE_WIDTH)
 
 
 def _bfloat16_bits(value: float) -> int:
@@ -262,6 +297,12 @@ class TilizePlan:
         # the reader on its strided branch.
         "input_pages_per_row",
         "in_page_width_bytes",
+        # --- retile (Refinement 4): a TILE input re-laid at another tile
+        # height. `in_tile_h` is 0 on the ROW_MAJOR path, where there is no
+        # input tile geometry at all.
+        "is_retile",
+        "in_tile_h",
+        "in_tile_rows_per_image",
         # --- padding (Refinement 2). All inert when `pad_active` is False, and
         # the reader's non-padded branches are then byte-identical to Phase 0. ---
         "pad_active",
@@ -280,6 +321,12 @@ class TilizePlan:
     # --- derived L1 footprint, in pages and bytes --------------------------
     @property
     def input_cb_pages(self) -> int:
+        # The retile path never reads through cb_input_rows (the reader
+        # assembles output tiles straight into cb_output_tiles), so the CB
+        # shrinks to the ONE page that keeps its JIT tile/format descriptor
+        # well-formed for the reader's other, compile-time-discarded branches.
+        if self.is_retile:
+            return 1
         return self.input_depth_rows * self.block_width_tiles
 
     @property
@@ -454,6 +501,18 @@ def _resident_l1_bytes(tensor, partition, num_cores: int) -> int:
     return math.ceil(total / max(1, num_cores))
 
 
+def _input_tile_height(input_tensor) -> int:
+    """The input's own tile height, or 0 for a ROW_MAJOR input (no tile geometry).
+
+    Non-zero IS the retile predicate: a TILE input is the only thing that puts
+    the reader on its face-walking block operation.
+    """
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
+        return 0
+    tile = getattr(input_tensor, "tile", None)
+    return int(tile.tile_shape[0]) if tile is not None else TILE_WIDTH
+
+
 def plan_cache_key(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value) -> tuple:
     """Hashable identity of everything the plan derivation reads."""
     return (
@@ -467,6 +526,10 @@ def plan_cache_key(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value
         str(output_tensor.memory_config()),
         output_tensor.buffer_page_size(),
         (output_tensor.tile.tile_shape[0], output_tensor.tile.tile_shape[1]),
+        # The INPUT's tile height selects the reader's block operation on the
+        # retile path, so it belongs in the plan's identity.
+        input_tensor.buffer_page_size(),
+        _input_tile_height(input_tensor),
         bool(low_l1),
         (grid.x, grid.y),
         None if pad_value is None else float(pad_value),
@@ -523,6 +586,19 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
     in_page_width_elems = int(input_tensor.buffer_page_size()) // input_tensor.element_size()
     input_pages_per_row = max(1, math.ceil(int(shape[-1]) / max(1, in_page_width_elems)))
 
+    # --- retile: a TILE input, re-laid at another tile height --------------
+    # The input's pages are whole TILES, not sticks, so `input_pages_per_row`
+    # (a stick-paging quantity) is meaningless here and every stick-indexed
+    # branch of the reader is off. What replaces them is one derived unit: the
+    # largest byte run contiguous in both tile layouts (`retile_copy_unit`),
+    # which the reader gathers straight into the OUTPUT tile — no row-major
+    # intermediate, no compute stage, and never an untilize/tilize round trip
+    # (op_design.md ranks that `rejected` at 2x the minimum DRAM traffic).
+    in_tile_h = _input_tile_height(input_tensor)
+    is_retile = in_tile_h > 0
+    if is_retile:
+        input_pages_per_row = 1
+
     # --- the pad region: what the output grid covers MINUS the input -------
     # Padding is `grid2d_padded` in op_design.md, and it is ADDITIVE on the
     # block that already exists: the block grid, the core assignment, the CBs
@@ -555,6 +631,42 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
     )
     pad_word = pad_fill_word(input_tensor.dtype, pad_value, elem_size) if pad_active else 0
 
+    # The input's tile-rows PER IMAGE. The output's tile grid and the input's do
+    # NOT have to agree on the padded per-image height (`H=20` at in_tile_h=8 is
+    # three input tile-rows, at out tile_h=4 five output tile-rows), so the
+    # reader splits a folded output tile-row per IMAGE before turning it into an
+    # input tile-row — the same segmentation the padded branch does, and the
+    # reason no host guard on "the two padded heights must match" is needed.
+    in_tile_rows_per_image = math.ceil(in_rows_per_image / in_tile_h) if is_retile else 0
+    if is_retile:
+        # A pure byte re-lay assembles the output tile's bytes from the input
+        # tiles' faces; both preconditions below are what make "byte" the right
+        # unit. They cannot be reached from SUPPORTED today (dtype and
+        # output_dtype are both bfloat16, and retile x padding is EXCLUDED), and
+        # they are asserted rather than assumed so the dtype refinement trips
+        # here instead of producing wrong bytes.
+        if input_tensor.dtype != output_tensor.dtype:
+            raise RuntimeError(
+                f"tilize: re-tiling {in_tile_h}->{tile_h} with a dtype cast "
+                f"({input_tensor.dtype} -> {output_tensor.dtype}) is not implemented; the retile "
+                "path is a pure byte re-lay and carries no pack-time conversion stage"
+            )
+        if (
+            int(input_tensor.buffer_page_size()) != in_tile_h * TILE_WIDTH * elem_size
+            or int(out_page_bytes) != tile_h * TILE_WIDTH * elem_size
+        ):
+            raise RuntimeError(
+                "tilize: re-tiling needs densely packed tile pages on both sides "
+                f"(in {input_tensor.buffer_page_size()} B vs {in_tile_h * TILE_WIDTH * elem_size}, "
+                f"out {out_page_bytes} B vs {tile_h * TILE_WIDTH * elem_size}); a block-float or "
+                "otherwise padded tile page carries per-face exponents the face walk does not move"
+            )
+        if pad_active:
+            raise RuntimeError(
+                "tilize: re-tiling a padded region is not implemented (EXCLUSIONS covers the cell); "
+                "the fill would have to be written into output faces the face walk never sources"
+            )
+
     # --- who fixes the block grid: a shard spec, or the L1 solve? ---------
     # tilize has no dependent axis, so a shard is already a block. When one side
     # is L1-sharded its OWN partition is used verbatim and its CB is placed on
@@ -581,6 +693,14 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
     partition = None
     input_native = False
     output_native = False
+    if is_retile:
+        # Retile x sharded is EXCLUDED (see tilize.EXCLUSIONS): the face walk is
+        # written against the interleaved TILE page index (`tile_row * C + col`)
+        # and a zero-copy CB over a resident TILE shard would need the shard's
+        # own page map on both sides. Forcing both partitions off keeps the
+        # solved plan — which is correct for every placement — as the only
+        # retile path, rather than half-wiring a native one no test can reach.
+        in_partition = out_partition = None
     if pad_active:
         # A zero-copy input CB IS the resident shard, and the shard holds only
         # the caller's own bytes — there is nowhere in it to put the fill, and
@@ -671,7 +791,12 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         #   footprint <= W*(2*tb_in + 2*tb_out) + 2*WRITE_BATCH_MIN_TILES*tb_out
         # which inverts to W_FIT below. Budget is read from the device, never a
         # literal; no tensor dimension appears.
-        denom = INPUT_DEPTH_ROWS * in_page_bytes + OUTPUT_DEPTH_BATCHES * out_page_bytes
+        # On the retile path cb_input_rows is a one-page stub (see
+        # TilizePlan.input_cb_pages), so only the output CB scales with the
+        # column extent and the solve gets the whole budget for it.
+        denom = OUTPUT_DEPTH_BATCHES * out_page_bytes
+        if not is_retile:
+            denom += INPUT_DEPTH_ROWS * in_page_bytes
         if pad_active:
             # cb_pad_row is ONE block row: `block_width_tiles * TILE_WIDTH * elem`
             # bytes, i.e. `in_page_bytes / tile_h` per tile of block width. Small,
@@ -773,6 +898,9 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         output_native=output_native,
         input_pages_per_row=input_pages_per_row,
         in_page_width_bytes=in_page_width_elems * input_tensor.element_size(),
+        is_retile=is_retile,
+        in_tile_h=in_tile_h,
+        in_tile_rows_per_image=in_tile_rows_per_image,
         pad_active=pad_active,
         pad_word=pad_word,
         elem_size=elem_size,
@@ -918,6 +1046,13 @@ def create_program_descriptor(
         plan.in_rows_per_image,
         plan.in_row_bytes,
         plan.rows_per_image_out,
+        # --- retile (inert, and the branch compiles out, when is_retile is 0)
+        int(plan.is_retile),
+        plan.in_tile_h,
+        plan.in_tile_rows_per_image,
+        CB_OUTPUT_TILES,
+        plan.tensor_col_tiles,
+        plan.out_page_bytes,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -979,12 +1114,23 @@ def create_program_descriptor(
             config=ttnn.WriterConfigDescriptor(),  # writes on NoC1
         )
     )
-    compute_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
-        core_ranges=plan.all_cores,
-        compile_time_args=compute_ct_args,
-        runtime_args=compute_rt_args,
-        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=plan.fp32_dest_acc_en),
+    # No compute kernel at all on the RETILE path. A re-tile is a pure byte
+    # re-lay between two tiled layouts, so `retile_copy_unit`'s runs go from the
+    # source tile's faces straight into the destination tile's faces over the
+    # NoC — there is no row-major intermediate for a tilize LLK to consume and
+    # nothing for the FPU to do. cb_output_tiles then has the READER as its
+    # single producer and the writer as its single consumer, which is the same
+    # one-producer/one-consumer contract as every other CB in this op.
+    compute_kernel = (
+        None
+        if plan.is_retile
+        else ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+            core_ranges=plan.all_cores,
+            compile_time_args=compute_ct_args,
+            runtime_args=compute_rt_args,
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=plan.fp32_dest_acc_en),
+        )
     )
 
     return ttnn.ProgramDescriptor(

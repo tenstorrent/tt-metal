@@ -292,7 +292,23 @@ SUPPORTED = {
     # therefore has no width cap of its own. The list IS `LEGAL_TILE_HEIGHTS`
     # (the `_check_request` gate's own source), so the two cannot drift.
     "tile_height": list(LEGAL_TILE_HEIGHTS),
-    "in_tile_height": ["none"],
+    # Retile (Refinement 4): a TILE input re-laid at another tile height. "none"
+    # IS the ROW_MAJOR sentinel and stays legal. The added values put the reader
+    # on a genuinely distinct block operation — `retile_block` walks FACES, not
+    # sticks, because the source's pages are whole tiles — and that block
+    # operation removes the compute stage entirely: a re-tile is a byte re-lay
+    # between two tiled layouts, so `retile_copy_unit`'s runs go from the source
+    # tile's faces straight into the destination tile's faces over the NoC. One
+    # DRAM crossing each way, which is the minimum; the untilize-and-retilize
+    # round trip op_design.md ranks `rejected` appears nowhere. The block grid,
+    # the core assignment, the CBs and the writer are all unchanged.
+    #
+    # The value 32 is in the list because `tile=` must be HONORED on a TILE
+    # input, so `in_tile_height=32 -> tile_height=32` (and every other
+    # equal-height pair) is a legal identity re-lay, not a no-op to elide —
+    # `retile_copy_unit` degenerates to "the whole tile" there and the walk
+    # becomes a page copy.
+    "in_tile_height": ["none"] + list(LEGAL_TILE_HEIGHTS),
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
 }
 
@@ -300,7 +316,29 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 # 3. EXCLUSIONS — cells inside cartesian(SUPPORTED) refused for now
 # ---------------------------------------------------------------------------
-EXCLUSIONS = []
+#
+# Both groups are RETILE crossings, and both are excluded for a stated
+# structural reason rather than for lack of trying:
+#
+#   * retile x sharded — `retile_block` addresses the source by INTERLEAVED TILE
+#     page index (`tile_row * C + tile_col`). A native (zero-copy) CB over a
+#     resident TILE shard would need the shard's own page map on BOTH sides of
+#     the face walk, and the alternative — reading a core's own shard back
+#     through a TensorAccessor — is the interleaved path wearing a sharded hat,
+#     which this op does not do anywhere else. Left excluded rather than
+#     half-wired: retile is arch-gated to Blackhole (the LLK tiny-tile gate the
+#     golden suite skips on), so a native sharded retile cannot be verified on
+#     the box this landed on.
+#   * retile x padding — the fill would have to be written into output FACES the
+#     face walk never sources, which is a second, differently-shaped fill from
+#     the row-major one `cb_pad_row` serves.
+#
+# Neither crossing is reached by any `tile_geometry_retile` golden case (all six
+# are unpadded interleaved DRAM), so no cell moves from pass to xfail here.
+_RETILE_HEIGHTS = list(LEGAL_TILE_HEIGHTS)
+EXCLUSIONS = [{"in_tile_height": h, "shard_api": api} for h in _RETILE_HEIGHTS for api in ("legacy_2d", "nd")] + [
+    {"in_tile_height": h, "pad_mode": mode} for h in _RETILE_HEIGHTS for mode in ("auto", "explicit")
+]
 
 
 # ---------------------------------------------------------------------------

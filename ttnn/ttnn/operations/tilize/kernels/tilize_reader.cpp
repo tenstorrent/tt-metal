@@ -41,6 +41,33 @@
 // The two phases are ordered read-then-fill with the barrier BETWEEN them, so a
 // CPU store into the tail of a row can never race the NoC write into its head.
 //
+// RETILE INPUT (`is_retile`) — a TILE input re-laid at ANOTHER tile height.
+// This is a genuinely distinct block operation, not a parameterization of the
+// stick reader: the source's pages are whole TILES, so the reader walks FACES.
+// `read_sticks_for_tilize` cannot express it at all — it is stick-indexed by
+// construction (`accessor.get_noc_addr(start_page + block_row + row, ...)`,
+// tilize_helpers_dataflow.inl:121) and there are no sticks to index.
+//
+// The whole algorithm is ONE derived quantity, `retile_copy_unit` (host side,
+// mirrored in the constexprs below): the largest byte run that is contiguous in
+// BOTH tile layouts. A tile of height `h` is `h / min(h,16)` face-ROWS of two
+// `min(h,16) x 16` faces, face-row-major, elements row-major inside a face
+// (`tt_metal/impl/data_format/tile.cpp:TILE_FACE_HW_CHOICES`). So:
+//   * equal face heights (`min(h_in,16) == min(h_out,16)`) — a face PAIR is
+//     adjacent in both layouts, so the run is `min(h_in,h_out)` rows x all 32
+//     columns (a slab: left face then right face, NOT row-major).
+//   * different face heights — the run is one face FRAGMENT,
+//     `min(h_in,h_out)` rows x 16 columns.
+// Each run is issued as one `noc_async_read` from the source tile page's byte
+// offset into the destination tile's byte offset, so the output tile is
+// ASSEMBLED IN PLACE in cb_output_tiles and there is no compute stage and no
+// row-major intermediate. This is the opposite of the untilize/re-tilize round
+// trip op_design.md ranks `rejected`: one DRAM crossing each way, the minimum.
+//
+// This branch is therefore the only one that pushes to cb_output_tiles instead
+// of cb_input_rows (which stays a one-page stub). The writer is unchanged — it
+// already stores whole output tile pages in exactly this order.
+//
 // The H tail is also why this branch cannot call `read_sticks_for_tilize`:
 // that helper spans ONE contiguous stick run (`start_page + block_row + row`),
 // which is only a valid tile-row index when `H % tile_h == 0` — with an H tail
@@ -53,6 +80,26 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+
+namespace {
+
+constexpr uint32_t kTileWidth = 32;
+constexpr uint32_t kFaceWidth = 16;
+constexpr uint32_t kFacesPerRow = kTileWidth / kFaceWidth;  // 2
+
+// Byte-offset-in-elements of element (r, c) inside a tile of face height `a`.
+// `a == min(tile_h, 16)`; faces are laid out face-row-major, elements row-major
+// within a face. This is the ONE address rule the retile block operation needs.
+template <uint32_t a>
+FORCE_INLINE uint32_t tile_elem_offset(uint32_t r, uint32_t c) {
+    const uint32_t face_row = r / a;
+    const uint32_t row_in_face = r - face_row * a;
+    const uint32_t face_col = c / kFaceWidth;
+    const uint32_t col_in_face = c - face_col * kFaceWidth;
+    return ((face_row * kFacesPerRow + face_col) * a + row_in_face) * kFaceWidth + col_in_face;
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_input_rows = get_compile_time_arg_val(0);
@@ -74,7 +121,14 @@ void kernel_main() {
     constexpr uint32_t in_rows_per_image = get_compile_time_arg_val(15);   // the INPUT's logical H
     constexpr uint32_t in_row_bytes = get_compile_time_arg_val(16);        // the INPUT's logical W, in bytes
     constexpr uint32_t rows_per_image_out = get_compile_time_arg_val(17);  // tile-rows per image, padded
-    constexpr auto in_args = TensorAccessorArgs<18>();
+    // --- retile. All six are inert and the branch compiles out at is_retile == 0.
+    constexpr uint32_t is_retile = get_compile_time_arg_val(18);
+    constexpr uint32_t in_tile_h = get_compile_time_arg_val(19);               // the INPUT's tile height
+    constexpr uint32_t in_tile_rows_per_image = get_compile_time_arg_val(20);  // ceil(in H / in_tile_h)
+    constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(21);
+    constexpr uint32_t tensor_col_tiles = get_compile_time_arg_val(22);  // C
+    constexpr uint32_t out_tile_bytes = get_compile_time_arg_val(23);
+    constexpr auto in_args = TensorAccessorArgs<24>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block_id = get_arg_val<uint32_t>(1);
@@ -118,7 +172,61 @@ void kernel_main() {
         const uint32_t row_end = ((row_group + 1) * tensor_row_blocks) / num_row_groups;
         const uint32_t block_row_extent = row_end - row_start;
 
-        if constexpr (pad_active) {
+        if constexpr (is_retile) {
+            // retile_block — the face-walking block operation. Assembles this
+            // block's output tiles IN PLACE in cb_output_tiles out of the input
+            // tiles' faces, one `retile_copy_unit` run per NoC read.
+            constexpr uint32_t in_face_h = (in_tile_h < kFaceWidth) ? in_tile_h : kFaceWidth;
+            constexpr uint32_t out_face_h = (tile_h < kFaceWidth) ? tile_h : kFaceWidth;
+            // retile_copy_unit(in_tile_h, tile_h), mirrored from the host.
+            constexpr uint32_t unit_rows = (in_tile_h < tile_h) ? in_tile_h : tile_h;
+            constexpr uint32_t unit_cols = (in_face_h == out_face_h) ? kTileWidth : kFaceWidth;
+            constexpr uint32_t unit_bytes = unit_rows * unit_cols * elem_size;
+            constexpr uint32_t unit_rows_per_tile = tile_h / unit_rows;
+            constexpr uint32_t unit_cols_per_tile = kTileWidth / unit_cols;
+
+            const uint32_t col_base = w_chunk * block_width_tiles;
+            for (uint32_t tr = 0; tr < block_row_extent; ++tr) {
+                const uint32_t out_tile_row = row_start + tr;
+                // Per-IMAGE split, for the same reason the padded branch needs
+                // one: the input's and the output's padded per-image heights do
+                // not have to agree (H=20 is 3 input tile-rows at 8 and 5
+                // output tile-rows at 4), so a folded output tile-row is only a
+                // folded INPUT tile-row after the image is factored out.
+                const uint32_t image = out_tile_row / rows_per_image_out;
+                const uint32_t row_in_image = (out_tile_row - image * rows_per_image_out) * tile_h;
+
+                cb_reserve_back(cb_output_tiles, block_width_tiles);
+                uint32_t tile_l1 = get_write_ptr(cb_output_tiles);
+
+                // Every transfer of the whole tile-row goes behind ONE barrier,
+                // matching the block quantum of every other branch here: the
+                // in-flight depth is `block_width_tiles * unit_rows_per_tile *
+                // unit_cols_per_tile` reads, which is where the tiny-unit
+                // geometries (1 -> 32 issues 64 x 32 B per output tile) get
+                // their amortization.
+                for (uint32_t i = 0; i < block_width_tiles; ++i) {
+                    const uint32_t tile_col = col_base + i;
+                    for (uint32_t ur = 0; ur < unit_rows_per_tile; ++ur) {
+                        const uint32_t out_row_local = ur * unit_rows;
+                        const uint32_t src_row = row_in_image + out_row_local;
+                        const uint32_t in_tile_row_in_image = src_row / in_tile_h;
+                        const uint32_t in_row_local = src_row - in_tile_row_in_image * in_tile_h;
+                        const uint32_t in_page =
+                            (image * in_tile_rows_per_image + in_tile_row_in_image) * tensor_col_tiles + tile_col;
+                        for (uint32_t uc = 0; uc < unit_cols_per_tile; ++uc) {
+                            const uint32_t col = uc * unit_cols;
+                            const uint32_t src_off = tile_elem_offset<in_face_h>(in_row_local, col) * elem_size;
+                            const uint32_t dst_off = tile_elem_offset<out_face_h>(out_row_local, col) * elem_size;
+                            noc_async_read(in_acc.get_noc_addr(in_page, src_off), tile_l1 + dst_off, unit_bytes);
+                        }
+                    }
+                    tile_l1 += out_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_output_tiles, block_width_tiles);
+            }
+        } else if constexpr (pad_active) {
             // load_block, PADDED + SEGMENTED. `pad_active` implies the input is
             // read through the accessor (the host clears `input_native`, since a
             // resident shard holds no room for the fill).
