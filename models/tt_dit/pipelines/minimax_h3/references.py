@@ -47,7 +47,13 @@ import torch
 from PIL import Image, ImageOps
 
 from .conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD, keyframe_condition_rows, sample_posterior
-from .packing import MINIMAX_H3_FPS, MINIMAX_H3_MAX_DURATION, MINIMAX_H3_MIN_DURATION, align_num_frames
+from .packing import (
+    MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
+    MINIMAX_H3_FPS,
+    MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MIN_DURATION,
+    align_num_frames,
+)
 from .packing_ref2va import (
     MINIMAX_H3_MAX_REFERENCE_AUDIOS,
     MINIMAX_H3_MAX_REFERENCE_IMAGES,
@@ -69,6 +75,16 @@ from .packing_ref2va import (
 # to a whole hop with ZEROS, which our device encoder does not do -- it asserts
 # divisibility instead -- so the padding happens here, on host.
 MINIMAX_H3_AUDIO_HOP = 800
+
+# The longest soundtrack a request can carry: the 15 s frame budget aligns up to 362 frames
+# (17n + 5), so `prepare_reference_waveform` keeps up to 362/24 = 15.083 s of audio, which is
+# 603.33 hops. Ceil, not `audio_latent_num_frames`'s round -- that is the TARGET grid; the
+# reference encoder emits ceil(samples / hop) latents.
+MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS = math.ceil(
+    align_num_frames(round(MINIMAX_H3_MAX_DURATION * MINIMAX_H3_FPS))
+    * MINIMAX_H3_AUDIO_LATENTS_PER_SECOND
+    / MINIMAX_H3_FPS
+)
 
 
 def check_references(references: Sequence[MiniMaxH3Reference]) -> list[str]:
@@ -209,19 +225,20 @@ def raw_reference_pixels(frames: np.ndarray, device: torch.device | str | None =
     return torch.from_numpy(np.ascontiguousarray(frames)).to(device).permute(3, 0, 1, 2)[None]
 
 
-def pad_waveform_to_hop(waveform: torch.Tensor) -> torch.Tensor:
-    """Right-pad a waveform with zeros up to a whole 800-sample hop.
+def pad_waveform_to_max_duration(waveform: torch.Tensor) -> torch.Tensor:
+    """Right-pad a waveform with zeros to the one fixed encode length, 604 hops.
 
-    The reference audio VAE's ``encode`` does this internally
-    (``autoencoder_kl_minimax_h3_audio.py:607``); the device encoder asserts the length
-    is already a multiple of the hop instead. Load-bearing, not defensive: a 5.1667 s
-    soundtrack is 165333 samples, which is not a multiple of 800.
+    Every reference soundtrack encodes at this single shape, so the audio encoder compiles
+    exactly once -- during warmup -- and, when T-sharded, never first-runs a collective at a
+    novel shape under live traces. The encoder is right-pad invariant by construction (the
+    symmetric trunk re-zeroes its pad tail per op, the ``pre_block`` attention is causal), so
+    trimming the pad latents after the encode recovers the unpadded answer;
+    ``test_encode_pad_to_max_then_trim`` gates that contract.
     """
     samples = waveform.shape[-1]
-    padded = math.ceil(samples / MINIMAX_H3_AUDIO_HOP) * MINIMAX_H3_AUDIO_HOP
-    if padded == samples:
-        return waveform
-    return torch.nn.functional.pad(waveform, (0, padded - samples))
+    target = MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS * MINIMAX_H3_AUDIO_HOP
+    assert samples <= target, f"a reference soundtrack of {samples} samples exceeds the {target}-sample maximum"
+    return torch.nn.functional.pad(waveform, (0, target - samples))
 
 
 def encode_references(
@@ -284,10 +301,13 @@ def encode_references(
             video_rows.append(keyframe_condition_rows(latents, latents_mean, latents_std, patch_size))
 
         if reference.has_audio:
-            waveform = pad_waveform_to_hop(reference.waveform.to(device) if device else reference.waveform)
+            waveform = reference.waveform.to(device) if device else reference.waveform
+            num_latents = math.ceil(waveform.shape[-1] / MINIMAX_H3_AUDIO_HOP)
+            waveform = pad_waveform_to_max_duration(waveform)
             # The audio VAE is mono; the two stereo channels are two batch items.
             latents = encode_audio(waveform[:, None]).float().cpu().transpose(1, 2)  # (2, T, C)
-            reference.num_audio_latents = latents.shape[1]
+            latents = latents[:, :num_latents]
+            reference.num_audio_latents = num_latents
             normalized = (latents - audio_mean) / audio_std
             # Channel-major rows: the whole left channel, then the whole right one.
             audio_rows.append(normalized.reshape(-1, audio_latent_channels))

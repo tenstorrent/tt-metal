@@ -443,10 +443,6 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
-        # Only consult the preset for what the caller left unset, so an untuned shape with every
-        # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
-        # documents. `coresident` is residency rather than parallelism and has a safe default, so it
-        # does not hold the hatch shut for callers that cannot pass it.
         supplied = (tp_axis, sp_axis, num_links, topology)
         preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
@@ -457,7 +453,6 @@ class MiniMaxH3Pipeline:
         # Preset default (quad-only), overridable so the traced resident path is testable on a
         # single 4x8 Galaxy too rather than only where the preset turns it on.
         self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
-        # Unset env means the preset, not the encoder's default-off: that path still hangs.
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
@@ -481,14 +476,6 @@ class MiniMaxH3Pipeline:
         # Forces the ref2va encoder pad onto one presentation rung; warmup walks the encoder ladder
         # the same way `_force_bucket` walks the denoise ladder.
         self._force_prompt_pad: int | None = None
-        # Persistent device buffers whose shapes are request-independent (the arena caps, or literal
-        # constants), the LTX / Flux2 pattern taken one step further: a ttnn trace bakes its inputs'
-        # addresses AND replay rewrites every address the capture touched, so every buffer that must
-        # survive a replay -- trace inputs and the eager shell's inputs alike -- must be allocated
-        # before any capture and refreshed by same-shape `ttnn.copy`, never rebound. Fixed capacities
-        # are what make that possible: the true lengths ride in index-tensor content and `logical_n`,
-        # not in shapes. All bound on the first (untraced) pass; `_denoise` releases every capture
-        # before any pass that rebinds.
         self._tt_video = StateTensor()  # target video latents, [1, 1, video_rows cap, 96]
         self._tt_audio = StateTensor()  # target audio latents, [1, 1, audio_rows cap, 32]
         self._tt_cond_video = StateTensor()  # video conditioning rows in packed-walk order
@@ -564,27 +551,20 @@ class MiniMaxH3Pipeline:
         self.adaln_slot_roles = tuple(adaln_slot_roles)
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        self.audio_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
         self.dit_parallel_config = DiTParallelConfig(
             tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor),
             sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor),
             cfg_parallel=None,
         )
-        # sequence_parallel: the decoder's [1, L, width] activations shard L across the SP axis
-        # instead of replicating the whole presentation on every device. TP-only, a ref2va
-        # presentation (~4.1k tokens per image reference at the 2048px canvas) costs ~0.5 GiB/device
-        # per image in decoder transients and OOMs the coresident deployment at 7 images
-        # (tt-inference-server#5044, reproduced by test_ref2va_reference_oom_minimax_h3.py).
-        # Decoder SP composes with FSDP -- weights shard the same axis, gathered before use -- and
-        # is PCC-gated against the HF golden by test_vision_conditioner_minimax_h3.py's sp cases.
+
         self.encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor),
             sequence_parallel=(
                 ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor) if self.sp_factor > 1 else None
             ),
         )
-        # Both VAEs are data-parallel over work units with *replicated* weights -- no tensor
-        # parallelism at all -- so their cache key carries factor 1. Recording it as a config rather
-        # than passing a literal keeps the key honest if that ever changes.
+
         self.vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=1))
 
         # Read from the partition that will actually be loaded, rather than assuming the
@@ -722,7 +702,7 @@ class MiniMaxH3Pipeline:
 
         `dit_fsdp=True` shards the DiT over the SP axis. `trace_denoise` defaults to the mesh preset
         (on for the quad only); pass `True` to trace the denoise step on other shapes, e.g. to
-        exercise the traced resident path on one 4x8 Galaxy. Audio-decoder T-shard follows the same
+        exercise the traced resident path on one 4x8 Galaxy. Audio-encoder T-shard follows the same
         preset (on for the quad); `MINIMAX_H3_AUDIO_T_SHARD` overrides. `bucket_denoise` pads to the
         ladder without tracing (tracing always implies it); default off. The three deployment knobs
         default to the task's envelope: `bucket_ladder` is the padded lengths and the admission cap
@@ -1575,12 +1555,11 @@ class MiniMaxH3Pipeline:
             config = self.audio_config
             # T-shard the DAC trunk across mesh axis 1 (mesh_partition splits a whole axis, so the
             # factor is the axis length: 8 on a 4x8, 32 on the quad). Each conv halo-exchanges with
-            # its neighbour shard and the trunk output gathers to full T for the causal pre_block.
-            # OFF pending test_audio_encode_t_parallel going green: the sharded trunk currently
-            # hangs after the first sharded op on 4x8 (under bisection); opt in via env once fixed.
-            t_factor = tuple(self.mesh_device.shape)[1]
-            if os.environ.get("MINIMAX_H3_AUDIO_T_SHARD", "0") != "1":
-                t_factor = 1
+            # its neighbour shard and the trunk output gathers to full T for the causal pre_block,
+            # over the shared Linear audio manager -- the axis-1 ring the encoder CCL manager wires
+            # would wrap shard 0 <-> shard 31 and deadlock the halo exchange. `audio_t_shard`
+            # resolves like the decoder's factor: MINIMAX_H3_AUDIO_T_SHARD wins, else the preset.
+            t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
             audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
             self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
             encoder = MiniMaxH3AudioEncoder(
@@ -1596,7 +1575,7 @@ class MiniMaxH3Pipeline:
                 # reach remote shards yet. Composes with the T-shard (batch axis 0, T axis 1).
                 stereo_split_axis=0,
                 parallel_config=audio_parallel,
-                ccl_manager=self.encoder_ccl_manager,
+                ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
                 # One step off the accurate default, measured at the production 5.17 s shape:
                 # full/tap 796 ms @ mean PCC 99.9989% -> weight/tap 565 ms @ 99.9785% -- 20x
                 # inside the encode gate (0.99 / rel RMSE 0.12). Not further: audio condition
@@ -1728,16 +1707,7 @@ class MiniMaxH3Pipeline:
                 if self.audio_t_factor > 1
                 else None
             )
-            # T is a line: DiT's Ring manager would wrap the last (pad) shard onto t=0.
-            audio_ccl = (
-                CCLManager(
-                    mesh_device=self.mesh_device,
-                    num_links=self.ccl_manager.num_links,
-                    topology=ttnn.Topology.Linear,
-                )
-                if audio_parallel_config is not None
-                else None
-            )
+            audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -2525,10 +2495,10 @@ class MiniMaxH3Pipeline:
                     embeds.shape[1] == pad_to
                 ), f"forced pad landed on {embeds.shape[1]}, expected presentation rung {pad_to}"
             ttnn.deallocate(embeds)
-            self._host_log(
-                f"warmed prompt encoder for {label}: "
-                f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
-            )
+            # self._host_log(
+            #     f"warmed prompt encoder for {label}: "
+            #     f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
+            # )
 
         self._host_log(
             f"ref2va prompt encoder envelope warmed: "
