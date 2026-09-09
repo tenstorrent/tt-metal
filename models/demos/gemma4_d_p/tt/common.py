@@ -26,6 +26,20 @@ def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
+def weight_cache_identity(model_path, n_layers, mesh_shape, precision):
+    """Describe the converted weights required by a prefill model."""
+    return dict(
+        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
+        n_layers=n_layers,
+        mesh_shape=mesh_shape,
+        build_variant={
+            "prefill_cache_layout": 1,
+            "global_projection": "qk",
+            "precision": {k: str(v) for k, v in sorted(precision._overrides.items())},
+        },
+    )
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size=1,
@@ -89,15 +103,8 @@ def create_tt_model(
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
     _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
-    cache_identity = dict(
-        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
-        n_layers=model_args.num_hidden_layers,
-        mesh_shape=_worker_mesh,
-        build_variant={
-            "prefill_cache_layout": 1,
-            "global_projection": "qk",
-            "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
-        },
+    cache_identity = weight_cache_identity(
+        model_path, model_args.num_hidden_layers, _worker_mesh, precision=_precision_for_variant
     )
     loaded_real_weights = False
     if state_dict is None:
