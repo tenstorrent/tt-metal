@@ -36,6 +36,26 @@ Tier 3 models are compatible with the latest TT-Metal releases but are not optim
 
 # Current Model Assignments
 
+## Agentic Research Model Tests
+
+[Agentic Research Model Tests](../.github/workflows/agentic-research-model-tests.yaml)
+runs every Saturday at 07:00 UTC and supports manual model, hardware, and tier
+selection. Its [registry](../tests/pipeline_reorg/agentic_research_model_tests.yaml)
+is independent of the daily model pipelines. Each hardware entry declares a tier
+and timeout, checked against `models.agentic_research_tier<N>` in
+[time_budget.yaml](../.github/time_budget.yaml). All registered tiers run weekly.
+
+| Model implementation | System | Tier | Weekly coverage |
+|----------------------|--------|------|-----------------|
+| Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
+
+When adding a model, add its command, owner, hardware, tier, and timeout to the
+registry and budget its runtime under the corresponding pipeline tier. Extend the
+manual model and hardware choices when needed. The shared model-test runner
+collects reports and validates centralized accuracy targets.
+
+## Daily Model Pipelines
+
 The initial release of the 3-tier model CI includes models owned by the models-team. We plan to onboard the remaining models incrementally to reduce CI load. The current list of models and systems in the new pipelines can be seen below.
 
 

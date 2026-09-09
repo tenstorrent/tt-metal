@@ -1,0 +1,11 @@
+# Weekly on Saturday. Budgets: models.agentic_research_tier<N> in .github/time_budget.yaml.
+- name: Llama 3.1-8B QB2 decoder and IFEval serving
+  cmd: bash models/demos/llama31_8b_qb2/tests/run_ci.sh
+  model: llama3.1-8b-qb2
+  model_family: Llama
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models

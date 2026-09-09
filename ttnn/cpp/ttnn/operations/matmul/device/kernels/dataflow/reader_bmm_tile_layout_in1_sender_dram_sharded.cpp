@@ -130,7 +130,10 @@ void kernel_main() {
                 (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
             const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
             const uint32_t read_address = in1_tensor_addr + source_tile * in1_tile_size_bytes;
-            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+            // A split reader's row may exceed one NoC burst (e.g. the LM
+            // head). Use its real compile-time bound so the read helper
+            // packetizes it and accounts for every response under this TRID.
+            noc.async_read<NocOptions::TXN_ID, tiles_per_k_row * in1_tile_size_bytes>(
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 read_size,

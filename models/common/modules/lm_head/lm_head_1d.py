@@ -400,7 +400,6 @@ def _validate_lm_head_program_configs(config: LMHead1DConfig) -> None:
             raise ValueError("LMHead1D DRAM-sharded programs require input_memcfg in L1")
         if config.input_memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
             raise ValueError("LMHead1D DRAM-sharded programs require width-sharded input_memcfg")
-        num_compute_cores = config.input_memcfg.shard_spec.grid.num_cores()
 
     for split_index, program_config in enumerate(config.program_configs):
         if program_config is None:
@@ -429,6 +428,10 @@ def _validate_lm_head_program_configs(config: LMHead1DConfig) -> None:
             raise ValueError(f"LMHead1D split {split_index} weight memory must reside in DRAM")
         if weight_memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
             raise ValueError(f"LMHead1D split {split_index} weight memory must be width sharded")
+        # DRAM reader/compute placement is independent of the activation's
+        # multicast sender/storage grid. Each weight bank supplies the
+        # configured number of readers (including BH two/three-reader paths).
+        num_compute_cores = weight_memcfg.shard_spec.grid.num_cores() * program_config.num_workers_per_dram_bank
         covered_width = program_config.per_core_N * TILE_SIZE * num_compute_cores
         if covered_width < physical_widths[split_index]:
             raise ValueError(

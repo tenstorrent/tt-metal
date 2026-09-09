@@ -1,0 +1,4 @@
+lm-eval[ifeval]==0.4.4
+datasets==3.1.0
+setuptools<81
+httpx==0.28.1

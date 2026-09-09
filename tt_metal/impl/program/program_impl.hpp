@@ -407,9 +407,11 @@ public:
     void deallocate_circular_buffers();
 
     // CB tracking for SHM memory reporting
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
-        int device_id, size_t num_devices) const;
-    size_t get_num_cb_devices() const { return cb_devices_.size(); }
+    // Merge exact core-range unions before expanding to individual cores.
+    void merge_cb_l1_regions_by_core_range(
+        std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const;
+    static std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> expand_cb_l1_regions_per_core(
+        const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range);
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 

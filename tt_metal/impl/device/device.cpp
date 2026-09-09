@@ -1124,59 +1124,20 @@ void Device::unregister_program(detail::ProgramImpl* program) {
 uint64_t Device::get_total_cb_allocated() const {
     std::lock_guard<std::mutex> lock(active_programs_mutex_);
 
-    // For PHYSICAL CB tracking accounting for address reuse:
-    // Collect L1 regions per core and merge overlapping addresses
-    // This handles cached/traced programs that share the same physical L1 addresses on the same core
-
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
-
+    // Merge identical core ranges before expanding their address unions to individual cores.
+    // Nonidentical overlapping ranges are still merged per core, preserving physical address reuse.
+    std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_range;
     for (const auto* program : active_programs_) {
-        size_t num_devices = program->get_num_cb_devices();
-
-        // Get L1 regions per core for this program on this device
-        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
-
-        // Merge into device-wide map
-        for (const auto& [core, regions] : program_regions) {
-            auto& core_regions = device_regions_per_core[core];
-            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
-        }
+        program->merge_cb_l1_regions_by_core_range(regions_per_range);
     }
+    const auto device_regions_per_core = detail::ProgramImpl::expand_cb_l1_regions_per_core(regions_per_range);
 
-    // Merge overlapping regions per core to get actual physical usage
     uint64_t total_physical = 0;
-
-    for (auto& [core, regions] : device_regions_per_core) {
-        if (regions.empty()) {
-            continue;
-        }
-
-        // Sort by start address
-        std::sort(regions.begin(), regions.end());
-
-        // Merge overlapping ranges
-        std::vector<std::pair<uint64_t, uint64_t>> merged;
-        merged.push_back(regions[0]);
-
-        for (size_t i = 1; i < regions.size(); i++) {
-            auto& last = merged.back();
-            const auto& current = regions[i];
-
-            if (current.first <= last.second) {
-                // Overlapping - merge
-                last.second = std::max(last.second, current.second);
-            } else {
-                // Non-overlapping - add new region
-                merged.push_back(current);
-            }
-        }
-
-        // Sum merged regions for this core
-        for (const auto& [start, end] : merged) {
+    for (const auto& [core, regions] : device_regions_per_core) {
+        for (const auto& [start, end] : regions) {
             total_physical += (end - start);
         }
     }
-
     return total_physical;
 }
 

@@ -1962,27 +1962,52 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     this->local_circular_buffer_allocation_needed_ = false;
 }
 
-std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
-    int device_id, size_t num_devices) const {
-    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
-    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
+namespace {
+void merge_cb_stats_intervals(
+    std::vector<std::pair<uint64_t, uint64_t>>& merged, const std::vector<std::pair<uint64_t, uint64_t>>& incoming) {
+    for (const auto& region : incoming) {
+        // Ends increase with starts because the accumulator contains disjoint intervals.
+        auto first =
+            std::lower_bound(merged.begin(), merged.end(), region.first, [](const auto& existing, uint64_t start) {
+                return existing.second < start;
+            });
+        if (first != merged.end() && first->first <= region.first && first->second >= region.second) {
+            continue;
+        }
+        auto combined = region;
+        auto last = first;
+        while (last != merged.end() && last->first <= combined.second) {
+            combined.first = std::min(combined.first, last->first);
+            combined.second = std::max(combined.second, last->second);
+            ++last;
+        }
+        if (first == last) {
+            merged.insert(first, combined);
+        } else {
+            *first = combined;
+            merged.erase(first + 1, last);
+        }
+    }
+}
+}  // namespace
 
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
-
-    // For each allocator, iterate through all cores in its CoreRange
+void detail::ProgramImpl::merge_cb_l1_regions_by_core_range(
+    std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const {
     for (const auto& cb_allocator : cb_allocators_) {
-        const auto& l1_regions = cb_allocator.l1_regions;
+        merge_cb_stats_intervals(regions_per_range[cb_allocator.core_range], cb_allocator.l1_regions);
+    }
+}
 
-        // Add these regions to every core in the CoreRange
-        for (uint32_t x = cb_allocator.core_range.start_coord.x; x <= cb_allocator.core_range.end_coord.x; x++) {
-            for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
-                CoreCoord core(x, y);
-                auto& core_regions = regions_per_core[core];
-                core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
+std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::expand_cb_l1_regions_per_core(
+    const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) {
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
+    for (const auto& [core_range, intervals] : regions_per_range) {
+        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                merge_cb_stats_intervals(regions_per_core[CoreCoord(x, y)], intervals);
             }
         }
     }
-
     return regions_per_core;
 }
 

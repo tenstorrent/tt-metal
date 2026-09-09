@@ -1,0 +1,118 @@
+name: Agentic Research Model Tests
+
+on:
+  schedule:
+    - cron: "0 7 * * 6" # Saturday morning, UTC
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model to test
+        type: choice
+        default: all
+        options:
+          - all
+          - llama3.1-8b-qb2
+      sku:
+        description: Hardware to test
+        type: choice
+        default: all
+        options:
+          - all
+          - bh_quietbox_2
+      tier:
+        description: Model tier
+        type: choice
+        default: all
+        options:
+          - all
+          - "1"
+          - "2"
+          - "3"
+      vllm-tt-plugin-ref:
+        description: vLLM TT plugin branch or tag for serving tests
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  select-tests:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    env:
+      REGISTRY: tests/pipeline_reorg/agentic_research_model_tests.yaml
+      SKU: ${{ inputs.sku || 'all' }}
+      MODEL: ${{ inputs.model || 'all' }}
+      TIER: ${{ inputs.tier || 'all' }}
+      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - run: pip3 install PyYAML
+      - name: Validate every tier's time budget
+        run: |
+          for tier in 1 2 3; do
+            python3 .github/scripts/utils/verify_time_budget.py \
+              "$REGISTRY" .github/time_budget.yaml agentic_research "$tier"
+          done
+      - name: Resolve hardware
+        id: hardware
+        run: |
+          if [ "$SKU" = all ]; then SKU=ALL_SKUS_IN_TESTS; fi
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            "$REGISTRY" "$SKU" .github/sku_config.yaml
+      - name: Select model and tier
+        id: select
+        env:
+          MATRIX: ${{ steps.hardware.outputs.matrix }}
+        run: |
+          # A missing tier must never bypass its budget check.
+          jq -e 'all(.[]; .tier == 1 or .tier == 2 or .tier == 3)' <<< "$MATRIX"
+          selected=$(jq -c --arg model "$MODEL" --arg tier "$TIER" --arg plugin_ref "$VLLM_TT_PLUGIN_REF" '
+            [.[] | select(($model == "all" or .model == $model) and
+                          ($tier == "all" or (.tier | tostring) == $tier))
+                 | .cmd = ("export VLLM_TT_PLUGIN_REF=" + ($plugin_ref | @sh) + "\n" + .cmd)]
+          ' <<< "$MATRIX")
+          if [ "$selected" = '[]' ]; then
+            echo "::error::No tests match model=$MODEL, sku=$SKU, tier=$TIER"
+            exit 1
+          fi
+          echo "matrix=$selected" >> "$GITHUB_OUTPUT"
+
+  build-artifact:
+    needs: [check-harbor, select-tests]
+    if: ${{ !cancelled() && needs.select-tests.result == 'success' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      build-inplace-wheel: true
+      platform: Ubuntu 22.04
+
+  model-tests:
+    needs: [build-artifact, select-tests]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.select-tests.result == 'success' }}
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      matrix: ${{ needs.select-tests.outputs.matrix }}
+      enabled-skus: ""
+      tier: ""
+      summary-scope: agentic-research
