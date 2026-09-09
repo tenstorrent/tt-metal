@@ -72,4 +72,4 @@ def test_bw_sigmoid_all_bitpatterns(device, dtype):
 
     lost = checked & (result == 0)
     assert lost.sum() == 0, f"{int(lost.sum())} inputs returned a zero gradient, first at x={float(x[lost][0])}"
-    assert_with_ulp(golden[checked], result[checked], ulp_threshold=8)
+    assert_with_ulp(expected_result=golden[checked], actual_result=result[checked], ulp_threshold=8)
