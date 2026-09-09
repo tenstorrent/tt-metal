@@ -26,9 +26,12 @@ Two findings shape everything below:
    `models/demos/common/prefill/`, and 2/4/8-galaxy mesh descriptors plus rank bindings are checked
    in and exercised for DeepSeek/Kimi/GLM. Gemma 4 is the only thing gated to one rank, by two
    explicit `NotImplementedError`s.
-2. **The KV address table is a second, independent blocker on the slot count.** It hits protobuf's
-   2 GiB message cap between **2 and 3** slots — today's config sits at 78% of it — for reasons
-   unrelated to PP. §5 covers it.
+2. **The KV address table is a second blocker on the slot count, unrelated to PP.** It hits
+   protobuf's 2 GiB message cap between **2 and 3** slots — today's config sits at 78% of it — after
+   which the writer switches to a compressed form automatically. No code needs writing (the worker
+   compiles tt-metal's reader), but the **deployed** Gemma 4 worker pins tt-metal five weeks before
+   that feature and mis-reads a compressed table *silently*. §5 has the evidence and the fix: bump
+   one submodule. Clear this before raising `PREFILL_NUM_USERS`.
 
 ---
 
@@ -103,8 +106,9 @@ attention sits at global indices 5, 11, 17, …, 59:
 
 Worst rank **≈0.905 GiB per user per device**, a **3.9×** reduction from 3.53 GiB. Weights drop to
 ≈1.9 GB per device. Budget on the worst rank: 32 − (1.9 weights + 0.7 embedding on rank 0 + ~2 GB
-traces/scratch) ≈ 27 GB → **~29 slots on DRAM grounds**. DRAM stops being the binding constraint;
-§5 covers what replaces it.
+traces/scratch) ≈ 27 GB → **~29 slots on DRAM grounds**. DRAM is the binding constraint *once* the
+address-table issue in §5 is cleared; until then the practical ceiling is ~2 slots regardless of
+how much DRAM the split frees.
 
 ### 1.4 Schedule, bubbles, and why no microbatching is needed
 
@@ -359,12 +363,15 @@ For 31B (`num_kv_shared_layers=0`) it can return `None`.
    highest-risk interaction in the change set (§6.2).
 6. **Migration merge**, 2 ranks then 4 ranks, table on shared storage. Verify the merged table spans
    all 60 global `semantic_layer`s with unchanged config IDs.
-7. **Slot ramp.** Raise `PREFILL_NUM_USERS` 2 → 4 → 8 at PP=4, watching for allocator OOM **and**
-   the address-table cap (§5).
+7. **Slot ramp.** **Do §5.3 actions 1-2 first** — past ~3 slots the published table switches to
+   the compressed runs-only form, and the currently deployed worker mis-reads that silently. Then
+   raise `PREFILL_NUM_USERS` 2 → 4 → 8 at PP=4, watching for allocator OOM, verifying migrated KV by
+   `dst-bytes` at each step, and noting that rank 0's host RAM for the table grows ~270 MiB per slot
+   (§5.1).
 
 ---
 
-## 5. The address-table cap, and how to fix it
+## 5. The address-table cap (blocking — needs a worker submodule bump)
 
 ### 5.1 Diagnosis
 
@@ -405,29 +412,82 @@ slot) before compressing; at 8 slots that is ~2.2 GB.
 
 ### 5.2 Fixes, easiest first
 
-**A must be answered first** — it decides whether anything else is needed. B and C are additive and
-together reach ~12 slots while keeping the table readable by an entries-only worker, which is the
-safe path if A comes back negative.
+**A is answered, and it is half-blocking:** no out-of-tree code is needed, but the *deployed*
+worker is pinned to a pre-compression tt-metal and fails silently on a compressed table. B and C
+remain live contingencies if that pin cannot move; D addresses host RAM only. See §5.3.
 
-#### A. Confirm whether the worker already reads `STRIDED_ROWS` — zero code
+#### A. Does the worker read `STRIDED_ROWS`? — **ANSWERED: capability yes, deployment NO**
 
-The runs format exists so readers can adopt it, and the "dual-write for old readers" wording implies
-a transition that may already be complete. One question to the tt-llm-engine owners settles whether
-there is a blocker at all.
+**Investigated 2026-09-08 against the checkouts on this machine. Split answer, and the deployment
+half is a blocker that must be cleared before `PREFILL_NUM_USERS` goes past 2.**
 
-It can also be **tested today, at 2 slots, before any PP work**, via the canary override
-`KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES` (`kv_chunk_address_table_protobuf.cpp:44-53`, read per call
-specifically so tests can re-point it). Setting it low forces `dual_write=false`, so the current
-single-rank disagg run emits a runs-only table and either works or fails loudly:
+**Capability — yes.** The worker has no table reader of its own; it compiles and calls tt-metal's:
+
+- `disaggregation/migration/src/worker/control_thread.cpp:1627` calls
+  `tt_dis::import_from_protobuf_file(path)`.
+- `disaggregation/migration/CMakeLists.txt:206` and `:1019` compile
+  `${TT_METAL_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp`
+  straight into the worker targets.
+- A search for `STRIDED_ROWS` / `KvChunkRun` / `ChunkCompression` / `format_version` across every
+  `.cpp` / `.hpp` / `.proto` in tt-llm-engine returns **zero** hits — there is no second
+  implementation to maintain.
+
+So **no out-of-tree code has to be written.** Runs support arrives purely by which tt-metal the
+worker is built against.
+
+**Deployment — no.** That is also the problem. The worker image actually used for Gemma 4 disagg is
+`/data/hshah/gemma4-disagg-1p1d/tt-llm-engine-gemma-worker`, whose Dockerfile "compiles tt-metal
+(from submodule)" — **not** from the runner's checkout. That submodule is pinned at:
+
+```
+e49ac055d61363311b5ddfdcd172502e89e84eca  (v0.75.0-dev20260710-16)  2026-07-30
+```
+
+five weeks before the compression commit `384227a543c` (2026-09-04). Verified against that
+submodule tree:
+
+- `git merge-base --is-ancestor 384227a543c HEAD` → **not an ancestor**.
+- Its `kv_chunk_address_table_protobuf.cpp` contains **zero** occurrences of `STRIDED_ROWS` /
+  `install_strided_map` / `KvChunkRun`.
+- Its `kv_chunk_address_table.proto` stops at field 9 (`configs`) — no field 11 (`runs`), no field
+  12 (`format_version`), no per-config `compression` tag.
+
+> ⚠️ **The failure mode is SILENT, not loud.** The fail-closed guarantee in the new proto protects
+> readers that know about `format_version`; this reader predates the field, so it has nothing to
+> gate on. Handed a runs-only table it will: ignore unknown fields 11/12 (normal proto3 behaviour),
+> find `entries` (field 8) **empty**, parse successfully, and build a table in which every lookup
+> returns a zeroed `KvCacheLocation`. Its only `throw`s are for duplicate config names, an
+> out-of-range `config_idx`, and I/O errors — none of which fire here. The worker would migrate
+> nothing, or from address 0, and report success.
+
+Because the writer flips to runs-only automatically between 2 and 3 slots (§5.1), raising
+`PREFILL_NUM_USERS` against this worker build would silently produce empty/garbage KV on the decode
+side. **This must be cleared first.**
+
+**The fix: bump the submodule.** Point
+`gemma4-disagg-1p1d/tt-llm-engine-gemma-worker`'s tt-metal submodule at ≥ `384227a543c` and rebuild
+the image. Still no code change — but a real deployment prerequisite, not a formality. Note the
+newer sibling checkout `/data/hshah/tt-llm-engine` (HEAD `62943f1c`) defaults `TT_METAL_DIR` to
+`../../tt-metal`, so a worker built there against this tree already has the support; the pinned
+submodule in the *deployment* copy is what lags.
+
+##### Required confirmation on hardware (no longer optional)
+
+Because failure is silent, verify explicitly rather than trusting the absence of errors. Force
+runs-only at 2 slots on the existing single-rank config
+(`kv_chunk_address_table_protobuf.cpp:44-53`, read per call so tests can re-point it):
 
 ```bash
 KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=1   # forces runs-only; existing 2-slot config, no PP needed
 ```
 
-The override can only *lower* the threshold. Raising it cannot keep dual-write at 8 slots — the
-2 GiB limit is protobuf's own message cap, so serialization would simply fail instead.
+Then assert on **migrated bytes**, via the `dst-bytes` path already used by
+`gemma4_producer_loopback_migration.yaml` (`PREFILL_VERIFY_MIGRATION: "dst-bytes"`). A run that
+merely completes without error proves nothing. Do this both before and after the submodule bump: it
+should fail byte-comparison before and pass after.
 
-**Do this first.** If the worker reads runs, the cap is a non-issue and B/C/D are unnecessary.
+Note the override can only *lower* the threshold. Raising it cannot keep dual-write at 8 slots — the
+2 GiB limit is protobuf's own message cap, so serialization would fail instead.
 
 #### B. Per-config `num_layers` — small code, 24% saving, needs decode-side agreement
 
@@ -492,13 +552,29 @@ describe memory that isn't there. This is precisely the regularity the strided r
 to capture, so D is the correct expression of the idea; E is a dead end. Recorded so it isn't
 re-proposed.
 
-#### Recommendation
+### 5.3 Conclusion
 
-Run **A** now — one question plus a one-env-var experiment on the existing 2-slot config, and it may
-close the issue entirely. If the worker cannot read runs, do **C** (optionally with **B**), which
-reaches the slot target with no out-of-tree change. Keep **D** in reserve.
+**The wire format is not the problem; the deployed worker's tt-metal pin is.** Nothing needs to be
+written in either repo — the worker compiles tt-metal's reader — but the Gemma 4 worker image is
+pinned five weeks behind the compression commit, and that build mis-reads a compressed table
+**silently** (§5.2 A). Since the writer switches to compressed automatically between 2 and 3 slots,
+this sits directly in front of the slot goal.
 
----
+Ordered actions:
+
+1. **Bump `tt-llm-engine-gemma-worker`'s tt-metal submodule to ≥ `384227a543c` and rebuild the
+   worker image.** Prerequisite for `PREFILL_NUM_USERS > 2`, independent of PP.
+2. **Verify by migrated bytes**, not by absence of errors — force runs-only with
+   `KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=1` and check `dst-bytes` (§5.2 A). Expect fail-before,
+   pass-after; that asymmetry is the proof.
+3. **Then ramp slots.** With the bump in place the cap is a non-issue and DRAM is the binding
+   constraint again — ~29 slots at PP=4 by the §1.3 budget.
+4. **Watch rank 0 host RAM**, which materializes the dense grid (~270 MiB per slot, §5.1) before
+   compressing: ~2.2 GB at 8 slots. Fix **D** removes it if it ever matters.
+
+If the submodule pin genuinely cannot move (e.g. the worker depends on other behaviour in that
+tt-metal), fall back to **C** — per-rank tables keep each table under the cap at PP=4, so the writer
+never emits a compressed table and the old reader stays correct.
 
 ## 6. Risks and open questions
 
