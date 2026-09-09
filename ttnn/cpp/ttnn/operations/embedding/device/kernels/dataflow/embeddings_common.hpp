@@ -31,28 +31,48 @@ uint32_t pad_local_addr;
 uint32_t zero_local_addr;
 uint32_t one_local_addr;
 
+// Fills the local weight cache (pad row under PADDED, rows 0 and 1 under BINARY) with
+// `weight_stick_size` bytes of each cached row, starting `weight_col_offset_bytes` into the row.
+// The offset is the core's column slice of the weight row (non-zero only for width-/block-sharded
+// output); it is applied per read so that `weights` can be built on the clean buffer base.
 template <typename T>
 FORCE_INLINE constexpr void prepare_local_cache(
     const Noc& noc,
     uint32_t local_cache_cb,
     const T& weights,
     uint32_t weight_stick_size,
-    uint32_t pad_token_arg_idx = 0) {
+    uint32_t pad_token_arg_idx = 0,
+    uint32_t weight_col_offset_bytes = 0) {
 #if defined PADDED
     pad_token = get_arg_val<uint32_t>(pad_token_arg_idx);
     CircularBuffer cb(local_cache_cb);
     cb.reserve_back(1);
     pad_local_addr = cb.get_write_ptr();
-    noc.async_read(weights, CoreLocalMem<uint32_t>(pad_local_addr), weight_stick_size, {.page_id = pad_token}, {});
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(pad_local_addr),
+        weight_stick_size,
+        {.page_id = pad_token, .offset_bytes = weight_col_offset_bytes},
+        {});
     noc.async_read_barrier();
 #elif defined BINARY
     CircularBuffer cb(local_cache_cb);
     cb.reserve_back(2);
     zero_local_addr = cb.get_write_ptr();
-    noc.async_read(weights, CoreLocalMem<uint32_t>(zero_local_addr), weight_stick_size, {.page_id = 0}, {});
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(zero_local_addr),
+        weight_stick_size,
+        {.page_id = 0, .offset_bytes = weight_col_offset_bytes},
+        {});
 
     one_local_addr = zero_local_addr + weight_stick_size;
-    noc.async_read(weights, CoreLocalMem<uint32_t>(one_local_addr), weight_stick_size, {.page_id = 1}, {});
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(one_local_addr),
+        weight_stick_size,
+        {.page_id = 1, .offset_bytes = weight_col_offset_bytes},
+        {});
 
     noc.async_read_barrier();
 #endif
@@ -60,6 +80,12 @@ FORCE_INLINE constexpr void prepare_local_cache(
 
 // Issues an async read of one token's weight stick (or a chunk of it) into the destination L1
 // address. Caller must barrier before use.
+//
+// `chunk_offset_bytes` selects the chunk within the (already column-sliced) stick and applies to
+// both the DRAM read and the local-cache replay. `weight_col_offset_bytes` is the core's column
+// slice of the weight row; it applies to the DRAM read only, because prepare_local_cache already
+// filled the local cache from that offset. Passing it here (rather than folding it into the
+// accessor's base address) keeps `weights` on the clean buffer base.
 template <typename T>
 FORCE_INLINE void read_token_async(
     const Noc& noc,
@@ -67,7 +93,9 @@ FORCE_INLINE void read_token_async(
     const T& weights,
     uint32_t dst_l1_addr,
     uint32_t size_bytes,
-    uint32_t weight_offset_bytes = 0) {
+    uint32_t chunk_offset_bytes = 0,
+    uint32_t weight_col_offset_bytes = 0) {
+    const uint32_t weight_offset_bytes = weight_col_offset_bytes + chunk_offset_bytes;
 #if defined PADDED
     if (token == pad_token) {
         const uint8_t noc_id = noc.get_noc_id();
@@ -76,7 +104,7 @@ FORCE_INLINE void read_token_async(
             src,
             CoreLocalMem<uint32_t>(dst_l1_addr),
             size_bytes,
-            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = pad_local_addr + weight_offset_bytes},
+            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = pad_local_addr + chunk_offset_bytes},
             {});
         return;
     }
@@ -94,7 +122,7 @@ FORCE_INLINE void read_token_async(
         src,
         CoreLocalMem<uint32_t>(dst_l1_addr),
         size_bytes,
-        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = local_addr + weight_offset_bytes},
+        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = local_addr + chunk_offset_bytes},
         {});
 #elif defined BFP16
     union {
