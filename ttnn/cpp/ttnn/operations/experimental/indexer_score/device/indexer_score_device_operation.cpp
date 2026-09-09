@@ -442,7 +442,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
             "indexer_score fused: head_group_size must be 0 or Hi (no head streaming)");
     }
 
-    // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
+    // Weights use projection order [B, 1, Sq, Hi].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
     TT_FATAL(k_shape[1] == 1, "k must be single-head [B, 1, T, D], got {} heads", k_shape[1]);
     TT_FATAL(q_shape[3] == k_shape[3], "q head dim {} != k head dim {}", q_shape[3], k_shape[3]);
@@ -452,8 +452,8 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     if (!attrs.synthesize_gate) {
         TT_FATAL(w_shape.rank() == 4, "weights must be rank 4");
         TT_FATAL(
-            w_shape[1] == q_shape[1] && w_shape[2] == q_shape[2] && w_shape[3] == 1,
-            "weights must be [B, Hi, Sq, 1] matching q [B, Hi, Sq, D]");
+            w_shape[1] == 1 && w_shape[2] == q_shape[2] && w_shape[3] == q_shape[1],
+            "weights must be [B, 1, Sq, Hi] matching q [B, Hi, Sq, D]");
         TT_FATAL(q_shape[0] == w_shape[0], "q/weights batch mismatch ({} vs {})", q_shape[0], w_shape[0]);
         TT_FATAL(w.dtype() == DataType::BFLOAT16, "weights must be bfloat16 (got {})", w.dtype());
         TT_FATAL(w.layout() == Layout::TILE, "weights must be TILE layout");
