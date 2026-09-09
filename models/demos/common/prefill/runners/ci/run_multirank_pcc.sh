@@ -49,8 +49,7 @@ case "${MODEL}" in
     # a long way (SP x TP fits 34 at bf16, 56 at fp8), so this sits well under the edge, not on it.
     NUM_USERS_DEFAULT=28
     TP_SHARD_KV_DEFAULT=1
-    # UNTRACED, as of now
-    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
+    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1; export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
@@ -151,8 +150,8 @@ python3 "${TTRUN_PY}" \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
-    ${RUNNER_ENV} \
     export LOGURU_LEVEL=INFO; \
+    ${RUNNER_ENV} \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
