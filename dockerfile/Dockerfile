@@ -250,12 +250,19 @@ RUN curl -fsSL -o /usr/local/bin/tt-smi \
 
 # include-what-you-use. Here rather than with the other tools in ci-build-light
 # because nothing in the build needs it: this is the first stage shared by the
-# CI test images and the dev images, which are the two consumers. It carries its
-# own copy of Clang's builtin headers, since the LLVM apt packages install only
-# versioned names and IWYU's default lookup wants a plain `clang` on PATH.
+# CI test images and the dev images, which are the two consumers.
+#
+# IWYU reads Clang's builtin headers from the LLVM prefix it was built against,
+# which is the same /usr/lib/llvm-<major> the apt packages above install. The
+# check below analyzes a file that needs those headers, so that coupling breaks
+# the image build rather than the first analysis run.
 COPY --from=iwyu-layer --link /install/ /usr/local/
 RUN test -x /usr/local/bin/include-what-you-use || \
-    { echo "ERROR: include-what-you-use not found in iwyu-layer" >&2; exit 1; }
+      { echo "ERROR: include-what-you-use not found in iwyu-layer" >&2; exit 1; }; \
+    printf '#include <stddef.h>\nsize_t f(void) { return 0; }\n' > /tmp/iwyu-check.c; \
+    include-what-you-use -xc /tmp/iwyu-check.c 2>&1 | grep -q 'has correct #includes' || \
+      { echo "ERROR: include-what-you-use cannot find Clang's builtin headers" >&2; exit 1; }; \
+    rm -f /tmp/iwyu-check.c
 
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \

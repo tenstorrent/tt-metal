@@ -15,7 +15,6 @@ INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 IWYU_LLVM_PREFIX="${IWYU_LLVM_PREFIX:-/usr/lib/llvm-${IWYU_LLVM_MAJOR}}"
 DOWNLOAD_URL="https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/${IWYU_VERSION}.tar.gz"
 TMPDIR="/tmp/iwyu"
-CLANG_RESOURCE_DIR="${IWYU_LLVM_PREFIX}/lib/clang/${IWYU_LLVM_MAJOR}"
 
 echo "Installing include-what-you-use ${IWYU_VERSION} (LLVM ${IWYU_LLVM_MAJOR})..."
 
@@ -43,24 +42,18 @@ mkdir -p "${INSTALL_PREFIX}"
 
 # Build with CMake.
 #
-# IWYU needs Clang's builtin headers (stddef.h and friends) at runtime. Its
-# default is to locate them next to a `clang` on PATH, but the LLVM apt
-# packages install only versioned names, so there is no `clang` to find. Point
-# the lookup at IWYU's own tree instead and ship the headers there, which is
-# the packaging mode IWYU documents for exactly this case.
+# The resource dir is left at IWYU's default, which bakes in the LLVM prefix it
+# was built against. IWYU then finds Clang's builtin headers (stddef.h and
+# friends) under that prefix with no `clang` on PATH, so the consuming image
+# needs LLVM at the same prefix. That holds because both come from the same LLVM
+# apt packages, and if it ever stops holding IWYU says "fatal error: 'stddef.h'
+# file not found" rather than failing quietly.
 cmake -S "${TMPDIR}" -B "${TMPDIR}/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCMAKE_PREFIX_PATH="${IWYU_LLVM_PREFIX}" \
-    -DIWYU_RESOURCE_RELATIVE_TO=iwyu \
-    -DIWYU_RESOURCE_DIR="../lib/clang/${IWYU_LLVM_MAJOR}"
+    -DCMAKE_PREFIX_PATH="${IWYU_LLVM_PREFIX}"
 cmake --build "${TMPDIR}/build" -j"$(nproc)"
 cmake --install "${TMPDIR}/build"
-
-# Ship the builtin headers at the path configured above. Only include/ is
-# needed; the rest of Clang's resource dir is compiler-rt runtime libraries.
-mkdir -p "${INSTALL_PREFIX}/lib/clang/${IWYU_LLVM_MAJOR}"
-cp -r "${CLANG_RESOURCE_DIR}/include" "${INSTALL_PREFIX}/lib/clang/${IWYU_LLVM_MAJOR}/include"
 
 # Cleanup
 rm -rf "${TMPDIR}"
