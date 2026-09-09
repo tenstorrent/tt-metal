@@ -10,6 +10,8 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/math.hpp>
+
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -422,9 +424,9 @@ Tensor reduce(
         const uint32_t tile_h = prepared_input.tensor_spec().tile().get_height();
         const uint32_t tile_w = prepared_input.tensor_spec().tile().get_width();
         const uint32_t NC = logical[0] * logical[1];
-        const uint32_t Wt = (padded[3] + tile_w - 1) / tile_w;
+        const uint32_t Wt = tt::div_up(padded[3], tile_w);
         // Padded H, matching the factory's Ht so the reader's ht >= Ht guard indexes real tiles.
-        const uint32_t Ht = (padded[2] + tile_h - 1) / tile_h;
+        const uint32_t Ht = tt::div_up(padded[2], tile_h);
         const uint32_t col_groups = NC * Wt;  // cores the un-split path would use
 
         const auto grid = prepared_input.device()->compute_with_storage_grid_size();
