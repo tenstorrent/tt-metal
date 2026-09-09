@@ -38,7 +38,7 @@ private:
 
 protected:
     // Write ``lr`` to the optimizer and record it as this scheduler's last LR.
-    // C++ counterpart of the Python ``_SchedulerBase._apply_initial_lr`` mixin,
+    // C++ counterpart of the Python ``_SchedulerBase._update_lr`` mixin,
     // shared by every site that publishes a new LR:
     //   * constructors — mirror PyTorch's construction-time initial step: each
     //     scheduler applies its step-0 LR at construction;

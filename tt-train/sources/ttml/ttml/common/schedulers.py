@@ -91,8 +91,15 @@ class _SchedulerBase:
         self._last_step = 0
         self._last_lr = self._base_lr
 
-    def _apply_initial_lr(self, lr: float):
-        """Write the construction-time LR, mirroring PyTorch's initial step."""
+    def _update_lr(self, lr: float):
+        """Write ``lr`` to the optimizer and record it as this scheduler's last LR.
+
+        Shared by every site that publishes a new LR (same contract as the C++
+        ``LRSchedulerBase::update_lr``):
+          * constructors — mirror PyTorch's construction-time initial step;
+          * step() — publish the newly computed LR;
+          * set_state_dict() — push the restored live LR back to the optimizer.
+        """
         self._optimizer.set_lr(lr)
         self._last_lr = lr
 
@@ -114,14 +121,13 @@ class _SchedulerBase:
 
     def set_state_dict(self, state: dict):
         self._last_step = state["m_last_step"]
-        self._last_lr = state["m_last_lr"]
         self._base_lr = state["m_base_lr"]
         # Push the restored live LR back to the optimizer. The constructor
         # wrote the construction-time LR (e.g. base_lr * start_factor), so if
         # the optimizer's own state was loaded before the scheduler was
         # constructed, the checkpoint's live LR has been overwritten and the
         # first resumed optimizer.step() would otherwise run at the wrong LR.
-        self._optimizer.set_lr(self._last_lr)
+        self._update_lr(state["m_last_lr"])
 
 
 class CosineAnnealingScheduler(_SchedulerBase):
@@ -132,15 +138,14 @@ class CosineAnnealingScheduler(_SchedulerBase):
         self._T_max = T_max
         self._eta_min = eta_min
         # At step 0 the cosine factor is 1, so the LR is (re)set to the base LR.
-        self._apply_initial_lr(self._base_lr)
+        self._update_lr(self._base_lr)
 
     def step(self):
         self._last_step += 1
         new_lr = self._eta_min + 0.5 * (self._base_lr - self._eta_min) * (
             1.0 + math.cos(math.pi * self._last_step / self._T_max)
         )
-        self._optimizer.set_lr(new_lr)
-        self._last_lr = new_lr
+        self._update_lr(new_lr)
 
     def get_state_dict(self) -> dict:
         state = super().get_state_dict()
@@ -164,14 +169,13 @@ class StepScheduler(_SchedulerBase):
         self._step_size = step_size
         self._gamma = gamma
         # At step 0 the factor is gamma**0 == 1, so the LR is (re)set to the base LR.
-        self._apply_initial_lr(self._base_lr)
+        self._update_lr(self._base_lr)
 
     def step(self):
         self._last_step += 1
         num_decays = self._last_step // self._step_size
         new_lr = self._base_lr * (self._gamma**num_decays)
-        self._optimizer.set_lr(new_lr)
-        self._last_lr = new_lr
+        self._update_lr(new_lr)
 
     def get_state_dict(self) -> dict:
         state = super().get_state_dict()
@@ -202,15 +206,14 @@ class LinearScheduler(_SchedulerBase):
         self._total_steps = total_steps
         # Mirror PyTorch, which applies start_factor at construction: the LR
         # used before the first step() is already base_lr * start_factor.
-        self._apply_initial_lr(self._base_lr * start_factor)
+        self._update_lr(self._base_lr * start_factor)
 
     def step(self):
         self._last_step += 1
         progress = min(self._last_step / self._total_steps, 1.0)
         factor = self._start_factor + (self._end_factor - self._start_factor) * progress
         new_lr = self._base_lr * factor
-        self._optimizer.set_lr(new_lr)
-        self._last_lr = new_lr
+        self._update_lr(new_lr)
 
     def get_state_dict(self) -> dict:
         state = super().get_state_dict()
@@ -231,13 +234,12 @@ class LambdaScheduler(_SchedulerBase):
         super().__init__(optimizer)
         self._lr_lambda = lr_lambda
         # Mirror PyTorch's LambdaLR, which applies lr_lambda(0) at construction.
-        self._apply_initial_lr(self._base_lr * lr_lambda(0))
+        self._update_lr(self._base_lr * lr_lambda(0))
 
     def step(self):
         self._last_step += 1
         new_lr = self._base_lr * self._lr_lambda(self._last_step)
-        self._optimizer.set_lr(new_lr)
-        self._last_lr = new_lr
+        self._update_lr(new_lr)
 
     # The ``lr_lambda`` itself is never pickled. If it is a plain function or
     # ``lambda`` (``types.FunctionType``) the state stores ``None`` and the
@@ -296,7 +298,7 @@ class SequentialScheduler(_SchedulerBase):
         # Only the first child is active; restore its initial LR. Mirrors
         # PyTorch's SequentialLR, which resets the LR to initial_lr and redoes
         # the initial step of the first scheduler only.
-        self._apply_initial_lr(self._schedulers[0].get_last_lr())
+        self._update_lr(self._schedulers[0].get_last_lr())
 
     def step(self):
         if self._current_scheduler_index >= len(self._schedulers):
@@ -338,7 +340,7 @@ class SequentialScheduler(_SchedulerBase):
         # expected keys won't be present in the per-child sub-dict.
         self._current_step_in_scheduler = state["m_current_step_in_scheduler"]
         self._current_scheduler_index = state["m_current_scheduler_index"]
-        self._last_lr = state["m_last_lr"]
+        restored_last_lr = state["m_last_lr"]
 
         for i, child in enumerate(self._schedulers):
             prefix = f"scheduler_{i}/"
@@ -348,4 +350,4 @@ class SequentialScheduler(_SchedulerBase):
         # Each child's set_state_dict pushed ITS saved live LR to the
         # optimizer, so the optimizer now holds the last child's — re-apply
         # this chain's own live LR (the active child's).
-        self._optimizer.set_lr(self._last_lr)
+        self._update_lr(restored_last_lr)
