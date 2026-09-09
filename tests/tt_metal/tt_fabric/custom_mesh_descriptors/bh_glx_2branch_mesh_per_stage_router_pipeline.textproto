@@ -6,17 +6,18 @@
 # Topology (both branches loop back to the router):
 #
 #   Branch A: router(4x2) -> 4x1 -> ( 4x1 -> 4x1 -> 4x1 -> 4x1 -> 4x1 -> 4x2 ) x10 -> 4x4 -> router
-#   Branch B: router(4x2) -> 4x1 -> ( 4x2 ) x5 -> router
+#   Branch B: router(4x2) -> 4x1 -> ( 4x2 ) x5 -> 4x4 -> router
 #
-# 69 meshes / 69 ranks total:
+# 70 meshes / 70 ranks total:
 #   mesh 0            router                4x2
 #   mesh 1            branch A head         4x1
 #   meshes 2..61      branch A body         ten groups of (4x1 x5 + 4x2)
 #   mesh 62           branch A tail         4x4
 #   mesh 63           branch B head         4x1
 #   meshes 64..68     branch B body         4x2 x5
+#   mesh 69           branch B tail         4x4
 #
-# 352 chips = 11 BLACKHOLE galaxies. The row axis is RING (the 4-row Y ring the
+# 368 chips = 11.5 BLACKHOLE galaxies (12 galaxies, 16 chips spare). The row axis is RING (the 4-row Y ring the
 # decoder / lm-head CCLs need); the column axis is LINE. The router sits at fabric degree 4
 # -- a_send / a_recv / b_send / b_recv -- which is what a two-branch FABRIC-return fork needs.
 #
@@ -123,6 +124,7 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "S4x2" mesh_id: 66 } }  # B stage 2 (4x2)
   instances { mesh { mesh_descriptor: "S4x2" mesh_id: 67 } }  # B stage 3 (4x2)
   instances { mesh { mesh_descriptor: "S4x2" mesh_id: 68 } }  # B stage 4 (4x2)
+  instances { mesh { mesh_descriptor: "S4x4" mesh_id: 69 } }  # B tail (4x4)
 
   # --- Branch A ------------------------------------------------------------
   connections {
@@ -473,9 +475,14 @@ graph_descriptors {
   }  # B stage 3 -> B stage 4
   connections {
     nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 68 } }
+    nodes { mesh { mesh_descriptor: "S4x4" mesh_id: 69 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B stage 4 -> B tail
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x4" mesh_id: 69 } }
     nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 0 } }
     channels { count: 8 policy: RELAXED }
-  }  # B stage 4 -> router
+  }  # B tail -> router
 }
 
 # --- Instantiation ----------------------------------------------------------
