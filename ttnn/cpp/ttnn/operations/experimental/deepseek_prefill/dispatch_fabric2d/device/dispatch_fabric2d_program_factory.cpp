@@ -5,7 +5,6 @@
 #include "dispatch_fabric2d_program_factory.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <memory>
 
 #include <tt-metalium/allocator.hpp>
@@ -269,7 +268,6 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             const auto in_words = to_words(forwarding_chunks(stream, row, extent, args.num_links));
             const auto out_words = to_words(outgoing_chunks(stream, row, extent, args.num_links));
 
-            const char* skip_relay = std::getenv("DSPF2D_SKIP_RELAY");
             tt::tt_metal::KernelDescriptor rdr;
             rdr.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/dataflow/"
@@ -292,13 +290,6 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             for (uint32_t i = 0; i < dspf2d::ReaderRtArg::kCount; i++) {
                 tt::tt_metal::TensorAccessorArgs(dram[i]).append_to(rdr.compile_time_args);
             }
-            rdr.defines.push_back({"DSPF2D_SKIP_RELAY", skip_relay != nullptr ? skip_relay : "0"});
-            const char* depth1 = std::getenv("DSPF2D_RELAY_DEPTH1");
-            rdr.defines.push_back({"DSPF2D_RELAY_DEPTH1", depth1 != nullptr ? depth1 : "0"});
-            const char* diag = std::getenv("DSPF2D_DIAG");
-            rdr.defines.push_back({"DSPF2D_DIAG", diag != nullptr ? diag : "0"});
-            const char* wait_bound = std::getenv("DSPF2D_WAIT_BOUND");
-            rdr.defines.push_back({"DSPF2D_WAIT_BOUND", wait_bound != nullptr ? wait_bound : "0"});
             rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt::tt_metal::NOC::NOC_0,
