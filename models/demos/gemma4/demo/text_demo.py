@@ -1091,7 +1091,16 @@ def run_generation(
             # ttnn_decode_forward returns a bare logits tensor on the on-device-sampling
             # path (on_device_logits=True) and a (logits, None) tuple otherwise. Normalize
             # to a 2-tuple so the trace-capture call sites below can always unpack two values.
-            return out if isinstance(out, tuple) else (out, None)
+            out = out if isinstance(out, tuple) else (out, None)
+            logits, extra = out
+            if not on_device_sampling:
+                return logits, extra
+            # Sample inside the decode trace. sample() after execute_trace
+            # allocates CBs against a live trace. enable_trace=False because
+            # Gemma4 disables nested sampling traces (_tt_disable_sampling_trace).
+            sampled = model.sampling.sample(logits, enable_trace=False)
+            tokens = sampled[0] if isinstance(sampled, tuple) else sampled
+            return tokens, extra
 
         def _inputs_to_device(inputs):
             return {k: ttnn.to_device(v, device=mesh_device) for k, v in inputs.items() if v is not None}
@@ -1102,23 +1111,13 @@ def run_generation(
                     ttnn.copy_host_to_device_tensor(v, trace_device_inputs[k])
 
         def _extract_token(decode_output):
-            """Extract next token from model output (token IDs or logits)."""
+            """Read the next token from a device tensor (token IDs or logits)."""
+            output_cpu = (
+                ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0]) if is_mesh else ttnn.to_torch(decode_output)
+            )
             if on_device_sampling:
-                # Keep main behavior: decode sampling in this demo remains untraced.
-                # SamplingGenerator.sample() returns (tt_tokens, tt_log_probs); take the tokens.
-                sampled = model.sampling.sample(decode_output, enable_trace=False)
-                tt_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
-                sampled_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
-                )
-                return sampled_cpu.reshape(-1)[0].item()
-            else:
-                output_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
-                    if is_mesh
-                    else ttnn.to_torch(decode_output)
-                )
-                return output_cpu.squeeze().argmax().item()
+                return output_cpu.reshape(-1)[0].item()
+            return output_cpu.squeeze().argmax().item()
 
         sample_mode = "device" if on_device_sampling else "host"
         logger.info(
@@ -1151,7 +1150,9 @@ def run_generation(
                 if enable_decode_trace and trace_id is not None:
                     # ── Traced execution: copy inputs and replay ──
                     _copy_inputs_to_trace(inputs_h)
-                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    # Host then reads the captured token buffer; non-blocking
+                    # execute_trace does not complete before that to_torch.
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
                     decode_logits = trace_output
                     t_enq_end = time.perf_counter()
 
@@ -1184,7 +1185,7 @@ def run_generation(
                     # 3. Execute trace for current iteration
                     profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
                     _copy_inputs_to_trace(inputs_h2)
-                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
                     decode_logits = trace_output
                     t_enq_end = time.perf_counter()
 

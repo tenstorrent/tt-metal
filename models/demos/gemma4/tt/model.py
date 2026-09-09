@@ -1193,14 +1193,25 @@ class Gemma4Model:
         if memory_config is not None:
             embed_kwargs["memory_config"] = memory_config
         embeds = ttnn.embedding(tokens, self.embedding_weight, **embed_kwargs)
+        return self._allgather_tp_embeds(embeds)
 
-        # All-gather sharded hidden dim back to full hidden
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
-            embeds = ttnn.unsqueeze_to_4D(embeds)
-            from models.demos.gemma4.tt.ccl import ccl_allgather
+    def _allgather_tp_embeds(self, embeds):
+        """Reconstruct the full hidden dim after a column-parallel embedding lookup.
 
-            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
-        return embeds
+        Tile before the gather: ROW_MAJOR pages wider than the default Wormhole
+        fabric packet (31B TP=2) hang, while the TILE decoder-layer all-reduce
+        of the same width does not.
+        """
+        if self.mesh_config is None or self.mesh_config.tp <= 1:
+            return embeds
+        embeds = ttnn.unsqueeze_to_4D(embeds)
+        if embeds.layout != ttnn.TILE_LAYOUT:
+            tiled = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+            embeds.deallocate(True)
+            embeds = tiled
+        from models.demos.gemma4.tt.ccl import ccl_allgather
+
+        return ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
 
     def raw_embed(self, tokens):
         """Token embedding table lookup without the sqrt(hidden) scale.
@@ -1214,12 +1225,7 @@ class Gemma4Model:
             raise RuntimeError("Embedding weights not loaded")
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
         embeds = ttnn.mul(embeds, 1.0 / self.embed_scale)
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
-            embeds = ttnn.unsqueeze_to_4D(embeds)
-            from models.demos.gemma4.tt.ccl import ccl_allgather
-
-            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
-        return embeds
+        return self._allgather_tp_embeds(embeds)
 
     def get_shared_kv_caches(self):
         """Return the target KV caches the it-assistant drafter cross-attends to.
