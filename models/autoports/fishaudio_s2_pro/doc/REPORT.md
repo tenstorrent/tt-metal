@@ -1,6 +1,6 @@
 # Fish Audio S2 Pro on Blackhole — bring-up report
 
-generated 2026-09-08T23:49:14Z
+generated 2026-09-09T03:31:11Z
 
 ## Verified
 
@@ -32,7 +32,7 @@ generated 2026-09-08T23:49:14Z
 | 09-server-smoke | ok | 0 | 2026-09-08T22:28:49Z | 2026-09-08T22:31:48Z |
 | 10-package | ok | 0 | 2026-09-08T23:26:47Z | 2026-09-08T23:30:15Z |
 | 11-serve-prove | ok | 1 | 2026-09-08T23:39:29Z | 2026-09-08T23:47:15Z |
-| 12-report-push | running | - | 2026-09-08T23:49:14Z |  |
+| 12-report-push | running | - | 2026-09-09T03:31:11Z |  |
 
 ## Accuracy thresholds (from bf16-vs-fp32 CPU floors)
 
