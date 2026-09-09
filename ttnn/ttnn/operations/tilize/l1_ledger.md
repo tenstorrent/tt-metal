@@ -226,10 +226,36 @@ Read transactions are the only term the split moves, which is why `num_w_chunks`
 **minimized** rather than maximized: `max(w_chunks_for_l1, w_chunks_for_occupancy)`
 takes the smallest value that both fits L1 and fills the grid, and never more.
 
+**Where the divisor constraint costs read transactions (verifier-added).** The
+minimization above is over a *continuous* chunk count; Deviation 1 restricts
+`block_width_tiles` to a **divisor of `C`**, so the realized `num_w_chunks` is
+`C / block_width_tiles` and can only *overshoot* the target. On every shape whose
+`C` is smooth the overshoot is zero (`C = 512 -> 64`, `1024 -> 64`, `384 -> 32`,
+`64 -> 1`, `32 -> 2`: the whole worked table). It is non-zero exactly where `C` has
+a large prime factor, and the one such shape in the suite is the logits row
+`[1,1,1,50304]`, `C = 1572 = 2^2 * 3 * 131`: the target is 64 chunks, the coarsest
+divisor `<= 1572/64 = 24` is **12**, so the split lands on **131** chunks of 12
+tiles instead of 63 of 25. DRAM crossings are unchanged (still 1 in / 1 out, the
+named-boundary minimum) and cross-core stays 0, but the **read transaction count is
+2.08x the minimum-that-fills-the-grid** on that shape, at 768 B per read instead of
+1600 B. So the closing claim below is exact on smooth `C` and an overshoot on rough
+`C`; the honest form is "the fewest read transactions of any split that fills the
+grid **and keeps one push/pop quantum per core**".
+
+The escape, recorded so the perf pass does not have to re-derive it: the quantum
+mix is only a problem *within one core*, and a `ProgramDescriptor` can carry two
+disjoint core ranges with their own CBs and their own `block_width_tiles` CT arg —
+full-width cores and tail cores, neither mixing quanta. That restores the ragged
+tail the design specified without weakening the wrap invariant. It is a
+work-distribution restructure, not a knob turn, so it is filed as a perf-refinement
+lever rather than fixed here.
+
 > Cheapest-traffic split considered: **`tile_row` x `tile_col` with `num_w_chunks`
 > minimized** — `in_bytes + out_bytes` across DRAM (the minimum), `0` cross-core, and
-> the fewest read transactions of any split that fills the grid. Implemented: **that
-> split**. Nothing deferred on traffic grounds.
+> the fewest read transactions of any split that fills the grid subject to the
+> one-quantum-per-core wrap invariant. Implemented: **that split**. Nothing deferred
+> on traffic grounds; the single rough-`C` overshoot is quantified above and carried
+> as a perf lever.
 
 **Reconciled against the built code.** `num_w_chunks = C / block_width_tiles`
 *exactly* (the divisor constraint, Deviation 1), so the transaction table above
@@ -249,6 +275,15 @@ perf gate names (8x8 Wormhole, `WRITE_BATCH_MIN_TILES = 4`, fresh-cache medians)
 |-------|-------|-------|-------|------|-----|---------------|
 | `[1,1,32,16384]` **perf focus** | 512 | 1 x 8 | **64 / 64** | 512 B/stick | ~13900 | ~151 |
 | `[1,1,16384,32]` transposed pair | 512 | 8 x 1 | **64 / 64** | 64 B/stick | ~21000 | ~100 |
+
+Re-measured by the verification pass on the same box (`--profile`, two dispatches
+each, `GenericOpDeviceOperation` rows): perf focus **13106 / 14133 ns** at 64/64
+cores (~160 GB/s over the 2 MiB moved), transposed pair **21220 / 20268 ns** at
+64/64 (~101 GB/s). Both reproduce the table. For scale, `double_buffer/report.md`
+puts an untuned 64-core DRAM->DRAM stream at **190.8 GB/s** (≈ this part's DRAM
+peak), so the residual headroom is ~1.19x on the perf-focus geometry and ~1.9x on
+its transposed counterpart — the latter being the 64 B stick width, which the
+blocking cannot coarsen.
 
 The pair carries an identical tile count (2 MiB moved each way), both reach the
 whole grid, and the 1.5x gap is therefore **transaction shape, not occupancy** —

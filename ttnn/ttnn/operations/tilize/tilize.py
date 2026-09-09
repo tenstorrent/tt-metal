@@ -215,11 +215,29 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
-    "low_l1": [False],
+    # `low_l1` is not a regime — it is a value of the `block_width_tiles` knob
+    # (`W_CAP = min(W_FIT, LOW_L1_WIDTH_CAP)`), so the kernels, the CBs and the
+    # block operations are byte-identical at both settings. Promoted from
+    # [False] by the verification pass on measured evidence: both settings are
+    # bit-identical on `[1,1,32,8192]` (the `low_l1_forcing_width` geometry,
+    # C=256) and neither OOMs, because `LOW_L1_WIDTH_CAP` is a host constant
+    # independent of every tensor dimension. See l1_ledger.md's total, in which
+    # no tensor dimension appears at either setting.
+    "low_l1": [False, True],
     "shard_api": ["none"],
     "out_scheme": ["interleaved"],
-    "buffer": ["dram_to_dram"],
-    "rank": [4],
+    # All four interleaved buffer transitions. Placement is a `TensorAccessor`
+    # concern on both legs and the kernels never name a buffer type; promoted
+    # from [dram_to_dram] by the verification pass after all three additional
+    # transitions came back bit-exact.
+    "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
+    # Rank is not a geometry branch at or above 2: `derive_plan` folds
+    # `shape[:-2]` into R generically and the reader indexes sticks linearly, so
+    # 2/3/5/6 exercise no new code path and all came back bit-exact. Promoted
+    # from [4] by the verification pass. Ranks 0 and 1 stay OUT: they have no
+    # tile dims of their own, so they are reachable only with a pad requested
+    # and belong to the padding refinement.
+    "rank": [2, 3, 4, 5, 6],
     "orientation": ["none"],
     "pad_mode": ["none"],
     "pad_value": ["none"],
@@ -260,9 +278,30 @@ def _tile_shape(tile):
     return (int(shape[0]), int(shape[1]))
 
 
-def _check_request(input_tensor, *, output_padded_shape, tile):
-    """Malformed REQUESTS. These run ahead of the per-axis support loop so a
-    malformed call never reaches the support rectangle."""
+# The checks split into two groups by ONE question: is the request malformed
+# whatever the op eventually supports, or only once the relevant axis value is
+# supported at all?
+#
+#   * UNCONDITIONAL (`_check_request`) — wrong tensor placement, a layout the op
+#     will never take, a tile geometry the hardware does not have, a TILE input
+#     with nothing to re-tile to. These run AHEAD of the support gate, because
+#     no future refinement makes them legal.
+#   * SUPPORT-CONDITIONAL (`_check_pad_target`, `_check_alignment_request`) —
+#     both are statements about the PADDING contract, and padding is an axis
+#     (`pad_mode`) the registry gates. While `pad_mode`/`alignment` sit outside
+#     SUPPORTED the honest refusal is the registry's `UnsupportedAxisValue`
+#     ("this op does not do padding yet"), not a ValueError about the argument's
+#     shape; the golden harness decorates those cells xfail(raises=
+#     NotImplementedError) off exactly that reasoning. So they run AFTER the
+#     per-axis loop, and re-arm as real ValueErrors the moment the padding
+#     refinement lands. Note `UnsupportedAxisValue` is a `NotImplementedError`
+#     and therefore also a `RuntimeError`, so a caller (or an acceptance test)
+#     catching `(ValueError, RuntimeError)` still sees the refusal either way.
+
+
+def _check_request(input_tensor, *, tile):
+    """UNCONDITIONALLY malformed REQUESTS — illegal under every future
+    SUPPORTED, so they run ahead of the per-axis support loop."""
     if not ttnn.is_tensor_storage_on_device(input_tensor):
         raise ValueError("tilize: input_tensor must be on device")
 
@@ -281,20 +320,37 @@ def _check_request(input_tensor, *, output_padded_shape, tile):
         if tile_h not in LEGAL_TILE_HEIGHTS:
             raise ValueError(f"tilize: `tile` height must be a power-of-two fraction of 32, got {tile_h}")
 
-    shape = list(input_tensor.shape)
-    if output_padded_shape is not None:
-        target = [int(d) for d in list(output_padded_shape)]
-        if len(target) != len(shape):
-            raise ValueError(f"tilize: output_padded_shape rank {len(target)} != input rank {len(shape)}")
-        for i, (t, s) in enumerate(zip(target, shape)):
-            if t < s:
-                raise ValueError(f"tilize: output_padded_shape[{i}]={t} is smaller than the input's {s}")
+
+def _check_pad_target(input_tensor, *, output_padded_shape):
+    """The explicit pad target must cover the input. Support-conditional: only
+    reachable once `pad_mode="explicit"` is in SUPPORTED."""
+    if output_padded_shape is None:
+        return
+
+    shape = [int(d) for d in list(input_tensor.shape)]
+    target = [int(d) for d in list(output_padded_shape)]
+
+    # A rank-0 or rank-1 input has no tile dims of its own — the pad SYNTHESIZES
+    # them (rank 0 -> [H, W], rank 1 -> [H, W] with the input's W), which is why
+    # feature_spec.TARGET["rank"] lists 0 and 1 as pad-only ranks and
+    # tag_alignment reports `hw_non_aligned` there. A rank-2 target against such
+    # an input is therefore well-formed, not a rank mismatch.
+    if len(shape) < 2 and len(target) == 2:
+        shape = [1] * (2 - len(shape)) + shape
+
+    if len(target) != len(shape):
+        raise ValueError(f"tilize: output_padded_shape rank {len(target)} != input rank {len(shape)}")
+    for i, (t, s) in enumerate(zip(target, shape)):
+        if t < s:
+            raise ValueError(f"tilize: output_padded_shape[{i}]={t} is smaller than the input's {s}")
 
 
 def _check_alignment_request(axes, *, pad_requested):
     """Padding is opt-in: with no padding argument, a non-tile-aligned input is
     refused rather than silently padded. A malformed REQUEST, not a support
-    refusal — hence ValueError and not UnsupportedAxisValue."""
+    refusal — hence ValueError and not UnsupportedAxisValue. Support-conditional
+    for the same reason as `_check_pad_target`: while `alignment` is
+    tile-aligned-only the registry has already refused the cell."""
     if not pad_requested and axes["alignment"] != "tile_aligned":
         raise ValueError(
             "tilize: input's last two dims are not tile-aligned "
@@ -308,17 +364,33 @@ def _check_alignment_request(axes, *, pad_requested):
 # ---------------------------------------------------------------------------
 
 
+# A freshly built nd MemoryConfig reports this layout; a LIVE tensor built from
+# one reports the equivalent legacy layout instead (see `_spec_of`).
+_ND_LAYOUT = getattr(ttnn.TensorMemoryLayout, "ND_SHARDED", None)
+
+
 def _spec_of(mem_config):
-    """(is_sharded, is_nd, out_scheme, orientation) for one side of the call."""
+    """(is_sharded, is_nd, out_scheme, orientation) for one side of the call.
+
+    The nd-vs-legacy_2d discriminator is NOT "does it have an nd_shard_spec".
+    Measured on device (`probes/probe_003.py` - `probe_005.py`): a live tensor's `memory_config()`
+    populates BOTH `shard_spec` and `nd_shard_spec` whichever API allocated it,
+    so "has an nd spec" tags every sharded call `nd` and the declared
+    `tag_shard_api` (which reads the scenario's `scheme`) disagrees on every
+    legacy_2d row. What does discriminate, for a freshly built config AND a
+    live one: an nd config carries an nd spec and NO legacy 2-D spec, and
+    reports `ND_SHARDED` rather than a HEIGHT/WIDTH/BLOCK layout.
+    """
     nd_spec = getattr(mem_config, "nd_shard_spec", None)
-    if nd_spec is not None:
+    shard_spec = getattr(mem_config, "shard_spec", None)
+    layout = mem_config.memory_layout
+    if nd_spec is not None and (shard_spec is None or (_ND_LAYOUT is not None and layout == _ND_LAYOUT)):
         return True, True, "nd", nd_spec.orientation
-    if mem_config.memory_layout in _SHARDED_LAYOUTS:
-        shard_spec = mem_config.shard_spec
+    if layout in _SHARDED_LAYOUTS:
         return (
             True,
             False,
-            mem_config.memory_layout,
+            layout,
             shard_spec.orientation if shard_spec is not None else "none",
         )
     return False, False, "interleaved", "none"
@@ -405,13 +477,14 @@ def validate(
     pad_value=None,
     tile=None,
 ):
-    """Malformed-request checks first (ValueError / RuntimeError), then the
-    registry support gate (UnsupportedAxisValue / ExcludedCell)."""
-    _check_request(input_tensor, output_padded_shape=output_padded_shape, tile=tile)
+    """Unconditionally-malformed requests (ValueError), then the registry
+    support gate (UnsupportedAxisValue / ExcludedCell), then the
+    support-conditional padding checks — see the comment above
+    `_check_request` for why the padding pair sits on the far side of the
+    gate."""
+    _check_request(input_tensor, tile=tile)
 
     axes = _axes_from_call(input_tensor, memory_config, dtype, low_l1, output_padded_shape, pad_value, tile)
-
-    _check_alignment_request(axes, pad_requested=(axes["pad_mode"] != "none"))
 
     # 1. SUPPORTED — per-axis
     for axis, allowed in SUPPORTED.items():
@@ -422,6 +495,11 @@ def validate(
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
+
+    # 3. Support-conditional malformed requests — the padding contract, which
+    #    only becomes the caller's mistake once padding itself is supported.
+    _check_pad_target(input_tensor, output_padded_shape=output_padded_shape)
+    _check_alignment_request(axes, pad_requested=(axes["pad_mode"] != "none"))
 
     return axes
 

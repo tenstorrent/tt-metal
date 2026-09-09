@@ -1,0 +1,421 @@
+# Operation Requirements: tilize
+
+## Definition
+
+- **Formula**: `out[i] = in[i]` — a pure re-laying of bytes. Every element keeps its
+  value and its logical position; only the address it occupies changes. ROW_MAJOR
+  storage becomes TILE storage: a sequence of `tile_h × 32` tiles, each built from
+  four 16×16 faces (TL, TR, BL, BR) in row-major order, elements row-major within a
+  face. Where a pad is requested, positions outside the input's logical extent hold
+  exactly the fill value. Where `dtype=` names a different output format, the value is
+  converted at pack time (value-preserving, within a dtype family).
+
+  The work is a 2-D grid of output tiles, `R × C`, with the leading dims folding into
+  `R`:
+
+      R = prod(shape[:-2]) * ceil(shape[-2] / tile_height)
+      C = ceil(shape[-1] / 32)
+
+- **PyTorch Reference** (standalone — the logical view of the output is the input,
+  which is why the layout / dtype / shape assertions carry the weight):
+
+```python
+def torch_tilize(x: torch.Tensor,
+                 output_padded_shape=None,
+                 pad_value=None) -> torch.Tensor:
+    """Reference for tilize's LOGICAL result. tilize is value- and
+    position-preserving, so unpadded it is the identity; a padded call places the
+    input in the leading region of the padded shape and fills the rest."""
+    if output_padded_shape is None and pad_value is None:
+        return x
+    shape = list(x.shape)
+    if len(shape) < 2:                       # rank 0/1: the pad SYNTHESIZES tile dims
+        x = x.reshape([1] * (2 - len(shape)) + shape)
+        shape = list(x.shape)
+    target = (list(output_padded_shape) if output_padded_shape is not None
+              else shape[:-2] + [((shape[-2] + 31) // 32) * 32,
+                                 ((shape[-1] + 31) // 32) * 32])
+    out = torch.full(target, float(pad_value or 0), dtype=x.dtype)
+    out[tuple(slice(0, d) for d in shape)] = x
+    return out
+```
+
+- **Import Path**: `from ttnn.operations.tilize import tilize`
+  (also bound as `ttnn.tilize` — the public name this op occupies)
+
+- **Function Signature**:
+
+```python
+tilize(
+    input_tensor: ttnn.Tensor,                       # ROW_MAJOR (or TILE, to re-tile)
+    memory_config: ttnn.MemoryConfig | None = None,  # output placement (default: input's)
+    *,
+    dtype: ttnn.DataType | None = None,              # output dtype (default: input's)
+    low_l1: bool = False,                            # per-core L1 independent of dims
+    output_padded_shape: list[int] | ttnn.Shape | None = None,  # explicit pad target
+    pad_value: float | int | None = None,            # fill for padded positions
+    tile: ttnn.Tile | None = None,                   # output tile geometry (default 32x32)
+) -> ttnn.Tensor
+```
+
+## Phases
+
+> **Non-regression rule**: Every refinement must pass all tests from prior phases.
+> **Drift signal**: XPASS-strict failures mean the implementer added support but forgot to update SUPPORTED. The implementer fixes by updating SUPPORTED.
+> **Checkbox protocol**: Implementer marks `[x]` when the refinement is complete and all tests pass, `[~]` when real work landed but at least one named axis value is deferred (treated as completed by the queue, surfaced as partial), `[ ]` only when nothing usable was produced.
+> **Refinement ID + follow-up naming (mandatory — the runner parses this)**: Primary refinements are `Refinement N` (e.g. `Refinement 1`, `Refinement 2`). When you ship `[~]` partial and file the sharper follow-up the partial-tick protocol requires, name it by appending a lowercase letter to the parent's number: `Refinement 1b`, `Refinement 1c`, … (never `Refinement 1.5`, `Refinement 1 (follow-up)`, or a fresh number). Order follow-ups immediately after their parent so the queue runs them before later refinements — a partial's remaining-blocker follow-up must be picked next, not leapfrogged. The runner's parser matches exactly `Refinement \d+[a-z]?`; any other shape is invisible to the queue and silently skipped.
+
+### [x] Phase 0 — Core Implementation
+
+- **SUPPORTED dtype**: [bfloat16]
+- **SUPPORTED output_dtype**: [bfloat16]
+- **SUPPORTED layout-ish axes**: `in_tile_height=["none"]` (ROW_MAJOR input only), `tile_height=[32]`
+- **SUPPORTED shape-derived axes**: `alignment=["tile_aligned"]`, `rank=[2,3,4,5,6]`, `tile_grid` = **all five** (`single_tile`, `small`, `tall_narrow`, `short_wide`, `square_large`)
+- **SUPPORTED placement axes**: `shard_api=["none"]`, `out_scheme=["interleaved"]`, `orientation=["none"]`, `buffer` = **all four** interleaved transitions
+- **SUPPORTED op-specific axes**: `low_l1=[False, True]`, `pad_mode=["none"]`, `pad_value=["none"]`
+- **EXCLUSIONS**: none
+- **Cores**: multi — a 2-D block grid `num_row_groups × num_w_chunks` linearized into `split_work_to_cores(..., row_wise=True)`; **64/64 cores measured on both `[1,1,32,16384]` (R=1) and `[1,1,16384,32]` (C=1)**
+- **Compute config**: `fp32_dest_acc_en` keyed on the input dtype (always `False` at bf16); `dst_full_sync_en` left off so `fast_tilize` stays eligible
+- **Golden baseline**: **249 / 4548 cells passing** (per `verifier_report.json`), `supported_fail` / `xpass_drift` / `xfail_wrong_mode` all **0**
+- **Verifier fixes folded into Phase 0**: validate() check ordering (83 `xfail_wrong_mode` → 0), rank-0/1 pad-target rule, `_spec_of` nd-vs-legacy discriminator, `ttnn.tilize` public alias, and three measured SUPPORTED promotions (`rank`, `low_l1`, `buffer`). See `verification_report.md`.
+
+---
+
+### [ ] Refinement 1 — Sharded and L1 placement: `shard_api`, `out_scheme`, `orientation`
+
+**Goal**: add `"legacy_2d"` and `"nd"` to `SUPPORTED["shard_api"]`, `HEIGHT_SHARDED` /
+`WIDTH_SHARDED` / `BLOCK_SHARDED` / `"nd"` to `SUPPORTED["out_scheme"]`, and
+`ROW_MAJOR` / `COL_MAJOR` to `SUPPORTED["orientation"]` — natively, in the kernels'
+data access. This is the design's `grid2d_sharded` deferred regime: the shard fixes
+the core assignment and the per-core extent, so `num_row_groups` / `num_w_chunks` are
+read **off the shard spec** instead of solved, and the sharded side's CB becomes
+**zero-copy over the shard buffer** via `ttnn.cb_descriptor_from_sharded_tensor`
+(`ttnn/cpp/ttnn-nanobind/program_descriptors.cpp:517-540`). Everything else — the
+block operations, the compute call, the writer's batching — is unchanged. Unlocks the
+`sharded_legacy_2d` (7), `sharded_nd` (3) and `short_wide_width_sharded` golden cases,
+plus the 97 `test_golden_main_tests.py` cases currently refused on `shard_api`.
+
+**Verifier notes**: no implementation skill covers `memory_layout` / shard placement
+yet — `/memory-layouts` is ROW_MAJOR↔TILE, a different axis. Do not attach it. The
+mechanics you need are named here instead:
+
+* **This op has no dependent axis, so every same-spec shard is LOCAL.** Each output
+  tile depends only on its own 32-element column slice of its own `tile_h` sticks —
+  nothing spans blocks. So a HEIGHT-sharded output is exactly a `row_group` block, a
+  WIDTH-sharded output exactly a `w_chunk` block, and a BLOCK-sharded output exactly
+  the 2-D block the op already builds. **There is no cross-core combine to design, no
+  mcast, no semaphore.** That is why this is one refinement and not a scheme-change
+  standalone: the topology already matches.
+* **The native path is what "sharded" means here — do not settle for the accessor.**
+  A core's own local shard is already resident in its L1; it *is* the per-core block.
+  Consume it through the zero-copy CB placement, never re-read it through a
+  `TensorAccessor` as if it were interleaved. An accessor read of a core's own shard
+  would pass every golden cell while meaning the axis was never implemented. Check the
+  dataflow, not the test colour. (`TensorAccessor` still owns the interleaved leg and
+  the genuinely non-local **cross-spec** gather — `cross_spec_height_in_width_out` and
+  the `dram_sharded_out` case are where a core's output shard needs bytes from another
+  core's input shard, and that one is a real remote read.)
+* **`eval/golden_tests/tilize/axes.py:_spec_of` has a live nd-vs-legacy_2d bug** that
+  the verification pass fixed in the op's copy but could not fix in the gate: a live
+  tensor's `memory_config()` populates *both* `shard_spec` and `nd_shard_spec`
+  whichever API allocated it, so "has an nd spec" tags every sharded call `nd`. You
+  will see 84 `shard_api` mismatches in `merge_axes`' output that are **not yours** —
+  the xfail decoration comes from the declared taggers and is unaffected. The op's
+  `_spec_of` already carries the correct discriminator; mirror it if you touch the
+  harness under `/golden-tests`.
+* **Fold in the L1-budget correction while you are here** (an L1 ledger finding, filed
+  into this refinement rather than standing alone per the filing rule): `derive_plan`
+  sizes the CBs against `ttnn.get_max_worker_l1_unreserved_size()`, which does not
+  account for the tensors themselves when `buffer` is `l1_to_l1`/`dram_to_l1` — and a
+  sharded tensor is L1-resident by definition. No cell in the suite trips it today
+  (the grid, not L1, is the binding constraint on every one of these shapes), but a
+  sharded refinement is exactly where it starts to bite. Subtract the resident shard
+  bytes from the budget.
+* **Ordering**: first because it is the most structurally invasive of the four
+  generality refinements — it changes where the split comes from. Land it on the
+  Phase 0 test surface (bf16, one dtype pair) before Refinement 5 multiplies every
+  scenario by 18 dtype pairs.
+
+**Done when**: the three axes carry their TARGET values in SUPPORTED; the
+`sharded_legacy_2d`, `sharded_nd` and `short_wide_width_sharded` golden cells pass;
+the sharded side is consumed through a CB placed on the shard buffer (verifiable in
+the `ProgramDescriptor`, not just in the test result); the golden suite's three loud
+categories stay at 0; and Phase 0's 249 cells still pass.
+
+---
+
+### [ ] Refinement 2 — Padding: `pad_mode`, `pad_value`, `alignment`, ranks 0 and 1
+
+**Goal**: add `"auto"` and `"explicit"` to `SUPPORTED["pad_mode"]`, `"zero"` /
+`"positive"` / `"negative"` to `SUPPORTED["pad_value"]`, `"w_non_aligned"` /
+`"h_non_aligned"` / `"hw_non_aligned"` to `SUPPORTED["alignment"]`, and `0` / `1` to
+`SUPPORTED["rank"]` — natively, with the fill produced **in the kernel**. This is the
+design's `grid2d_padded` deferred regime, and the design's own framing is the plan:
+the fill is an *additive* step on the block that already exists. The reader memsets
+the pad region of the L1 sub-block (the W tail inside `padded_row_bytes`, and the H
+tail rows) before/around the stick reads; the block grid, the core assignment, the
+CBs and the compute call are unchanged. Unlocks `padding_auto` (7),
+`padding_explicit` (4), `padding_crossed` (3), the four padded members of
+`work_geometry`, ranks 0/1 in `interleaved`, and the 13 `test_golden_main_tests.py` +
+`test_regression.py` cases refused on `pad_mode` / `rank=0`.
+
+**Implementation skill**: /memory-layouts
+
+**Verifier notes**: the skill's non-aligned rule (last-tile H/W zero-pad / mask done
+in the reader or compute) is the relevant part; you are **not** adding a ROW_MAJOR leg
+— the input is already ROW_MAJOR and the tilize is already in-kernel. Four things the
+skill cannot see:
+
+* **The H tail breaks a contiguity invariant the reader currently relies on.** One
+  `read_sticks_for_tilize` call spans a contiguous stick run
+  (`start_page + block_row*tile_h + row`), which is only valid across an image
+  boundary when `H % tile_h == 0` — then `start_stick = row_start * tile_h` is exact.
+  With an H tail it is not, so the block's reader call must be **segmented per image**
+  (`op_design.md` → Mechanism caps, last-but-two row). `[8,1,249,2048]` is the case
+  that catches this; `[1,1,1,50304]` and `[1,1,1,2048]` are the H=1 degenerate forms.
+* **Rank 0 and 1 are pad-only and the pad SYNTHESIZES their tile dims** (rank 0 →
+  `[H,W]`, rank 1 → `[H,W]`), which is why `tag_alignment` reports `hw_non_aligned`
+  there. `validate()`'s `_check_pad_target` already left-pads the input shape to 2
+  before comparing against `output_padded_shape`, so the request-shape side is done —
+  what is missing is the reader arithmetic.
+* **`pad_mode="explicit"` may exceed the tile-round** (`padding_explicit` carries one
+  such case: whole pad *tiles* past the data). Those tiles have no input bytes at all
+  and must be produced from the fill alone.
+* **A negative fill on an integer dtype goes through a signed→unsigned bit_cast and
+  must not truncate** (the prompt's MUST). That rule only arms once Refinement 5 adds
+  the integer dtypes — the fill path you write here should already be width-correct so
+  it does not have to be revisited. `test_regression.py::test_pad_value_extremes`
+  (±3.4e38 at fp32) is the float end of the same requirement.
+* **Ordering**: second — structurally lighter than the shard refinement but heavier
+  than the tile-geometry and dtype work, and still ahead of Refinement 5 for the same
+  small-test-surface reason. No hard dependency on Refinement 1, but `padding_crossed`
+  crosses padding with a sharded output and with `low_l1`, so running after 1 means
+  those cells land for free.
+
+**Done when**: the four axes carry their TARGET values in SUPPORTED; every padded
+position holds exactly the fill value (checked with
+`to_torch_with_padded_shape`, not just the logical view); the logical shape of a
+padded output is **unchanged** (only the padded shape grows — promoting the logical
+shape is the named bug); the `padding_auto` / `padding_explicit` / `padding_crossed`
+golden groups pass; the three loud categories stay at 0; Phase 0's 249 cells and
+Refinement 1's cells still pass.
+
+---
+
+### [ ] Refinement 3 — Speed up the perf-flagged attention profile
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES` flags **`[1,1,32,16384]`** (bf16 → bf16,
+interleaved DRAM→DRAM, rank 4, tile-aligned, 32×32 tile) with the `attention:` note
+as the **mandatory** perf target — DeepSeek-V3 MLA's `wo_tilize` output projection,
+`R=1 × C=512`, the decode-phase geometry where a row-only split has one row to cut.
+Optimize **that exact config** using the relevant patterns in
+`ttnn/ttnn/operations/examples/master.md`. No SUPPORTED change.
+
+Where it stands today (measured by the verification pass, `--profile`, 8×8 Wormhole,
+fresh cache, two dispatches): **13106 / 14133 ns at 64/64 cores**, block `1 × 8` tiles,
+512 B per stick read, 64 KiB L1/core — ≈**160 GB/s** over the 2 MiB moved.
+`double_buffer/report.md` puts an untuned 64-core DRAM→DRAM stream at 190.8 GB/s
+(≈ this part's peak), so there is roughly **1.19×** of headroom. Occupancy is already
+full, so the lever is **not** work distribution — it is transaction shape and issue
+cost. The catalog entries whose *situation* matches: `double_buffer` (bytes in flight
+— co-tune `INPUT_DEPTH_ROWS` × `WRITE_BATCH_MIN_TILES` at this block width, where the
+existing sweeps were taken on other geometries and `write_rows_per_barrier` is inert
+at `bw=8`), `tile_reorder` (coalescing on a DRAM-bound move), `noc_placement` (the
+placement × NoC matrix — `row_wise=True` and NoC0/NoC1 are already taken, the
+diagonal variant is not), and `compute_block_size`'s **second** lever: the tilize
+helper reconfigs unpack+pack data formats at every block boundary by default, and on
+the no-cast diagonal (`dtype == output_dtype`, which is this target) that reconfig is
+wasted MMIO — `ReconfigureRegisterDatatypeMode::NoReconfigure` is a one-token change
+worth up to 1.19× where transitions are frequent. Several ⭐⭐ T2 levers, so try more
+than one in this phase.
+
+**Done when**: measured device-ns improves on `[1,1,32,16384]` at bf16→bf16 (the
+flagged config exactly — not a proxy), with the core count reported alongside the
+duration and still 64/64 (a number taken on a fraction of the grid describes the
+split, not the kernel); precision is unchanged (bit-identity — this op does no
+arithmetic, so any deviation is a bug, not a budget); the golden suite is green with
+the three loud categories at 0; and no regression across the config-spanning guard
+set — one representative per distinct kernel path × placement, which for this op means
+at minimum `[1,1,2048,64]` (`grid2d_full_width`, `num_w_chunks == 1`),
+`[1,1,32,2048]` (`grid2d_width_chunked`), `[1,1,2048,2048]` (`bw = 64`, the widest
+block), `[1,1,16384,32]` (`bw = 1`, where `write_rows_per_barrier` is the whole knob),
+plus one sharded and one padded representative if Refinements 1 and 2 have landed.
+
+---
+
+### [ ] Refinement 4 — Tile geometry: tiny tiles and the retile path
+
+**Goal**: add `16, 8, 4, 2, 1` to `SUPPORTED["tile_height"]` and `32, 16, 8, 4, 2, 1`
+to `SUPPORTED["in_tile_height"]` — both natively on device. Two regimes the design
+defers, taken together because they share the `tile=` surface:
+
+* `grid2d_tiny_tile` (ROW_MAJOR in, sub-32 tile out) is nearly a knob turn: `tile_h < 32`
+  changes only the `TileDescriptor` on both CBs, `read_sticks_for_tilize` reads
+  `tile_h` from `unpack_tile_r_dim[cb_id]`, and the block grid is unchanged. It does
+  drop off `can_use_fast_tilize` (which requires 32×32), so expect the regular
+  `tilize_block` LLK path.
+* `retile` (TILE in at one height → another) is the genuinely distinct one: the input
+  is already tiled, so the reader walks **faces, not sticks**, and
+  `read_sticks_for_tilize` cannot express it (it is stick-indexed by construction —
+  `accessor.get_noc_addr(start_page + block_row + row, ...)`). This is a new reader
+  block operation.
+
+Unlocks the `tile_geometry_tiny` (3) and `tile_geometry_retile` (6) golden groups.
+
+**Implementation skill**: /memory-layouts
+
+**Verifier notes**:
+
+* **Re-tiling MUST NOT be done by untilizing to ROW_MAJOR and tilizing again.** That
+  is the host-side workaround the prompt forbids wearing a kernel hat; the design
+  ranks it `rejected` at 2× the minimum DRAM traffic in both directions, and nothing
+  built on it survives when the real face-walking reader lands. Likewise no
+  `ttnn.to_layout` / `ttnn.untilize` wrapper at the entry point. If the face-walking
+  reader turns out to be more than a focused pass, ship `[~]` partial with the
+  **tiny-tile half only** (which is the near-knob-turn) and file `Refinement 4b` for
+  the retile reader — do not substitute a round-trip.
+* **`retile` is arch-gated to Blackhole** (`helpers.skip_if_retile_unsupported`; the
+  reference carries `@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on
+  Wormhole B0")`). On the Wormhole box this verification pass ran on, all 108 retile
+  cells and 196 fp8 cells appear as `xfail_other` **skips**, not failures — so on
+  Wormhole you can build the reader but you cannot green the cells. Plain tiny-tile
+  (ROW_MAJOR in, sub-32 out) is **not** gated and runs everywhere, which is the other
+  reason the two halves are bundled: one of them is testable here.
+* **Watch the interaction with `tag_alignment`.** H is measured against the **output**
+  tile height, not a literal 32 — `H=48` with `tile_height=16` is three whole tile-rows
+  with no H tail at all. So changing `tile_height` re-partitions the `alignment` axis,
+  and a cell that was `h_non_aligned` at 32 can become `tile_aligned` at 16. If
+  Refinement 2 has landed, re-check its H-tail arithmetic against a tiny tile.
+* **Ordering**: after the perf slot and after the two heavier structural refinements,
+  before the dtype multiplication. `tb_in` and `tb_out` both scale with `tile_h`, so
+  the L1 ledger's totals shrink here rather than grow — no new budget pressure.
+
+**Done when**: both axes carry their TARGET values in SUPPORTED; the
+`tile_geometry_tiny` cells pass on this box; the retile reader walks faces on device
+(verifiable in the kernel, and green on Blackhole where the gate allows); no
+manipulation-op wrapper appears at the entry point; the three loud categories stay
+at 0; and all prior phases still pass.
+
+---
+
+### [ ] Refinement 5 — Numerical configurability: the full `dtype × output_dtype` cartesian
+
+**Goal**: add `float32`, `fp8_e4m3`, `uint32`, `int32`, `uint16`, `uint8` to
+`SUPPORTED["dtype"]` and `float32`, `bfloat8_b`, `bfloat4_b`, `uint32`, `int32`,
+`uint16`, `uint8` to `SUPPORTED["output_dtype"]`, expose
+`compute_kernel_config: ttnn.ComputeKernelConfig` on the entry point, and set the
+intermediate-CB precision correctly (including `UnpackToDestFp32` tagging where it
+applies). Cells that fail out of the box land in `EXCLUSIONS`, not in their own
+refinement. This is the largest cell-count unlock in the queue by a wide margin: 18
+legal `(dtype, output_dtype)` pairs survive `INVALID`'s 38 prunes, so it multiplies
+**every** scenario in the suite.
+
+**Implementation skill**: /numeric-formats-metal
+
+**Verifier notes**: probed on device by the verification pass, so you can start from
+evidence rather than from a matrix. On `(1,1,64,128)`:
+
+| pair | today | reading |
+|---|---|---|
+| `bf16 -> fp32` | exact | free |
+| `uint32 -> uint32`, `int32 -> int32`, `uint16 -> uint16` | exact | free — a list widening |
+| `bf16 -> bf8b` | `max_abs 0.031` | block-float quantization, expected; needs a tolerance, not a fix |
+| `bf16 -> bf4b` | `max_abs 0.926` | the one genuinely lossy target in the set; `helpers._transition_tolerance` already carries the floors |
+| `fp32 -> fp32` | **`max_abs 1.95e-3`** | **a correctness failure, not precision** — see below |
+| `uint8 -> uint8` | **`max_abs 99` on data in `[0,100)`** | **broken, not merely unsupported** — see below |
+
+* **fp32 output is a correctness trap, not a precision knob.** `can_use_fast_tilize`
+  refuses fp32 output and the fallback truncates through tf32, which is why
+  `fp32 -> fp32` is not bit-identical today. For a byte re-lay the golden oracle *is*
+  bit-identity, so this cell needs all three of `Fp32Mode::Lossless`,
+  `fp32_dest_acc_en=true`, and `UnpackToDestMode::UnpackToDestFp32` on `cb_input_rows`
+  (`tilize_helpers.inl:115-127`) — any one missing and it fails. Note this is the one
+  place where the helper's own "prefer Fast, the downstream FPU truncates anyway"
+  advice is **wrong**: there is no downstream FPU op here, the tiled output *is* the
+  product. Today `derive_plan` sets `fp32_dest_acc_en` from the **input** dtype alone;
+  it must key on the output too.
+* **`uint8` is an investigation, not a list widening.** Every other integer width is
+  bit-exact, so suspect the helper's `elem_size = tile_size / tile_hw` derivation and
+  the per-face vs full-tile dim at 1 byte/element — the exact failure mode
+  `TARGET["dtype"]`'s comment warns about ("getting it wrong yields a strided tile
+  rather than a wrong value"). If it does not survive, `{"dtype": ttnn.uint8}` and
+  `{"output_dtype": ttnn.uint8}` go to `EXCLUSIONS` with the mechanism named — that is
+  the skill's stated pattern and it is the right outcome, not a failure of the phase.
+* **`fp8_e4m3` is Blackhole-only and input-only.** On Wormhole its 196 cells are
+  `xfail_other` arch skips, so you cannot green them here. Also see the open
+  `feature_spec` question in `verification_report.md` → INVALID audit: the cartesian
+  currently generates `fp8_e4m3 × in_tile_height=<TILE>`, an fp8 tensor in TILE layout
+  that by `TARGET`'s own comment has no TILE form. Raise it rather than working around
+  it.
+* **Check the widened output page against DEST width.** With `bf16 in -> fp32 out` the
+  output CB becomes a `Float32` page under a 16-bit DEST. That is not a precision loss
+  here (the DEST value is already the tensor's own bf16 value, widened losslessly at
+  pack) but it doubles the bytes through the packer and in every read of that CB, and
+  it doubles that CB's L1. Decide it deliberately and record it in `l1_ledger.md`'s
+  page-format row rather than inheriting it.
+* **Ordering: last of the generality refinements, deliberately.** It is the cheapest to
+  build (it widens SUPPORTED lists and relaxes a `validate()` gate on an existing path
+  — the skill's pass condition is *zero kernel changes*) and the largest in cells, but
+  landing it first would force Refinements 1, 2 and 4 to be built and debugged across
+  18 dtype pairs instead of one. Land the structure first, extend it once.
+
+**Done when**: both dtype axes carry their TARGET values minus a named, mechanism-
+justified `EXCLUSIONS` set; `fp32 -> fp32` and every integer no-cast diagonal are
+**bit-identical**; the lossy casts hold `helpers._transition_tolerance`'s floors;
+`test_regression.py`'s 10 cases pass; the three loud categories stay at 0; and every
+prior phase still passes across the widened cartesian.
+
+---
+
+### [ ] Refinement 6 — Speed up the transposed / rough-`C` geometries
+
+**Type**: perf
+
+**Goal**: two regions the first perf phase deliberately did not touch, both measured
+and both with a named lever. No SUPPORTED change.
+
+1. **`[1,1,16384,32]`, the transposed perf-focus pair** (`R=512 × C=1`, 512 tiles —
+   the *same tile count* as Refinement 3's target, which is what makes the pair a
+   checkable claim rather than an assertable one). Measured **21220 / 20268 ns at
+   64/64 cores** ≈ **101 GB/s**, against ≈160 GB/s on its transposed twin and a
+   ~190 GB/s untuned 64-core ceiling — so ~1.9× of headroom, and the gap to the twin
+   is **transaction shape, not occupancy** (both fill the grid). The reads are 64 B
+   per stick, which is the tensor's own row width and *cannot* be coarsened by
+   blocking: consecutive ROW_MAJOR sticks live on different DRAM banks. That rules out
+   the block-size lever and points at `split_reader` in
+   `ttnn/ttnn/operations/examples/master.md` — if one data-movement RISC-V is
+   issue-bound on 512 tiny reads per core, splitting the disjoint stick ranges across
+   NCRISC and BRISC is the matching pattern (measured up to ~1.7× where the issue rate
+   really is the wall). **Confirm the issue-bound diagnosis before building it** — the
+   catalog is explicit that this does nothing unless a data-movement RISC-V is itself
+   the bottleneck.
+2. **Rough-`C` shapes overshoot the read-transaction minimum.** `block_width_tiles` is
+   constrained to a **divisor** of `C` so that no core ever mixes two CB push/pop
+   quanta (neither endpoint may wrap mid-transfer — `llk_push_tiles`' `LLK_ASSERT`
+   and `cb_pop_front`'s `fifo_rd_ptr <= fifo_limit`). Free on smooth `C`, but on
+   `[1,1,1,50304]` (`C = 1572 = 2²·3·131`, a `LOOSE_CASES` production form) the
+   coarsest divisor ≤ `1572/64 = 24` is **12**, so the split lands on **131** chunks of
+   12 tiles instead of the target 63 of 25: DRAM crossings unchanged at the 1-in/1-out
+   minimum, but **2.08× the read-transaction minimum** at 768 B per read instead of
+   1600 B. The escape is recorded in `l1_ledger.md` and needs no new mechanism: a
+   `ProgramDescriptor` can carry **two disjoint core ranges**, full-width cores and
+   tail cores, each with its own CB sizing and its own `block_width_tiles` CT arg —
+   which restores the design's ragged column tail without weakening the wrap
+   invariant, because the mix was only ever a problem *within* one core.
+
+**Verifier notes**: item 2 is the L1-ledger finding this pass folded in rather than
+filing standalone — it touches the same two CBs, so it belongs to a perf phase and not
+to its own queue entry. It is a work-distribution restructure (⭐⭐ T2-ish), item 1 is a
+⭐⭐ T2 with a diagnosis gate; that is two levers, which is a reasonable phase. If the
+issue-bound diagnosis for item 1 comes back negative, say so and spend the phase on
+item 2 alone rather than building a `split_reader` that measures flat.
+
+**Done when**: measured device-ns improves on `[1,1,16384,32]` and/or on
+`[1,1,1,50304]` (with its `pad_mode="auto"` config, which Refinement 2 unlocks — if
+Refinement 2 has not landed, measure item 2 on the nearest tile-aligned rough-`C`
+witness and say which); the core count is reported alongside every duration and is
+still 64/64; bit-identity is unchanged; the golden suite is green with the three loud
+categories at 0; and no regression across the same config-spanning guard set
+Refinement 3 established.
