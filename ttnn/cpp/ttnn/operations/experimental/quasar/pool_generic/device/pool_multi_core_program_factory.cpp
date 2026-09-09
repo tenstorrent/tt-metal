@@ -682,7 +682,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     // Dataflow buffers.
     // -----------------------------------------------------------------------
-    //  Reduce scaler (srcB) face layout. num_faces MUST be 1, not 4: the reduce-col strided
+    //  Reduce scaler (srcB) face geometry. num_faces MUST be 1, not 4: the reduce-col strided
     // tilize unpacks srcB with a single UNPACR1_FACE and NO L1 increment (TT_OP_UNPACR1_FACE_INC(0,0,0,0,...)
     // in llk_unpack_reduce_col_tilizeA_strided.h), so it re-reads the same one scalar face regardless of the
     // face count -- z=1 and z=4 are byte-identical. num_faces=4 built an illegal (x=16, y=1, z=4) buffer
@@ -690,7 +690,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // z_dim is 4" (ckernel_trisc_common.h). num_faces=1 gives the (x=16, y=1, z=1) descriptor the LLK
     // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
     // full 32x32 4-face geometry below -- that operand genuinely needs it.)
-    const auto scalar_tile = tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH});
+    const auto scalar_tile = tt::tt_metal::Tile::from_face_grid({1, 1}, {1, tt::constants::FACE_WIDTH});
     const uint32_t window_size_hw = kernel_h * kernel_w;
     // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
     // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
@@ -709,6 +709,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         raw_face_r_pow2 <<= 1;
     }
     const uint32_t raw_face_r = raw_face_r_pow2;
+    const std::array<uint32_t, 2> raw_face_shape = {raw_face_r, tt::constants::FACE_WIDTH};
     // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
     // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
     // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
@@ -718,11 +719,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
     // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
     // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
-    // A 2x2 grid of raw_face_r-row faces, i.e. a (2 * raw_face_r) x 32 tile.
-    const std::optional<tt::tt_metal::Tile> input_tile =
-        return_indices ? std::nullopt
-                       : std::optional{tt::tt_metal::Tile(
-                             {2 * raw_face_r, tt::constants::TILE_WIDTH}, {raw_face_r, tt::constants::FACE_WIDTH})};
+    const std::array<uint32_t, 2> faces_grid_in_input_tile_for_cb = {2u, 2u};
+    const auto input_tile =
+        return_indices
+            ? std::nullopt
+            : std::optional{tt::tt_metal::Tile::from_face_grid(faces_grid_in_input_tile_for_cb, raw_face_shape)};
 
     // Single-row faces: one 1x16 face, or two of them side by side (a 1x32 tile).
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;

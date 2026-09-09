@@ -1479,8 +1479,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .num_entries = 1,
                 .data_format_metadata = tilized_info.data_format,
                 // Four single-row faces: a 2x2 grid of 1x16 faces.
-                .tile_format_metadata =
-                    tt::tt_metal::Tile({2, tt::constants::TILE_WIDTH}, {1, tt::constants::FACE_WIDTH}),
+                .tile_format_metadata = tt::tt_metal::Tile::from_face_grid({2, 2}, {1, tt::constants::FACE_WIDTH}),
             });
         } else if (split_program_tilize_only) {
             // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,
