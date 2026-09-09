@@ -1,17 +1,23 @@
-# Laguna-XS-2.1 on Blackhole, transcribed from this checkout's current
-# setup_vllm.sh, serve_vllm.sh, README.md, and validated .venv.
-schema: 1
+# Laguna-XS-2.1 on Blackhole, transcribed from this checkout's current setup_vllm.sh,
+# serve_vllm.sh, README.md, and validated .venv. Migrated to the 5.1 container schema
+# (was schema: 1 / type: vllm); values re-verified against the checkout 2026-08-31.
+schema: "5.1"
 repo: tt-hous/laguna-xs-2.1
 name: laguna-xs-2.1
-weights: poolside/Laguna-XS-2.1
-type: vllm
+weights:
+  repo: poolside/Laguna-XS-2.1
+  revision: c5f36269bbdbd3f27fddc9a9f9dbae0cf2cf57db
+kind: vllm-plugin
 arch: blackhole
 
 source:
-  tt_metal: /home/ttuser/dev/laguna/tt-metal
+  tt_metal: /home/ttuser/dev/laguna/tt-metal   # agentic-research/hous/laguna-xs-2.1
   code:
-    # Exact Laguna serving closure for the qualified profiles. Disabled DFlash,
-    # speculative-decode, functional-baseline, and token-dispatch code is omitted.
+    # Exact Laguna serving closure for the qualified profiles, re-verified 2026-08-31:
+    # module-level `models.*` and relative imports all land in this list. Disabled
+    # DFlash, speculative-decode (tt/spec_decode.py — lazy, needs TT_LAGUNA_SPEC_DECODE=1),
+    # functional-baseline, and token-dispatch code (the deepseek_v3_d_p MoE imports are
+    # lazy and the qualified profiles keep dispatch disabled) is omitted.
     - models/autoports/poolside_laguna_xs_2_1/tt/__init__.py
     - models/autoports/poolside_laguna_xs_2_1/tt/dflash_reference.py
     - models/autoports/poolside_laguna_xs_2_1/tt/generator.py
@@ -24,10 +30,11 @@ source:
     - models/autoports/poolside_laguna_xs_2_1/tt/prefill_runtime.py
     # LagunaModel.from_pretrained imports this lazily while loading weights.
     - models/autoports/poolside_laguna_xs_2_1/tests/laguna_weights.py
-    # Installable model-local vLLM plugin and its exact registration payload.
+    # Installable model-local vLLM plugin and its registration payload. extra_models is
+    # listed as a DIRECTORY so it covers runtime.extra_models_dir below.
     - models/autoports/poolside_laguna_xs_2_1/vllm_ext/pyproject.toml
     - models/autoports/poolside_laguna_xs_2_1/vllm_ext/laguna_vllm_ext
-    - models/autoports/poolside_laguna_xs_2_1/vllm_ext/extra_models/laguna/vllm_metadata.json
+    - models/autoports/poolside_laguna_xs_2_1/vllm_ext/extra_models
     # Load-bearing numerics: model.py silently uses in-code defaults if absent.
     - models/autoports/poolside_laguna_xs_2_1/doc/datatype_sweep/selected_precision_config.json
     # Shared production modules reached by generator.py and Sampling1D, including
@@ -56,19 +63,29 @@ source:
 
 runtime:
   vllm: {version: "0.24.0"}
+  # Exact PEP 610 commit recorded by the validated .venv (direct_url.json: installed
+  # from the public repo at this sha, requested_revision main) — pushed, so {repo, ref}
+  # is faithful AND fetchable.
+  plugin:
+    repo: https://github.com/tenstorrent/vllm-tt-plugin
+    ref: c127c17d80d66ee83d23064d3a62ac844a1170de
+  extension: models/autoports/poolside_laguna_xs_2_1/vllm_ext
+  # The children of this dir carry vllm_metadata.json (extra_models/laguna/).
+  extra_models_dir: models/autoports/poolside_laguna_xs_2_1/vllm_ext/extra_models
   # Seeded from the validated model .venv. The editable tt-metal/extension and
   # vllm/plugin installs are omitted because the image build supplies those;
   # the test-only pytest packages are omitted from the serving dependency set.
   lock: requirements.lock
-  plugin:
-    repo: https://github.com/tenstorrent/vllm-tt-plugin
-    # Exact PEP 610 commit recorded by the validated .venv and requirements.txt.
-    ref: c127c17d80d66ee83d23064d3a62ac844a1170de
-  extension: models/autoports/poolside_laguna_xs_2_1/vllm_ext
 
 serve:
   port: 8000
   block_size: 64
+  # Both profiles serve tool calls and reasoning through the model's own parsers
+  # (validated: 03_toolcall.json). Declared here so tt-model renders the flags —
+  # --enable-auto-tool-choice rides along with --tool-call-parser automatically.
+  capabilities:
+    tool_parser: poolside_v1
+    reasoning_parser: poolside_v1
   env:
     TT_LAGUNA_PIPE_CHUNK: "2048"
     TT_LAGUNA_HYBRID_KV: "0"
@@ -108,9 +125,6 @@ serve_profiles:
       - --enable-prefix-caching
       - --enable-prompt-tokens-details
       - --no-enable-chunked-prefill
-      - --enable-auto-tool-choice
-      - [--tool-call-parser, poolside_v1]
-      - [--reasoning-parser, poolside_v1]
     env:
       TT_VISIBLE_DEVICES: "0,1"
       TT_LAGUNA_CCL_TOPOLOGY: ring
@@ -131,10 +145,53 @@ serve_profiles:
     args:
       - --trust-remote-code
       - --no-enable-prefix-caching
-      - --enable-auto-tool-choice
-      - [--tool-call-parser, poolside_v1]
-      - [--reasoning-parser, poolside_v1]
     env:
       TT_LAGUNA_PREFIX_CACHE: "0"
       TT_LAGUNA_DECODE_SDPA_PC: "1"
 default_profile: p150x2
+
+verify:
+  # the silent-fallback trap: model.py falls back to in-code PrecisionPolicy defaults
+  # when this file is missing — nothing else would catch an allowlist slip
+  - "import pathlib; p = pathlib.Path('/opt/tt-metal/models/autoports/poolside_laguna_xs_2_1/doc/datatype_sweep/selected_precision_config.json'); assert p.exists(), f'{p} missing: the model would silently serve with in-code precision defaults'"
+  - "import models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm"
+  # from_pretrained's LAZY import — a build-time check because it only fires at weight
+  # load, ten minutes into a boot, on a consumer's machine
+  - "import models.autoports.poolside_laguna_xs_2_1.tests.laguna_weights"
+
+card:
+  description: >
+    Laguna-XS-2.1 is a Poolside coding model with tool calling and reasoning,
+    served through an OpenAI-compatible API.
+  quickstart: |
+    ### Point a client at it
+    Use the endpoint printed by `tt-model serve` (normally `http://127.0.0.1:20000/v1`). Tool calling and reasoning are on
+    (`poolside_v1` parsers). First boot JIT-compiles kernels (~10 min) before
+    `Application startup complete`.
+
+    ### Hardware
+    `p150x2` uses two P150 cards or one internal P300c in a TT-QuietBox 2.
+    `p150x4` uses four P150 cards or both internal P300c cards in a TT-QuietBox 2.
+    A single P150 is unsupported: the full model exhausts device memory while loading
+    weights, before allocating the KV cache.
+
+    ### Expected performance
+    Measured on `p150x2` (two P150 ASICs, 1x2 mesh), vLLM 0.24.0, output 512 tokens,
+    concurrency 1. The profile enables automatic prefix caching; this sweep gave every
+    request a unique cache salt to bypass prefix reuse, so the numbers are cold.
+
+    | Input tokens requested | Output tokens | Concurrency | Decode tok/s/user | Aggregate output tok/s | Time to first token | End-to-end latency |
+    |---:|---:|---:|---:|---:|---:|---:|
+    | 128 | 512 | 1 | 19.97 | 19.84 | 0.215 s | 25.801 s |
+    | 1,024 | 512 | 1 | 19.82 | 18.29 | 2.213 s | 27.995 s |
+    | 2,048 | 512 | 1 | 19.80 | 18.05 | 2.563 s | 28.366 s |
+    | 4,096 | 512 | 1 | 19.78 | 14.70 | 8.984 s | 34.822 s |
+    | 8,192 | 512 | 1 | 19.72 | 11.23 | 19.680 s | 45.592 s |
+    | 16,384 | 512 | 1 | 19.61 | 8.53 | 33.931 s | 59.993 s |
+    | 32,768 | 512 | 1 | 19.38 | 5.44 | 67.812 s | 94.178 s |
+    | 65,536 | 512 | 1 | 18.95 | 2.79 | 156.630 s | 183.595 s |
+    | 130,048 | 512 | 1 | 18.15 | 1.25 | 380.812 s | 408.967 s |
+
+    Decode is nearly flat across the context range. Time to first token and end-to-end
+    latency are prefill-dominated at long context. `p150x4` is a regression profile with
+    no current sweep.
