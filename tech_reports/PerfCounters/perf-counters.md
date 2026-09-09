@@ -203,14 +203,16 @@ Measures backpressure from math stage to unpackers.
 | **Counter group** | UNPACK |
 
 ```
-Unpacker-to-Math Data Flow = avg(SRCA_WRITE_REQ, SRCB_WRITE_REQ) /
-                             avg(UNPACK0_BUSY_THREAD0, UNPACK1_BUSY_THREAD0) * 100
+flow0 = SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0
+flow1 = SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0
+Unpacker-to-Math Data Flow = mean(flow0, flow1)      # raw ratio, can exceed 1
 ```
 
-- **High value (>80%)**: Unpackers can write to source registers when busy. Good data flow.
-- **Low value (<30%)**: Unpackers are busy but rarely request a source register write. Math is not consuming data fast enough.
+- **Near 1**: the unpacker writes a source register on most busy cycles.
+- **Low value (<0.3)**: the unpacker is busy but rarely requests a source register write. Math is not consuming data fast enough.
+- **Above 1**: writes from THCON or another thread landed while this unpacker was idle; the request counter is not a subset of the busy counter, which is why this is a ratio and not a percentage.
 
-**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **Unpacker Write Efficiency** (#42) to distinguish backpressure from other stall types.
+**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **SrcA/SrcB Write Actual Efficiency** to separate blocked writes from missing writes.
 
 ---
 
@@ -422,50 +424,6 @@ On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DM
 
 ---
 
-**16. Dest Read Backpressure**
-
-Fraction of packer destination register reads that were blocked.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Dest Read Backpressure = (PACKER0_DEST_READ_REQ - DEST_READ_GRANTED_0) /
-                         PACKER0_DEST_READ_REQ * 100
-```
-
-- **High value (>20%)**: Packer can't read destination register (math still writing).
-- **Low value (~0%)**: No destination register contention.
-
-**Use case:** Identifies math-to-pack register handoff bottleneck.
-
----
-
-**17. Math Dest Write Port Stall Rate**
-
-Fraction of math cycles stalled by destination register write port contention.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_PORT) /
-                             MATH_INSTRN_AVAILABLE * 100
-```
-
-- **High value (>10%)**: Math is stalled waiting for write port to destination register.
-- **Low value (~0%)**: No write port stalls.
-
-The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 for an entire op (would otherwise report a misleading 100% stall rate). This happens on BH for workloads that don't exercise the write-port path heavily.
-
-**Use case:** Detects destination register write contention from the math side.
-
----
-
 **18. Math Scoreboard Stall Rate**
 
 Fraction of math cycles stalled by FPU data hazard scoreboard.
@@ -543,7 +501,7 @@ SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ * 10
 
 ### Additional Idle Waits
 
-**21. MMIO/SFPU/THCON/MOVE Idle Wait**
+**21. CFG/SFPU/THCON/MOVE Idle Wait**
 
 Fraction of total cycles each thread spent waiting for specific hardware units.
 
@@ -553,14 +511,14 @@ Fraction of total cycles each thread spent waiting for specific hardware units.
 | **Counter group** | INSTRN |
 
 ```
-MMIO Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
+CFG Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / ref_cnt * 100
 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / ref_cnt * 100
 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 ```
 
 - **High value (>5%)**: Significant time spent waiting for this unit. MOVE Idle Wait at 2.8% for tilize is expected.
-- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and MMIO are typically ~0%.
+- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and CFG are typically ~0%.
 
 **Use case:** Absolute (not relative) measure of time lost to each hardware unit. Unlike the stall breakdown metrics which show percentage of stalls, these show percentage of total time.
 
@@ -992,30 +950,9 @@ Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
 
 ---
 
-**42. Unpacker0/1 Write Efficiency**
-
-Source register write throughput per unpacker — fraction of unpacker-busy cycles where the write actually succeeded (port-OK).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Unpacker0 Write Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0 * 100
-Unpacker1 Write Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0 * 100
-```
-
-- **High value (>80%)**: Unpacker spends most busy time successfully writing data.
-- **Low value (<40%)**: Unpacker busy but writes are blocked (port contention or less data than busy cycles).
-
-**Use case:** Identifies unpacker bottlenecks — low efficiency combined with high Unpack Busy cycles suggests port contention or register overwrite stalls.
-
----
-
 **43. FPU Execution Efficiency**
 
-FPU active cycles as fraction of math instruction availability on the math thread.
+FPU active cycles per cycle the math thread had a math instruction available. A raw ratio: FPU_COUNTER counts dequeues from every thread, so it is not a subset of thread 1's availability.
 
 | | |
 |---|---|
@@ -1023,19 +960,19 @@ FPU active cycles as fraction of math instruction availability on the math threa
 | **Counter group** | FPU + INSTRN |
 
 ```
-FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1 * 100
+FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1      # raw ratio
 ```
 
-- **High value (>80%)**: FPU executes whenever math work is available (compute-efficient).
-- **Low value (<30%)**: Math instructions pending but FPU not running (pipeline stalls).
+- **Near or above 1**: FPU executes whenever math work is available (compute-efficient).
+- **Low value (<0.3)**: Math instructions available but FPU not running (pipeline stalls).
 
 **Use case:** Distinguishes compute-bound (high efficiency) from stall-bound (low efficiency) workloads on the math path.
 
 ---
 
-**44. SrcA/SrcB Write Overwrite Blocked Rate**
+**44. SrcA Write Overwrite Blocked Rate**
 
-Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previous data not yet consumed by math).
+Fraction of srcA DMA write attempts blocked by overwrite protection (previous data not yet consumed by math). SrcB reports the port-blocked mode instead (metric 15); each source's other blocking mode is 1 minus its write efficiency.
 
 | | |
 |---|---|
@@ -1045,11 +982,9 @@ Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previo
 ```
 SrcA Write Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) /
                                SRCA_WRITE_REQ * 100
-SrcB Write Overwrite Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_OVR) /
-                               SRCB_WRITE_REQ * 100
 ```
 
-Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
+Paired with `SrcA Write Actual Efficiency` to separate the two stall modes:
 - **Port blocking**: DMA write port unavailable (mux contention)
 - **Overwrite blocking**: previous srcA/B value not yet consumed by math; can't overwrite
 
@@ -1057,69 +992,6 @@ Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
 - **Low value (~0%)**: No register pressure.
 
 **Use case:** Distinguishes source register overwrite stalls (math-consumer bottleneck) from port stalls (DMA arbitration).
-
----
-
-**45. Fidelity Stall Rate**
-
-Fraction of math-valid cycles stalled in a fidelity phase (multi-HF-cycle math instruction).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **0%**: LoFi math only (all instructions complete in 1 HF cycle).
-- **>0%**: HiFi math instructions are active. Each HiFi2 takes 2 cycles, HiFi4 takes 4 cycles.
-
-**Use case:** Detects whether a workload uses HiFi math; non-zero values indicate multi-cycle math instructions contributing to total execution time.
-
----
-
-**46. HiFi Fraction**
-
-Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 or HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
-                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
-```
-
-- **0%**: Pure LoFi.
-- **100%**: Pure HiFi.
-
-**Use case:** Quick check of fidelity mix in a workload.
-
----
-
-**47. Avg HF Cycles Per Instrn**
-
-Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
-```
-
-- **1.0**: All LoFi.
-- **2.0**: All HiFi2.
-- **4.0**: All HiFi4.
-- Between: Mixed workload.
-
-**Use case:** Single-number summary of fidelity impact on math execution.
 
 ---
 
