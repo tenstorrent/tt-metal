@@ -40,7 +40,7 @@ from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 # it outright on these ops — "in0_block_w=1 is small, try in0_block_w=2 or above".
 #
 # Swept in isolation at the model's shapes (bfloat8_b, LoFi + fp32 accumulate, median of
-# 4 steady-state launches; tests/test_qwen3_tts_gate_up_sweep_n150.py):
+# 4 steady-state launches):
 #
 #   (2048, 6144)  N150 / TP=1     shipped 1D  @64  in0_block_w=1   91.7 us  146 GB/s  50.6 %
 #                                 ->  dram    @16  in0_block_w=4   58.0 us  230 GB/s  80.0 %
@@ -68,11 +68,10 @@ from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 #          -29 us of matmul, not for the wall clock.
 #
 # TP=2 had no numerics gate at all -- test_qwen3_tts_pcc.py opens
-# ttnn.open_device(device_id=0), so every test in it runs tp_size=1. Rather than treat
-# that as a reason to withhold the N300 arm, test_qwen3_tts_mlp_tp2_pcc.py now covers
-# it, and the two arms are indistinguishable on a real 2-chip mesh: PCC vs a
-# full-precision torch reference 0.99965531 -> 0.99965531 (identical to 8 digits),
-# relative RMS 4.693 -> 4.716 %, arm-to-arm PCC 0.99999285.
+# ttnn.open_device(device_id=0), so every test in it runs tp_size=1. The two
+# arms are indistinguishable on a real 2-chip mesh: PCC vs a full-precision torch
+# reference 0.99965531 -> 0.99965531 (identical to 8 digits), relative RMS
+# 4.693 -> 4.716 %, arm-to-arm PCC 0.99999285.
 #
 # Generation length does move (81 -> 94 frames on the perf-gate text, 81 -> 77 on the
 # QA text, each re-measured, so it is the numerics and not sampler noise) -- but it
@@ -299,8 +298,8 @@ class MLP(LightweightModule):
         #
         # N150 / TP=1, N=6144: the full-grid choice was swept at **bf16** ("210 GB/s, 73 % of
         # DRAM peak"). At bfp8 it is 135 GB/s. Re-swept in isolation at the model's shapes
-        # (bfloat8_b, LoFi + fp32 acc, median of 4 steady launches,
-        # test_qwen3_tts_prefill_mm_sweep_n150.py); isolated time tracks the in-model window
+        # (bfloat8_b, LoFi + fp32 acc, median of 4 steady launches);
+        # isolated time tracks the in-model window
         # to ~1 us on every shape:
         #
         #   m=64   c64 ibw=1 (shipped) 99.0 us 135 GB/s | c32 ibw=2 71.3 us 187 GB/s  <- best
@@ -338,7 +337,7 @@ class MLP(LightweightModule):
         # L1-INTERLEAVED from the SiLU-mul, so the mcast sender re-reads it out of
         # interleaved L1 for every K block; a width shard on the matmul's own grid hands
         # each core its 6 K-tiles up front. Same program config, only the in0 memcfg
-        # changes (test_qwen3_tts_prefill_mm_sweep_n150.py, median of 4 steady launches):
+        # changes (median of 4 steady launches):
         #
         #   m=64   c32 interleaved-in0  85.4 us 156 GB/s -> sharded-in0  72.1 us 185 GB/s
         #   m=128  c32 interleaved-in0 149.5 us  89 GB/s -> sharded-in0 110.7 us 121 GB/s

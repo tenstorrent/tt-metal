@@ -366,8 +366,8 @@ def apply_rope_qk(
         # `cos.shape[1] in (input.shape[1], 1)`, and Qwen3-TTS cos/sin are head-broadcast
         # (shape[1] == 1), so both forms are legal. [1,nh,S,D] and [nh,1,S,D] have the
         # same linear tile order, so the reshape is metadata only — and the outputs are
-        # BIT-EXACT, max|diff| == 0 on all four (heads, seq) the demo runs
-        # (test_qwen3_tts_rope_prefill_probe.py). QWEN3_TTS_ROPE_HEAD_BATCH=0 reverts.
+        # BIT-EXACT, max|diff| == 0 on all four (heads, seq) the demo runs.
+        # QWEN3_TTS_ROPE_HEAD_BATCH=0 reverts.
         _shape = tuple(int(d) for d in t.shape)
         _fold = (
             _shape[0] == 1

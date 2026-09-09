@@ -191,7 +191,7 @@ class DecoderLayer(LightweightModule):
         # dim_tiles (64 for hidden=2048), which drives block_w to (2048/64)/32 = 1 and
         # subblock_w to 1 — the same "most cores, thinnest block" shape that cost the
         # matmuls 34 us each. Swept at the model's shapes
-        # (test_qwen3_tts_prefill_trio_sweep.py, median of 4 steady launches):
+        # (median of 4 steady launches):
         #
         #   m=64   c64 bw=1 13.3 us | c32 bw=2 12.3  <- best | c16 13.3 | c8 15.5 | c4 21.0
         #   m=128  c64 bw=1 17.5 us | c32 bw=2 16.8  <- best | c16 19.0 | c8 24.5 | c4 36.6
