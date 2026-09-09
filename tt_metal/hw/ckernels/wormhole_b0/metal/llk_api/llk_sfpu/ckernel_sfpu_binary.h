@@ -180,15 +180,29 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
         sfpi::vFloat result = in0 * r;
         if constexpr (is_fp32_dest_acc_en) {
-            // Skip quotient refinement when in0*r is already non-finite (biased exponent == 255).
-            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
-            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+            // Skip quotient refinement in the two cases where in0*r is already the IEEE
+            // result and the residual would destroy it:
+            //   - in0*r is non-finite (biased exponent == 255). If in0*r = +/-inf, then the
+            //     residual e = in0 - (+/-inf)*in1 = -/+inf and result + e*r = inf + (-inf) =
+            //     NaN, which would corrupt IEEE overflow behavior.
+            //   - in1 is non-finite. For in1 = +/-inf, r = 1/in1 = +/-0 and result = in0*r is
+            //     already the required signed zero, but e = in0 - result*in1 evaluates
+            //     0*inf = NaN.
+            v_if(
+                sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255 &&
+                sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255) {
                 // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
                 // The residual subtraction is exact under Sterbenz's lemma.
                 sfpi::vFloat e = in0 - result * in1;
                 result = result + e * r;
             }
+            v_endif;
+
+            // The guard above also excludes a NaN denominator, so set that result explicitly.
+            // sfpu_reciprocal_iter returns 0 rather than NaN for a NaN input, which leaves
+            // result = in0*0 = 0; before this the refinement happened to restore the NaN via
+            // e = in0 - 0*NaN. Stating it directly does not depend on the reciprocal.
+            v_if(sfpi::is_nan(in1)) { result = std::numeric_limits<float>::quiet_NaN(); }
             v_endif;
         }
 

@@ -87,8 +87,21 @@ def test_mul_fp32(device, ttnn_function):
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=nan; in fp32  tile
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=0; in chained (mul * recip) div op
 def test_div_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15, 0.0, float("inf")]], dtype=torch.float32)
-    y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0, 10, 0.0, float("inf")]], dtype=torch.float32)
+    inf = float("inf")
+    nan = float("nan")
+    # The sweeps elsewhere in this file draw operands from [-100, 100] and never
+    # generate infinities, and the pairs below previously covered only inf / inf.
+    # The trailing pairs add finite / +-inf, which IEEE-754 and the registered
+    # torch.div golden both define as a signed zero, and +-1 / nan, which must
+    # stay nan.
+    x_torch = torch.tensor(
+        [[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15, 0.0, inf, 1, -3, 0, 1, 1, -1]],
+        dtype=torch.float32,
+    )
+    y_torch = torch.tensor(
+        [[2, 3, -4, -5, 0, 0, 0, 1, 0, 10, 0.0, inf, inf, inf, inf, -inf, nan, nan]],
+        dtype=torch.float32,
+    )
     # torch out in ttnn TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
     #            1.500000000000000]])
     # tt out in torch TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
