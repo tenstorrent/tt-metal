@@ -505,7 +505,7 @@ uint32_t MeshWorkload::get_cb_size(
 
 }  // namespace tt::tt_metal::distributed
 
-std::unordered_set<tt::tt_metal::SubDeviceId> tt::tt_metal::internal::get_mesh_workload_sub_device_ids(
+const std::unordered_set<tt::tt_metal::SubDeviceId>& tt::tt_metal::internal::get_mesh_workload_sub_device_ids(
     distributed::MeshWorkload& mesh_workload, distributed::MeshDevice* mesh_device) {
     return mesh_workload.impl().determine_sub_device_ids(mesh_device);
 }

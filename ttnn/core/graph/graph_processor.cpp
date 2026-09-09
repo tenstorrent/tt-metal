@@ -602,10 +602,17 @@ void track_mesh_workload_execution(
         }
     }
 
-    // Same invariant FDMeshCommandQueue::enqueue_mesh_workload enforces, which has already run by
-    // the time we get here.
-    const auto sub_device_ids = tt::tt_metal::internal::get_mesh_workload_sub_device_ids(workload, mesh_device);
-    TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
+    // FDMeshCommandQueue::enqueue_mesh_workload enforces this same invariant and has already run by
+    // the time we get here, so a violation is not reachable through dispatch. Capture is passive
+    // observation, though, so it declines to record rather than aborting the caller's run.
+    const auto& sub_device_ids = tt::tt_metal::internal::get_mesh_workload_sub_device_ids(workload, mesh_device);
+    if (sub_device_ids.size() != 1) {
+        log_warning(
+            tt::LogAlways,
+            "Graph capture skipped a workload execution: expected exactly one sub-device, found {}.",
+            sub_device_ids.size());
+        return;
+    }
     const auto sub_device_id = *sub_device_ids.begin();
     const auto worker_core_ranges =
         mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);

@@ -15,9 +15,22 @@ class MeshWorkload;
 
 namespace tt::tt_metal::internal {
 
-// INTERNAL API: Resolve the sub-devices occupied by a workload using the same implementation as
-// mesh dispatch. This exists for TTNN graph-report tooling and is not part of the stable Metalium API.
-std::unordered_set<SubDeviceId> get_mesh_workload_sub_device_ids(
+/**
+ * @warning INTERNAL. Everything declared in this header lives under
+ * @c api/internal: it exists to serve tt-metal's own tooling and
+ * bindings, is not part of the supported user-facing API, and may change or be
+ * removed without a deprecation period.
+ */
+
+/**
+ * Resolves the sub-devices a workload occupies, using the same implementation mesh
+ * dispatch uses, so callers cannot drift from dispatch's own placement decision.
+ *
+ * Returns a reference to state cached on the workload; it is valid until the workload
+ * is next modified or destroyed. @p mesh_workload is non-const because resolving
+ * populates that cache.
+ */
+const std::unordered_set<SubDeviceId>& get_mesh_workload_sub_device_ids(
     distributed::MeshWorkload& mesh_workload, distributed::MeshDevice* mesh_device);
 
 }  // namespace tt::tt_metal::internal
