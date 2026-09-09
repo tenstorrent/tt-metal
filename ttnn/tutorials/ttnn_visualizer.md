@@ -191,13 +191,70 @@ Tracy will output the path to a directory:
 2025-08-01 10:51:02.731 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:905 - OPs csv generated at: /root/tt-metal/generated/profiler/reports/2025_08_01_10_51_02/ops_perf_results_2025_08_01_10_51_02.csv
 ```
 
-This diredtory contains the following output files:
+This directory contains the following output files:
 
 * `ops_perf_results_<timestamp>.csv`
-* `device_profile_log.txt`
+* `profile_log_device.csv`
+* `session.json`
 * `<name>.tracy` (Tracy file)
 
 Upload this entire directory to TT-NN Visualizer as the **Performance report**.
+
+---
+
+### Generating both reports from one run
+
+The two sections above capture each report separately. To capture both from a single execution, leave the TT-NN logging configuration in place and run that same command under Tracy:
+
+```bash
+export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode":false,"enable_logging":true,"enable_graph_report":true,"enable_detailed_buffer_report":true,"report_name":"ttnn_visualizer_tutorial"}'
+python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
+```
+
+Both reports carry one overall session ID, so they can be paired without relying on directory timestamps:
+
+- The Tracy launcher creates the session ID before starting the profiled process and exports it as `TTNN_RUN_SESSION_ID`.
+- The memory report stores it in the `session_id` column of each `graph_captures` row in `db.sqlite`.
+- Tracy report postprocessing writes the launcher's ID to `session.json`.
+
+Metal does not manage the ID. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
+
+```bash
+export TTNN_RUN_SESSION_ID=$(uuidgen)
+```
+
+Caller-supplied session IDs must be 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-` so they remain safe in environment and report metadata.
+
+Match `session_id` in `session.json` to the memory report's `session_id`, then use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
+
+| Column | Meaning |
+| --- | --- |
+| `capture_index` | Counts graph captures within the process; `0` is the first |
+| `rank` | Distributed rank the capture ran on |
+| `device_operation_id_begin` / `_end` | Half-open range of device operation ids the capture dispatched |
+
+`device_operation_id_*` holds raw device operation ids. The `GLOBAL CALL COUNT` column of `ops_perf_results.csv` is **not** a raw id: the profiler packs the operation id together with the device id and a host-fallback flag, via `EncodePerDeviceProgramID` in `tt_metal/impl/profiler/tt_metal_profiler.cpp` (`DEVICE_ID_NUM_BITS = 10`, `DEVICE_OP_ID_NUM_BITS = 31`). Decode it before comparing:
+
+```python
+DEVICE_ID_NUM_BITS, DEVICE_OP_ID_NUM_BITS = 10, 31
+op_id     = (global_call_count & ((1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS
+device_id =  global_call_count & ((1 << DEVICE_ID_NUM_BITS) - 1)
+```
+
+The performance rows belonging to a capture are then those satisfying:
+
+```sql
+((GLOBAL_CALL_COUNT & 0x7FFFFFFF) >> 10) >= device_operation_id_begin
+AND ((GLOBAL_CALL_COUNT & 0x7FFFFFFF) >> 10) < device_operation_id_end
+```
+
+Comparing `GLOBAL CALL COUNT` directly against the range matches nothing: on a 2-chip run the smallest encoded value is already `1 << 10`. Each dispatched operation contributes one row per device, so a capture of N operations on a D-device mesh selects N×D rows.
+
+Upload the two directories as usual. The session ID in `session.json` identifies the matching performance report; each range then indexes into `ops_perf_results*.csv`. The session ID is intentionally absent from the CSV files.
+
+A process that captures more than once (several pytest cases, successive model iterations, or repeated manual captures) produces one row per capture, each with its own range, so a capture is paired with its own interval rather than with everything the process did.
+
+Across a multi-host run every rank runs the same program, so the Nth capture carries the same `capture_index` on every rank with no configuration; `rank` keeps the merged rows apart, and each rank's range refers to its own performance report. Ranks must open the same captures in the same order for the indices to line up — `world_size` is recorded so a consumer can check it received one row per rank.
 
 ---
 
