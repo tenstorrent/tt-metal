@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression test: the rank-stamped TopK merge must not leak the SFPU's shared -1.0
-// constant. It programs a lo16 clear mask into a programmable constant register and
-// never restores it, so the mask must not land on LREG11 (p_sfpu::LCONST_neg1 ==
-// sfpi::vConstNeg1), which firmware loads once at boot and later ops read bare.
+// Regression test: the rank-stamped TopK merge must not change the SFPU's shared -1.0 register
+// (LREG11, sfpi::vConstNeg1). It programs a lo16 clear mask into a programmable constant register
+// and never restores it, so the mask must not land on LREG11.
 //
-// Poison with one rank-stamped merge, datacopy a fresh input tile over its output, then
-// probe with x - 1 computed against LCONST_neg1. Control: rank_stamped=False, which keeps
-// the merge but compiles the mask write out. Needs 32-bit DEST (dest_acc).
+// Probe = x - 1 computed against LCONST_neg1. Run the probe on a fresh input tile before the merge
+// (reference) and again after it; the two must agree bit for bit, whatever LREG11 held at start.
+// Control: rank_stamped=False keeps the merge but compiles the mask write out. Needs 32-bit DEST.
 
 #include <cstdint>
 
@@ -40,8 +39,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+    for (int i = 0; i < 2; ++i)
+    {
+        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+    }
 }
 
 #endif
@@ -85,11 +87,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // constant file, so it must stay ahead of the poison.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
+    // Raw TTI, not `x - 1.0f`: the compiler may otherwise materialize the -1.0 elsewhere and
+    // never read LCONST_neg1. Same idiom as _floor_body_.
+    constexpr auto probe = []
+    {
+        constexpr int PROBE_ITERATIONS = 8;
+        for (int d = 0; d < PROBE_ITERATIONS; d++)
+        {
+            sfpi::vFloat x                  = sfpi::dst_reg[0];
+            sfpi::l_reg[sfpi::LRegs::LReg0] = x;
+            TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG0, 0);
+            sfpi::vFloat x_minus_1 = sfpi::l_reg[sfpi::LRegs::LReg0];
+            sfpi::dst_reg[0]       = x_minus_1;
+            sfpi::dst_reg++;
+        }
+    };
 
-    // POISON. Called only for its effect on the constant registers; its DEST output is
-    // discarded. Safe without a preceding phases-steps call: the merge records and
-    // replays nothing, reaching DEST only through inline loads and stores.
+    // Reference: the probe before the merge.
+    _llk_math_wait_for_dest_available_<DST_SYNC>();
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+        0 /* dst_index */, formats.math, formats.math);
+    _llk_math_eltwise_unary_sfpu_params_(probe, 0 /* dst_index */, VectorMode::RC);
+    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+
+    // Poison: one merge, called only for its effect on the constant registers; its DEST output is
+    // discarded. Safe without a preceding phases-steps call: the merge records and replays nothing.
+    _llk_math_wait_for_dest_available_<DST_SYNC>();
     _llk_math_eltwise_unary_sfpu_params_(
         []
         {
@@ -109,30 +132,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0 /* dst_index */,
         VectorMode::None);
 
-    // Must follow the poison: the merge overwrites the whole DEST half.
+    // The probe again, on a fresh copy of the input.
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0 /* dst_index */, formats.math, formats.math);
-
-    // PROBE. x - 1 over the tile, 8 iterations per face, VectorMode::RC walks all four.
-    _llk_math_eltwise_unary_sfpu_params_(
-        []
-        {
-            constexpr int PROBE_ITERATIONS = 8;
-            for (int d = 0; d < PROBE_ITERATIONS; d++)
-            {
-                sfpi::vFloat x                  = sfpi::dst_reg[0];
-                sfpi::l_reg[sfpi::LRegs::LReg0] = x;
-                // Raw TTI, not `x - 1.0f`: the compiler may otherwise materialize the
-                // -1.0 elsewhere and never read LCONST_neg1. Same idiom as _floor_body_.
-                TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG0, 0);
-                sfpi::vFloat x_minus_1 = sfpi::l_reg[sfpi::LRegs::LReg0];
-                sfpi::dst_reg[0]       = x_minus_1;
-                sfpi::dst_reg++;
-            }
-        },
-        0 /* dst_index */,
-        VectorMode::RC);
-
+    _llk_math_eltwise_unary_sfpu_params_(probe, 0 /* dst_index */, VectorMode::RC);
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 
@@ -152,9 +155,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    for (int i = 0; i < 2; ++i)
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
