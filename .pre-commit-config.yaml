@@ -66,6 +66,11 @@ repos:
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
       language: system
       pass_filenames: false
+    - id: validate-metalium-header-hygiene
+      name: validate-metalium-header-hygiene
+      entry: python3 scripts/validate_api/validate_header_hygiene.py
+      language: system
+      pass_filenames: false
 - repo: local
   hooks:
     - id: check-torch-imports-in-ttnn
