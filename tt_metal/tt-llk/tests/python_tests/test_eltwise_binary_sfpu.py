@@ -678,10 +678,8 @@ def test_eltwise_binary_sfpu_float(
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    # Only xlogy needs this: under a Bfp8_b input the coarse quantization pushes small
-    # operands to values whose log is -inf, and the product carries it. Pow was withheld
-    # alongside it and does not need to be -- it passes on every Bfp8_b-input combination,
-    # so it is swept now.
+    # Bfp8_b quantization can map small positive operands to zero, making xlogy's
+    # logarithm -inf.
     if formats.input_format == DataFormat.Bfp8_b and mathop == MathOperation.SfpuXlogy:
         pytest.skip("Bfp8_b input is not supported for XLOGY coverage")
 
