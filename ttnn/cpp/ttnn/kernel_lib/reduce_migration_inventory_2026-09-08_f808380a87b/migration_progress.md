@@ -441,3 +441,34 @@ entry coverage remains 130/144. The unchanged original reproduction then passed
 sanity passed **63/63** without skips/failures (`reduce-migration-5txgugv1`).
 JUnit agrees with every post-fix result. A fresh review and the full prepared
 regression remain due.
+
+## Seventh Claude review: module manifest and derived reports
+
+Fresh Opus 5/high round 7 verified R6.1 as correct and complete and found one
+build-system regression: `sources.cmake` still listed the pre-rename
+`softmax/device/softmax_reduce.hpp` in the exported API header set, so a clean
+configure and every `cmake --install`/packaging build failed. Only incremental
+ninja builds in a tree configured before the rename were recorded, which could
+not detect it. Both failures were reproduced, then fixed by listing
+`softmax_reduce_plans.hpp` in `TTNN_OP_NORMALIZATION_SRCS`, matching its
+groupnorm sibling.
+
+The round also exposed drift between the sanity manifest and its three derived
+reports, in both directions: md/html/csv still reported 74 cases / 129 covered
+kernels and `DF001` as a gap, while the manifest's own `kernels[]` copies held
+superseded `SM006`/`SM022`/`SM023`/`SM028` selections that the CSV had current.
+`scripts/generate_reduce_migration_sanity_reports.py` now projects md, html and
+csv from the manifest and refuses to run on internal disagreement, so the class
+of drift is closed. Sixteen stale manifest fields and a `"; "` evidence prefix on
+69 kernel entries were corrected from the authoritative group entries; the six
+resulting CSV row changes are all corrections. See `review_round_07.md`.
+
+Configure, install, native build, pre-commit and `git diff --check` all passed.
+The five sanity groups for the two factories including the renamed header passed
+**5/5** (`reduce-r71-softmax`), and full sanity collection passed **77/77 groups
+with zero failures** (`reduce-r71-collect`), plus four architecture-template
+selections under `--tt-arch=blackhole` (`reduce-r71-collect-bh`). Counts are
+unchanged: **178 full groups, 1,000 definitions, 18,860 known cases; 77 sanity
+cases, 63 available on N300**; kernel-entry coverage 130/144, now consistent
+across all four artifacts. A fresh review and the full prepared regression
+remain due.

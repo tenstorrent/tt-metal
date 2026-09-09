@@ -1918,7 +1918,8 @@
       "hardware": "One Wormhole device.",
       "expected_cases": 1,
       "require_pass": true,
-      "full_suite_group": "T177"
+      "full_suite_group": "T177",
+      "test_evidence": "tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py:21"
     },
     {
       "id": "SM076",
@@ -2177,8 +2178,8 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp:89; ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp:181; ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp:330",
       "case": "SM023",
       "status": "selected",
-      "selection": "Groupnorm large algorithm; N=2,C=4,groups=1,H=W=512 exceeds resident L1 buffers.",
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:289"
+      "selection": "Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper\u2019s unconditional skip.",
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18"
     },
     {
       "id": "S059",
@@ -2191,8 +2192,8 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp:92; ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp:188; ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp:312",
       "case": "SM022",
       "status": "selected",
-      "selection": "Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked.",
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:289"
+      "selection": "Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper\u2019s unconditional skip.",
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18"
     },
     {
       "id": "S060",
@@ -2472,8 +2473,8 @@
       "evidence": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp:232; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp:336; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp:363; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp:502",
       "case": "SM006",
       "status": "selected",
-      "selection": "ROW_MAJOR [1,1,32,64], one BLOCK_SHARDED core: groupnorm_sharded_v2 and its writer.",
-      "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:1040"
+      "selection": "ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 destination accumulation. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.",
+      "test_evidence": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py:2137"
     },
     {
       "id": "S083",
@@ -2750,11 +2751,11 @@
       "factories": [
         "DH001"
       ],
-      "evidence": "; models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/op.py:26",
+      "evidence": "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/op.py:26",
       "status": "covered",
       "case": "SM075",
       "selection": "Small standard SDPA with two query heads and 128 KV tokens.",
-      "test_evidence": "tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py"
+      "test_evidence": "tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py:21"
     },
     {
       "id": "DF002",
@@ -2763,7 +2764,7 @@
       "factories": [
         "DH002"
       ],
-      "evidence": "; tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp:89",
+      "evidence": "tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp:89",
       "case": "SM067",
       "status": "selected",
       "selection": "Small interleaved UDM width reduction.",
@@ -2776,7 +2777,7 @@
       "factories": [
         "DH003"
       ],
-      "evidence": "; tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp:226",
+      "evidence": "tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp:226",
       "case": "SM068",
       "status": "selected",
       "selection": "Small sharded UDM width reduction instantiates sender and receiver kernels.",
@@ -2789,7 +2790,7 @@
       "factories": [
         "DH003"
       ],
-      "evidence": "; tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp:216",
+      "evidence": "tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp:216",
       "case": "SM068",
       "status": "selected",
       "selection": "Small sharded UDM width reduction instantiates sender and receiver kernels.",
@@ -2802,7 +2803,7 @@
       "factories": [
         "F034"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp:1221",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp:1221",
       "case": "SM072",
       "status": "selected",
       "selection": "WAN whole-row RMSNorm, TP=2, prompt length512, width5120. TP1 uses the drain-only writer; TP2 uses the all-gather worker writer.",
@@ -2815,7 +2816,7 @@
       "factories": [
         "F034"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp:1179",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp:1179",
       "case": "SM071",
       "status": "selected",
       "selection": "WAN whole-row RMSNorm, TP=1, prompt length512, width5120. TP1 uses the drain-only writer; TP2 uses the all-gather worker writer.",
@@ -2828,7 +2829,7 @@
       "factories": [
         "F035"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp:797",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp:797",
       "case": "SM069",
       "status": "selected",
       "selection": "Fused RMS all-gather on N300, two devices, BF16, no residual add; smallest existing numeric case.",
@@ -2841,7 +2842,7 @@
       "factories": [
         "F036"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/attn_res_gather_softmax_program_factory.cpp:346",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/attn_res_gather_softmax_program_factory.cpp:346",
       "case": "SM070",
       "status": "selected",
       "selection": "Plain AttnRes read, the smallest existing 2x4 fabric arm; 640 tokens per chip.",
@@ -2855,7 +2856,7 @@
         "F040",
         "F041"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/indexer_score/device/indexer_score_program_factory.cpp:364; ttnn/cpp/ttnn/operations/experimental/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp:459",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/indexer_score_program_factory.cpp:364; ttnn/cpp/ttnn/operations/experimental/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp:459",
       "case": "SM050",
       "status": "selected",
       "selection": "Indexer block-pool fallback, one group and 16 blocks per unit (>8), reaches the reduce-helper branch.",
@@ -2868,7 +2869,7 @@
       "factories": [
         "F043"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/sigmoid_gated_rms_norm_program_factory.cpp:97",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/sigmoid_gated_rms_norm_program_factory.cpp:97",
       "case": "SM052",
       "status": "selected",
       "selection": "Basic BF16 gated RMSNorm numerical case.",
@@ -2881,7 +2882,7 @@
       "factories": [
         "F047"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:206",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:206",
       "status": "gap",
       "case": "",
       "selection": "No direct unit test calls the experimental Quasar generic-reduction entry points. Quasar-named ResNet sum/mean tests call the standard entry points.",
@@ -2895,7 +2896,7 @@
         "F047",
         "DH004"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:208; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_program_factory.cpp:333",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:208; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_program_factory.cpp:333",
       "status": "gap",
       "case": "",
       "selection": "No direct unit test calls the experimental Quasar generic-reduction entry points. Quasar-named ResNet sum/mean tests call the standard entry points.",
@@ -2908,7 +2909,7 @@
       "factories": [
         "F048"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_single_core_hw_program_factory.cpp:133",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_single_core_hw_program_factory.cpp:133",
       "status": "gap",
       "case": "",
       "selection": "No direct unit test calls the experimental Quasar generic-reduction entry points. Quasar-named ResNet sum/mean tests call the standard entry points.",
@@ -2921,7 +2922,7 @@
       "factories": [
         ""
       ],
-      "evidence": "; :",
+      "evidence": ":",
       "status": "gap",
       "case": "",
       "selection": "No host factory references this Quasar transpose reader.",
@@ -2934,7 +2935,7 @@
       "factories": [
         "DH004"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_program_factory.cpp:325",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_program_factory.cpp:325",
       "status": "gap",
       "case": "",
       "selection": "No direct unit test calls the experimental Quasar generic-reduction entry points. Quasar-named ResNet sum/mean tests call the standard entry points.",
@@ -2947,7 +2948,7 @@
       "factories": [
         "F046"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:140",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:140",
       "status": "gap",
       "case": "",
       "selection": "No direct unit test calls the experimental Quasar generic-reduction entry points. Quasar-named ResNet sum/mean tests call the standard entry points.",
@@ -2960,7 +2961,7 @@
       "factories": [
         "DH005"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/joint_sdpa_program_factory.cpp:468",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/joint_sdpa_program_factory.cpp:468",
       "status": "gap",
       "case": "",
       "selection": "No direct unit test found for experimental Quasar joint SDPA.",
@@ -2973,7 +2974,7 @@
       "factories": [
         "DH006"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/sdpa_program_factory.cpp:1563",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/sdpa_program_factory.cpp:1563",
       "case": "SM065",
       "status": "selected",
       "selection": "Quasar SDPA per-op numerical case, seq128, batch1.",
@@ -2986,7 +2987,7 @@
       "factories": [
         "DH007"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp:1077",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp:1077",
       "case": "SM066",
       "status": "selected",
       "selection": "Quasar decode SDPA per-op numerical case, batch1, KV capacity256.",
@@ -2999,7 +3000,7 @@
       "factories": [
         "F052"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp:286",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp:286",
       "case": "SM018",
       "status": "selected",
       "selection": "Existing minimal grouped-gate numerical configuration.",
@@ -3012,7 +3013,7 @@
       "factories": [
         "F053"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/hc_sum_reduce_program_factory.cpp:137",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/hc_sum_reduce_program_factory.cpp:137",
       "case": "SM019",
       "status": "selected",
       "selection": "BF16 H=32, W=1024, latent_size=32, DRAM input/output.",
@@ -3025,7 +3026,7 @@
       "factories": [
         "DH008"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_welford_program_factory.cpp:86",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_welford_program_factory.cpp:86",
       "case": "SM054",
       "status": "selected",
       "selection": "Single-device DiT layernorm pipeline, TP=1, sequence 512, width 2048, no affine.",
@@ -3038,7 +3039,7 @@
       "factories": [
         "F055"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp:258",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp:258",
       "case": "SM053",
       "status": "selected",
       "selection": "Single-device simulated distributed RMSNorm, one head, sequence 128, hidden 1024, pre/post fusion.",
@@ -3051,7 +3052,7 @@
       "factories": [
         "F056"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_program_factory.cpp:136",
+      "evidence": "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_program_factory.cpp:136",
       "case": "SM053",
       "status": "selected",
       "selection": "Single-device simulated distributed RMSNorm, one head, sequence 128, hidden 1024, pre/post fusion.",
@@ -3064,7 +3065,7 @@
       "factories": [
         "F058"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/moreh_dot_program_factory.cpp:19",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/moreh_dot_program_factory.cpp:19",
       "case": "SM021",
       "status": "selected",
       "selection": "One aligned BF16 tile row, dot length 32.",
@@ -3077,7 +3078,7 @@
       "factories": [
         "F065"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/moreh_linear_backward_multi_core_program_factory.cpp:155",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/moreh_linear_backward_multi_core_program_factory.cpp:155",
       "case": "SM030",
       "status": "selected",
       "selection": "Bias gradient with width 30: reduce H.",
@@ -3090,7 +3091,7 @@
       "factories": [
         "F067"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/moreh_mean_h_program_factory.cpp:148",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/moreh_mean_h_program_factory.cpp:148",
       "case": "SM032",
       "status": "selected",
       "selection": "BF16 [17,22], dim=0 (height), keepdim=true.",
@@ -3104,7 +3105,7 @@
         "F071",
         "F091"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_h_small/softmax_h_small.cpp:135; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_h_small.cpp:145",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_h_small/softmax_h_small.cpp:135; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_h_small.cpp:145",
       "case": "SM035",
       "status": "selected",
       "selection": "Explicit Moreh softmax strategy SMALL_H, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.",
@@ -3118,7 +3119,7 @@
         "F070",
         "F090"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_h_large/softmax_h_large.cpp:136; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_h_large.cpp:146",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_h_large/softmax_h_large.cpp:136; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_h_large.cpp:146",
       "case": "SM036",
       "status": "selected",
       "selection": "Explicit Moreh softmax strategy LARGE_H, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.",
@@ -3132,7 +3133,7 @@
         "F073",
         "F093"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_w_small/softmax_w_small.cpp:139; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_w_small.cpp:148",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_w_small/softmax_w_small.cpp:139; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_w_small.cpp:148",
       "case": "SM037",
       "status": "selected",
       "selection": "Explicit Moreh softmax strategy SMALL_W, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.",
@@ -3146,7 +3147,7 @@
         "F072",
         "F092"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_w_large/softmax_w_large.cpp:144; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_w_large.cpp:153",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/softmax_w_large/softmax_w_large.cpp:144; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_w_large.cpp:153",
       "case": "SM038",
       "status": "selected",
       "selection": "Explicit Moreh softmax strategy LARGE_W, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.",
@@ -3159,7 +3160,7 @@
       "factories": [
         "F077"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/softmax_backward_w_small/softmax_backward_w_small.cpp:64",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/softmax_backward_w_small/softmax_backward_w_small.cpp:64",
       "case": "SM041",
       "status": "selected",
       "selection": "Explicit Moreh softmax backward strategy SMALL_W, BF16 [32,32].",
@@ -3172,7 +3173,7 @@
       "factories": [
         "F076"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/softmax_backward_w_large/softmax_backward_w_large.cpp:69",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/softmax_backward_w_large/softmax_backward_w_large.cpp:69",
       "case": "SM042",
       "status": "selected",
       "selection": "Explicit Moreh softmax backward strategy LARGE_W, BF16 [32,32].",
@@ -3185,7 +3186,7 @@
       "factories": [
         "F078"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_program_factory.cpp:168",
+      "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_program_factory.cpp:168",
       "case": "SM043",
       "status": "selected",
       "selection": "BF16 [3,2,319,319], dim=2: Moreh height sum compute/reader.",
@@ -3199,7 +3200,7 @@
         "F079",
         "F080"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp:621; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_no_mcast_program_factory.cpp:800",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp:621; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_no_mcast_program_factory.cpp:800",
       "case": "SM005",
       "status": "selected",
       "selection": "TILE [1,1,32,64], two groups, 1x1 core grid, legacy (non-Welford) groupnorm.",
@@ -3212,11 +3213,11 @@
       "factories": [
         "F081"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp:651",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp:651",
       "case": "SM006",
       "status": "selected",
-      "selection": "ROW_MAJOR [1,1,32,64], one BLOCK_SHARDED core: groupnorm_sharded_v2 and its writer.",
-      "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:1040"
+      "selection": "ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 destination accumulation. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.",
+      "test_evidence": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py:2137"
     },
     {
       "id": "DF037",
@@ -3225,7 +3226,7 @@
       "factories": [
         "DH009"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp:636",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp:636",
       "case": "SM007",
       "status": "selected",
       "selection": "Tiled BF16 [1,1,32,64], no gamma/beta: ordinary interleaved layernorm reader.",
@@ -3238,7 +3239,7 @@
       "factories": [
         "DH009"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp:630",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp:630",
       "case": "SM046",
       "status": "selected",
       "selection": "FP32 tiled input with TILE gamma/beta, W padded to 4096: >2 MiB resident buffer demand forces the large-tensor reader; legacy compute.",
@@ -3251,7 +3252,7 @@
       "factories": [
         "DH009"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp:634",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp:634",
       "case": "SM008",
       "status": "selected",
       "selection": "Tiled BF16 [1,1,32,64], ROW_MAJOR gamma/beta: rm_gb interleaved reader.",
@@ -3265,7 +3266,7 @@
         "F084",
         "F083"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:495; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:501; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp:308",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:495; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:501; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp:308",
       "case": "SM009",
       "status": "selected",
       "selection": "Tiled BF16 [1,1,32,64], WIDTH_SHARDED 1x1, use_welford defaults false, no ROW_MAJOR weights.",
@@ -3279,7 +3280,7 @@
         "F084",
         "F083"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:487; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp:308",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:487; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp:308",
       "case": "SM045",
       "status": "selected",
       "selection": "One physical device simulates four partitions; sharded layernorm PRE_ALL_GATHER selects pre-all-gather compute/writer.",
@@ -3293,7 +3294,7 @@
         "F084",
         "F083"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:494; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:500; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp:308",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:494; ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp:500; ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp:308",
       "case": "SM044",
       "status": "selected",
       "selection": "Sharded layernorm with ROW_MAJOR gamma/beta and legacy compute selects rm_gb writer.",
@@ -3306,7 +3307,7 @@
       "factories": [
         "F087"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp:72",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp:72",
       "case": "SM012",
       "status": "selected",
       "selection": "One device, [1,1,32,64], use_2d_core_grid=true: 2D pre-all-gather worker and merge code.",
@@ -3320,7 +3321,7 @@
         "F085",
         "F086"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp:56; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_welford_program_factory.cpp:53",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp:56; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_welford_program_factory.cpp:53",
       "case": "SM011",
       "status": "selected",
       "selection": "One-device pre/post RMSNorm pipeline [1,1,32,64], num_devices=1; post uses metal2 compute.",
@@ -3338,7 +3339,7 @@
         "F087",
         "DH010"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp:66; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_welford_program_factory.cpp:48",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp:66; ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_welford_program_factory.cpp:48",
       "case": "SM010",
       "status": "selected",
       "selection": "One device, tiled [1,1,32,64]: layernorm pre-all-gather statistics, two tiles wide.",
@@ -3351,7 +3352,7 @@
       "factories": [
         "F088"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized.cpp:374",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized.cpp:374",
       "case": "SM013",
       "status": "selected",
       "selection": "Tiled [1,1,32,32], last-dimension stable attention softmax.",
@@ -3364,7 +3365,7 @@
       "factories": [
         "F088"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized.cpp:373",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized.cpp:373",
       "case": "SM047",
       "status": "selected",
       "selection": "Width 637 tiles: resident stable-softmax buffers exceed 90% of L1; dedicated large-kernel numerical test.",
@@ -3377,7 +3378,7 @@
       "factories": [
         "F089"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized_sharded.cpp:244",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized_sharded.cpp:244",
       "case": "SM014",
       "status": "selected",
       "selection": "Tiled [1,1,32,32], one BLOCK_SHARDED core, no mask: ordinary sharded reader.",
@@ -3390,7 +3391,7 @@
       "factories": [
         "F089"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized_sharded.cpp:247",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized_sharded.cpp:247",
       "case": "SM049",
       "status": "selected",
       "selection": "Single-device Falcon operation test, seq=64; calls scale_causal_mask_hw_dims_softmax_in_place with tiled mask.",
@@ -3403,7 +3404,7 @@
       "factories": [
         "F089"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized_sharded.cpp:242",
+      "evidence": "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_attention_optimized_sharded.cpp:242",
       "case": "SM048",
       "status": "selected",
       "selection": "Sharded softmax with ROW_MAJOR attention mask selects the row-major-mask reader.",
@@ -3416,7 +3417,7 @@
       "factories": [
         "F099"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:302",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:302",
       "case": "SM016",
       "status": "selected",
       "selection": "Matched HEIGHT_SHARDED input/output on a 2x4 core grid, int32 MAX W: sharded reader with REDUCE_SCALER=1; only dataflow coverage is claimed.",
@@ -3430,7 +3431,7 @@
         "F098",
         "F099"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:376; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:273",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:376; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:273",
       "case": "SM003",
       "status": "selected",
       "selection": "ROW_MAJOR [1,1,64,64], sum W: row-major reduce compute and reader.",
@@ -3445,7 +3446,7 @@
         "F100",
         "DH011"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:335; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_single_core_hw_program_factory.cpp:156; ttnn/cpp/ttnn/operations/reduction/generic/device/welford_reduce_program_factory.cpp:329",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp:335; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_single_core_hw_program_factory.cpp:156; ttnn/cpp/ttnn/operations/reduction/generic/device/welford_reduce_program_factory.cpp:329",
       "case": "SM002",
       "status": "selected",
       "selection": "BF16 tiled [64,64], mean over W: universal reduce reader (compute already covered).",
@@ -3458,7 +3459,7 @@
       "factories": [
         "F098"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:405",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:405",
       "case": "SM015",
       "status": "selected",
       "selection": "BF16 [8,1,64,2048], WIDTH_SHARDED input/output: sharded input-column transpose reader.",
@@ -3472,7 +3473,7 @@
         "F098",
         "DH011"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:443; ttnn/cpp/ttnn/operations/reduction/generic/device/welford_reduce_program_factory.cpp:315",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp:443; ttnn/cpp/ttnn/operations/reduction/generic/device/welford_reduce_program_factory.cpp:315",
       "case": "SM001",
       "status": "selected",
       "selection": "BF16 tiled [64,64], mean over H: interleaved H transpose reader and reduce.cpp.",
@@ -3485,7 +3486,7 @@
       "factories": [
         "F101"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp:257",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp:257",
       "case": "SM017",
       "status": "selected",
       "selection": "Smallest existing MoE numerical shape: [1,1,32,64], eight experts, two selected.",
@@ -3498,7 +3499,7 @@
       "factories": [
         "F102"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/reduction/sampling/device/sampling_program_factory.cpp:30",
+      "evidence": "ttnn/cpp/ttnn/operations/reduction/sampling/device/sampling_program_factory.cpp:30",
       "case": "SM004",
       "status": "selected",
       "selection": "32 users, width 64, top-k=1: deterministic sampled indices. Sampling still runs its MAX/SUM softmax helpers.",
@@ -3511,7 +3512,7 @@
       "factories": [
         "DH012"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.cpp:1519; ttnn/cpp/ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.cpp:1548",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.cpp:1519; ttnn/cpp/ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.cpp:1548",
       "case": "SM074",
       "status": "selected",
       "selection": "Smallest fixed experimental ring-joint SDPA case: 1x4 submesh, sequence8960,10heads; five numerical iterations.",
@@ -3524,7 +3525,7 @@
       "factories": [
         "DH013"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.cpp:572",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.cpp:572",
       "case": "SM062",
       "status": "selected",
       "selection": "Smallest joint SDPA shape: sequence15 + joint19, one head and one batch.",
@@ -3537,7 +3538,7 @@
       "factories": [
         "DH015"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:2637",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:2637",
       "case": "SM073",
       "status": "selected",
       "selection": "Existing numerical multi-batch ring-joint SDPA case on T3K.",
@@ -3550,7 +3551,7 @@
       "factories": [
         "DH017"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_program_factory.cpp:244",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_program_factory.cpp:244",
       "case": "SM064",
       "status": "selected",
       "selection": "Native MSA sparse SDPA random selection, H=16,S=8,topk=16; compares device output with golden.",
@@ -3563,7 +3564,7 @@
       "factories": [
         "DH018"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_program_factory.cpp:273",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_program_factory.cpp:273",
       "case": "SM063",
       "status": "selected",
       "selection": "Single-chunk sparse SDPA with all indices valid; PCC against a golden reference.",
@@ -3577,7 +3578,7 @@
         "DH014",
         "DH016"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_program_factory.cpp:499; ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp:1429",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_program_factory.cpp:499; ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp:1429",
       "case": "SM060",
       "status": "selected",
       "selection": "Standard SDPA, small causal BF16 sequence 256, head_dim 32; numerical check includes attention sink.",
@@ -3590,7 +3591,7 @@
       "factories": [
         "DH019"
       ],
-      "evidence": "; ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp:804",
+      "evidence": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp:804",
       "case": "SM061",
       "status": "selected",
       "selection": "Decode SDPA, batch 4, sequence 1024, head_dim128, 8x4 grid, sliding window128.",
@@ -3603,7 +3604,7 @@
       "factories": [
         "F111"
       ],
-      "evidence": "; ttnn/ttnn/operations/examples/compute_fusion/program_descriptor_with_inline_kernels.py:384",
+      "evidence": "ttnn/ttnn/operations/examples/compute_fusion/program_descriptor_with_inline_kernels.py:384",
       "case": "SM055",
       "status": "selected",
       "selection": "Inline reduce+reciprocal correctness scenario; two fixed tile counts, fused/unfused variants.",
@@ -3616,7 +3617,7 @@
       "factories": [
         "F112"
       ],
-      "evidence": "; ttnn/ttnn/operations/examples/reduce_accumulate/program_descriptor_with_inline_kernels.py:317",
+      "evidence": "ttnn/ttnn/operations/examples/reduce_accumulate/program_descriptor_with_inline_kernels.py:317",
       "case": "SM056",
       "status": "selected",
       "selection": "Inline helper variant, row reduction, BF16 accumulation; four fixed tile counts.",
@@ -3629,7 +3630,7 @@
       "factories": [
         "F114"
       ],
-      "evidence": "; ttnn/ttnn/operations/examples/row_reduce_accumulate/program_descriptor_with_inline_kernels.py:397",
+      "evidence": "ttnn/ttnn/operations/examples/row_reduce_accumulate/program_descriptor_with_inline_kernels.py:397",
       "case": "SM057",
       "status": "selected",
       "selection": "Inline reduce_fold method, BF16 input/accumulation, positive inputs; six fixed tile counts.",
@@ -3642,7 +3643,7 @@
       "factories": [
         "F116"
       ],
-      "evidence": "; ttnn/ttnn/operations/toy_variance/toy_variance_program_artifacts.py:169",
+      "evidence": "ttnn/ttnn/operations/toy_variance/toy_variance_program_artifacts.py:169",
       "case": "SM058",
       "status": "selected",
       "selection": "Interleaved toy variance, aligned width 256.",
@@ -3655,7 +3656,7 @@
       "factories": [
         "F117"
       ],
-      "evidence": "; ttnn/ttnn/operations/toy_variance/toy_variance_sharded_program_artifacts.py:198",
+      "evidence": "ttnn/ttnn/operations/toy_variance/toy_variance_sharded_program_artifacts.py:198",
       "case": "SM059",
       "status": "selected",
       "selection": "Sharded toy variance, two cores on one device, width 64 (one tile per core).",
@@ -3697,8 +3698,8 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/moreh_group_norm_program_factory.cpp:208",
       "case": "SM023",
       "status": "selected",
-      "selection": "Groupnorm large algorithm; N=2,C=4,groups=1,H=W=512 exceeds resident L1 buffers.",
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:289"
+      "selection": "Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper\u2019s unconditional skip.",
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18"
     },
     {
       "id": "DP004",
@@ -3710,8 +3711,8 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/moreh_group_norm_program_factory.cpp:210",
       "case": "SM022",
       "status": "selected",
-      "selection": "Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked.",
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:289"
+      "selection": "Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper\u2019s unconditional skip.",
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18"
     },
     {
       "id": "DP005",
@@ -3788,7 +3789,7 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_program_factory.cpp:213",
       "case": "SM028",
       "status": "selected",
-      "selection": "Layernorm small backward [20,30], affine enabled: both gamma/beta and input-gradient readers.",
+      "selection": "Layernorm backward with width normalization and affine gradients; exercises the parameter H reduction and small input-gradient kernel.",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py:511"
     },
     {
@@ -3814,7 +3815,7 @@
       "evidence": "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_program_factory.cpp:256",
       "case": "SM028",
       "status": "selected",
-      "selection": "Layernorm small backward [20,30], affine enabled: both gamma/beta and input-gradient readers.",
+      "selection": "Layernorm backward with width normalization and affine gradients; exercises the parameter H reduction and small input-gradient kernel.",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py:511"
     },
     {
