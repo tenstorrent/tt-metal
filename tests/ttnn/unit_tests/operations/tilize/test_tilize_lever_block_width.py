@@ -50,10 +50,16 @@ def test_block_width_lever(device, forced_bw, monkeypatch):
     exact and report the (cores, bytes-per-read) pair the value implies."""
     grid = device.compute_with_storage_grid_size()
 
-    # Force the extent by overriding the divisor search only. Everything
+    # Force the extent by overriding the width search only. Everything
     # downstream — num_w_chunks, num_row_groups, the CB page counts,
     # write_rows_per_barrier, the core assignment — still derives from it, so
     # this measures the KNOB and not a hand-built second code path.
+    #
+    # `RAGGED_COLUMN_TAIL=False` puts the solve back on `_largest_divisor_at_most`
+    # (Refinement 6 made the ragged `ceil` the default and only falls back to the
+    # divisor). It changes nothing about what is measured here: C = 512 and every
+    # forced width is a divisor of it, so the plan carries no tail either way.
+    monkeypatch.setattr(pd, "RAGGED_COLUMN_TAIL", False)
     monkeypatch.setattr(pd, "_largest_divisor_at_most", lambda n, limit: forced_bw)
     monkeypatch.setattr(pd, "_PLAN_CACHE", {})
 
@@ -71,7 +77,7 @@ def test_block_width_lever(device, forced_bw, monkeypatch):
     plan = pd.derive_plan(tt_input, tt_output, low_l1=False, grid=grid)
     assert plan.block_width_tiles == forced_bw
     print(
-        f"\n[lever block_width_tiles={forced_bw}] cores={len(plan.assignment)}/{grid.x * grid.y}, "
+        f"\n[lever block_width_tiles={forced_bw}] cores={plan.num_cores_used}/{grid.x * grid.y}, "
         f"num_w_chunks={plan.num_w_chunks}, blocks_total={plan.num_blocks_total}, "
         f"read={plan.block_row_bytes} B/stick, wrpb={plan.write_rows_per_barrier}, "
         f"L1/core={plan.l1_per_core_bytes // 1024} KiB"

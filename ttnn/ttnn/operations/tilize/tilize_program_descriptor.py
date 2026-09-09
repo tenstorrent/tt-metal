@@ -1264,12 +1264,25 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         # the read transaction — the trade this knob makes. `MIN_BLOCK_ROW_BYTES`
         # is where the trade stops paying; take the deepest pipe whose read still
         # clears it, and fall back to the occupancy-only cut when none does.
+        #
+        # The ladder is HALVED, not decremented: a wave is bought by halving the
+        # block width, so `{cap, cap/2, ..., 2}` are the settings
+        # `MIN_BLOCK_ROW_BYTES` was calibrated against (Refinement 3 measured
+        # w1/w2/w4/w8). Under the divisor rule a non-power-of-two wave count
+        # almost always collapsed onto its neighbour's divisor, so walking every
+        # integer was harmless; under the ragged rule it is a genuinely new
+        # candidate, and the one it produces on `C = 1572` (waves 3 -> a 576 B
+        # read) measured 29058 ns against 27035 for the power-of-two neighbour's
+        # 832 B — i.e. the uncalibrated rung is the worst of the three. Halving
+        # keeps the ladder and the floor on the same footing.
         block_width_tiles = _width_at(1)
-        for waves in range(PIPELINE_WAVES_PER_CORE, 1, -1):
+        waves = PIPELINE_WAVES_PER_CORE
+        while waves > 1:
             candidate = _width_at(waves)
             if candidate * TILE_WIDTH * elem_size >= MIN_BLOCK_ROW_BYTES:
                 block_width_tiles = candidate
                 break
+            waves //= 2
         # The column cut, now in two families. `tail_width_tiles == 0` is the
         # smooth case and is byte-identical to the divisor rule.
         num_w_chunks = tensor_col_tiles // block_width_tiles
@@ -1594,6 +1607,12 @@ def create_program_descriptor(
     if plan.lossless_fp32:
         unpack_to_dest_mode = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
         unpack_to_dest_mode[CB_INPUT_ROWS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        # The SPLIT input CB is the same relay's second input — the compute
+        # kernel tilizes the block's trailing sub-block straight out of it — so
+        # it carries the identical mode. Setting only CB_INPUT_ROWS trips the
+        # helper's own `Fp32Mode::Lossless` static_assert on the split call
+        # (tilize_helpers.inl:122), which is the guard doing its job.
+        unpack_to_dest_mode[CB_INPUT_ROWS_SPLIT] = ttnn.UnpackToDestMode.UnpackToDestFp32
         compute_config.unpack_to_dest_mode = unpack_to_dest_mode
 
     # ========== Kernels ==========
