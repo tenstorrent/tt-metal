@@ -108,7 +108,7 @@ public:
      * (pointer arithmetic, comparisons, ...).
      *
      * For element access, prefer operator[] (bounds-checked) within a scoped_lock() scope. Reach
-     * for this only when you need the raw underlying handle e.g. local_mem().get_unsafe_ptr()).
+     * for this only when you need the raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized (matches begin()/end()).
     [[nodiscard]] pointer local_mem() const noexcept { return start_addr_; }
