@@ -887,15 +887,8 @@ static void emit_metal2_namespaces(
             named_compile_args.begin(), named_compile_args.end());
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
-            // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
-            // which is not a valid flat C++ identifier, so emitting
-            // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
-            // skip them to keep the flat `args::` form namespaced-safe. This change
-            // does NOT emit the matching `blaze_ct_args::<ns>` structs — that is a separate
-            // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
-            // a kernel that references `blaze_ct_args::<ns>` requires that step to be
-            // present, so skipping here only prevents invalid flat C++, it does not
-            // itself make namespaced args available.
+            // Dotted keys cannot name flat args:: constants.
+            // Blaze constants are emitted separately from named_ct_arg_namespaces.
             if (name.find('.') != std::string::npos) {
                 continue;
             }
@@ -1840,12 +1833,16 @@ static void collect_kernels(
                 // be part of the key. Without it, two kernels sharing source/CT args/defines
                 // but differing in Blaze RT names or layout alias in the JIT and disk caches
                 // and load a stale descriptor layout (the .so then reads runtime args from
-                // the wrong slots). The named CT namespaces need no separate entry: they are
-                // a deterministic split of the flat named_compile_args serialized above.
-                // Determinism: NamedRuntimeArgNamespaces is a std::map (sorted ns order) of
-                // declaration-ordered vectors, so this iteration order is fixed; ns/field are
-                // validated C++ identifiers (alnum + '_'), so they cannot contain the
-                // ':'/'='/',' separators and the serialization is unambiguous.
+                // the wrong slots). Typed CT args bypass named_compile_args, so serialize them too.
+                // Both namespace maps have a fixed iteration order: namespaces are sorted
+                // and entries retain declaration order. Names cannot contain the ':', '=',
+                // or ',' separators used below.
+                for (const auto& [ns, entries] : named_ct_arg_namespaces) {
+                    key += ":bctns:" + ns;
+                    for (const auto& [field, value] : entries) {
+                        key += ":bct:" + field + "=" + std::to_string(value);
+                    }
+                }
                 for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
                     key += ":brtns:" + ns;
                     for (const auto& entry : entries) {

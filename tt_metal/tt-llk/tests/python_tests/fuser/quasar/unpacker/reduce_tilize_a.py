@@ -105,7 +105,7 @@ class UnpackReduceTilize(Unpacker):
 
         return (
             f"_llk_unpack_reduce_col_tilizeA_strided_"
-            f"({tensor_shape}, {l1_row_idx}, {block.tile_id_global});\n"
+            f"({tensor_shape}, {l1_row_idx}, 0);\n"
         )
 
     def uninit(

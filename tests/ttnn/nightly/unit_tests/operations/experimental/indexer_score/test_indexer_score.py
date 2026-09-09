@@ -5,7 +5,7 @@
 Tests for the two lightning-indexer scorers that share one device op:
 
   indexer_score_dsa - DeepSeek-V3.2 DSA / GLM-5:
-      score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * w[b,h,s]
+      score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * w[b,0,s,h]
       ReLU + learned per-head gates, ALL heads summed into one row [B,1,Sq,T].
 
   indexer_score_msa - MiniMax M3 MSA:
@@ -58,7 +58,7 @@ def indexer_score_dsa_ref(q, k, w, chunk_start):
     q, k, w = q.float(), k.float(), w.float()
     score = torch.zeros(b, sq, t)
     for h in range(hi):
-        score += torch.relu(q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, h]
+        score += torch.relu(q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, 0, :, h : h + 1]
     future = torch.arange(t).unsqueeze(0) > chunk_start + torch.arange(sq).unsqueeze(1)
     return score.masked_fill(future, float("-inf")).unsqueeze(1)
 
@@ -100,7 +100,7 @@ def indexer_score_msa_ref(q, k, w, chunk_start, num_groups=1, block_size=0):
 
 
 def make_inputs(heads, dim, sq, t, seed=42):
-    """q [1,Hi,Sq,D], k [1,1,T,D], weights [1,Hi,Sq,1], all bf16.
+    """q [1,Hi,Sq,D], k [1,1,T,D], weights [1,1,Sq,Hi], all bf16.
 
     Weights are random so some gates are negative: -inf padding must stay distinguishable from
     low-but-valid (negative) scores by topk.
@@ -108,12 +108,12 @@ def make_inputs(heads, dim, sq, t, seed=42):
     g = torch.Generator().manual_seed(seed)
     q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
     k = torch.randn(1, 1, t, dim, generator=g, dtype=torch.bfloat16)
-    w = torch.randn(1, heads, sq, 1, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, 1, sq, heads, generator=g, dtype=torch.bfloat16)
     return q, k, w
 
 
-def to_device(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    return ttnn.from_torch(t, device=device, layout=layout, dtype=dtype)
+def to_device(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, *, mesh_mapper=None):
+    return ttnn.from_torch(t, device=device, layout=layout, dtype=dtype, mesh_mapper=mesh_mapper)
 
 
 def _extra_kwargs(program_config, compute_kernel_config):
@@ -147,6 +147,31 @@ def run_dsa(
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
+
+
+@pytest.mark.parametrize("heads", [1, 3, 8, 16, 32, 40, 64])
+@pytest.mark.parametrize("q_chunk,k_chunk,head_group", [(32, 64, 0), (64, 32, 1)])
+def test_indexer_score_weights(device, heads, q_chunk, k_chunk, head_group):
+    """Signed gates, odd head counts and overlapping in-place tile expansion, on two cached dispatches.
+
+    Resident and streamed heads cover both gate-multiply implementations.
+    """
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
+    for seed in (42, 123):
+        q, k, w = make_inputs(heads, 64, 64, 256, seed=seed)
+        q_dev, k_dev = to_device(q, device), to_device(k, device)
+        w_dev = to_device(w, device)
+        out = ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=192, program_config=cfg)
+        assert_indexer_match(ttnn.to_torch(out), indexer_score_dsa_ref(q, k, w, 192), 64, 256, check_neg=True)
+
+
+def test_indexer_score_weights_shape(device, expect_error):
+    q, k, _ = make_inputs(8, 64, 64, 256)
+    w = torch.zeros(1, 8, 64, 1, dtype=torch.bfloat16)  # Unsupported head-major layout.
+    with expect_error(RuntimeError, "weights must be"):
+        ttnn.experimental.indexer_score_dsa(
+            to_device(q, device), to_device(k, device), to_device(w, device), chunk_start_idx=192
+        )
 
 
 def run_msa(
@@ -341,12 +366,12 @@ IDX_CACHE = dict(heads=64, dim=128, sq=64, t=256, chunk_start=128)  # small all-
 
 
 def _indexed_inputs(num_slots, seed=11):
-    """q [1,Hi,Sq,D], a shared k cache [B,1,T,D], weights [1,Hi,Sq,1], all bf16. Slots differ so a
+    """q [1,Hi,Sq,D], a shared k cache [B,1,T,D], weights [1,1,Sq,Hi], all bf16. Slots differ so a
     wrong-slot read would change the scores (and fail the per-slot reference)."""
     c = IDX_CACHE
     g = torch.Generator().manual_seed(seed)
     q = torch.randn(1, c["heads"], c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
-    w = torch.randn(1, c["heads"], c["sq"], 1, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, 1, c["sq"], c["heads"], generator=g, dtype=torch.bfloat16)
     k_cache = torch.randn(num_slots, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
     return q, w, k_cache
 
@@ -493,11 +518,11 @@ KV_LEN = dict(heads=64, dim=128, sq=64, t=512, chunk_start=0)  # oversized T=512
 
 
 def _kv_len_inputs(seed=23):
-    """q [1,Hi,Sq,D], an oversized k buffer [1,1,T,D], weights [1,Hi,Sq,1], all bf16."""
+    """q [1,Hi,Sq,D], an oversized k buffer [1,1,T,D], weights [1,1,Sq,Hi], all bf16."""
     c = KV_LEN
     g = torch.Generator().manual_seed(seed)
     q = torch.randn(1, c["heads"], c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
-    w = torch.randn(1, c["heads"], c["sq"], 1, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, 1, c["sq"], c["heads"], generator=g, dtype=torch.bfloat16)
     k = torch.randn(1, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
     return q, w, k
 
@@ -636,7 +661,7 @@ def test_indexer_score_dsa_msa_differ(device):
     scale = 1.0
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
     q, k, _ = make_inputs(heads, dim, sq, t)
-    w_const = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # match MSA's gate so only relu differs
+    w_const = torch.full((1, 1, sq, heads), scale, dtype=torch.bfloat16)  # match MSA's gate so only relu differs
     out_dsa = run_dsa(q, k, w_const, chunk_start, device, program_config=cfg)
     out_msa = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg)
     visible = out_dsa > torch.finfo(torch.bfloat16).min  # exclude the -inf causal mask
@@ -1009,7 +1034,7 @@ def _global_inputs(heads, chunk, t, seed):
     g = torch.Generator().manual_seed(seed)
     q = torch.randn(1, heads, chunk, QB_DIM, generator=g, dtype=torch.bfloat16)
     k = torch.randn(1, 1, t, QB_DIM, generator=g, dtype=torch.bfloat16)
-    w = torch.randn(1, heads, chunk, 1, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, 1, chunk, heads, generator=g, dtype=torch.bfloat16)
     return q, k, w
 
 
@@ -1038,7 +1063,7 @@ def _shard_1d(mesh_device, heads, seed):
     q_g, k_g, w_g = _global_inputs(heads, QB_CHUNK, QB_T, seed)
     shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
     q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
-    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    w_dev = to_device(w_g, mesh_device, mesh_mapper=shard)
     k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
     return q_g, k_g, w_g, q_dev, k_dev, w_dev
 
@@ -1748,7 +1773,7 @@ def _straddle_ref(q_g, k_nat, w_g, sp, chunk_global, chunk_start, t_len):
         qh, kh, wh = q_g[:, :, sl, :].float(), k_nat[:, 0].float(), w_g[:, :, sl, :].float()
         score = torch.zeros(1, sq, t_len)
         for h in range(heads):
-            score += torch.relu(qh[:, h] @ kh.transpose(-2, -1)) * wh[:, h]
+            score += torch.relu(qh[:, h] @ kh.transpose(-2, -1)) * wh[:, 0, :, h : h + 1]
         lr = update_idxt + torch.arange(sq)
         pos = (lr // cl) * chunk_global + r * cl + (lr % cl)  # block-cyclic home (writer rotation)
         future = torch.arange(t_len).unsqueeze(0) > pos.unsqueeze(1)
