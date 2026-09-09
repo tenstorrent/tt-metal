@@ -6,6 +6,9 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <span>
 #include <memory>
 #include <utility>
 
@@ -104,6 +107,9 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
+        // For any type but TENSIX, `sender_core.core_coord` is the core's physical NoC coordinate (such cores
+        // have no logical grid) and host writes into its L1 carry that core type's L1 NoC offset.
+        HalProgrammableCoreType sender_core_type = HalProgrammableCoreType::TENSIX;
     };
 
     /**
@@ -277,6 +283,12 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
+     * @brief Consumes `num_pages` from the read position; with `notify_sender`, also returns their space to the
+     *        device. read() is a copy followed by pop().
+     */
+    void pop(uint32_t num_pages, bool notify_sender = true);
+
+    /**
      * @brief Blocks until all sent data has been acknowledged.
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
@@ -295,6 +307,19 @@ public:
      * @throws TT_FATAL if page_size has not been set.
      */
     uint32_t pages_available();
+
+    /**
+     * @brief The device's bytes_sent word as it stands now: a monotonic 32-bit count of every byte it has pushed.
+     *        Safe to call from any thread.
+     */
+    uint32_t bytes_sent() const;
+
+    /**
+     * @brief The FIFO's data region in host memory, for a reader that decodes pages in place instead of read():
+     *        byte N of the stream lives at offset N mod fifo_size. Only the pinned, cache-coherent backing supports
+     *        this; the hugepage fallback fatals.
+     */
+    std::span<std::byte> host_fifo() const;
 
     /**
      * @brief Discards any currently-available pages WITHOUT reading the data
@@ -361,6 +386,7 @@ private:
         const PinnedBufferInfo& bytes_sent_info) const;
     void init_sender_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    CoreCoord sender_virtual_core(const MeshDevice& mesh_device, ChipId device_id) const;
 
     void wait_for_bytes(uint32_t num_bytes);
     void pop_bytes(uint32_t num_bytes);
@@ -382,6 +408,7 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
+    HalProgrammableCoreType sender_core_type_ = HalProgrammableCoreType::TENSIX;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
