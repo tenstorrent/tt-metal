@@ -27,31 +27,28 @@ emulator both set it); the tag text records the evidence. Three classes exist: c
 REAL Quasar bugs that pre-date this branch (the <= 8-row-window cases: identical mismatch on sim,
 RTL, T=1/T=4 and main). QPOOL_NO_SIM_SKIP=1 forces them all to run -- do that on the emulator.
 
-Run via run_qpool.sh sweep (C ladder) / run_qpool.sh matrix (this matrix). On WH/BH silicon
-(the cross-check leg) set QPOOL_RUN_ON_ANY_ARCH=1 — conftest.py skips this directory otherwise so
-the WH/BH sanity pool group does not run the quasar op.
+Run via plain pytest. QPOOL_ONLY=name1,name2 runs a subset. The suite also passes on WH silicon
+(the quasar op runs there), which serves as the cross-check leg.
 """
 
 import os
-import sys
 
 import pytest
 import torch
 
 import ttnn
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_qpool_debug import _build_input, _dump_mismatches
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.pool_quasar_test_utils import (
+    _build_input,
+    _dump_mismatches,
+)
 
 # =============================== CONFIG — edit me ===============================
 C_VALUES = [8, 16, 32, 40, 64, 96, 128, 144, 256, 280, 384, 392, 512, 768]
 PATTERN = "random"
 SEED = 0
 PCC_THRESHOLD = 0.99
-PERF_ITERS = 3  # measured iterations per case in test_qpool_perf_matrix (plus 1 warmup)
 # =================================================================================
-
-SIM_MAX_STICKS = 128
 
 
 def _run_case(
@@ -74,11 +71,10 @@ def _run_case(
     count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
     out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
-    perf_label=None,  # perf mode: skip the golden check, run PERF_ITERS labeled iterations instead
 ):
     pattern = pattern or PATTERN
     kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
-    out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1  # perf mode only; golden shape wins below
+    out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1  # provisional; the golden shape wins below
     out_w = (in_w - kernel[1] + 2 * padding[1]) // stride[1] + 1
     tensor_height = batch * in_h * in_w
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32"
@@ -94,27 +90,26 @@ def _run_case(
             )
         ).reshape(batch, in_h, in_w, channels)
     input_max = x_nhwc.float().max().item()
-    if perf_label is None:
-        if pool == "max":
-            golden_nchw = torch.nn.functional.max_pool2d(
-                x_nhwc.permute(0, 3, 1, 2).float(),
-                kernel_size=kernel,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                ceil_mode=ceil_mode,
-            )
-        else:
-            golden_nchw = torch.nn.functional.avg_pool2d(
-                x_nhwc.permute(0, 3, 1, 2).float(),
-                kernel_size=kernel,
-                stride=stride,
-                padding=padding,
-                ceil_mode=ceil_mode,
-                **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
-            )
-        out_h, out_w = golden_nchw.shape[2], golden_nchw.shape[3]  # exact for ceil_mode/dilation
-        golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
+    if pool == "max":
+        golden_nchw = torch.nn.functional.max_pool2d(
+            x_nhwc.permute(0, 3, 1, 2).float(),
+            kernel_size=kernel,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            ceil_mode=ceil_mode,
+        )
+    else:
+        golden_nchw = torch.nn.functional.avg_pool2d(
+            x_nhwc.permute(0, 3, 1, 2).float(),
+            kernel_size=kernel,
+            stride=stride,
+            padding=padding,
+            ceil_mode=ceil_mode,
+            **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
+        )
+    out_h, out_w = golden_nchw.shape[2], golden_nchw.shape[3]  # exact for ceil_mode/dilation
+    golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
 
     grid = device.compute_with_storage_grid_size()
     if shard == "height":
@@ -177,18 +172,6 @@ def _run_case(
         )
         ttnn.synchronize_device(device)
         return out
-
-    if perf_label is not None:
-        # Label each dispatch in the craq-sim per-dispatch trace (halo+pool quiesce as one row)
-        # so qpool_perf_report.py can attribute clocks per case. Warmup absorbs JIT/program cache.
-        os.environ["TTSIM_PERF_TRACE_NODEID"] = f"warmup_{perf_label}"
-        run_once().deallocate()
-        for i in range(PERF_ITERS):
-            os.environ["TTSIM_PERF_TRACE_NODEID"] = f"case::{perf_label}::i{i}"
-            run_once().deallocate()
-        os.environ["TTSIM_PERF_TRACE_NODEID"] = f"teardown_{perf_label}"
-        x.deallocate()
-        return f"PERF ({PERF_ITERS} iters)"
 
     out = run_once()
     got = ttnn.to_torch(out).float().reshape(batch * out_h * out_w, channels)
@@ -538,17 +521,3 @@ def test_qpool_matrix(mesh_device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_qpool_unit_cases(mesh_device):
     _run_cases(mesh_device, UNIT_CASES)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_qpool_perf_matrix(mesh_device):
-    """Perf pass over the matrix configs: 1 warmup + PERF_ITERS labeled iterations per case, no
-    golden check — the craq-sim per-dispatch trace (run_qpool.sh perf / perf-ab sets the env)
-    attributes clocks per case for qpool_perf_report.py. Skips correctness sim_skip cases (they
-    hang or corrupt on the sim) and const-pattern cases (value-only twins of existing shapes)."""
-    for name, kwargs in MATRIX_CASES:
-        kwargs = dict(kwargs)
-        if kwargs.pop("sim_skip", None) or str(kwargs.get("pattern", "")).startswith("const:"):
-            continue
-        print(f"\nQPOOL-PERF: {name}", flush=True)
-        _run_case(mesh_device, perf_label=name, **kwargs)
