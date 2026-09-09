@@ -101,7 +101,22 @@ def test_attention_inference(
 
     state_dict = model_args.load_state_dict()
 
-    reference_model = model_args.reference_attention(load_checkpoint=True)
+    reference_model = model_args.reference_attention(
+        load_checkpoint=True, layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    )
+
+    # Hybrid-attention models: the tested layer decides the rope (decoder.py picks rot_mats_local for
+    # sliding_attention layers) and the HF reference must rotate with the same layer type (the reference is
+    # HF layer 0's module, so pin its rope_layer_type to the tested layer).
+    layer_num = int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    layer_type = model_args.layer_types[layer_num] if getattr(model_args, "layer_types", None) else None
+    is_sliding_layer = layer_type == "sliding_attention"
+    if layer_type is not None and hasattr(reference_model, "rope_layer_type"):
+        reference_model.rope_layer_type = layer_type
+    rope_theta = (
+        model_args.rope_theta_local if (is_sliding_layer and model_args.rope_theta_local) else model_args.rope_theta
+    )
+    rope_scaling = getattr(model_args, "rope_scaling_local", None) if is_sliding_layer else model_args.rope_scaling
 
     seq_len = 1
 
@@ -117,8 +132,8 @@ def test_attention_inference(
         batch_size,
         model_args.head_dim,
         model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling,
+        rope_theta,
+        rope_scaling,
         model_args.use_qk_fused,
         prefetcher=prefetcher,
     )

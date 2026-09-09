@@ -4490,9 +4490,10 @@ class ModelArgs:
         )
         return wrapper
 
-    def reference_attention(self, load_checkpoint=False):
+    def reference_attention(self, load_checkpoint=False, layer_num=0):
+        # layer_num: which decoder layer's attention to wrap (hybrid models: layer kind and weights differ per layer)
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
-        layer = model.model.layers[0].self_attn
+        layer = model.model.layers[layer_num].self_attn
         use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
         wrapper = HfAttentionWrapper(
             layer,
