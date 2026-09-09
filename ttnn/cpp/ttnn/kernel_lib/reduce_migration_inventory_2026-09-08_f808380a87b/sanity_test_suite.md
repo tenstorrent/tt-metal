@@ -1,13 +1,13 @@
 # Reduce-helper migration sanity suite
 
-**74 exact test cases: 58 Python cases and 16 C++ GTests.** They provide one primary numerical case for each of **129 of 144 kernel entries**. Shared coverage is deduplicated: one case can cover compute plus reader/writer kernels. The 15 uncovered entries are listed below.
+**77 exact test cases: 62 Python cases and 15 C++ GTests.** They provide one primary numerical case for each of **130 of 144 kernel entries**. Shared coverage is deduplicated: one case can cover compute plus reader/writer kernels. The 14 uncovered entries are listed below.
 
 | Kernel category | Covered | Inventory total |
 | --- | ---: | ---: |
 | Compute | 51 | 58 |
-| Dataflow calling old helpers | 61 | 69 |
+| Dataflow calling old helpers | 62 | 69 |
 | Manual auxiliary readers | 17 | 17 |
-| Total | 129 | 144 |
+| Total | 130 | 144 |
 
 This is a subset of the existing [full unit suite](unit_test_suite.html), which collected 18,452 cases. The original inventory counts source kernels, including three compute/dataflow pairs embedded in Python. A kernel can run incidentally in additional cases; one primary case is assigned to it in the coverage map. This does not cover every template instantiation, layout, accumulation mode or helper call site.
 
@@ -37,7 +37,7 @@ Each group must collect exactly one case. During execution, a skip, xfail, missi
 
 The `{arch}` token in a few node IDs substitutes only the `silicon_arch_name` fixture from pytest's `--tt-arch`; all numerical parameters remain fixed. The plugin selects the resulting exact node and the runner checks its cardinality. For a collection targeting another build, pass e.g. `-- --tt-arch=blackhole`.
 
-The inline examples retain their existing fixed width loops (compute fusion: 2 tile counts; reduce accumulate: 4; row reduce accumulate: 6), but the runner pins their supported environment selectors to the helper variants. DiT's correctness sweep is pinned to `cross_k_prompt_L512` and `CORR_DET_REPEATS=0`, keeping its numerical check and removing extra determinism launches. Moreh callback tests and some other tests also make several calls internally. **74 is a pytest-case count, not a device-launch count.**
+The inline examples retain their existing fixed width loops (compute fusion: 2 tile counts; reduce accumulate: 4; row reduce accumulate: 6), but the runner pins their supported environment selectors to the helper variants. DiT's correctness sweep is pinned to `cross_k_prompt_L512` and `CORR_DET_REPEATS=0`, keeping its numerical check and removing extra determinism launches. Moreh callback tests and some other tests also make several calls internally. **77 is a pytest-case count, not a device-launch count.**
 
 Results go to a new directory under `generated/test_reports/`, with per-case logs, JUnit XML, collection metadata and `summary.json`. `--output-dir` must name a new directory, so previous results are preserved.
 
@@ -45,8 +45,8 @@ Results go to a new directory under `generated/test_reports/`, with per-case log
 
 | Lane | Cases | Requirements |
 | --- | ---: | --- |
-| `common` | 56 | One device; shared Wormhole/Blackhole test sources. Individual core-grid and debug-mode constraints still apply. |
-| `wormhole` | 3 | One Wormhole device: two Moreh layernorm backward cases and the Falcon causal-mask operation case. |
+| `common` | 58 | One device; shared Wormhole/Blackhole test sources. Individual core-grid and debug-mode constraints still apply. |
+| `wormhole` | 4 | One Wormhole device: two Moreh layernorm backward cases, the Falcon causal-mask operation case and the BGE encoder SDPA case. |
 | `blackhole` | 5 | One Blackhole device: KDA, indexer and sparse attention cases. |
 | `quasar` | 2 | Single logical Quasar device/emulator; requires that environment and build. |
 | `fabric-1x4` | 2 | Four devices, 1x4 mesh with 2D fabric; requires unit_tests_ttnn_udm. |
@@ -56,6 +56,8 @@ Results go to a new directory under `generated/test_reports/`, with per-case log
 | `wormhole-t3k` | 1 | Eight Wormhole devices (2x4 T3K). |
 | `blackhole-galaxy` | 1 | Blackhole Galaxy cluster; the selected experimental ring case uses a 1x4 submesh. |
 
+Common denotes shared single-device test sources, not verification on every SKU or debug configuration. Running every lane on one machine is generally not possible.
+
 ## Coverage gaps
 
 These are missing executable paths, not cases silently skipped by the suite.
@@ -63,7 +65,6 @@ These are missing executable paths, not cases silently skipped by the suite.
 - `S045`, `S046`, `S047`, `DF011`, `DF012`, `DF013`, `DF015`, `DF016`: No direct unit test calls the experimental Quasar generic-reduction entry points. Quasar-named ResNet sum/mean tests call the standard entry points.
 - `DF014`: No host factory references this Quasar transpose reader.
 - `DF017`: No direct unit test found for experimental Quasar joint SDPA.
-- `DF001`: No unit test found for the BGE custom encoder SDPA descriptor; BGE attention PCC tests use the stock path.
 - `S066`, `S067`: Legacy Moreh norm H/W sources have no current host factory; ord_other variants are covered separately.
 - `S089`: Legacy non-metal2 RMS post-all-gather appears only in a source-composition test; that test does not execute the kernel.
 - `S092`: Legacy RMS pre-all-gather 2D source has no current host reference; the active 2D factory uses layernorm_pre_allgather_2d.cpp.
@@ -72,7 +73,7 @@ The disabled general large-H softmax factory does not add a kernel gap: `SM036` 
 
 ## Verification
 
-Collected 74 cases across 74 groups with 0 failed groups. No on-device test bodies were run. Host checks verified failure propagation for skips, xfails, assertions and case-count drift, plus continuation to a later passing case. Four architecture-dependent selections also collected exactly once with --tt-arch=blackhole. Selection was checked against factory/test sources at `f808380a87b320e24457c600cc79b05d7a0b8f73`. Python/script-only additions require no C++ build.
+Collected 77 cases across 77 groups with 0 failed groups. No on-device test bodies were run. Host checks verified failure propagation for skips, xfails, assertions and case-count drift, plus continuation to a later passing case. 4 architecture-dependent selections also collected exactly once with --tt-arch=blackhole. Selection was checked against factory/test sources at `f808380a87b320e24457c600cc79b05d7a0b8f73`. Python/script-only additions require no C++ build.
 
 ## Exact selections and kernel map
 
@@ -128,14 +129,14 @@ TILE [1,1,32,64], two groups, 1x1 core grid, legacy (non-Welford) groupnorm.
 tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.GroupNormNoMcastInterleaved
 ```
 
-### SM006 — C++ normalization
+### SM006 — GroupNorm sharded formats
 
 Lane: `common`. Primary kernels: `S080`, `DF036`.
 
-ROW_MAJOR [1,1,32,64], one BLOCK_SHARDED core: groupnorm_sharded_v2 and its writer.
+ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 destination accumulation. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.
 
 ```text
-tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.GroupNormShardedBlock1x1
+tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_sharded_all_config[legacy-row_major-bf16-gb_bf16-N=1-C=128-H=1-W=512-num_groups=16-grid_y=1-grid_x=4]
 ```
 
 ### SM007 — C++ normalization
@@ -826,4 +827,34 @@ Smallest fixed experimental ring-joint SDPA case: 1x4 submesh, sequence8960,10he
 
 ```text
 models/tt_dit/tests/unit/test_exp_ring_joint_attention.py::test_exp_ring_joint_sdpa_dit_bh_glx_custom[{arch}-1x4-ring]
+```
+
+### SM075 — BGE model-local SDPA
+
+Lane: `wormhole`. Primary kernels: `DF001`.
+
+Small standard SDPA with two query heads and 128 KV tokens.
+
+```text
+tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py::test_bge_encoder_sdpa_reduce_auxiliary[runtime_lengths=False-streaming=False]
+```
+
+### SM076 — distributed Welford layer norm
+
+Lane: `common`. Primary kernels: `DF044`.
+
+One-device Welford post-all-gather with hand-built mean/variance, BF16 input and weights, FP32 destination; exercises the shared reader without an auxiliary recipe.
+
+```text
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py::test_layer_norm_post_all_gather_welford_with_program_cache[one_stats_pair-small-bf16]
+```
+
+### SM077 — distributed RMS norm
+
+Lane: `common`. Primary kernels: `S090`, `DF044`.
+
+One-device RMSNorm post-all-gather with BF16 input/weights, FP32 statistics and destination; guards the planned auxiliary buffer unpack format.
+
+```text
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py::test_post_all_gather_mixed_stats_dtype_with_program_cache[one_stats_pair-rmsnorm-bf16_input_fp32_stats]
 ```

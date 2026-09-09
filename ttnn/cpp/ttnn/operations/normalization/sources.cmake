@@ -34,6 +34,7 @@ set(TTNN_OP_NORMALIZATION_SRCS
     rmsnorm/rmsnorm.cpp
     shard_spec_validation.cpp
     softmax/softmax.cpp
+    softmax/device/softmax_reduce_plans.hpp
     softmax/device/softmax_device_operation.cpp
     softmax/device/softmax_program_factory_general_w_small.cpp
     softmax/device/softmax_program_factory_general_w_large.cpp
@@ -50,7 +51,6 @@ set(TTNN_OP_NORMALIZATION_API_HEADERS
     layernorm_distributed/device/layernorm_distributed_types.hpp
     layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp
     rmsnorm/rmsnorm.hpp
-    softmax/device/softmax_reduce.hpp
     softmax/device/softmax_operation_types.hpp
     softmax/device/softmax_device_operation.hpp
     softmax/softmax.hpp
