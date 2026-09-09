@@ -1094,8 +1094,8 @@ def test_eltwise_unary_sfpu_int(
 _INT32_MAX = 2**31 - 1
 
 # Only a negative threshold reaches relu_min's vInt branch, so both signs are swept, the
-# non-negative ones as the control. The negative extreme stops short of INT_MIN, which is
-# neither representable in Dst nor reachable as a stimulus.
+# non-negative ones as the control. The negative extreme stops short of INT_MIN: CustomStrategy
+# clamps stimuli at info.min + 1, so no input could straddle it.
 _RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
 
 
@@ -1106,8 +1106,8 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     negative threshold. The range ends exercise the compare between far-apart operands.
     """
     # Straddling the boundary, then a decade either side of it. Offsets that leave the
-    # representable range are dropped rather than folded onto its ends, which is what the
-    # thresholds at the extremes would otherwise turn most of them into.
+    # stimuli range are dropped rather than folded onto its ends, which is what the thresholds
+    # at the extremes would otherwise turn most of them into.
     offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
     candidates = [threshold + d for d in offsets] + [-_INT32_MAX, _INT32_MAX]
     values = sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX})
@@ -1128,6 +1128,10 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
 
     The negative half is the point, and the golden is an exact integer max, so a wrong
     threshold shows up as a wrong clamp value rather than a tolerance miss.
+
+    Int32 stimuli are two's complement, which is how ttnn feeds the device -- see
+    use_int32_twos_complement in test_sfpu_reduce.py. Under this file's sign-magnitude
+    default a kernel that reads Dst in the other encoding would pass instead.
     """
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
@@ -1141,6 +1145,7 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
         input_dimensions,
         spec_A=_relu_min_int_stimuli_spec(threshold),
         relu_min_int_threshold=threshold,
+        twos_complement=True,
     )
 
 
@@ -1435,6 +1440,7 @@ def eltwise_unary_sfpu(
     custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    twos_complement=False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1524,6 +1530,7 @@ def eltwise_unary_sfpu(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
