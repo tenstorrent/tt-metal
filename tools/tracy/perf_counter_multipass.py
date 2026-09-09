@@ -2,14 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Multi-pass hardware perf counter capture.
-
-The tracy front end (``tools/tracy/__main__.py``) only parses the CLI options and calls in here.
-Everything about counter groups lives in this module: which groups an architecture has, how a
-request is split into passes (the L1 banks share one hardware mux and the BRISC firmware fits a
-limited number of readout groups), how the workload is replayed once per pass and how the per-pass
-device logs are merged back into one.
-"""
+"""Multi-pass perf counter capture: group tables, pass scheduling (one L1 bank per pass, the BRISC firmware
+fits three groups), per-pass workload replay and the device log merge. tracy/__main__.py only calls in here."""
 
 import math
 import os
@@ -96,10 +90,8 @@ def detect_device_arch():
 
 
 def resolve_perf_counter_groups(requested_groups, arch):
-    """Turn the requested group names into the ordered, deduplicated list of groups to capture.
-
-    ``all`` expands to the architecture's full set. Groups the architecture does not have raise
-    ValueError: the l1_* groups on Quasar, the Blackhole-only banks elsewhere."""
+    """Ordered, deduplicated groups to capture; ``all`` is the architecture's full set. Groups the architecture
+    does not have (l1_* on Quasar, banks 2-5 off Blackhole) raise ValueError."""
     is_blackhole = arch == "blackhole"
     is_quasar = arch == "quasar"
     if arch is None and any(g.lower() == "all" for g in requested_groups):
@@ -140,13 +132,8 @@ def describe_passes(passes):
 
 
 def plan_perf_counter_capture(requested_groups, multipass, can_replay):
-    """Resolve, validate and schedule a counter request.
-
-    Returns the list of per-pass bitfields (one entry for a single pass). A single pass is also
-    exported through TT_METAL_PROFILE_PERF_COUNTERS so the workload picks it up. More than one
-    pass needs ``multipass`` (the user opted in to replaying the workload) and ``can_replay``
-    (this process launches the workload, so it can run it again); otherwise ValueError carries
-    the pass plan."""
+    """Per-pass bitfields for a counter request. One pass is also exported via TT_METAL_PROFILE_PERF_COUNTERS;
+    several passes need ``multipass`` and ``can_replay`` (this process launches the workload), else ValueError."""
     resolved = resolve_perf_counter_groups(requested_groups, detect_device_arch())
     passes = schedule_perf_counter_passes(resolved)
     bitfields = [perf_counter_groups_to_bitfield(p) for p in passes]
@@ -185,10 +172,7 @@ def merge_perf_counter_device_logs(pass_csvs, out_csv):
 
 
 def run_perf_counter_passes(run_workload, env, pass_bitfields, output_folder):
-    """Replay the workload once per pass, each with its own group mask, then merge the device logs.
-
-    ``run_workload(env)`` runs the workload to completion with the given environment. Returns
-    False if any pass left no device log, in which case nothing is merged."""
+    """Run the workload once per pass mask and merge the device logs; False if a pass left no log."""
     logs_folder = generate_logs_folder(output_folder)
     device_log = logs_folder / PROFILER_DEVICE_SIDE_LOG
     pass_dir = logs_folder / "perf_counter_passes"
