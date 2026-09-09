@@ -314,6 +314,53 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# The e2e leg is the demo itself plus the voice-clone quality gate. It deliberately
+# does NOT run test_qwen3_tts_perf_device.py: that asserts steady ms/frame inside a
+# +/-5% two-sided band, which is both a flake risk on shared runners and fails when
+# the model gets faster -- and Tier 3 is perf-exempt anyway. The demo gives the
+# functional signal (it exits nonzero on any exception) and the quality test gives
+# the accuracy signal (SIM > 0.80, WER < 10%), scored by models independent of the
+# pipeline under test.
+#
+# demo_full_ttnn_tts.py is an argparse script, not a pytest module, so it is invoked
+# directly. It reads --hf-id rather than $HF_MODEL; HF_MODEL is still exported for the
+# repo convention and so the trace-region coverage test sees this job.
+- name: Qwen3-TTS-1.7B e2e tests
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --text "Good morning. Today is a beautiful day for a walk in the park."
+    pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+      release_ready: false
+    bh_p150:
+      timeout: 8
+      tier: 3
+      release_ready: false
+  team: models
+
+# Separate entry because MESH_DEVICE is per-cmd, not per-SKU: unset means a
+# single-chip open_device, so N300 needs it set to exercise the TP=2 path.
+- name: Qwen3-TTS-1.7B e2e tests (N300 TP=2)
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base MESH_DEVICE=N300
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --text "Good morning. Today is a beautiful day for a walk in the park."
+    pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    wh_n300:
+      timeout: 8
+      tier: 3
+      release_ready: false
+  team: models
+
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct

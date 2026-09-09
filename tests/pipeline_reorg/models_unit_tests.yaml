@@ -1973,3 +1973,27 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+
+# Module PCC against the torch reference: MLP, attention, one CodePredictor step,
+# and the Talker chain. Opens a plain single-chip device (ttnn.open_device), so the
+# same cmd is valid on every SKU here -- no MESH_DEVICE.
+- name: Qwen3-TTS-1.7B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    pytest --timeout 300 models/demos/qwen3_tts/tests/test_qwen3_tts_pcc.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+      release_ready: false
+    wh_n300:
+      timeout: 3
+      tier: 3
+      release_ready: false
+    bh_p150:
+      timeout: 3
+      tier: 3
+      release_ready: false
+  team: models

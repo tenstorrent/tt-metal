@@ -330,6 +330,36 @@ targets:
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
 
+  # Tier 3 -> exempt from perf targets, and deliberately so here: the e2e leg runs the
+  # demo for a functional signal, not a perf assertion. The accuracy gates are SIM
+  # (speaker similarity) and WER, which the central schema has no metric slot for, and
+  # the quality test asserts them in-test rather than emitting a benchmark payload.
+  # TODO until that payload exists; the resolver skips TODO entries.
+  qwen3-tts-1.7b:
+    aliases: ["Qwen3-TTS-12Hz-1.7B-Base", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      bh_p150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+
   gemma-4-26b-a4b:
     aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it"]
     skus:
