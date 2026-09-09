@@ -566,8 +566,6 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-# skip_wide_topk_on_sim subsumes skip_routed_topk_on_sim here: it covers every simulator, not
-# just Blackhole's, so the BH-only SFPCONFIG gap no longer needs its own marker on this test.
 @skip_wide_topk_on_sim
 def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
@@ -621,12 +619,6 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     )
 
 
-# Keeps the UInt32 index datapath under the simulator now that test_large_2d_topk does not run
-# there. is_uint32_index_required() widens on "padded width > 65535" or "input is fp32"; the fp32
-# arm reaches the same index CB at two tiles instead of 2048.
-#
-# Do NOT rename this with a "test_2d_topk" prefix: ttsim-skip-list.yaml deselects that node id and
-# pytest matches --deselect with a plain nodeid.startswith(), so it would be dropped on ttsim.
 @pytest.mark.parametrize("dim2", [64])
 @pytest.mark.parametrize("k", [32])
 def test_topk_fp32_uint32_indices(device, dim2, k):
