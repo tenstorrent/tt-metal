@@ -422,50 +422,6 @@ On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DM
 
 ---
 
-**16. Dest Read Backpressure**
-
-Fraction of packer destination register reads that were blocked.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Dest Read Backpressure = (PACKER0_DEST_READ_REQ - DEST_READ_GRANTED_0) /
-                         PACKER0_DEST_READ_REQ * 100
-```
-
-- **High value (>20%)**: Packer can't read destination register (math still writing).
-- **Low value (~0%)**: No destination register contention.
-
-**Use case:** Identifies math-to-pack register handoff bottleneck.
-
----
-
-**17. Math Dest Write Port Stall Rate**
-
-Fraction of math cycles stalled by destination register write port contention.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_PORT) /
-                             MATH_INSTRN_AVAILABLE * 100
-```
-
-- **High value (>10%)**: Math is stalled waiting for write port to destination register.
-- **Low value (~0%)**: No write port stalls.
-
-The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 for an entire op (would otherwise report a misleading 100% stall rate). This happens on BH for workloads that don't exercise the write-port path heavily.
-
-**Use case:** Detects destination register write contention from the math side.
-
----
-
 **18. Math Scoreboard Stall Rate**
 
 Fraction of math cycles stalled by FPU data hazard scoreboard.
@@ -1033,9 +989,9 @@ FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1 * 100
 
 ---
 
-**44. SrcA/SrcB Write Overwrite Blocked Rate**
+**44. SrcA Write Overwrite Blocked Rate**
 
-Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previous data not yet consumed by math).
+Fraction of srcA DMA write attempts blocked by overwrite protection (previous data not yet consumed by math). SrcB reports the port-blocked mode instead (metric 15); each source's other blocking mode is 1 minus its write efficiency.
 
 | | |
 |---|---|
@@ -1045,11 +1001,9 @@ Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previo
 ```
 SrcA Write Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) /
                                SRCA_WRITE_REQ * 100
-SrcB Write Overwrite Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_OVR) /
-                               SRCB_WRITE_REQ * 100
 ```
 
-Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
+Paired with `SrcA Write Actual Efficiency` to separate the two stall modes:
 - **Port blocking**: DMA write port unavailable (mux contention)
 - **Overwrite blocking**: previous srcA/B value not yet consumed by math; can't overwrite
 

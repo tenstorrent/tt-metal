@@ -467,9 +467,8 @@ per-zone CSV, so they can be worked out by hand. Counter names are as they appea
 | 12 | SrcA/SrcB Clear Wait | INSTRN_THREAD | `SrcA Clear Wait = WAITING_FOR_SRCA_CLEAR / INSTRN_OUT_L * 100 SrcB Clear Wait = WAITING_FOR_SRCB_CLEAR / INSTRN_OUT_L * 100` | both |
 | 13 | Math / Pack / Unpack Idle Wait | INSTRN_THREAD | `Math Idle Wait T1 = WAITING_FOR_MATH_IDLE_1 / INSTRN_OUT_L * 100 Pack Idle Wait T2 = WAITING_FOR_PACK_IDLE_2 / INSTRN_OUT_L * 100 Unpack Idle Wait T0 = WAITING_FOR_UNPACK_IDLE_0 / INSTRN_OUT_L * 100` | both |
 | 15 | Data Hazard Stall Rate | TDMA_UNPACK | `Data Hazard Stall = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A) / MATH_INSTRN_AVAILABLE * 100` | both |
-| 16 | SrcA/SrcB Write Port Blocked | TDMA_UNPACK | `SrcA Port Blocked = (SRCA_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCA_WRITE_REQ * 100 SrcB Port Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCB_WRITE_REQ * 100` | both |
-| 17 | SrcA/SrcB Write Overwrite Blocked | TDMA_UNPACK | `SrcA Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) / SRCA_WRITE_REQ * 100 SrcB Overwrite Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_ACTUAL) / SRCB_WRITE_REQ * 100` | both |
-| 18 | Dest Read Backpressure | TDMA_PACK | `Dest Read BP = (PACKER0_DEST_READ_REQ - DEST_READ_GRANTED_0) / PACKER0_DEST_READ_REQ * 100` | both |
+| 16 | SrcB Write Port Blocked | TDMA_UNPACK | `SrcB Port Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCB_WRITE_REQ * 100` | both |
+| 17 | SrcA Write Overwrite Blocked | TDMA_UNPACK | `SrcA Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) / SRCA_WRITE_REQ * 100` | both |
 | 19 | Math Scoreboard Stall Rate | TDMA_PACK | `Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) / MATH_INSTRN_AVAILABLE * 100` | both |
 | 20 | Per-type Instruction Availability | INSTRN_THREAD | `TYPE Avail Rate = TYPE_INSTRN_AVAILABLE_N / INSTRN_OUT_L * 100` | both |
 | 21 | SrcA Write Actual Efficiency | TDMA_UNPACK | `SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_REQ * 100` | both |
@@ -480,7 +479,6 @@ per-zone CSV, so they can be worked out by hand. Counter names are as they appea
 | 27 | Compute-to-Unpack Ratio | FPU + TDMA_UNPACK | `Compute-to-Unpack = MATH_COUNTER / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0) * 100` | both |
 | 29 | HiFi Fraction | TDMA_UNPACK | `HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) / (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100` | both |
 | 30 | Avg HF Cycles Per Instrn | TDMA_UNPACK | `Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)` | both |
-| 31 | Math Dest Write Port Stall Rate | TDMA_PACK | `Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_PORT) / MATH_INSTRN_AVAILABLE * 100` | both |
 | 32 | MMIO / SFPU / THCON / MOVE Idle Wait | INSTRN_THREAD | `MMIO Idle Wait T0 = WAITING_FOR_MMIO_IDLE_0 / INSTRN_OUT_L * 100 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / INSTRN_OUT_L * 100 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / INSTRN_OUT_L * 100 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / INSTRN_OUT_L * 100` | both |
 | 33 | L1 TDMA Bundle Util | L1 (mux 0) | `L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L1_OUT_L * 100` | both |
 | 34 | NoC Ring 0/1 Outgoing/Incoming Util | L1 (Ring 0 on mux 0, Ring 1 on mux 1) | `NoC Ring 0 Outgoing Util = avg(L1_0_NOC_RING0_OUTGOING_0, L1_0_NOC_RING0_OUTGOING_1) / L1_OUT_L * 100 NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMING_1) / L1_OUT_L * 100` | both |
