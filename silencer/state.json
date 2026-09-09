@@ -43,7 +43,8 @@
     "33946342890",
     "34085742089",
     "34182246734",
-    "34079232201"
+    "34079232201",
+    34310201941
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -73,7 +74,8 @@
     "blackhole-e2e-tests.yaml",
     "galaxy-sanity.yaml",
     "tt-metal-l2-nightly.yaml",
-    "models-t3-e2e-tests.yaml"
+    "models-t3-e2e-tests.yaml",
+    "runtime-perf-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -355,8 +357,18 @@
       "status": "dispatched",
       "reported": false,
       "category": 6,
-      "note": "Opened as draft PR (unverified, no docker in sandbox). Gates ttnn::tilize legacy shard-spec fallback warning (tilize_device_operation.cpp:257) with std::once_flag; source: models-t2-e2e-tests run 34079232201 job 101612490125 (Qwen3-32B wh_llmbox_perf), 192 occurrences in last-5000-line sample.",
-      "validation_dispatched": "models-t2-e2e-tests.yaml (model=qwen3-32b, sku=wh_llmbox_perf) dispatched this run"
+      "note": "Interim: build-artifact success, Qwen3-32B e2e test job still queued in run 34277441628. Posted interim comment + marked ready for review 2026-09-09. Awaiting terminal state next run.",
+      "validation_dispatched": "models-t2-e2e-tests.yaml (model=qwen3-32b, sku=wh_llmbox_perf) dispatched this run",
+      "nonterminal_reported": true,
+      "last_state": "in_progress",
+      "number": 55822
+    },
+    {
+      "branch": "silencer/pytest-collection-warning-test-metadata-loader",
+      "pattern": "PytestCollectionWarning: cannot collect test class 'TestMetadataLoader'",
+      "status": "opened",
+      "reported": false,
+      "note": "PR opened this run to add __test__=False to TestMetadataLoader in tests/tt_metal/tt_metal/data_movement/python/test_metadata.py; found in runtime-perf-profiler-tests/runtime_perf_data_movement[bh_p150_perf] job 102343682696 of run 34310201941."
     }
   ],
   "backlog_cursor": "Rotated through galaxy-integration-tests (34182246734: warning/critical lines were real fatal hw errors in a failing job, not noise - skipped) and models-t2-e2e-tests (34079232201: found tilize shard-spec warning spam, fixed, PR opened branch silencer/tilize-warn-once-shard-spec). Next rotation: blackhole-sanity-tests, then continue models-t2/t3-e2e-tests."
