@@ -23,14 +23,18 @@ from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TR
 
 @dataclasses.dataclass(frozen=True)
 class GoldenComparisonConfig:
-    method: str
-    scope: str = "degenerate"
-    ulp_threshold: float | None = None
-    rtol: float = 1e-5
-    atol: float = 1e-4
-    equal_nan: bool = True
-    nonfinite: str = "strict"
-    mask: object | None = None
+    """Defines a per-tensor comparison policy for golden outputs.
+    Controls the metric, applicability, tolerances, and compared elements.
+    """
+
+    method: str  # Comparison metric: "ulp", "allclose", or "skip".
+    scope: str = "degenerate"  # Apply only to degenerate PCC cases or to "all" outputs.
+    ulp_threshold: float | None = None  # Maximum ULP distance accepted by the ULP metric.
+    rtol: float = 1e-5  # Relative tolerance used by the allclose metric.
+    atol: float = 1e-4  # Absolute tolerance used by the allclose metric.
+    equal_nan: bool = True  # Whether matching NaN positions compare as equal.
+    nonfinite: str = "strict"  # Policy for nonfinite values: "strict" or "mask".
+    mask: object | None = None  # Optional boolean tensor selecting elements to compare.
 
 
 def set_golden_comparison_config(
@@ -45,6 +49,10 @@ def set_golden_comparison_config(
     nonfinite="strict",
     mask=None,
 ):
+    """Attach a validated comparison policy to a Torch golden tensor.
+    Returns the same tensor so golden implementations can configure results inline.
+    """
+
     import torch
 
     if not isinstance(tensor, torch.Tensor):
@@ -74,6 +82,10 @@ def set_golden_comparison_config(
 
 
 def _copy_golden_comparison_config(source, destination):
+    """Copy recognized golden comparison metadata between tensors.
+    Leaves each destination attribute unchanged when the source does not define it.
+    """
+
     comparison_config = getattr(source, "_ttnn_comparison_config", None)
     if comparison_config is not None:
         destination._ttnn_comparison_config = comparison_config
