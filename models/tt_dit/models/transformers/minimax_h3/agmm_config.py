@@ -111,10 +111,6 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     if _EXACT_ONLY:
-        # Screening mode: only a per_core_M that was itself swept uses the table; everything else
-        # falls to the v3 rule engine. The divisor rule below can land a 13-tile-per-core operating
-        # point on the entry swept at 1 tile per core (5 s to_out on a 4x8: 148 tiles / 12 cores = 13,
-        # prime), or reuse an entry swept in the other core-grid orientation.
         return AGMM_BLOCK_SIZES.get((k, n, per_core_m))
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
