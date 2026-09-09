@@ -30,7 +30,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M_8x4" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M_24x4" mesh_id: 1 } }
-    channels { count: 16 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
 }
 
