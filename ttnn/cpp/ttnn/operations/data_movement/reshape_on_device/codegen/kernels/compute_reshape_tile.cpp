@@ -27,14 +27,14 @@ constexpr uint32_t compute_num_blocks_per_column(uint32_t tile_cnt, uint32_t max
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_mid = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt_in = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt_out = get_compile_time_arg_val(4);
-    constexpr uint32_t in_tile_rows = get_compile_time_arg_val(5);
-    constexpr uint32_t out_tile_rows = get_compile_time_arg_val(6);
-    constexpr uint32_t max_bct = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_in           = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_mid          = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_out          = get_compile_time_arg_val(2);
+    constexpr uint32_t Wt_in           = get_compile_time_arg_val(3);
+    constexpr uint32_t Wt_out          = get_compile_time_arg_val(4);
+    constexpr uint32_t in_tile_rows    = get_compile_time_arg_val(5);
+    constexpr uint32_t out_tile_rows   = get_compile_time_arg_val(6);
+    constexpr uint32_t max_bct         = get_compile_time_arg_val(7);
 
     uint32_t num_chunks = get_arg_val<uint32_t>(0);
 

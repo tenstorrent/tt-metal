@@ -66,7 +66,8 @@ void kernel_main() {
     scratch_buffer.reserve_back(NABATCH);
     const uint32_t scratch_base_raw = scratch_buffer.get_write_ptr();
     scratch_buffer.push_back(NABATCH);
-    const uint32_t scratch_base = (scratch_base_raw + input_alignment - 1) & ~(input_alignment - 1);
+    const uint32_t scratch_base =
+        (scratch_base_raw + input_alignment - 1) & ~(input_alignment - 1);
 
     uint32_t units_left = num_units;
     uint32_t unit = start_unit;
@@ -82,7 +83,8 @@ void kernel_main() {
             const uint32_t slab_index = u - output_page * slabs_per_output;
             const uint32_t output_column = slab_index * slab_bytes;
             const uint32_t logical_bytes =
-                ((new_stick_bytes - output_column) < slab_bytes) ? (new_stick_bytes - output_column) : slab_bytes;
+                ((new_stick_bytes - output_column) < slab_bytes)
+                    ? (new_stick_bytes - output_column) : slab_bytes;
             const CoreLocalMem<uint8_t> region(scratch_base + j * region_stride);
 
             uint32_t flat = output_page * new_stick_bytes + output_column;
@@ -93,19 +95,19 @@ void kernel_main() {
                 const uint32_t source_column = flat - source_page * old_stick_bytes;
                 const uint32_t page_left = old_stick_bytes - source_column;
                 const uint32_t take = left < page_left ? left : page_left;
-                const uint32_t read_column = source_column & ~(input_alignment - 1);
-                const uint32_t read_end = (source_column + take + input_alignment - 1) & ~(input_alignment - 1);
+                const uint32_t read_column =
+                    source_column & ~(input_alignment - 1);
+                const uint32_t read_end =
+                    (source_column + take + input_alignment - 1) &
+                    ~(input_alignment - 1);
                 const uint32_t read_bytes = read_end - read_column;
                 if (read_bytes > noc_max_burst_bytes) {
                     return;  // host geometry guarantees this cannot happen
                 }
-                noc.async_read(
-                    source,
-                    region,
-                    read_bytes,
-                    {.page_id = source_page, .offset_bytes = read_column},
-                    {.offset_bytes = woff});
-                woff += read_bytes;  // aligned -> next dest stays aligned
+                noc.async_read(source, region, read_bytes,
+                               {.page_id = source_page, .offset_bytes = read_column},
+                               {.offset_bytes = woff});
+                woff += read_bytes;   // aligned -> next dest stays aligned
                 flat += take;
                 left -= take;
             }
@@ -120,9 +122,11 @@ void kernel_main() {
             const uint32_t slab_index = u - output_page * slabs_per_output;
             const uint32_t output_column = slab_index * slab_bytes;
             const uint32_t logical_bytes =
-                ((new_stick_bytes - output_column) < slab_bytes) ? (new_stick_bytes - output_column) : slab_bytes;
+                ((new_stick_bytes - output_column) < slab_bytes)
+                    ? (new_stick_bytes - output_column) : slab_bytes;
             const bool final = output_column + logical_bytes == new_stick_bytes;
-            const uint32_t page_span = final ? (new_page_bytes - output_column) : slab_bytes;
+            const uint32_t page_span =
+                final ? (new_page_bytes - output_column) : slab_bytes;
             const uint32_t region = scratch_base + j * region_stride;
             const uint32_t output = out_base + j * slab_slot_bytes;
 
@@ -135,11 +139,15 @@ void kernel_main() {
                 const uint32_t source_column = flat - source_page * old_stick_bytes;
                 const uint32_t page_left = old_stick_bytes - source_column;
                 const uint32_t take = left < page_left ? left : page_left;
-                const uint32_t read_column = source_column & ~(input_alignment - 1);
-                const uint32_t read_end = (source_column + take + input_alignment - 1) & ~(input_alignment - 1);
+                const uint32_t read_column =
+                    source_column & ~(input_alignment - 1);
+                const uint32_t read_end =
+                    (source_column + take + input_alignment - 1) &
+                    ~(input_alignment - 1);
                 const uint32_t read_bytes = read_end - read_column;
                 tt_memmove<false, false, true, noc_max_burst_bytes>(
-                    noc, output + slab_column, region + woff + (source_column - read_column), take);
+                    noc, output + slab_column,
+                    region + woff + (source_column - read_column), take);
                 woff += read_bytes;
                 slab_column += take;
                 flat += take;

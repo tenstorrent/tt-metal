@@ -112,14 +112,11 @@ struct ArgsConcat : ArgsBase {
 
 template <typename Accessor, typename State, typename NextFn>
 FORCE_INLINE void read_pages(
-    uint32_t cb_id,
-    uint32_t BATCH,
-    uint32_t cb_page_size,
+    uint32_t cb_id, uint32_t BATCH, uint32_t cb_page_size,
     uint32_t source_read_size,
-    const Accessor& accessor,
-    uint32_t num_pages,
-    State& state,
-    NextFn next_fn) {
+    const Accessor& accessor, uint32_t num_pages,
+    State& state, NextFn next_fn)
+{
     Noc noc;
     CircularBuffer cb(cb_id);
 
@@ -130,12 +127,9 @@ FORCE_INLINE void read_pages(
         uint32_t l1_offset = 0;
         for (uint32_t t = 0; t < batch; t++) {
             const uint32_t source_page = next_fn(state);
-            noc.async_read(
-                accessor,
-                cb,
-                source_read_size,
-                {.page_id = source_page, .offset_bytes = 0},
-                {.offset_bytes = l1_offset});
+            noc.async_read(accessor, cb, source_read_size,
+                           {.page_id = source_page, .offset_bytes = 0},
+                           {.offset_bytes = l1_offset});
             l1_offset += cb_page_size;
         }
         noc.async_read_barrier();
@@ -149,8 +143,8 @@ FORCE_INLINE void read_pages(
 void kernel_main() {
     // Named CT args
     constexpr uint32_t SEQ_ID = get_named_compile_time_arg_val("seq_id");
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_id");
-    constexpr uint32_t BATCH = get_named_compile_time_arg_val("batch");
+    constexpr uint32_t cb_id  = get_named_compile_time_arg_val("cb_id");
+    constexpr uint32_t BATCH  = get_named_compile_time_arg_val("batch");
 
     // Positional CT args: TensorAccessorArgs at index 0. An optional source-pitch
     // override is carried by the named CT arg "src_page_pitch" (0 ⇒ absent).
@@ -158,35 +152,42 @@ void kernel_main() {
 
     // RT args base (common header)
     const auto* base = reinterpret_cast<const ArgsBase*>(get_arg_addr(0));
-    constexpr uint32_t source_page_size_override = get_named_compile_time_arg_val("src_page_pitch");
-    const uint32_t source_page_size =
-        source_page_size_override != 0 ? source_page_size_override : src_args.get_aligned_page_size();
-    const uint32_t cb_page_size = get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
+    constexpr uint32_t source_page_size_override =
+        get_named_compile_time_arg_val("src_page_pitch");
+    const uint32_t source_page_size = source_page_size_override != 0
+        ? source_page_size_override : src_args.get_aligned_page_size();
+    const uint32_t cb_page_size =
+        get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
     // The accessor pitch controls source page addressing. The transfer itself
     // must fit the destination CB slot; keep the independent authorities even
     // when their current standard tile sizes happen to match.
-    const uint32_t source_read_size = source_page_size < cb_page_size ? source_page_size : cb_page_size;
+    const uint32_t source_read_size =
+        source_page_size < cb_page_size ? source_page_size : cb_page_size;
     const auto s = TensorAccessor(src_args, base->src_addr, source_page_size);
 
     // ── IDENTITY ────────────────────────────────────────────────────
     if constexpr (SEQ_ID == SEQ_IDENTITY) {
         auto st = seq_identity_init(base->start_id);
-        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, base->num_pages, st, seq_identity_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size,
+                   s, base->num_pages, st, seq_identity_next);
     }
 
     // ── REPEAT ──────────────────────────────────────────────────────
     else if constexpr (SEQ_ID == SEQ_REPEAT) {
         const auto* a = reinterpret_cast<const ArgsRepeat*>(get_arg_addr(0));
         auto st = seq_repeat_init(a->start_id, a->num_repeats, a->lower_pages, a->rep_dim_pages);
-        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_repeat_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size,
+                   s, a->num_pages, st, seq_repeat_next);
     }
 
     // ── REPEAT_INTERLEAVE (per-element AABB replication) ─────────────
     // Reuses ArgsRepeat — only the addressing function differs.
     else if constexpr (SEQ_ID == SEQ_REPEAT_INTERLEAVE) {
         const auto* a = reinterpret_cast<const ArgsRepeat*>(get_arg_addr(0));
-        auto st = seq_repeat_interleave_init(a->start_id, a->num_repeats, a->lower_pages, a->rep_dim_pages);
-        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_repeat_interleave_next);
+        auto st = seq_repeat_interleave_init(
+            a->start_id, a->num_repeats, a->lower_pages, a->rep_dim_pages);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size,
+                   s, a->num_pages, st, seq_repeat_interleave_next);
     }
 
     // ── SLICE ───────────────────────────────────────────────────────
@@ -195,11 +196,12 @@ void kernel_main() {
         const uint32_t nd = a->num_dims;
         // Variable-length arrays follow num_dims in RT arg memory
         tt_l1_ptr uint32_t* num_unpadded = (tt_l1_ptr uint32_t*)(&a->num_dims + 1);
-        tt_l1_ptr uint32_t* num_padded = num_unpadded + nd;
-        tt_l1_ptr uint32_t* id_per_dim = num_padded + nd;
+        tt_l1_ptr uint32_t* num_padded   = num_unpadded + nd;
+        tt_l1_ptr uint32_t* id_per_dim   = num_padded + nd;
 
         auto st = seq_slice_init(a->start_id, nd, num_unpadded, num_padded, id_per_dim);
-        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_slice_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size,
+                   s, a->num_pages, st, seq_slice_next);
     }
 
     // ── PERMUTE ─────────────────────────────────────────────────────
@@ -209,14 +211,17 @@ void kernel_main() {
         // seq_permute_init reads them from RT arg indices starting at &num_dims + 1
         uint32_t rt_data_start = 4;  // index of first element after ArgsPermute header
         auto st = seq_permute_init(a->num_dims, rt_data_start);
-        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_permute_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size,
+                   s, a->num_pages, st, seq_permute_next);
     }
 
     // ── TRANSPOSE_WH ────────────────────────────────────────────────
     else if constexpr (SEQ_ID == SEQ_TRANSPOSE_WH) {
         const auto* a = reinterpret_cast<const ArgsTransposeWh*>(get_arg_addr(0));
-        auto st = seq_transpose_wh_init(a->start_id, a->start_ht, a->start_wt, a->Ht, a->Wt, a->HtWt);
-        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_transpose_wh_next);
+        auto st = seq_transpose_wh_init(
+            a->start_id, a->start_ht, a->start_wt, a->Ht, a->Wt, a->HtWt);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size,
+                   s, a->num_pages, st, seq_transpose_wh_next);
     }
 
     // ── PAD (conditional source / fill) ─────────────────────────────
@@ -248,23 +253,10 @@ void kernel_main() {
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
 
         auto st = seq_pad_init(
-            a->start_id,
-            a->start_wt,
-            a->start_ht,
-            a->start_c,
-            a->start_n,
-            a->Wt_in,
-            a->Ht_in,
-            a->C_in,
-            a->N_in,
-            a->Wt_out,
-            a->Ht_out,
-            a->C_out,
-            a->N_out,
-            a->front_wt,
-            a->front_ht,
-            a->front_c,
-            a->front_n);
+            a->start_id, a->start_wt, a->start_ht, a->start_c, a->start_n,
+            a->Wt_in, a->Ht_in, a->C_in, a->N_in,
+            a->Wt_out, a->Ht_out, a->C_out, a->N_out,
+            a->front_wt, a->front_ht, a->front_c, a->front_n);
 
         uint32_t pages_left = a->num_pages;
         while (pages_left > 0) {
@@ -274,13 +266,12 @@ void kernel_main() {
             for (uint32_t t = 0; t < batch; t++) {
                 uint32_t src_page = seq_pad_next(st);
                 if (st.is_data) {
-                    noc.async_read(
-                        s, cb, source_read_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+                    noc.async_read(s, cb, source_read_size,
+                                   {.page_id = src_page, .offset_bytes = 0},
+                                   {.offset_bytes = l1_offset});
                 } else {
                     noc.async_read(
-                        self_ep,
-                        cb,
-                        a->tile_bytes,
+                        self_ep, cb, a->tile_bytes,
                         {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1},
                         {.offset_bytes = l1_offset});
                 }
@@ -301,7 +292,9 @@ void kernel_main() {
         Noc noc;
         CircularBuffer cb(cb_id);
 
-        auto st = seq_concat_init(a->start_tensor, a->start_tensor_id, a->page_id_0, a->page_id_1, a->ppb_0, a->ppb_1);
+        auto st = seq_concat_init(
+            a->start_tensor, a->start_tensor_id,
+            a->page_id_0, a->page_id_1, a->ppb_0, a->ppb_1);
 
         uint32_t pages_left = a->num_pages;
         while (pages_left > 0) {
@@ -312,15 +305,13 @@ void kernel_main() {
                 uint32_t read_tensor = st.curr_tensor;
                 uint32_t src_page = seq_concat_next(st);
                 if (read_tensor == 0) {
-                    noc.async_read(
-                        s, cb, source_read_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+                    noc.async_read(s, cb, source_read_size,
+                                   {.page_id = src_page, .offset_bytes = 0},
+                                   {.offset_bytes = l1_offset});
                 } else {
-                    noc.async_read(
-                        s1,
-                        cb,
-                        source_read_size,
-                        {.page_id = src_page, .offset_bytes = 0},
-                        {.offset_bytes = l1_offset});
+                    noc.async_read(s1, cb, source_read_size,
+                                   {.page_id = src_page, .offset_bytes = 0},
+                                   {.offset_bytes = l1_offset});
                 }
                 l1_offset += cb_page_size;
             }

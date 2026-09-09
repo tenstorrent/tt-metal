@@ -12,9 +12,9 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    uint32_t dst_addr   = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles  = get_arg_val<uint32_t>(1);
+    uint32_t start_id   = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t REQUESTED_WRITE_SIZE = get_compile_time_arg_val(1);
@@ -36,13 +36,15 @@ void kernel_main() {
     // the authority for its L1 page stride. Convert the CB field to bytes
     // explicitly; cb_addr_shift is zero on dataflow RISCs but
     // keeping it here prevents this generic writer from depending on that fact.
-    const uint32_t l1_page_stride = get_local_cb_interface(cb_out).fifo_page_size << cb_addr_shift;
+    const uint32_t l1_page_stride =
+        get_local_cb_interface(cb_out).fifo_page_size << cb_addr_shift;
     // Never read beyond the staging slot or write beyond the destination page.
     // The minimum preserves placement-specific or nonstandard page layouts and
     // is unchanged for ordinary equal-pitch cases.
-    const uint32_t write_size_dst =
-        REQUESTED_WRITE_SIZE < destination_page_size ? REQUESTED_WRITE_SIZE : destination_page_size;
-    const uint32_t write_size = write_size_dst < l1_page_stride ? write_size_dst : l1_page_stride;
+    const uint32_t write_size_dst = REQUESTED_WRITE_SIZE < destination_page_size
+        ? REQUESTED_WRITE_SIZE : destination_page_size;
+    const uint32_t write_size = write_size_dst < l1_page_stride
+        ? write_size_dst : l1_page_stride;
 
     Noc noc;
     CircularBuffer cb(cb_out);
@@ -61,8 +63,9 @@ void kernel_main() {
         cb.wait_front(batch);
         uint32_t l1_read_offset = 0;
         for (uint32_t t = 0; t < batch; t++) {
-            noc.async_write(
-                cb, d, write_size, {.offset_bytes = l1_read_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+            noc.async_write(cb, d, write_size,
+                            {.offset_bytes = l1_read_offset},
+                            {.page_id = tile_id++, .offset_bytes = 0});
             l1_read_offset += l1_page_stride;
         }
         tiles_left -= batch;
@@ -73,14 +76,15 @@ void kernel_main() {
         // been popped yet and are still counted as "available" by cb_wait_front.
         while (tiles_left > 0) {
             batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-            cb.wait_front(prev_batch + batch);  // wait for NEW batch to arrive
-            noc.async_writes_flushed();         // flush prev (NOC drained during wait)
-            cb.pop_front(prev_batch);           // reclaim prev batch space
+            cb.wait_front(prev_batch + batch); // wait for NEW batch to arrive
+            noc.async_writes_flushed();        // flush prev (NOC drained during wait)
+            cb.pop_front(prev_batch);          // reclaim prev batch space
 
             l1_read_offset = 0;
             for (uint32_t t = 0; t < batch; t++) {
-                noc.async_write(
-                    cb, d, write_size, {.offset_bytes = l1_read_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+                noc.async_write(cb, d, write_size,
+                                {.offset_bytes = l1_read_offset},
+                                {.page_id = tile_id++, .offset_bytes = 0});
                 l1_read_offset += l1_page_stride;
             }
             tiles_left -= batch;
@@ -93,7 +97,9 @@ void kernel_main() {
     } else {
         for (uint32_t i = 0; i < num_tiles; i++) {
             cb.wait_front(1);
-            noc.async_write(cb, d, write_size, {.offset_bytes = 0}, {.page_id = tile_id++, .offset_bytes = 0});
+            noc.async_write(cb, d, write_size,
+                            {.offset_bytes = 0},
+                            {.page_id = tile_id++, .offset_bytes = 0});
             noc.async_writes_flushed();
             cb.pop_front(1);
         }

@@ -107,9 +107,7 @@ void kernel_main() {
         }
         noc.async_write_barrier();
         noc.async_write<NocOptions::DEFAULT, tile_bytes>(
-            output_mem,
-            output_accessor,
-            range_bytes,
+            output_mem, output_accessor, range_bytes,
             {.offset_bytes = range_start},
             {.page_id = output_page, .offset_bytes = range_start});
         noc.async_write_barrier();

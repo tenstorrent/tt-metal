@@ -21,11 +21,11 @@
 #include "api/dataflow/noc.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_reads = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_read = get_arg_val<uint32_t>(2);
+    uint32_t dst_addr              = get_arg_val<uint32_t>(0);
+    uint32_t num_reads             = get_arg_val<uint32_t>(1);
+    uint32_t num_sticks_per_read   = get_arg_val<uint32_t>(2);
     uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(3);
-    uint32_t start_stick = get_arg_val<uint32_t>(4);
+    uint32_t start_stick           = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t new_stick_size = get_compile_time_arg_val(1);
@@ -53,13 +53,11 @@ void kernel_main() {
                 uint32_t remaining = new_stick_size;
                 uint32_t offset = 0;
                 while (remaining > 0) {
-                    uint32_t burst = remaining < noc_max_burst_bytes ? remaining : noc_max_burst_bytes;
-                    noc.async_write(
-                        out_buffer,
-                        s,
-                        burst,
-                        {.offset_bytes = l1_read_offset + offset},
-                        {.page_id = i_stick, .offset_bytes = offset});
+                    uint32_t burst = remaining < noc_max_burst_bytes
+                        ? remaining : noc_max_burst_bytes;
+                    noc.async_write(out_buffer, s, burst,
+                                    {.offset_bytes = l1_read_offset + offset},
+                                    {.page_id = i_stick, .offset_bytes = offset});
                     remaining -= burst;
                     offset += burst;
                 }
@@ -78,13 +76,11 @@ void kernel_main() {
         uint32_t remaining = partial_bytes;
         uint32_t offset = 0;
         while (remaining > 0) {
-            uint32_t burst = remaining < noc_max_burst_bytes ? remaining : noc_max_burst_bytes;
-            noc.async_write(
-                out_buffer,
-                s,
-                burst,
-                {.offset_bytes = offset},
-                {.page_id = start_stick, .offset_bytes = col_off + offset});
+            uint32_t burst = remaining < noc_max_burst_bytes
+                ? remaining : noc_max_burst_bytes;
+            noc.async_write(out_buffer, s, burst,
+                            {.offset_bytes = offset},
+                            {.page_id = start_stick, .offset_bytes = col_off + offset});
             remaining -= burst;
             offset += burst;
         }
@@ -105,12 +101,9 @@ void kernel_main() {
         uint32_t l1_read_offset = 0;
         uint32_t i_stick = start_stick;
         for (uint32_t i = 0; i < num_sticks_per_read; ++i) {
-            noc.async_write(
-                out_buffer,
-                s,
-                new_stick_size,
-                {.offset_bytes = l1_read_offset},
-                {.page_id = i_stick, .offset_bytes = 0});
+            noc.async_write(out_buffer, s, new_stick_size,
+                            {.offset_bytes = l1_read_offset},
+                            {.page_id = i_stick, .offset_bytes = 0});
             l1_read_offset += slot_stride;
             i_stick += 1;
         }

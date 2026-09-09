@@ -53,20 +53,21 @@ void kernel_main() {
             const uint32_t slab_index = u - output_page * slabs_per_output;
             const uint32_t output_column = slab_index * slab_bytes;
             const uint32_t logical_bytes =
-                ((new_stick_bytes - output_column) < slab_bytes) ? (new_stick_bytes - output_column) : slab_bytes;
+                ((new_stick_bytes - output_column) < slab_bytes)
+                    ? (new_stick_bytes - output_column) : slab_bytes;
             const bool final = output_column + logical_bytes == new_stick_bytes;
-            uint32_t remaining = final ? (new_page_bytes - output_column) : logical_bytes;
+            uint32_t remaining = final
+                ? (new_page_bytes - output_column) : logical_bytes;
 
             const uint32_t source_offset = j * slab_slot_bytes;  // reader slab slot
             uint32_t offset = 0;
             while (remaining > 0) {
-                const uint32_t burst = remaining < noc_max_burst_bytes ? remaining : noc_max_burst_bytes;
-                noc.async_write(
-                    out_buffer,
-                    destination,
-                    burst,
-                    {.offset_bytes = source_offset + offset},
-                    {.page_id = output_page, .offset_bytes = output_column + offset});
+                const uint32_t burst = remaining < noc_max_burst_bytes
+                    ? remaining : noc_max_burst_bytes;
+                noc.async_write(out_buffer, destination, burst,
+                                {.offset_bytes = source_offset + offset},
+                                {.page_id = output_page,
+                                 .offset_bytes = output_column + offset});
                 offset += burst;
                 remaining -= burst;
             }

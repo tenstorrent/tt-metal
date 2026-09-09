@@ -43,7 +43,8 @@ void kernel_main() {
         map_buffer.reserve_back(1);
         const uint32_t map_l1 = map_buffer.get_write_ptr();
         noc.async_read<NocOptions::DEFAULT, map_page_bytes>(
-            map_accessor, map_buffer, map_page_bytes, {.page_id = output_page, .offset_bytes = 0}, {.offset_bytes = 0});
+            map_accessor, map_buffer, map_page_bytes,
+            {.page_id = output_page, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         map_buffer.push_back(1);
 
@@ -59,11 +60,8 @@ void kernel_main() {
             }
             input_buffer.reserve_back(1);
             noc.async_read<NocOptions::DEFAULT, tile_bytes>(
-                input_accessor,
-                input_buffer,
-                tile_bytes,
-                {.page_id = input_page, .offset_bytes = 0},
-                {.offset_bytes = 0});
+                input_accessor, input_buffer, tile_bytes,
+                {.page_id = input_page, .offset_bytes = 0}, {.offset_bytes = 0});
             noc.async_read_barrier();
             input_buffer.push_back(1);
             previous_page = input_page;

@@ -82,7 +82,8 @@ void kernel_main() {
         }
         noc.async_write_barrier();
         noc.async_write<NocOptions::DEFAULT, tile_bytes>(
-            output_mem, output_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = output_page, .offset_bytes = 0});
+            output_mem, output_accessor, tile_bytes,
+            {.offset_bytes = 0}, {.page_id = output_page, .offset_bytes = 0});
         noc.async_write_barrier();
         map_buffer.pop_front(1);
     }

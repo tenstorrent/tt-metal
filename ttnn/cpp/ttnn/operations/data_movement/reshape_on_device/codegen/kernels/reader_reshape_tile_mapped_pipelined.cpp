@@ -53,8 +53,10 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<map_args.next_compile_time_args_offset()>();
     constexpr uint32_t max_entries = map_page_bytes / sizeof(SegmentMapData);
     static_assert(read_batch >= 1, "pipelined reader needs a positive batch");
-    static_assert(read_batch < input_cb_depth, "writer holds one un-popped slot; a full-depth reserve deadlocks");
-    static_assert(input_cb_depth % read_batch == 0, "CB FIFO-wrap discipline (CHARTER.md contract 2)");
+    static_assert(read_batch < input_cb_depth,
+                  "writer holds one un-popped slot; a full-depth reserve deadlocks");
+    static_assert(input_cb_depth % read_batch == 0,
+                  "CB FIFO-wrap discipline (CHARTER.md contract 2)");
 
     const auto input_accessor = TensorAccessor(input_args, input_addr);
     const auto map_accessor = TensorAccessor(map_args, map_addr);
@@ -75,7 +77,8 @@ void kernel_main() {
         map_buffer.reserve_back(1);
         const uint32_t map_l1 = map_buffer.get_write_ptr();
         noc.async_read<NocOptions::DEFAULT, map_page_bytes>(
-            map_accessor, map_buffer, map_page_bytes, {.page_id = output_page, .offset_bytes = 0}, {.offset_bytes = 0});
+            map_accessor, map_buffer, map_page_bytes,
+            {.page_id = output_page, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         map_buffer.push_back(1);
 
@@ -98,9 +101,7 @@ void kernel_main() {
                 input_buffer.reserve_back(batch_capacity);
             }
             noc.async_read<NocOptions::DEFAULT, tile_bytes>(
-                input_accessor,
-                input_buffer,
-                tile_bytes,
+                input_accessor, input_buffer, tile_bytes,
                 {.page_id = input_page, .offset_bytes = 0},
                 {.offset_bytes = pending * tile_bytes});
             ++pending;

@@ -25,15 +25,15 @@
 #include "api/dataflow/dataflow_api.h"
 
 // --- Sequencer ID constants (match CT arg SEQ_ID) ---
-constexpr uint32_t SEQ_IDENTITY = 0;
-constexpr uint32_t SEQ_REPEAT = 1;
-constexpr uint32_t SEQ_SLICE = 2;
-constexpr uint32_t SEQ_PERMUTE = 3;
+constexpr uint32_t SEQ_IDENTITY     = 0;
+constexpr uint32_t SEQ_REPEAT       = 1;
+constexpr uint32_t SEQ_SLICE        = 2;
+constexpr uint32_t SEQ_PERMUTE      = 3;
 constexpr uint32_t SEQ_TRANSPOSE_WH = 4;
-constexpr uint32_t SEQ_PAD = 5;
-constexpr uint32_t SEQ_CONCAT = 6;
-constexpr uint32_t SEQ_HC = 7;
-constexpr uint32_t SEQ_CN = 8;
+constexpr uint32_t SEQ_PAD          = 5;
+constexpr uint32_t SEQ_CONCAT       = 6;
+constexpr uint32_t SEQ_HC           = 7;
+constexpr uint32_t SEQ_CN           = 8;
 constexpr uint32_t SEQ_REPEAT_INTERLEAVE = 9;
 
 // Max supported dimensions for N-dim sequencers (slice, permute)
@@ -49,16 +49,16 @@ struct SeqIdentityState {
 
 struct SeqRepeatState {
     uint32_t out_page;
-    uint32_t src_lower;  // REP_DIM_PAGES * LOWER_PAGES
-    uint32_t dst_lower;  // NUM_REPEATS * src_lower
+    uint32_t src_lower;   // REP_DIM_PAGES * LOWER_PAGES
+    uint32_t dst_lower;   // NUM_REPEATS * src_lower
 };
 
 struct SeqRepeatInterleaveState {
-    uint32_t src_page;     // source page for the next call
-    uint32_t lo;           // offset below the repeat dim, wraps at lower_pages
-    uint32_t rep_phase;    // which copy of the current element, wraps at num_repeats
-    uint32_t num_repeats;  // per-element replication factor
-    uint32_t lower_pages;  // pages below the repeat dim
+    uint32_t src_page;      // source page for the next call
+    uint32_t lo;            // offset below the repeat dim, wraps at lower_pages
+    uint32_t rep_phase;     // which copy of the current element, wraps at num_repeats
+    uint32_t num_repeats;   // per-element replication factor
+    uint32_t lower_pages;   // pages below the repeat dim
 };
 
 struct SeqSliceState {
@@ -105,7 +105,7 @@ struct SeqPadState {
     uint32_t front_ht;  // tile-aligned leading pad, H (tiles)
     uint32_t front_c;   // leading pad, C
     uint32_t front_n;   // leading pad, N
-    bool is_data;       // set by next(), read by transport loop
+    bool is_data;  // set by next(), read by transport loop
 };
 
 struct SeqConcatState {
@@ -113,30 +113,42 @@ struct SeqConcatState {
     uint32_t curr_tensor_id;
     uint32_t page_id_0;
     uint32_t page_id_1;
-    uint32_t ppb_0;  // pages per block, tensor 0
-    uint32_t ppb_1;  // pages per block, tensor 1
+    uint32_t ppb_0;   // pages per block, tensor 0
+    uint32_t ppb_1;   // pages per block, tensor 1
 };
 
 // =====================================================================
 // IDENTITY sequencer
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqIdentityState seq_identity_init(uint32_t start_id) { return {start_id}; }
+inline __attribute__((always_inline))
+SeqIdentityState seq_identity_init(uint32_t start_id) {
+    return {start_id};
+}
 
-inline __attribute__((always_inline)) uint32_t seq_identity_next(SeqIdentityState& st) { return st.page_id++; }
+inline __attribute__((always_inline))
+uint32_t seq_identity_next(SeqIdentityState& st) {
+    return st.page_id++;
+}
 
 // =====================================================================
 // REPEAT sequencer
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqRepeatState
-seq_repeat_init(uint32_t out_start_page, uint32_t num_repeats, uint32_t lower_pages, uint32_t rep_dim_pages) {
+inline __attribute__((always_inline))
+SeqRepeatState seq_repeat_init(
+    uint32_t out_start_page,
+    uint32_t num_repeats,
+    uint32_t lower_pages,
+    uint32_t rep_dim_pages
+) {
     uint32_t src_lower = rep_dim_pages * lower_pages;
     uint32_t dst_lower = num_repeats * src_lower;
     return {out_start_page, src_lower, dst_lower};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_repeat_next(SeqRepeatState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_repeat_next(SeqRepeatState& st) {
     uint32_t block = st.out_page / st.dst_lower;
     uint32_t within = st.out_page % st.dst_lower;
     uint32_t lower_in_rep = within % st.src_lower;
@@ -169,20 +181,26 @@ inline __attribute__((always_inline)) uint32_t seq_repeat_next(SeqRepeatState& s
 // divides on every page.
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqRepeatInterleaveState seq_repeat_interleave_init(
-    uint32_t out_start_page, uint32_t num_repeats, uint32_t lower_pages, uint32_t rep_dim_pages) {
+inline __attribute__((always_inline))
+SeqRepeatInterleaveState seq_repeat_interleave_init(
+    uint32_t out_start_page,
+    uint32_t num_repeats,
+    uint32_t lower_pages,
+    uint32_t rep_dim_pages
+) {
     uint32_t src_lower = rep_dim_pages * lower_pages;
     uint32_t dst_lower = num_repeats * src_lower;
-    uint32_t block = out_start_page / dst_lower;
-    uint32_t within = out_start_page % dst_lower;
-    uint32_t lo = within % lower_pages;
-    uint32_t out_rep = within / lower_pages;
-    uint32_t in_rep = out_rep / num_repeats;
-    uint32_t src_page = block * src_lower + in_rep * lower_pages + lo;
+    uint32_t block     = out_start_page / dst_lower;
+    uint32_t within    = out_start_page % dst_lower;
+    uint32_t lo        = within % lower_pages;
+    uint32_t out_rep   = within / lower_pages;
+    uint32_t in_rep    = out_rep / num_repeats;
+    uint32_t src_page  = block * src_lower + in_rep * lower_pages + lo;
     return {src_page, lo, out_rep - in_rep * num_repeats, num_repeats, lower_pages};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_repeat_interleave_next(SeqRepeatInterleaveState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_repeat_interleave_next(SeqRepeatInterleaveState& st) {
     uint32_t src_page = st.src_page;
     if (++st.lo == st.lower_pages) {
         st.lo = 0;
@@ -205,16 +223,19 @@ inline __attribute__((always_inline)) uint32_t seq_repeat_interleave_next(SeqRep
 // SLICE sequencer (N-dimensional skip)
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqSliceState seq_slice_init(
+inline __attribute__((always_inline))
+SeqSliceState seq_slice_init(
     uint32_t start_id,
     uint32_t num_dims,
     tt_l1_ptr uint32_t* num_unpadded,
     tt_l1_ptr uint32_t* num_padded,
-    tt_l1_ptr uint32_t* id_per_dim) {
+    tt_l1_ptr uint32_t* id_per_dim
+) {
     return {start_id, num_dims, num_unpadded, num_padded, id_per_dim};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_slice_next(SeqSliceState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_slice_next(SeqSliceState& st) {
     uint32_t result = st.src_tile_id;
     st.src_tile_id++;
     for (uint32_t j = 0; j < st.num_dims; ++j) {
@@ -233,29 +254,23 @@ inline __attribute__((always_inline)) uint32_t seq_slice_next(SeqSliceState& st)
 // PERMUTE sequencer (inverse permutation with strides)
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqPermuteState seq_permute_init(
+inline __attribute__((always_inline))
+SeqPermuteState seq_permute_init(
     uint32_t num_dims,
     uint32_t rt_start_idx  // RT arg index where src_strides[D] begins
 ) {
     SeqPermuteState st;
     st.num_dims = num_dims;
     uint32_t idx = rt_start_idx;
-    for (uint32_t d = 0; d < num_dims; d++) {
-        st.src_strides[d] = get_arg_val<uint32_t>(idx++);
-    }
-    for (uint32_t d = 0; d < num_dims; d++) {
-        st.out_shape[d] = get_arg_val<uint32_t>(idx++);
-    }
-    for (uint32_t d = 0; d < num_dims; d++) {
-        st.inv_perm[d] = get_arg_val<uint32_t>(idx++);
-    }
-    for (uint32_t d = 0; d < num_dims; d++) {
-        st.id_per_dim[d] = get_arg_val<uint32_t>(idx++);
-    }
+    for (uint32_t d = 0; d < num_dims; d++) st.src_strides[d] = get_arg_val<uint32_t>(idx++);
+    for (uint32_t d = 0; d < num_dims; d++) st.out_shape[d]   = get_arg_val<uint32_t>(idx++);
+    for (uint32_t d = 0; d < num_dims; d++) st.inv_perm[d]    = get_arg_val<uint32_t>(idx++);
+    for (uint32_t d = 0; d < num_dims; d++) st.id_per_dim[d]  = get_arg_val<uint32_t>(idx++);
     return st;
 }
 
-inline __attribute__((always_inline)) uint32_t seq_permute_next(SeqPermuteState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_permute_next(SeqPermuteState& st) {
     // Compute source tile via inverse permutation
     uint32_t src_tile_id = 0;
     for (uint32_t d = 0; d < st.num_dims; d++) {
@@ -264,9 +279,7 @@ inline __attribute__((always_inline)) uint32_t seq_permute_next(SeqPermuteState&
     // Advance N-dim output position (innermost last)
     for (uint32_t d = st.num_dims; d > 0; d--) {
         st.id_per_dim[d - 1]++;
-        if (st.id_per_dim[d - 1] < st.out_shape[d - 1]) {
-            break;
-        }
+        if (st.id_per_dim[d - 1] < st.out_shape[d - 1]) break;
         st.id_per_dim[d - 1] = 0;
     }
     return src_tile_id;
@@ -276,12 +289,20 @@ inline __attribute__((always_inline)) uint32_t seq_permute_next(SeqPermuteState&
 // TRANSPOSE_WH sequencer (W↔H tile swap via stride arithmetic)
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqTransposeWhState seq_transpose_wh_init(
-    uint32_t start_id, uint32_t start_ht, uint32_t start_wt, uint32_t Ht, uint32_t Wt, uint32_t HtWt) {
+inline __attribute__((always_inline))
+SeqTransposeWhState seq_transpose_wh_init(
+    uint32_t start_id,
+    uint32_t start_ht,
+    uint32_t start_wt,
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t HtWt
+) {
     return {start_id, start_ht, start_wt, Ht, Wt, HtWt};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_transpose_wh_next(SeqTransposeWhState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_transpose_wh_next(SeqTransposeWhState& st) {
     uint32_t result = st.i_tile;
     st.i_tile += st.Wt;
     st.ht++;
@@ -307,51 +328,34 @@ inline __attribute__((always_inline)) uint32_t seq_transpose_wh_next(SeqTranspos
 //   false -> tile is padding, use noc_async_read from pad_noc_addr
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqPadState seq_pad_init(
+inline __attribute__((always_inline))
+SeqPadState seq_pad_init(
     uint32_t start_src_tile,
-    uint32_t start_wt,
-    uint32_t start_ht,
-    uint32_t start_c,
-    uint32_t start_n,
-    uint32_t Wt_in,
-    uint32_t Ht_in,
-    uint32_t C_in,
-    uint32_t N_in,
-    uint32_t Wt_out,
-    uint32_t Ht_out,
-    uint32_t C_out,
-    uint32_t N_out,
-    uint32_t front_wt,
-    uint32_t front_ht,
-    uint32_t front_c,
-    uint32_t front_n) {
+    uint32_t start_wt, uint32_t start_ht,
+    uint32_t start_c,  uint32_t start_n,
+    uint32_t Wt_in,  uint32_t Ht_in,  uint32_t C_in,  uint32_t N_in,
+    uint32_t Wt_out, uint32_t Ht_out, uint32_t C_out, uint32_t N_out,
+    uint32_t front_wt, uint32_t front_ht, uint32_t front_c, uint32_t front_n
+) {
     return {
         start_src_tile,
-        start_wt,
-        start_ht,
-        start_c,
-        start_n,
-        Wt_in,
-        Ht_in,
-        C_in,
-        N_in,
-        Wt_out,
-        Ht_out,
-        C_out,
-        N_out,
-        front_wt,
-        front_ht,
-        front_c,
-        front_n,
-        false};
+        start_wt, start_ht, start_c, start_n,
+        Wt_in, Ht_in, C_in, N_in,
+        Wt_out, Ht_out, C_out, N_out,
+        front_wt, front_ht, front_c, front_n,
+        false
+    };
 }
 
-inline __attribute__((always_inline)) uint32_t seq_pad_next(SeqPadState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_pad_next(SeqPadState& st) {
     // Data occupies [front, front + in) in each dim; everything else is pad.
     // Back-only padding is the front_* == 0 special case.
-    st.is_data = (st.curr_wt >= st.front_wt) && (st.curr_wt < st.front_wt + st.Wt_in) && (st.curr_ht >= st.front_ht) &&
-                 (st.curr_ht < st.front_ht + st.Ht_in) && (st.curr_c >= st.front_c) &&
-                 (st.curr_c < st.front_c + st.C_in) && (st.curr_n >= st.front_n) && (st.curr_n < st.front_n + st.N_in);
+    st.is_data =
+        (st.curr_wt >= st.front_wt) && (st.curr_wt < st.front_wt + st.Wt_in) &&
+        (st.curr_ht >= st.front_ht) && (st.curr_ht < st.front_ht + st.Ht_in) &&
+        (st.curr_c  >= st.front_c)  && (st.curr_c  < st.front_c  + st.C_in)  &&
+        (st.curr_n  >= st.front_n)  && (st.curr_n  < st.front_n  + st.N_in);
 
     uint32_t result = st.src_tile;
     if (st.is_data) {
@@ -383,17 +387,20 @@ inline __attribute__((always_inline)) uint32_t seq_pad_next(SeqPadState& st) {
 // The returned value is the page_id within that tensor.
 // =====================================================================
 
-inline __attribute__((always_inline)) SeqConcatState seq_concat_init(
+inline __attribute__((always_inline))
+SeqConcatState seq_concat_init(
     uint32_t start_tensor,
     uint32_t start_tensor_id,
     uint32_t page_id_0,
     uint32_t page_id_1,
     uint32_t ppb_0,
-    uint32_t ppb_1) {
+    uint32_t ppb_1
+) {
     return {start_tensor, start_tensor_id, page_id_0, page_id_1, ppb_0, ppb_1};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_concat_next(SeqConcatState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_concat_next(SeqConcatState& st) {
     uint32_t result;
     uint32_t read_tensor = st.curr_tensor;  // save for caller
 
@@ -435,12 +442,16 @@ struct SeqHcState {
     uint32_t CH;
 };
 
-inline __attribute__((always_inline)) SeqHcState
-seq_hc_init(uint32_t start_id, uint32_t curr_c, uint32_t curr_h, uint32_t curr_n, uint32_t C, uint32_t H) {
+inline __attribute__((always_inline))
+SeqHcState seq_hc_init(
+    uint32_t start_id, uint32_t curr_c, uint32_t curr_h, uint32_t curr_n,
+    uint32_t C, uint32_t H
+) {
     return {start_id, curr_c, curr_h, curr_n, C, H, C * H};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_hc_next(SeqHcState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_hc_next(SeqHcState& st) {
     uint32_t result = st.i_stick;
     st.curr_c++;
     st.i_stick += st.H;
@@ -477,12 +488,16 @@ struct SeqCnState {
     uint32_t channel_step;  // N*C*HtWt - HtWt
 };
 
-inline __attribute__((always_inline)) SeqCnState seq_cn_init(
-    uint32_t start_id, uint32_t hw, uint32_t n, uint32_t N, uint32_t HtWt, uint32_t batch_step, uint32_t channel_step) {
+inline __attribute__((always_inline))
+SeqCnState seq_cn_init(
+    uint32_t start_id, uint32_t hw, uint32_t n,
+    uint32_t N, uint32_t HtWt, uint32_t batch_step, uint32_t channel_step
+) {
     return {start_id, hw, n, N, HtWt, batch_step, channel_step};
 }
 
-inline __attribute__((always_inline)) uint32_t seq_cn_next(SeqCnState& st) {
+inline __attribute__((always_inline))
+uint32_t seq_cn_next(SeqCnState& st) {
     uint32_t result = st.page_idx;
     st.page_idx++;
     st.hw++;
