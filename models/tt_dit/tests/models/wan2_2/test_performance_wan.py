@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import numpy as np
@@ -122,7 +123,11 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = create_fractal_image(width, height)
+        _wan_img = os.environ.get("WAN_IMAGE")
+        if _wan_img:
+            image_prompt = Image.open(_wan_img).convert("RGB").resize((width, height))
+        else:
+            image_prompt = create_fractal_image(width, height)
 
     # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
     if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
@@ -247,8 +252,12 @@ def test_pipeline_performance(
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
 
+    _wan_prompt = os.environ.get("WAN_PROMPT")
+    if _wan_prompt:
+        prompts = [_wan_prompt]
+
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = int(os.environ.get("WAN_STEPS", "40"))
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -274,8 +283,9 @@ def test_pipeline_performance(
             topology=topology,
             is_fsdp=is_fsdp,
             model_type=model_type,
-            checkpoint_name=(
-                "Wan-AI/Wan2.2-I2V-A14B-Diffusers" if model_type == "i2v" else "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+            checkpoint_name=os.environ.get(
+                "WAN_CKPT",
+                "Wan-AI/Wan2.2-I2V-A14B-Diffusers" if model_type == "i2v" else "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
             ),
             height=height,
             width=width,
@@ -457,6 +467,10 @@ def test_pipeline_performance(
             )
             pass_perf_check = False
 
-    assert pass_perf_check, "\n".join(assert_msgs)
+    _wan_custom = any(os.environ.get(v) for v in ("WAN_PROMPT", "WAN_IMAGE", "WAN_STEPS"))
+    if _wan_custom and not pass_perf_check:
+        print("[WAN] custom inputs set -> skipping perf-target assert:\n" + "\n".join(assert_msgs))
+    else:
+        assert pass_perf_check, "\n".join(assert_msgs)
 
     logger.info("Performance test completed successfully!")

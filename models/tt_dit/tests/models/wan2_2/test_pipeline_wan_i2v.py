@@ -120,7 +120,7 @@ def test_pipeline_inference(
             dynamic_load=dynamic_load,
             topology=topology,
             is_fsdp=is_fsdp,
-            checkpoint_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+            checkpoint_name=os.environ.get("WAN_I2V_CKPT", "Wan-AI/Wan2.2-I2V-A14B-Diffusers"),
             model_type="i2v",
             height=height,
             width=width,
