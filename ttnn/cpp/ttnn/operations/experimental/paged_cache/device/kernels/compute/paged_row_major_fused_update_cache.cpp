@@ -9,36 +9,26 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t rt_args_idx = 0;
-    const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
+    const auto has_work = get_arg(args::has_work);
     if (!has_work) {
         return;
     }
-    const bool is_input1 = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr uint32_t in1_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t in2_cb = get_compile_time_arg_val(1);
-    [[maybe_unused]] uint32_t in_cb = in1_cb;
-    if (!is_input1) {
-        in_cb = in2_cb;
-    }
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto num_heads = get_arg(args::num_heads);
 
-    constexpr uint32_t cache_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_cache2_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr uint32_t num_heads = get_compile_time_arg_val(7);
-
-    compute_kernel_hw_startup(cache_cb, untilized_cache_cb);
+    // Row-major input needs no untilize step, so this kernel never touches an input buffer; the
+    // writer drains the resident shard directly.
+    compute_kernel_hw_startup(dfb::cache, dfb::untilized_cache);
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1);
+        compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }
