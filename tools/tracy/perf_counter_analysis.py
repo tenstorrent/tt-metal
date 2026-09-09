@@ -23,12 +23,12 @@ COUNTER_TYPE_NAMES = {
     3: "MATH_COUNTER",
     # TDMA_UNPACK Group
     4: "MATH_SRC_DATA_READY",
-    5: "DATA_HAZARD_STALLS_MOVD2A",
+    5: "MATH_NOT_D2S_STALLED",
     6: "MATH_FIDELITY_STALL",
     7: "MATH_INSTRN_STARTED",
     8: "MATH_INSTRN_AVAILABLE",
-    9: "SRCB_WRITE_AVAILABLE",
-    10: "SRCA_WRITE_AVAILABLE",
+    9: "SRCB_WRITE_REQ",
+    10: "SRCA_WRITE_REQ",
     11: "UNPACK0_BUSY_THREAD0",
     12: "UNPACK1_BUSY_THREAD0",
     13: "UNPACK0_BUSY_THREAD1",
@@ -38,9 +38,9 @@ COUNTER_TYPE_NAMES = {
     16: "MATH_INSTRN_HF_2_CYCLE",
     17: "MATH_INSTRN_HF_4_CYCLE",
     # TDMA_PACK Group
-    18: "PACKER_DEST_READ_AVAILABLE",
+    18: "PACKER0_DEST_READ_REQ",
     19: "PACKER_BUSY",
-    20: "AVAILABLE_MATH",
+    20: "MATH_NOT_SCOREBOARD_STALLED",
     # INSTRN_THREAD Group (req)
     21: "CFG_INSTRN_AVAILABLE_0",
     22: "CFG_INSTRN_AVAILABLE_1",
@@ -54,9 +54,9 @@ COUNTER_TYPE_NAMES = {
     30: "MOVE_INSTRN_AVAILABLE_0",
     31: "MOVE_INSTRN_AVAILABLE_1",
     32: "MOVE_INSTRN_AVAILABLE_2",
-    33: "FPU_INSTRN_AVAILABLE_0",
-    34: "FPU_INSTRN_AVAILABLE_1",
-    35: "FPU_INSTRN_AVAILABLE_2",
+    33: "MATH_INSTRN_AVAILABLE_0",
+    34: "MATH_INSTRN_AVAILABLE_1",
+    35: "MATH_INSTRN_AVAILABLE_2",
     36: "UNPACK_INSTRN_AVAILABLE_0",
     37: "UNPACK_INSTRN_AVAILABLE_1",
     38: "UNPACK_INSTRN_AVAILABLE_2",
@@ -91,9 +91,9 @@ COUNTER_TYPE_NAMES = {
     67: "WAITING_FOR_MOVE_IDLE_0",
     68: "WAITING_FOR_MOVE_IDLE_1",
     69: "WAITING_FOR_MOVE_IDLE_2",
-    70: "WAITING_FOR_MMIO_IDLE_0",
-    71: "WAITING_FOR_MMIO_IDLE_1",
-    72: "WAITING_FOR_MMIO_IDLE_2",
+    70: "WAITING_FOR_CFG_IDLE_0",
+    71: "WAITING_FOR_CFG_IDLE_1",
+    72: "WAITING_FOR_CFG_IDLE_2",
     73: "WAITING_FOR_SFPU_IDLE_0",
     74: "WAITING_FOR_SFPU_IDLE_1",
     75: "WAITING_FOR_SFPU_IDLE_2",
@@ -115,7 +115,7 @@ COUNTER_TYPE_NAMES = {
     89: "L1_1_NOC_RING1_OUTGOING_1",
     90: "L1_1_NOC_RING1_INCOMING_0",
     91: "L1_1_NOC_RING1_INCOMING_1",
-    # Blackhole-specific L1 ports
+    # Reserved ordinals: Blackhole's former names for ports 1 and 8; nothing emits them now.
     92: "L1_0_UNIFIED_PACKER",
     93: "L1_1_RISC_CORE",
     # L1 Bank 0 grant counters
@@ -141,14 +141,14 @@ COUNTER_TYPE_NAMES = {
     111: "THREAD_INSTRUCTIONS_1",
     112: "THREAD_INSTRUCTIONS_2",
     # TDMA_UNPACK grant counters
-    113: "SRCB_WRITE_ACTUAL",
+    113: "SRCB_WRITE_NOT_BLOCKED_OVR",
     114: "SRCA_WRITE_NOT_BLOCKED_OVR",
-    115: "SRCA_WRITE_ACTUAL",
+    115: "SRCA_WRITE_NOT_BLOCKED_PORT",
     116: "SRCB_WRITE_NOT_BLOCKED_PORT",
-    117: "SRCA_WRITE_THREAD0",
-    118: "SRCB_WRITE_THREAD0",
-    119: "SRCA_WRITE_THREAD1",
-    120: "SRCB_WRITE_THREAD1",
+    117: "SRCA_WRITE_TID_EVEN",
+    118: "SRCB_WRITE_TID_EVEN",
+    119: "SRCA_WRITE_TID_ODD",
+    120: "SRCB_WRITE_TID_ODD",
     # TDMA_PACK additional req counters (WH only)
     121: "PACKER_DEST_READ_1",
     122: "PACKER_DEST_READ_2",
@@ -162,60 +162,74 @@ COUNTER_TYPE_NAMES = {
     129: "DEST_READ_GRANTED_2",
     130: "DEST_READ_GRANTED_3",
     131: "MATH_NOT_STALLED_DEST_WR_PORT",
-    # L1 Bank 4 req (BH only, mux position 4, misc ports 32-39)
-    132: "L1_4_MISC_PORT_0",
-    133: "L1_4_MISC_PORT_1",
-    134: "L1_4_MISC_PORT_2",
-    135: "L1_4_MISC_PORT_3",
-    136: "L1_4_MISC_PORT_4",
-    137: "L1_4_MISC_PORT_5",
-    138: "L1_4_MISC_PORT_6",
-    139: "L1_4_MISC_PORT_7",
+    # L1 bank 4 (BH only): ext packers 6-7, packer interface 1 (+ tag search), unpacker 0's extended read interfaces 1-5
+    132: "L1_4_EXT_PACKER_6",
+    133: "L1_4_EXT_PACKER_7",
+    134: "L1_4_PACKER_IF_1_TAG_SEARCH",
+    135: "L1_4_UNPACKER0_EXT_IF_1",
+    136: "L1_4_UNPACKER0_EXT_IF_2",
+    137: "L1_4_UNPACKER0_EXT_IF_3",
+    138: "L1_4_UNPACKER0_EXT_IF_4",
+    139: "L1_4_UNPACKER0_EXT_IF_5",
     # L1 Bank 4 grant counters
-    140: "L1_4_MISC_PORT_0_GRANT",
-    141: "L1_4_MISC_PORT_1_GRANT",
-    142: "L1_4_MISC_PORT_2_GRANT",
-    143: "L1_4_MISC_PORT_3_GRANT",
-    144: "L1_4_MISC_PORT_4_GRANT",
-    145: "L1_4_MISC_PORT_5_GRANT",
-    146: "L1_4_MISC_PORT_6_GRANT",
-    147: "L1_4_MISC_PORT_7_GRANT",
-    # L1 Bank 2 (BH only, mux position 2, NOC Ring 2 ports 16-23)
-    148: "L1_2_NOC_RING2_PORT_0",
-    149: "L1_2_NOC_RING2_PORT_1",
-    150: "L1_2_NOC_RING2_PORT_2",
-    151: "L1_2_NOC_RING2_PORT_3",
-    152: "L1_2_NOC_RING2_PORT_4",
-    153: "L1_2_NOC_RING2_PORT_5",
-    154: "L1_2_NOC_RING2_PORT_6",
-    155: "L1_2_NOC_RING2_PORT_7",
-    156: "L1_2_NOC_RING2_PORT_0_GRANT",
-    157: "L1_2_NOC_RING2_PORT_1_GRANT",
-    158: "L1_2_NOC_RING2_PORT_2_GRANT",
-    159: "L1_2_NOC_RING2_PORT_3_GRANT",
-    160: "L1_2_NOC_RING2_PORT_4_GRANT",
-    161: "L1_2_NOC_RING2_PORT_5_GRANT",
-    162: "L1_2_NOC_RING2_PORT_6_GRANT",
-    163: "L1_2_NOC_RING2_PORT_7_GRANT",
-    # L1 Bank 3 (BH only, mux position 3, NOC Ring 3 ports 24-31)
-    164: "L1_3_NOC_RING3_PORT_0",
-    165: "L1_3_NOC_RING3_PORT_1",
-    166: "L1_3_NOC_RING3_PORT_2",
-    167: "L1_3_NOC_RING3_PORT_3",
-    168: "L1_3_NOC_RING3_PORT_4",
-    169: "L1_3_NOC_RING3_PORT_5",
-    170: "L1_3_NOC_RING3_PORT_6",
-    171: "L1_3_NOC_RING3_PORT_7",
-    172: "L1_3_NOC_RING3_PORT_0_GRANT",
-    173: "L1_3_NOC_RING3_PORT_1_GRANT",
-    174: "L1_3_NOC_RING3_PORT_2_GRANT",
-    175: "L1_3_NOC_RING3_PORT_3_GRANT",
-    176: "L1_3_NOC_RING3_PORT_4_GRANT",
-    177: "L1_3_NOC_RING3_PORT_5_GRANT",
-    178: "L1_3_NOC_RING3_PORT_6_GRANT",
-    179: "L1_3_NOC_RING3_PORT_7_GRANT",
+    140: "L1_4_EXT_PACKER_6_GRANT",
+    141: "L1_4_EXT_PACKER_7_GRANT",
+    142: "L1_4_PACKER_IF_1_TAG_SEARCH_GRANT",
+    143: "L1_4_UNPACKER0_EXT_IF_1_GRANT",
+    144: "L1_4_UNPACKER0_EXT_IF_2_GRANT",
+    145: "L1_4_UNPACKER0_EXT_IF_3_GRANT",
+    146: "L1_4_UNPACKER0_EXT_IF_4_GRANT",
+    147: "L1_4_UNPACKER0_EXT_IF_5_GRANT",
+    # L1 Bank 2 (BH only, mux position 2): ext unpackers 4-7 (16-19), ring 0 ports 2-3 (20-23)
+    148: "L1_2_UNPACKER1_EXT_IF_4",
+    149: "L1_2_UNPACKER1_EXT_IF_5",
+    150: "L1_2_UNPACKER1_EXT_IF_6",
+    151: "L1_2_UNPACKER1_EXT_IF_7",
+    152: "L1_2_NOC_RING0_OUTGOING_2",
+    153: "L1_2_NOC_RING0_OUTGOING_3",
+    154: "L1_2_NOC_RING0_INCOMING_2",
+    155: "L1_2_NOC_RING0_INCOMING_3",
+    156: "L1_2_UNPACKER1_EXT_IF_4_GRANT",
+    157: "L1_2_UNPACKER1_EXT_IF_5_GRANT",
+    158: "L1_2_UNPACKER1_EXT_IF_6_GRANT",
+    159: "L1_2_UNPACKER1_EXT_IF_7_GRANT",
+    160: "L1_2_NOC_RING0_OUTGOING_2_GRANT",
+    161: "L1_2_NOC_RING0_OUTGOING_3_GRANT",
+    162: "L1_2_NOC_RING0_INCOMING_2_GRANT",
+    163: "L1_2_NOC_RING0_INCOMING_3_GRANT",
+    # L1 Bank 3 (BH only, mux position 3): ring 1 ports 2-3 (24-27), ext packers 2-5 (28-31)
+    164: "L1_3_NOC_RING1_OUTGOING_2",
+    165: "L1_3_NOC_RING1_OUTGOING_3",
+    166: "L1_3_NOC_RING1_INCOMING_2",
+    167: "L1_3_NOC_RING1_INCOMING_3",
+    168: "L1_3_EXT_PACKER_2",
+    169: "L1_3_EXT_PACKER_3",
+    170: "L1_3_EXT_PACKER_4",
+    171: "L1_3_EXT_PACKER_5",
+    172: "L1_3_NOC_RING1_OUTGOING_2_GRANT",
+    173: "L1_3_NOC_RING1_OUTGOING_3_GRANT",
+    174: "L1_3_NOC_RING1_INCOMING_2_GRANT",
+    175: "L1_3_NOC_RING1_INCOMING_3_GRANT",
+    176: "L1_3_EXT_PACKER_2_GRANT",
+    177: "L1_3_EXT_PACKER_3_GRANT",
+    178: "L1_3_EXT_PACKER_4_GRANT",
+    179: "L1_3_EXT_PACKER_5_GRANT",
     # Cycles any thread is stalled (OR across threads).
     180: "ANY_THREAD_STALL",
+    181: "L1_5_UNPACKER0_EXT_IF_6",
+    182: "L1_5_UNPACKER0_EXT_IF_7",
+    183: "L1_5_UNPACKER0_EXT_IF_6_GRANT",
+    184: "L1_5_UNPACKER0_EXT_IF_7_GRANT",
+    185: "L1_0_UNPACKER_1_ECC",
+    186: "L1_1_PACKER_IF_0",
+    187: "L1_1_UNPACKER1_EXT_IF_1",
+    188: "L1_1_UNPACKER1_EXT_IF_2",
+    189: "L1_1_UNPACKER1_EXT_IF_3",
+    190: "L1_0_UNPACKER_1_ECC_GRANT",
+    191: "L1_1_PACKER_IF_0_GRANT",
+    192: "L1_1_UNPACKER1_EXT_IF_1_GRANT",
+    193: "L1_1_UNPACKER1_EXT_IF_2_GRANT",
+    194: "L1_1_UNPACKER1_EXT_IF_3_GRANT",
 }
 
 
@@ -376,7 +390,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 1 Incoming Util Median (%)",
     "NOC Ring 1 Incoming Util Max (%)",
     "NOC Ring 1 Incoming Util Avg (%)",
-    # L1 Bank 0 port 1 (arch-specific)
+    # L1 Bank 0 port 1 (Wormhole only: the shared unpacker 1 / ECC / pack1 port)
     "L1 Packer Port Util Min (%)",
     "L1 Packer Port Util Median (%)",
     "L1 Packer Port Util Max (%)",
@@ -516,11 +530,11 @@ PERF_COUNTER_CSV_HEADERS = [
     "MOVE Idle Wait T0 Median (%)",
     "MOVE Idle Wait T0 Max (%)",
     "MOVE Idle Wait T0 Avg (%)",
-    # === RISC Core L1 util ===
-    "RISC Core L1 Util Min (%)",
-    "RISC Core L1 Util Median (%)",
-    "RISC Core L1 Util Max (%)",
-    "RISC Core L1 Util Avg (%)",
+    # === L1 TDMA packer port util ===
+    "L1 TDMA Packer Port Util Min (%)",
+    "L1 TDMA Packer Port Util Median (%)",
+    "L1 TDMA Packer Port Util Max (%)",
+    "L1 TDMA Packer Port Util Avg (%)",
     # === L1 composite metrics ===
     "L1 Total Bandwidth Util Min (%)",
     "L1 Total Bandwidth Util Median (%)",
@@ -768,7 +782,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "SFPU Idle Wait T1",
         "THCON Idle Wait T0",
         "MOVE Idle Wait T0",
-        "RISC Core L1 Util",
+        "L1 TDMA Packer Port Util",
         # L1 composite metrics
         "L1 Total Bandwidth Util",
         "L1 Read vs Write Ratio",
@@ -830,6 +844,10 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
                 print(f"{stat:<12} {ops_with_data:>15} {range_str:>30} {mean_str:>12}")
 
     print("\n" + "=" * 100 + "\n")
+
+
+def _is_blackhole(device_arch):
+    return "blackhole" in str(device_arch).lower()
 
 
 def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores):
@@ -940,18 +958,18 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
-    srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
+    srca_write = get_counter_series("SRCA_WRITE_NOT_BLOCKED_PORT")
     srcb_write = get_counter_series("SRCB_WRITE_NOT_BLOCKED_PORT")
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
-    srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
-    srcb_write_avail = get_counter_series("SRCB_WRITE_AVAILABLE")
-    packer_dest_read = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+    srca_write_avail = get_counter_series("SRCA_WRITE_REQ")
+    srcb_write_avail = get_counter_series("SRCB_WRITE_REQ")
+    packer_dest_read = get_counter_series("PACKER0_DEST_READ_REQ")
     packer_busy = get_counter_series("PACKER_BUSY")
     math_instrn_started = get_counter_series("MATH_INSTRN_STARTED")
     math_instrn_available = get_counter_series("MATH_INSTRN_AVAILABLE")
-    available_math = get_counter_series("AVAILABLE_MATH")
-    fpu_instrn_available_1 = get_counter_series("FPU_INSTRN_AVAILABLE_1")
+    available_math = get_counter_series("MATH_NOT_SCOREBOARD_STALLED")
+    fpu_instrn_available_1 = get_counter_series("MATH_INSTRN_AVAILABLE_1")
 
     sfpu_util = (sfpu_counter / sfpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
     fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
@@ -989,11 +1007,13 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         math_pipe_util = pd.Series(dtype=float)
 
-    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    # Falls back to MATH_NOT_SCOREBOARD_STALLED / ref_cnt when packer unused.
     if packer_busy is not None and packer_busy.sum() > 0:
         math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif available_math is not None:
-        avail_ref = get_counter_ref_cnt("AVAILABLE_MATH") if has_counter("AVAILABLE_MATH") else None
+        avail_ref = (
+            get_counter_ref_cnt("MATH_NOT_SCOREBOARD_STALLED") if has_counter("MATH_NOT_SCOREBOARD_STALLED") else None
+        )
         if avail_ref is not None:
             math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
         else:
@@ -1049,9 +1069,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if has_counter(full_name):
             per_op_stats[f"Semaphore Full Wait T{t}"] = compute_util_metric(full_name)
 
-    if has_counter("DATA_HAZARD_STALLS_MOVD2A") and has_counter("MATH_INSTRN_AVAILABLE"):
+    if has_counter("MATH_NOT_D2S_STALLED") and has_counter("MATH_INSTRN_AVAILABLE"):
         per_op_stats["Data Hazard Stall Rate"] = compute_complement_metric(
-            "DATA_HAZARD_STALLS_MOVD2A", "MATH_INSTRN_AVAILABLE"
+            "MATH_NOT_D2S_STALLED", "MATH_INSTRN_AVAILABLE"
         )
 
     if has_counter("MATH_FIDELITY_STALL") and has_counter("MATH_INSTRN_AVAILABLE"):
@@ -1071,7 +1091,10 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Avg HF Cycles Per Instrn"] = _group_to_stat_dict(avg_hf)
 
     # === L1 Bank 0 ===
-    if has_counter("L1_0_UNPACKER_0"):
+    port1_is_unpacker = _is_blackhole(device_arch)
+    if has_counter("L1_0_UNPACKER_0") and port1_is_unpacker and has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
+        per_op_stats["L1 Unpacker Port Util"] = compute_avg_channel_util("L1_0_UNPACKER_0", "L1_0_UNPACKER_1_ECC_PACK1")
+    elif has_counter("L1_0_UNPACKER_0"):
         per_op_stats["L1 Unpacker Port Util"] = compute_util_metric("L1_0_UNPACKER_0")
     if has_counter("L1_0_TDMA_BUNDLE_0_RISC") and has_counter("L1_0_TDMA_BUNDLE_1_TRISC"):
         per_op_stats["L1 TDMA Bundle Util"] = compute_avg_channel_util(
@@ -1086,10 +1109,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1"
         )
 
-    # L1 Port 1 (arch-specific)
-    if has_counter("L1_0_UNIFIED_PACKER"):
-        per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNIFIED_PACKER")
-    elif has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
+    # Wormhole's port 1 carries pack1 traffic; on Blackhole it is a second unpacker (counted above).
+    if not port1_is_unpacker and has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
         per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNPACKER_1_ECC_PACK1")
 
     # L1 back-pressure metrics (from grant counters)
@@ -1108,22 +1129,22 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_0_NOC_RING0_INCOMING_1_GRANT",
         )
 
-    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_ACTUAL"):
+    if has_counter("SRCA_WRITE_REQ") and has_counter("SRCA_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcA Write Port Blocked Rate"] = compute_complement_metric(
-            "SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE"
+            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_REQ"
         )
-    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
+    if has_counter("SRCA_WRITE_REQ") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
         per_op_stats["SrcA Write Overwrite Blocked Rate"] = compute_complement_metric(
-            "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_AVAILABLE"
+            "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_REQ"
         )
-    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_ACTUAL"):
+    if has_counter("SRCB_WRITE_REQ") and has_counter("SRCB_WRITE_NOT_BLOCKED_OVR"):
         per_op_stats["SrcB Write Overwrite Blocked Rate"] = compute_complement_metric(
-            "SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_REQ"
         )
 
     dest_grant_name = "DEST_READ_GRANTED_0"
-    if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
-        req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+    if has_counter("PACKER0_DEST_READ_REQ") and has_counter(dest_grant_name):
+        req = get_counter_series("PACKER0_DEST_READ_REQ")
         grant = get_counter_series(dest_grant_name)
         ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
@@ -1135,9 +1156,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             avail = get_counter_series("MATH_INSTRN_AVAILABLE")
             ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
             per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
-    if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
+    if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_SCOREBOARD_STALLED"):
         avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-        not_stalled = get_counter_series("AVAILABLE_MATH")
+        not_stalled = get_counter_series("MATH_NOT_SCOREBOARD_STALLED")
         ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
@@ -1185,12 +1206,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if median_ratio > 0.1:
             ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
             per_op_stats["L1 Unpacker Backpressure"] = _group_to_stat_dict(ratio)
-    if has_counter("L1_0_UNIFIED_PACKER") and has_counter("L1_0_PORT1_GRANT"):
-        req = get_counter_series("L1_0_UNIFIED_PACKER")
-        grant = get_counter_series("L1_0_PORT1_GRANT")
-        ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["L1 Packer Port Backpressure"] = _group_to_stat_dict(ratio)
-    elif has_counter("L1_0_UNPACKER_1_ECC_PACK1") and has_counter("L1_0_PORT1_GRANT"):
+    if not port1_is_unpacker and has_counter("L1_0_UNPACKER_1_ECC_PACK1") and has_counter("L1_0_PORT1_GRANT"):
         req = get_counter_series("L1_0_UNPACKER_1_ECC_PACK1")
         grant = get_counter_series("L1_0_PORT1_GRANT")
         ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
@@ -1205,22 +1221,24 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["THCON Instrn Avail Rate T0"] = compute_util_metric("THCON_INSTRN_AVAILABLE_0")
     if has_counter("MOVE_INSTRN_AVAILABLE_0"):
         per_op_stats["MOVE Instrn Avail Rate T0"] = compute_util_metric("MOVE_INSTRN_AVAILABLE_0")
-    if has_counter("FPU_INSTRN_AVAILABLE_1"):
-        per_op_stats["MATH Instrn Avail Rate T1"] = compute_util_metric("FPU_INSTRN_AVAILABLE_1")
+    if has_counter("MATH_INSTRN_AVAILABLE_1"):
+        per_op_stats["MATH Instrn Avail Rate T1"] = compute_util_metric("MATH_INSTRN_AVAILABLE_1")
     if has_counter("UNPACK_INSTRN_AVAILABLE_0"):
         per_op_stats["UNPACK Instrn Avail Rate T0"] = compute_util_metric("UNPACK_INSTRN_AVAILABLE_0")
     if has_counter("PACK_INSTRN_AVAILABLE_2"):
         per_op_stats["PACK Instrn Avail Rate T2"] = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
 
-    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
+    if has_counter("SRCB_WRITE_REQ") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
-            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ"
         )
-    if has_counter("SRCA_WRITE_ACTUAL") and has_counter("SRCA_WRITE_AVAILABLE"):
-        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
-    if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_AVAILABLE"):
+    if has_counter("SRCA_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCA_WRITE_REQ"):
+        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric(
+            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_REQ"
+        )
+    if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_REQ"):
         per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric(
-            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ"
         )
 
     # === Packer engine granularity ===
@@ -1232,23 +1250,23 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Packer Engine 2 Util"] = compute_util_metric("PACKER_BUSY_2")
 
     # === Low priority waits ===
-    if has_counter("WAITING_FOR_MMIO_IDLE_0"):
-        per_op_stats["MMIO Idle Wait T0"] = compute_util_metric("WAITING_FOR_MMIO_IDLE_0")
+    if has_counter("WAITING_FOR_CFG_IDLE_0"):
+        per_op_stats["MMIO Idle Wait T0"] = compute_util_metric("WAITING_FOR_CFG_IDLE_0")
     if has_counter("WAITING_FOR_SFPU_IDLE_1"):
         per_op_stats["SFPU Idle Wait T1"] = compute_util_metric("WAITING_FOR_SFPU_IDLE_1")
     if has_counter("WAITING_FOR_THCON_IDLE_0"):
         per_op_stats["THCON Idle Wait T0"] = compute_util_metric("WAITING_FOR_THCON_IDLE_0")
     if has_counter("WAITING_FOR_MOVE_IDLE_0"):
         per_op_stats["MOVE Idle Wait T0"] = compute_util_metric("WAITING_FOR_MOVE_IDLE_0")
-    if has_counter("L1_1_RISC_CORE"):
-        per_op_stats["RISC Core L1 Util"] = compute_util_metric("L1_1_RISC_CORE")
+    if has_counter("L1_1_TDMA_PACKER_2"):
+        per_op_stats["L1 TDMA Packer Port Util"] = compute_util_metric("L1_1_TDMA_PACKER_2")
 
     # === L1 composite metrics ===
     if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
-        packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
+        port1_key = "L1_0_UNPACKER_1_ECC_PACK1"
         port_keys = [
             "L1_0_UNPACKER_0",
-            packer_key,
+            port1_key,
             "L1_0_TDMA_BUNDLE_0_RISC",
             "L1_0_TDMA_BUNDLE_1_TRISC",
             "L1_0_NOC_RING0_OUTGOING_0",
@@ -1262,13 +1280,15 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["L1 Total Bandwidth Util"] = _group_to_stat_dict(ratio)
 
         # L1 Read vs Write Ratio
+        port1 = get_counter_series(port1_key)
         reads = (
             get_counter_series("L1_0_UNPACKER_0")
             + get_counter_series("L1_0_NOC_RING0_OUTGOING_0")
             + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+            + (port1 if port1_is_unpacker else 0)
         )
         writes = (
-            get_counter_series(packer_key)
+            (0 if port1_is_unpacker else port1)
             + get_counter_series("L1_0_NOC_RING0_INCOMING_0")
             + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
         )
@@ -1340,7 +1360,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             f"WAITING_FOR_NONZERO_SEM_{t}",
             f"WAITING_FOR_NONFULL_SEM_{t}",
             f"WAITING_FOR_MOVE_IDLE_{t}",
-            f"WAITING_FOR_MMIO_IDLE_{t}",
+            f"WAITING_FOR_CFG_IDLE_{t}",
             f"WAITING_FOR_SFPU_IDLE_{t}",
         ]
         if has_counter(stalls_name) and all(has_counter(r) for r in reason_names):
@@ -1426,14 +1446,14 @@ def compute_device_only_metrics(
         axis=1,
     )
     # Uses _ACTUAL counters, not _AVAILABLE.
-    if "value_SRCA_WRITE_ACTUAL" in eff_pivot.columns:
+    if "value_SRCA_WRITE_NOT_BLOCKED_PORT" in eff_pivot.columns:
         eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_SRCA_WRITE_ACTUAL", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
+            lambda x: safe_div(x.get("value_SRCA_WRITE_NOT_BLOCKED_PORT", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
             axis=1,
         )
-    if "value_SRCB_WRITE_ACTUAL" in eff_pivot.columns:
+    if "value_SRCB_WRITE_NOT_BLOCKED_OVR" in eff_pivot.columns:
         eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_SRCB_WRITE_ACTUAL", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
+            lambda x: safe_div(x.get("value_SRCB_WRITE_NOT_BLOCKED_OVR", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
             axis=1,
         )
     # Falls back to dest-read grant rate when packer unused.
@@ -1456,15 +1476,17 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    # Falls back to MATH_NOT_SCOREBOARD_STALLED / ref_cnt when packer unused.
     if has_packer_busy:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)),
+            lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("value_PACKER_BUSY", 0)),
             axis=1,
         )
-    elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
+    elif "ref_cnt_MATH_NOT_SCOREBOARD_STALLED" in eff_pivot.columns:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
+            lambda x: safe_div(
+                x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("ref_cnt_MATH_NOT_SCOREBOARD_STALLED", 0)
+            ),
             axis=1,
         )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
@@ -1480,8 +1502,8 @@ def compute_device_only_metrics(
         ].mean(axis=1, skipna=True)
     eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
         lambda x: (
-            (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
-            if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
+            (x.get("value_FPU_COUNTER", 0) / x.get("value_MATH_INSTRN_AVAILABLE_1", 1) * 100)
+            if x.get("value_MATH_INSTRN_AVAILABLE_1", 0) > 0
             else nan
         ),
         axis=1,
@@ -1529,7 +1551,7 @@ def compute_device_only_metrics(
 
     def _d2a_stall_rate(x):
         valid = x.get("value_MATH_INSTRN_AVAILABLE", 0)
-        not_stalled = x.get("value_DATA_HAZARD_STALLS_MOVD2A", 0)
+        not_stalled = x.get("value_MATH_NOT_D2S_STALLED", 0)
         return max(0.0, (valid - not_stalled) / valid * 100) if valid > 0 else nan
 
     eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(_d2a_stall_rate, axis=1)
@@ -1559,10 +1581,19 @@ def compute_device_only_metrics(
     eff_pivot["Avg HF Cycles Per Instrn"] = eff_pivot.apply(_avg_hf_cycles, axis=1)
 
     # L1 Bank 0 metrics
-    eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
-        lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
-        axis=1,
-    )
+    if _is_blackhole(device_arch):
+        eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
+            lambda x: safe_div(
+                (x.get("value_L1_0_UNPACKER_0", 0) + x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)) / 2,
+                x.get("ref_cnt_L1_0_UNPACKER_0", 0),
+            ),
+            axis=1,
+        )
+    else:
+        eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
+            lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
+            axis=1,
+        )
     eff_pivot["L1 TDMA Bundle Util"] = eff_pivot.apply(
         lambda x: safe_div(
             (x.get("value_L1_0_TDMA_BUNDLE_0_RISC", 0) + x.get("value_L1_0_TDMA_BUNDLE_1_TRISC", 0)) / 2,
@@ -1599,14 +1630,12 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
-    # L1 Port 1 (arch-specific)
-    eff_pivot["L1 Packer Port Util"] = eff_pivot.apply(
-        lambda x: safe_div(
-            x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)),
-            x.get("ref_cnt_L1_0_UNIFIED_PACKER", x.get("ref_cnt_L1_0_UNPACKER_1_ECC_PACK1", 0)),
-        ),
-        axis=1,
-    )
+    # Wormhole's port 1 carries pack1 traffic; on Blackhole it is a second unpacker.
+    port1_is_unpacker = _is_blackhole(device_arch)
+    if not port1_is_unpacker:
+        eff_pivot["L1 Packer Port Util"] = eff_pivot.apply(
+            safe_util("value_L1_0_UNPACKER_1_ECC_PACK1", "ref_cnt_L1_0_UNPACKER_1_ECC_PACK1"), axis=1
+        )
 
     # L1 back-pressure
     def safe_backpressure(req0_key, req1_key, grant0_key, grant1_key):
@@ -1676,15 +1705,11 @@ def compute_device_only_metrics(
             safe_single_bp("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
             axis=1,
         )
-    packer_req_key = (
-        "value_L1_0_UNIFIED_PACKER"
-        if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
-        else "value_L1_0_UNPACKER_1_ECC_PACK1"
-    )
-    eff_pivot["L1 Packer Port Backpressure"] = eff_pivot.apply(
-        safe_single_bp(packer_req_key, "value_L1_0_PORT1_GRANT"),
-        axis=1,
-    )
+    if not port1_is_unpacker:
+        eff_pivot["L1 Packer Port Backpressure"] = eff_pivot.apply(
+            safe_single_bp("value_L1_0_UNPACKER_1_ECC_PACK1", "value_L1_0_PORT1_GRANT"),
+            axis=1,
+        )
 
     # === Per-type instruction issue efficiency ===
     def safe_ratio(num_key, den_key):
@@ -1728,7 +1753,7 @@ def compute_device_only_metrics(
         axis=1,
     )
     eff_pivot["MATH Instrn Avail Rate T1"] = eff_pivot.apply(
-        safe_util("value_FPU_INSTRN_AVAILABLE_1", "ref_cnt_FPU_INSTRN_AVAILABLE_1"),
+        safe_util("value_MATH_INSTRN_AVAILABLE_1", "ref_cnt_MATH_INSTRN_AVAILABLE_1"),
         axis=1,
     )
     eff_pivot["UNPACK Instrn Avail Rate T0"] = eff_pivot.apply(
@@ -1741,7 +1766,7 @@ def compute_device_only_metrics(
     )
 
     eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"),
+        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
@@ -1753,11 +1778,11 @@ def compute_device_only_metrics(
         axis=1,
     )
     eff_pivot["SrcB Write Overwrite Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"),
+        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_OVR", "value_SRCB_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
-        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"),
+        safe_ratio("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
@@ -1787,9 +1812,9 @@ def compute_device_only_metrics(
         )
     # Different capture groups (PACK, UNPACK), so either column can be absent; a missing numerator
     # reads as a flat 100%. Existence only, unlike the sum guard above: all-zero is a real reading.
-    if "value_AVAILABLE_MATH" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
+    if "value_MATH_NOT_SCOREBOARD_STALLED" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
         eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
+            safe_complement("value_MATH_NOT_SCOREBOARD_STALLED", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
 
@@ -1833,7 +1858,7 @@ def compute_device_only_metrics(
 
     # Low priority waits
     eff_pivot["MMIO Idle Wait T0"] = eff_pivot.apply(
-        safe_util("value_WAITING_FOR_MMIO_IDLE_0", "ref_cnt_WAITING_FOR_MMIO_IDLE_0"),
+        safe_util("value_WAITING_FOR_CFG_IDLE_0", "ref_cnt_WAITING_FOR_CFG_IDLE_0"),
         axis=1,
     )
     eff_pivot["SFPU Idle Wait T1"] = eff_pivot.apply(
@@ -1848,8 +1873,8 @@ def compute_device_only_metrics(
         safe_util("value_WAITING_FOR_MOVE_IDLE_0", "ref_cnt_WAITING_FOR_MOVE_IDLE_0"),
         axis=1,
     )
-    eff_pivot["RISC Core L1 Util"] = eff_pivot.apply(
-        safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1
+    eff_pivot["L1 TDMA Packer Port Util"] = eff_pivot.apply(
+        safe_util("value_L1_1_TDMA_PACKER_2", "ref_cnt_L1_1_TDMA_PACKER_2"), axis=1
     )
 
     # === L1 composite metrics ===
@@ -1857,11 +1882,7 @@ def compute_device_only_metrics(
         """Sum of all 8 L1_0 port req counts / (8 * ref_cnt)."""
         ports = [
             "value_L1_0_UNPACKER_0",
-            (
-                "value_L1_0_UNIFIED_PACKER"
-                if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
-                else "value_L1_0_UNPACKER_1_ECC_PACK1"
-            ),
+            "value_L1_0_UNPACKER_1_ECC_PACK1",
             "value_L1_0_TDMA_BUNDLE_0_RISC",
             "value_L1_0_TDMA_BUNDLE_1_TRISC",
             "value_L1_0_NOC_RING0_OUTGOING_0",
@@ -1877,13 +1898,15 @@ def compute_device_only_metrics(
 
     def l1_rw_ratio(x):
         """(read ports) / (write ports). Read = Unpacker + NOC Out, Write = Packer + NOC In."""
+        port1 = x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)
         reads = (
             x.get("value_L1_0_UNPACKER_0", 0)
             + x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)
             + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0)
+            + (port1 if port1_is_unpacker else 0)
         )
         writes = (
-            x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0))
+            (0 if port1_is_unpacker else port1)
             + x.get("value_L1_0_NOC_RING0_INCOMING_0", 0)
             + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
         )
@@ -1976,7 +1999,7 @@ def compute_device_only_metrics(
             f"value_WAITING_FOR_NONZERO_SEM_{t}",
             f"value_WAITING_FOR_NONFULL_SEM_{t}",
             f"value_WAITING_FOR_MOVE_IDLE_{t}",
-            f"value_WAITING_FOR_MMIO_IDLE_{t}",
+            f"value_WAITING_FOR_CFG_IDLE_{t}",
             f"value_WAITING_FOR_SFPU_IDLE_{t}",
         ]
         if stalls_col in eff_pivot.columns and all(c in eff_pivot.columns for c in reason_cols):
@@ -2081,7 +2104,7 @@ def compute_device_only_metrics(
         "SFPU Idle Wait T1",
         "THCON Idle Wait T0",
         "MOVE Idle Wait T0",
-        "RISC Core L1 Util",
+        "L1 TDMA Packer Port Util",
         # L1 composite metrics
         "L1 Total Bandwidth Util",
         "L1 Read vs Write Ratio",
