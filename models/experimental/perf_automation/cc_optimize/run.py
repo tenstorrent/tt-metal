@@ -290,7 +290,7 @@ def _model_rel_from_perf_test(perf_test) -> str:
         models/demos/multimodal/gemma3/tests/e2e/test_main_perf.py::test_main_perf
         -> models/demos/multimodal/gemma3
     """
-    s = str(perf_test or "").split("::")[0].strip()
+    s = _node_path(perf_test)
     if not s:
         return ""
     parts = Path(s).parts
@@ -298,6 +298,17 @@ def _model_rel_from_perf_test(perf_test) -> str:
         return str(Path(*parts[: parts.index("tests")]))
     # No tests/ segment: fall back to the file's own directory, which is still inside the model.
     return str(Path(s).parent)
+
+
+def _split_depth_vars(value) -> set:
+    """The variable names in a PERF_MCP_DEPTH_VARS list. Empty for anything unusable."""
+    return {v.strip() for v in str(value or "").split(",") if v.strip()}
+
+
+def _node_path(perf_test) -> str:
+    """The test FILE from a `path::case` node. The depth cache and the bridge both key on the file
+    alone, so a caller holding the fuller form has to drop the case before either will match."""
+    return str(perf_test or "").split("::")[0].strip()
 
 
 def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, kernel_log: str) -> dict:
@@ -312,6 +323,39 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     }
     if pipe.get("case"):
         env["PERF_MCP_PERF_CASE"] = pipe["case"]
+    # THE DEPTH CAP HAS TO CROSS A PROCESS BOUNDARY, AND ONLY THIS DICT CROSSES IT.
+    #
+    # before_loop works out which spelling of the layer-cap variable actually reaches the builder,
+    # and at what depth, then records it with `os.environ[...] = ...`. But discover() runs
+    # before_loop as a SUBPROCESS (`python -m agent.before_loop`), so that assignment sets the
+    # child's environment and dies when the child exits. The parent never sees it, cc_env copies a
+    # parent os.environ that never had it, and the server -- which by design inherits nothing --
+    # is handed this dict without it. The cap was computed correctly every run and applied to
+    # nothing but the child's own baseline profile.
+    #
+    # The value is already durable: the bridge writes it to the coverage cache beside the run. Read
+    # back here, where the profiling server's environment is assembled, rather than recomputed --
+    # the bridge costs device probes, and it has already paid for them.
+    #
+    # What it cost while missing: a profile runs the model UNCAPPED. That is harmless while the
+    # uncapped forward fits inside tracy's 32K source-location budget, and silent because nothing
+    # errors. On voxtral_mini_3b_2507 the model crossed that budget on 2026-09-03 -- hand-written
+    # kernels are new source locations, so the optimizer's own wins pushed it over -- and from then
+    # on every capture came back "Instrumentation failure", taking the per-stage split, the bucket
+    # shares and every ranking built on them with it.
+    _depth_env = _depth_cache_get(repo_root, _node_path(pipe.get("perf_test")))
+    if _depth_env:
+        env["PERF_MCP_PROFILE_ENV"] = json.dumps(_depth_env)
+        # AND NAME EVERY VARIABLE IT SETS, because one gate has to take the cap back off.
+        # check_full_pipeline_latency times the model at FULL depth with tracy off, so it strips the
+        # cap before measuring -- but it can only strip names it can derive: this list, plus the
+        # stage spellings it reads from the model. The bridge may cap per stage as well as globally,
+        # and a stage name it fails to derive is a cap left on, which would time a two-layer model
+        # and report it as the whole one (measured on this model 2026-08-21: 2.47 ms/token against a
+        # true 17.96). Listing the keys makes that independent of whether the derivation works.
+        env["PERF_MCP_DEPTH_VARS"] = ",".join(
+            sorted(set(_depth_env) | _split_depth_vars(env.get("PERF_MCP_DEPTH_VARS")))
+        )
     # THE STATE DIRECTORY MUST CROSS THE PROCESS BOUNDARY. This env dict is explicit -- the server does
     # NOT inherit os.environ -- so a redirect set here would apply to the orchestrator only. The
     # orchestrator READS what the server WRITES (summary.py reads the 1cq full-pipeline baseline that
@@ -5168,7 +5212,12 @@ def optimize_pipeline(
     except Exception:  # noqa: BLE001
         _depth_knob = {}
     if _depth_knob:
-        _cov_env["PERF_MCP_DEPTH_VARS"] = ",".join(sorted(_depth_knob))
+        # UNION, not assignment: _mcp_config may already have listed the per-stage variables the
+        # bridge capped, and this knows only the global one. Overwriting drops the rest, and a
+        # dropped name is a cap the full-depth gate cannot take back off.
+        _cov_env["PERF_MCP_DEPTH_VARS"] = ",".join(
+            sorted(set(_depth_knob) | _split_depth_vars(_cov_env.get("PERF_MCP_DEPTH_VARS")))
+        )
         print(f"  [optimize/cc] depth knob(s): {', '.join(sorted(_depth_knob))}")
     _cov, _cov_facts = _coverage_layers(
         repo_root,
