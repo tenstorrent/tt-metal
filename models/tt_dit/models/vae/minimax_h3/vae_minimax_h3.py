@@ -507,7 +507,8 @@ class MiniMaxH3Vae:
 
     def _decoder_subfolder(self) -> str:
         num_frames, height, width = self.decoder.latent_shape
-        return f"vae_decoder_t{num_frames}_h{height}_w{width}"
+        variant = "_pxdenorm" if self.pixel_denorm is not None else ""
+        return f"vae_decoder_t{num_frames}_h{height}_w{width}{variant}"
 
     def _state_for(self, module) -> dict[str, torch.Tensor]:
         state = self._decoder_state if module is self.decoder else self._encoder_state

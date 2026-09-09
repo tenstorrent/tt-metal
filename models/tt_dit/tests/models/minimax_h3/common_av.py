@@ -249,7 +249,19 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         return paths
 
     silent = directory / f"{stem}_silent.mp4"
-    num_frames, height, width, _ = frames.shape
+    if frames.ndim == 3:
+        # Planar yuv420p from vae_output_type="yuv420": (F, H*3//2, W) uint8.
+        _, planar_height, width = frames.shape
+        height = planar_height * 2 // 3
+        pix_fmt = "yuv420p"
+        payload = np.ascontiguousarray(frames, dtype=np.uint8)
+    elif frames.ndim == 4:
+        _, height, width, channels = frames.shape
+        assert channels == 3, f"rgb frames expected (F, H, W, 3), got {frames.shape}"
+        pix_fmt = "rgb24"
+        payload = frames
+    else:
+        raise ValueError(f"frames must be (F, H, W, 3) rgb or (F, H*3//2, W) yuv, got {frames.shape}")
     subprocess.run(
         [
             exe,
@@ -259,7 +271,7 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
             "-f",
             "rawvideo",
             "-pix_fmt",
-            "rgb24",
+            pix_fmt,
             "-s",
             f"{width}x{height}",
             "-r",
@@ -276,7 +288,7 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
             "yuv420p",
             str(silent),
         ],
-        input=frames.tobytes(),
+        input=payload.tobytes(),
         check=True,
         capture_output=True,
     )
@@ -1076,7 +1088,7 @@ def run_user_generations(
             duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
             stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
             write_artifacts(
-                to_uint8_frames(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
             )
         index += 1
 
@@ -1145,9 +1157,20 @@ def run_user_ref_generations(
             kinds = "_".join(reference.kind for reference in references)
             stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{index}_{kinds}"
             write_artifacts(
-                to_uint8_frames(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
             )
         index += 1
+
+
+def frames_for_export(output) -> np.ndarray:
+    """Bytes the ffmpeg rawvideo pipe wants: planar yuv420p, or packed rgb24 from float RGB."""
+    if getattr(output, "video_format", "rgb_float") == "yuv420":
+        video = output.video
+        assert (
+            isinstance(video, np.ndarray) and video.ndim == 3
+        ), f"yuv420 expected (F, H*3//2, W) uint8, got {type(video)} {getattr(video, 'shape', None)}"
+        return np.ascontiguousarray(video, dtype=np.uint8)
+    return to_uint8_frames(output)
 
 
 def to_uint8_frames(output) -> np.ndarray:
@@ -1156,6 +1179,22 @@ def to_uint8_frames(output) -> np.ndarray:
     assert video.ndim == 5 and video.shape[0] == 1, f"unexpected video shape {tuple(video.shape)}"
     frames = video[0].permute(1, 2, 3, 0).clamp(0, 1).mul(255).round().to(torch.uint8)
     return frames.cpu().numpy()
+
+
+def assert_generation_ok(output, expected_frames: int) -> None:
+    """Frame count plus a layout check that does not assume `video` is a float tensor."""
+    assert output.num_frames == expected_frames, f"generated {output.num_frames} frames, expected {expected_frames}"
+    assert torch.isfinite(output.audio).all()
+    if getattr(output, "video_format", "rgb_float") == "yuv420":
+        video = output.video
+        assert (
+            isinstance(video, np.ndarray) and video.dtype == np.uint8
+        ), f"yuv420 video must be uint8 ndarray, got {type(video)} {getattr(video, 'dtype', None)}"
+        assert (
+            video.ndim == 3 and video.shape[0] == expected_frames
+        ), f"yuv420 expected (F, H*3//2, W) with F={expected_frames}, got {video.shape}"
+        return
+    assert torch.isfinite(output.video).all()
 
 
 def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17, height: int = 0, width: int = 0):
