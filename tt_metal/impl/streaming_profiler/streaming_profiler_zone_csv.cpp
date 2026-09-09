@@ -7,8 +7,11 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <span>
 #include <string>
 #include <string_view>
+
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -54,6 +57,10 @@ uint32_t ZoneCsvConsumer::name_hash(std::string_view name) {
     return (h & 0x7FFFFFFu) | 0x8000000u;  // outside the legacy sync-id range
 }
 
+ZoneCsvConsumer::ZoneCsvConsumer(const std::string& path) : path_(path), f_(std::fopen(path.c_str(), "w")) {
+    TT_FATAL(f_ != nullptr, "streaming profiler: cannot open {} for the zone CSV", path);
+}
+
 ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
     Row r;
     r.chip = core.chip_id;
@@ -66,50 +73,50 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
 }
 
 void ZoneCsvConsumer::operator()(const Batch& batch) {
-    dropped_ += batch.dropped;
-    if (freq_mhz_ == 0.0 && !batch.clocks.empty()) {
-        freq_mhz_ = batch.clocks.front().frequency_ghz * 1000.0;
+    dropped_ += batch.dropped();
+    if (freq_mhz_ == 0.0) {
+        if (!batch.zones().empty()) {
+            freq_mhz_ = batch.zones().front().frequency_ghz() * 1000.0;
+        } else if (!batch.timestamped_data().empty()) {
+            freq_mhz_ = batch.timestamped_data().begin()->frequency_ghz() * 1000.0;
+        }
     }
-    for (const api::Zone& z : batch.zones) {
+    for (const api::Zone& z : batch.zones()) {
         // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
-        const uint32_t id = name_hash(z.site.name);
+        const uint32_t id = name_hash(z.site().name);
         for (int end = 0; end < 2; end++) {
-            Row& r = rows_.emplace_back(row_for(z.core));
+            Row& r = rows_.emplace_back(row_for(z.core()));
             r.timer_id = id;
-            r.timestamp = end ? z.end_timestamp : z.start_timestamp;
-            r.prog = z.runtime_id;
-            r.zone_name = z.site.name;
+            r.timestamp = end ? z.end_timestamp() : z.start_timestamp();
+            r.prog = z.runtime_id();
+            r.zone_name = z.site().name;
             r.type = end ? "ZONE_END" : "ZONE_START";
         }
     }
-    for (const api::TimestampedData& d : batch.timestamped_data) {
+    for (const api::TimestampedData& d : batch.timestamped_data()) {
         // Sync events only: the reader interprets `data` as a CB id or semaphore address.
-        const uint32_t legacy = sync_legacy_id(d.site.name);
+        const uint32_t legacy = sync_legacy_id(d.site().name);
         if (legacy == 0) {
             continue;
         }
-        if (d.payload.empty()) {
+        const std::span<const uint64_t> payload = d.payload();
+        if (payload.empty()) {
             empty_payloads_++;  // a semaphore event at address 0 would invent a dependency
             continue;
         }
-        Row& r = rows_.emplace_back(row_for(d.core));
+        Row& r = rows_.emplace_back(row_for(d.core()));
         r.timer_id = legacy;
-        r.timestamp = d.timestamp;
-        r.data = d.payload.front();
+        r.timestamp = d.timestamp();
+        r.data = payload.front();
         r.type = "TS_DATA";
     }
 }
 
-void ZoneCsvConsumer::write_csv(const std::string& path) const {
-    FILE* f = std::fopen(path.c_str(), "w");
-    if (f == nullptr) {
-        std::fprintf(stderr, "[streaming profiler zone-csv] cannot open %s\n", path.c_str());
-        return;
-    }
+void ZoneCsvConsumer::write_csv() {
+    FILE* const f = f_;
     // core_x/core_y are the NoC 0 coordinate, as in the device profiler log this file mirrors, so a reader of that
     // log needs no special case; the logical coordinate rides in two trailing columns.
-    std::fprintf(
-        f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_ > 0.0 ? freq_mhz_ : 1000.0);
+    std::fprintf(f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_);
     std::fprintf(
         f,
         "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
@@ -142,7 +149,7 @@ void ZoneCsvConsumer::write_csv(const std::string& path) const {
         stderr,
         "[streaming profiler zone-csv] wrote %zu row(s) to %s (dropped records: %llu, events with no payload: %llu)\n",
         rows_.size(),
-        path.c_str(),
+        path_.c_str(),
         static_cast<unsigned long long>(dropped_),
         static_cast<unsigned long long>(empty_payloads_));
 }

@@ -22,9 +22,9 @@ namespace tt::tt_metal::streaming_profiler {
 
 class Service;
 
-// The built-in Tracy sink: subscribes to every channel and pushes each record onto Tracy's device timeline, one
-// context per (chip, core). Constructing it subscribes; destroying it unsubscribes. Everything after construction
-// runs on the subscription's thread.
+// The built-in Tracy sink: registers for every record type and pushes each record onto Tracy's device timeline, one
+// context per (chip, core). Constructing it registers; destroying it unregisters. Everything after construction
+// runs on the callback's thread.
 class TracySink {
 public:
     explicit TracySink(Service& service);
@@ -33,14 +33,14 @@ public:
     TracySink& operator=(const TracySink&) = delete;
 
 private:
-    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::Channel::All>;
+    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>;
     using Core = experimental::streaming_profiler::Core;
     struct Lane {
         TracyTTCtx ctx = nullptr;
         uint32_t thread = 0;
         uint32_t risc = 0;
     };
-    // One Tracy context per core; each RISC's timeline row is created and named on first use.
+    // Each RISC's timeline row is created and named on first use.
     struct CoreEntry {
         TracyTTCtx ctx = nullptr;
         std::array<uint32_t, 5> thread{};
@@ -52,7 +52,7 @@ private:
         const void* srcloc = nullptr;
     };
 
-    void on_batch(const Batch& batch);
+    void on_batch(const Batch& batch, uint64_t capture);
     // Records are placed by their steady_clock time through a continuous piecewise-linear map onto Tracy's timeline:
     // a fresh segment per capture, then one per second whose slope is the two clocks' rate ratio measured over the
     // whole baseline since construction. Continuity keeps order and containment exact across segments.
@@ -83,9 +83,7 @@ private:
 
     Service& service_;
     ConsumerHandle handle_ = 0;
-    // The capture the map holds for, by its clock set; a new capture starts a new map.
-    size_t capture_clocks_ = 0;
-    int64_t capture_anchor_ = 0;
+    uint64_t capture_ = 0;      // the capture the map holds for; a new one starts a new map
     int64_t anchor_tracy_ = 0;  // Tracy timer at construction; every context's cpuTime
     Probe base_{};              // taken at construction; every slope is measured against it
     std::vector<Segment> segments_;
@@ -93,7 +91,7 @@ private:
     uint64_t lane_key_ = ~uint64_t{0};
     Lane lane_hit_;
     std::unordered_map<uint64_t, CoreEntry> cores_;
-    // Keyed by the name's address: a subscription's name strings never move or die while it lives.
+    // Keyed by the name's address: a callback's name strings never move or die while it lives.
     std::vector<SrclocEntry> srcloc_table_;  // open addressing, power-of-two size, at most half full
     size_t srcloc_count_ = 0;
     std::unordered_map<std::string, const void*> srclocs_;

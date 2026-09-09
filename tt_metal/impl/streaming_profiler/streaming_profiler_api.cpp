@@ -4,191 +4,111 @@
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <deque>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "impl/streaming_profiler/spsc_marker_decode.hpp"
+#include <tt_stl/indestructible.hpp>
+
+#include "hostdevcommon/profiler_zone_id.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "llrt/zone_meta.hpp"
 
-namespace tt::tt_metal::experimental::streaming_profiler {
+namespace api = tt::tt_metal::experimental::streaming_profiler;
+
+namespace tt::tt_metal::experimental::streaming_profiler::detail {
+std::atomic<const SiteTu*> g_site_tus[kZoneTuCount];
+}
+
+namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-namespace internal = tt::tt_metal::streaming_profiler;
+static_assert(api::detail::kZoneLocalBits == TT_ZONE_LOCAL_BITS);
+static_assert(api::detail::kZoneTuCount == TT_ZONE_TU_COUNT);
+static_assert(TT_ZONE_STALL_ID == (TT_ZONE_RESERVED_TU << TT_ZONE_LOCAL_BITS));
 
-Core core_of(const internal::LaneInfo& li) {
-    return Core{
-        .logical = CoreCoord(li.logical_x, li.logical_y),
-        .physical = CoreCoord(li.physical_x, li.physical_y),
-        .chip_id = li.chip_id,
-        .risc = static_cast<Risc>(li.risc)};
-}
+constexpr api::Site kStallSite{.name = api::kStallZoneName};
+constexpr const api::Site* kStallSites[1] = {&kStallSite};
+constexpr api::detail::SiteTu kStallTu{kStallSites};
 
-// Per-subscription mirror of the process-wide per-ELF zone-name registry; a subscription runs on its own thread, so
-// lookups need no lock. refresh() once per batch, lookup() per record. Names register at load, strictly before a
-// binary can emit, so a miss is a binary without .tt_zone_meta or a tu_id collision. The strings never move or die
-// while the subscription lives; the Tracy sink keys on their addresses.
-class ZoneNameMirror {
+// Builds the tables behind api::detail::site_of from the zone-name registry as ELFs load. Nothing is ever freed: a
+// record may hold a Site's address for the life of the process, and a reader may still be walking a replaced table.
+class SiteTables {
 public:
-    struct Entry {
-        std::string name;
-        std::string file;
-        uint32_t line = 0;
-    };
-
-    void refresh() {
-        std::vector<tt::llrt::ZoneMetaEntry> delta;
-        cursor_ = tt::llrt::ZoneMetaRegistry::instance().additions_since(cursor_, delta);
-        for (auto& e : delta) {
-            sites_.emplace(e.zone_id, Entry{std::move(e.name), std::move(e.file), e.line});
+    void add(std::span<const tt::llrt::ZoneMetaEntry* const> entries) {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::map<uint32_t, std::vector<const api::Site*>> grown;
+        for (const tt::llrt::ZoneMetaEntry* e : entries) {
+            const uint32_t tu = TT_ZONE_TU_OF(e->zone_id), local = TT_ZONE_LOCAL_OF(e->zone_id);
+            auto [it, fresh] = grown.try_emplace(tu);
+            if (fresh) {
+                if (const api::detail::SiteTu* cur = api::detail::g_site_tus[tu].load(std::memory_order_relaxed)) {
+                    it->second.assign(cur->sites.begin(), cur->sites.end());
+                }
+            }
+            if (local >= it->second.size()) {
+                it->second.resize(local + 1, nullptr);
+            }
+            if (it->second[local] == nullptr) {
+                it->second[local] =
+                    &sites_.emplace_back(api::Site{.name = e->name, .location = {.file = e->file, .line = e->line}});
+            }
         }
-    }
-    Site lookup(uint32_t id) const {
-        const auto it = sites_.find(id);
-        if (it == sites_.end()) {
-            return {};
+        for (auto& [tu, v] : grown) {
+            auto arr = std::make_unique<const api::Site*[]>(v.size());
+            std::copy(v.begin(), v.end(), arr.get());
+            auto t = std::make_unique<api::detail::SiteTu>(
+                api::detail::SiteTu{std::span<const api::Site* const>(arr.get(), v.size())});
+            api::detail::g_site_tus[tu].store(t.get(), std::memory_order_release);
+            arrays_.push_back(std::move(arr));
+            tus_.push_back(std::move(t));
         }
-        return Site{.name = it->second.name, .location = {.file = it->second.file, .line = it->second.line}};
     }
 
 private:
-    std::unordered_map<uint32_t, Entry> sites_;
-    uint32_t cursor_ = 0;
+    std::mutex mu_;
+    std::deque<api::Site> sites_;
+    std::vector<std::unique_ptr<const api::Site*[]>> arrays_;
+    std::vector<std::unique_ptr<api::detail::SiteTu>> tus_;
 };
 
 }  // namespace
 
-// One per subscription, driven from that subscription's consumer thread, so no locking. Unsubscribed channels are
-// skipped before any decoding.
-class Adapter {
-public:
-    Adapter(Channel channels, std::function<void(const Batch<Channel::All>&)> cb) :
-        channels_(channels), cb_(std::move(cb)) {}
-
-    void operator()(const internal::RecordBatch& batch) {
-        using T = internal::RecType;
-        names_.refresh();
-        zones_.clear();
-        events_.clear();
-        data_.clear();
-        arena_.clear();
-        // Every Ext and Cont record adds at most one payload element, so the arena never reallocates under the
-        // spans handed out below.
-        arena_.reserve(batch.records.size());
-        const internal::CaptureContext& ctx = *batch.context;
-        const std::span<const internal::Rec> recs = batch.records;
-        for (size_t i = 0; i < recs.size(); i++) {
-            const internal::Rec& r = recs[i];
-            const internal::LaneInfo& lane = ctx.devices[r.meta.dev].lanes[r.meta.lane];
-            const Clock& clock = batch.clocks[r.meta.dev];
-            switch (r.meta.type) {
-                case T::Zone:
-                    if (detail::has(channels_, Channel::Zones)) {
-                        const bool is_stall = r.id == profiler::kSpscStallZoneId;
-                        zones_.push_back(Zone{
-                            .site = is_stall ? Site{.name = kStallZoneName} : names_.lookup(r.id),
-                            .core = core_of(lane),
-                            .clock = std::cref(clock),
-                            .start_timestamp = r.data.zone.start,
-                            .end_timestamp = r.data.zone.start + r.data.zone.duration,
-                            .runtime_id = r.prog,
-                            .stall = is_stall});
-                    }
-                    break;
-                case T::Event:
-                    if (detail::has(channels_, Channel::Events)) {
-                        events_.push_back(Event{
-                            .site = names_.lookup(r.id),
-                            .core = core_of(lane),
-                            .clock = std::cref(clock),
-                            .timestamp = r.data.ts,
-                            .runtime_id = r.prog});
-                    }
-                    break;
-                case T::Data: {
-                    // The head's Ext (payload words 0-1 and the word count) and Conts follow it directly: the decoder
-                    // writes the group in one call and batches split only between frames.
-                    const size_t first = arena_.size();
-                    size_t j = i + 1;
-                    if (j < recs.size() && recs[j].meta.type == T::Ext) {
-                        if (recs[j].id != 0) {
-                            arena_.push_back(recs[j].data.ext);
-                        }
-                        for (j++; j < recs.size() && recs[j].meta.type == T::Cont; j++) {
-                            arena_.push_back(recs[j].data.payload);
-                        }
-                    }
-                    if (detail::has(channels_, Channel::TimestampedData)) {
-                        data_.push_back(TimestampedData{
-                            .site = names_.lookup(r.id),
-                            .core = core_of(lane),
-                            .payload = std::span<const uint64_t>(arena_.data() + first, arena_.size() - first),
-                            .clock = std::cref(clock),
-                            .timestamp = r.data.ts,
-                            .runtime_id = r.prog});
-                    }
-                    i = j - 1;
-                    break;
-                }
-                case T::Ext:
-                case T::Cont: break;  // consumed with their Data head
-            }
-        }
-        if (zones_.empty() && events_.empty() && data_.empty() && batch.dropped_delta == 0 && batch.stall_delta == 0) {
-            return;
-        }
-        Batch<Channel::All> full;
-        full.zones = zones_;
-        full.timestamped_data = data_;
-        full.events = events_;
-        full.clocks = batch.clocks;
-        full.dropped = batch.dropped_delta;
-        full.stall_count = batch.stall_delta;
-        cb_(full);
-    }
-
-private:
-    const Channel channels_;
-    const std::function<void(const Batch<Channel::All>&)> cb_;
-    ZoneNameMirror names_;
-    std::vector<Zone> zones_;
-    std::vector<Event> events_;
-    std::vector<TimestampedData> data_;
-    std::vector<uint64_t> arena_;  // the batch's payloads, which data_'s spans point into
-};
-
-}  // namespace tt::tt_metal::experimental::streaming_profiler
-
-namespace tt::tt_metal::streaming_profiler {
-
-RecordCallback make_public_adapter(
-    experimental::streaming_profiler::Channel channels,
-    std::function<void(const experimental::streaming_profiler::Batch<experimental::streaming_profiler::Channel::All>&)>
-        callback) {
-    auto adapter = std::make_shared<experimental::streaming_profiler::Adapter>(channels, std::move(callback));
-    return [adapter](const RecordBatch& b) { (*adapter)(b); };
+void init_site_registry() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        api::detail::g_site_tus[TT_ZONE_RESERVED_TU].store(&kStallTu, std::memory_order_release);
+        static ttsl::Indestructible<SiteTables> tables;
+        tt::llrt::ZoneMetaRegistry::instance().set_listener(
+            [](std::span<const tt::llrt::ZoneMetaEntry* const> entries) { tables.get().add(entries); });
+    });
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
 
 namespace tt::tt_metal::experimental::streaming_profiler {
 
-SubscriptionHandle detail::subscribe(
-    std::string_view name, Channel channels, std::function<void(const Batch<Channel::All>&)> callback) {
+namespace internal = tt::tt_metal::streaming_profiler;
+
+CallbackHandle detail::register_callback(
+    std::string_view name, std::function<void(const Batch<RecordType::All>&)> callback) {
     static std::atomic<uint32_t> anonymous{0};
-    const std::string label = name.empty() ? "subscription-" + std::to_string(++anonymous) : std::string(name);
-    return internal::service().add_consumer(label, internal::make_public_adapter(channels, std::move(callback)));
+    const std::string label = name.empty() ? "callback-" + std::to_string(++anonymous) : std::string(name);
+    return internal::service().add_consumer(
+        label, [cb = std::move(callback)](const Batch<RecordType::All>& b, uint64_t) { cb(b); });
 }
 
-void Unsubscribe(SubscriptionHandle handle) { internal::service().remove_consumer(handle); }
+void UnregisterCallback(CallbackHandle handle) { internal::service().remove_consumer(handle); }
 
 bool IsActive() { return internal::service().is_active(); }
 

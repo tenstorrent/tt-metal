@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -71,12 +72,13 @@ int main(int argc, char** argv) {
         std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
     } totals;
     using experimental::streaming_profiler::Batch;
-    using experimental::streaming_profiler::Channel;
-    const auto sub = experimental::streaming_profiler::Subscribe("zones-example", [&](const Batch<Channel::All>& b) {
-        totals.zones += b.zones.size();
-        totals.points += b.events.size() + b.timestamped_data.size();
-        totals.stalls += b.stall_count;
-    });
+    using experimental::streaming_profiler::RecordType;
+    const auto sub =
+        experimental::streaming_profiler::RegisterCallback("zones-example", [&](const Batch<RecordType::All>& b) {
+            totals.zones += b.zones().size();
+            totals.points += b.events().size() + std::ranges::distance(b.timestamped_data());
+            totals.stalls += b.stall_count();
+        });
 
     const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
@@ -199,7 +201,7 @@ int main(int argc, char** argv) {
         }
     }
     mesh_device->close();
-    experimental::streaming_profiler::Unsubscribe(sub);
+    experimental::streaming_profiler::UnregisterCallback(sub);
     printf(
         "[streaming profiler zones] subscriber saw %llu zones, %llu points, %llu stalls\n",
         (unsigned long long)totals.zones.load(),

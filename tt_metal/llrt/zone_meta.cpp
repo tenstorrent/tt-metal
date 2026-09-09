@@ -5,12 +5,15 @@
 #include "zone_meta.hpp"
 
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/indestructible.hpp>
 
 #include "hostdevcommon/profiler_zone_id.h"
 #include "tt_elffile.hpp"
@@ -32,17 +35,17 @@ static_assert(
 struct State {
     mutable std::shared_mutex mtx;
     std::unordered_set<std::string> ingested;
-    std::vector<ZoneMetaEntry> log;  // append-only; the consumer's delta source
+    std::deque<ZoneMetaEntry> log;  // append-only; the listener keeps pointers into it
     std::unordered_map<uint32_t, uint32_t> id_to_log_idx;
+    ZoneMetaRegistry::Listener listener;
     uint64_t collisions = 0;
-    uint64_t records = 0;
     uint64_t foreign_sections = 0;
     bool collision_logged = false;
 };
 
 State& state() {
-    static State s;
-    return s;
+    static ttsl::Indestructible<State> s;
+    return s.get();
 }
 
 // Resolve a device VMA in .tt_zone_str to a string inside the mapped section, rebased by the section's own
@@ -134,8 +137,8 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
     if (skipped_foreign) {
         s.foreign_sections++;
     }
+    std::vector<const ZoneMetaEntry*> added;
     for (auto& e : parsed) {
-        s.records++;
         auto it = s.id_to_log_idx.find(e.zone_id);
         if (it != s.id_to_log_idx.end()) {
             const ZoneMetaEntry& prev = s.log[it->second];
@@ -163,18 +166,25 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
             continue;  // first writer wins: a name never changes under a consumer that already read it
         }
         s.id_to_log_idx.emplace(e.zone_id, static_cast<uint32_t>(s.log.size()));
-        s.log.push_back(std::move(e));
+        added.push_back(&s.log.emplace_back(std::move(e)));
+    }
+    if (s.listener && !added.empty()) {
+        s.listener(added);
     }
 }
 
-uint32_t ZoneMetaRegistry::additions_since(uint32_t from, std::vector<ZoneMetaEntry>& out) const {
-    const State& s = state();
-    std::shared_lock rd(s.mtx);
-    const uint32_t end = static_cast<uint32_t>(s.log.size());
-    for (uint32_t i = from; i < end; i++) {
-        out.push_back(s.log[i]);
+void ZoneMetaRegistry::set_listener(Listener listener) {
+    State& s = state();
+    std::unique_lock wr(s.mtx);
+    std::vector<const ZoneMetaEntry*> all;
+    all.reserve(s.log.size());
+    for (const ZoneMetaEntry& e : s.log) {
+        all.push_back(&e);
     }
-    return end;
+    if (!all.empty()) {
+        listener(all);
+    }
+    s.listener = std::move(listener);
 }
 
 uint64_t ZoneMetaRegistry::collisions() const {
@@ -183,10 +193,10 @@ uint64_t ZoneMetaRegistry::collisions() const {
     return s.collisions;
 }
 
-ZoneMetaRegistry::Stats ZoneMetaRegistry::stats() const {
+uint64_t ZoneMetaRegistry::foreign_sections() const {
     const State& s = state();
     std::shared_lock rd(s.mtx);
-    return Stats{static_cast<uint64_t>(s.ingested.size()), s.records, s.foreign_sections};
+    return s.foreign_sections;
 }
 
 }  // namespace tt::llrt

@@ -49,14 +49,20 @@ enum SpscControlBuffer {
     SPSC_RING_HEAD_0 = 0,
     // [PROFILER_SPSC_MAX_RISC, 2*): ring tail per RISC, producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
+    // Per Tensix RISC, the timer high word and runtime id in effect at the published tail, for a decoder reseeding a
+    // lane after a loss. The producer stores its tail, fences, then the state, so a reader that observes the state
+    // no later than the tail never sees a value the frame's words do not already carry inline. They live in the
+    // tails' 64 B block (words 16..31), in the words no Tensix RISC owns -- heads 16..23 and tails 29..30 -- so the
+    // relay's one 64 B read takes state and tails in a single L1 access. Runtime ids: spsc_state_prog_word.
+    SPSC_STATE_TIMER_0 = 16,
+    SPSC_STATE_PROG_0 = 21,
     // Host->kernel arm: while set a producer blocks on a full ring, because a relay is draining this core; while
     // clear it proceeds and overwrites. The host clears it on every Tensix core of the device at session start
     // (this backend does not touch the firmware) and sets it only on the cores its relays serve, so a core nobody
     // drains (dispatch cores, whose rings fill one launch at a time across processes) can never park in the stall
     // path and wedge wait_until_cores_done() at device close.
     PROFILER_ARMED = 2 * PROFILER_SPSC_MAX_RISC,
-    // NoC coords packed (y << 16) | x, written once by BRISC FW at init. Coords, not the flat id: the flat id is a
-    // dense rank over a sorted core map with no positional formula, computable only host-side.
+    // Reserved; the core's NoC coordinate reaches the wire from the host's core list via the relay (SPSC_PREFIX_XY).
     SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
     // Per-RISC count of full-ring blocks, written in the stall path and read by the host from L1 at teardown;
     // counting decoded stall markers would undercount, since a marker can be dropped between the relay frame and
@@ -65,6 +71,10 @@ enum SpscControlBuffer {
     SPSC_STALL_COUNT_MAX = 8,
     SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
 };
+// Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
+constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
+    return risc < 3 ? SPSC_STATE_PROG_0 + risc : SPSC_RING_TAIL_0 + PROFILER_SPSC_TENSIX_RISC + (risc - 3);
+}
 
 // Bounds the SPSC backend's whole control block against the DRAM profiler's L1 control vector, which it
 // overlays. Deliberately not asserted on DRAM_PROFILER_ADDRESS_T2_0: that entry is already out of bounds
@@ -73,6 +83,11 @@ enum SpscControlBuffer {
 static_assert(
     SPSC_CONTROL_END <= PROFILER_L1_CONTROL_VECTOR_SIZE,
     "SPSC/drainer control layout overflows the profiler L1 control vector");
+static_assert(
+    PROFILER_SPSC_TENSIX_RISC == 5 && SPSC_STATE_TIMER_0 >= PROFILER_SPSC_TENSIX_RISC &&
+        SPSC_STATE_TIMER_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_STATE_PROG_0 &&
+        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 && spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < 32,
+    "lane state must fill the unowned words of the tails' 64 B block");
 
 // Host->relay stop word: quiesce drains everything with every wait still holding, release is the kill
 // switch that abandons the waits and hands the NIU back.
@@ -95,40 +110,34 @@ static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 // enumerator on the DRAM profiler's PacketTypes; it never belonged to that wire.
 static constexpr std::uint32_t SPSC_TYPE_STICKY_META = 6;
 
-// SPSC span frame, the relay wire format: a control block (identity from SPSC_CORE_XY, progress from the heads,
-// extent from the tails) followed by the ring words it describes; the relay injects nothing of its own.
+// SPSC span frame, the relay wire format: a control block (identity from the host-seeded coordinate, progress from
+// the heads, extent from the tails) followed by the ring words it describes; the relay injects nothing of its own.
 //
 //   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits are layout flags
 //   [1]                       payload_words = control block + pack pads + shipped ring words
-//   [2 .. PREFIX)             zero
-//   [PREFIX .. +CONTROL)      packed frame: the SPSC_SPAN_WIRE_CTRL_WORDS control block; raw frame: the
-//                             worker's whole 64-word control vector
+//   [2 .. 2+RISC)             ring head each RISC's run starts at, relay-written
+//   [7]                       the core's NoC coordinate (y << 16 | x), relay-written
+//   [PREFIX .. +CONTROL)      the SPSC_SPAN_WIRE_CTRL_WORDS control block
 //   [.. +payload)             per RISC in ascending order with a live run: spsc_span_pack_pad() skipped words,
 //                             then the run, ring wrap resolved into a flat array
 //   [.. frame_words)          skipped words up to a 64 B socket page
 //
-// The host recomputes the geometry from the control block (per RISC, run = spsc_span_live(head, tail) ending
-// at word counter tail), so the wire carries no lane tags, run lengths or core id. The NIU gathers each live
+// The host recomputes the geometry from the control block (per RISC, the run is head..tail), so the wire carries
+// no lane tags, run lengths or core id. The NIU gathers each live
 // window straight into the host FIFO, and a NoC write mis-delivers a transfer whose destination is not
 // congruent to the source modulo NOC_PCIE_WRITE_ALIGNMENT_BYTES (16 B), so each run is preceded by
-// spsc_span_pack_pad() skipped words, never written; the host reads past them. The 16-word prefix puts the
-// control block at 64 B and the payload at 320 B, both L1_ALIGNMENT multiples.
-constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
+// spsc_span_pack_pad() skipped words, never written; the host reads past them. The 8-word prefix puts the
+// control block at 32 B and the payload at 96 B, both NoC-alignment multiples.
+constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 8;
 // Wire type code. Must equal PP_BULK_SPAN in tt_metal/impl/streaming_profiler/spsc_packet.h, which is plain C and
 // cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
 // Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in spsc_packet.h).
 constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
-// Socket page granularity in words; frames pad up to a whole number. Larger pages concentrate the same credit
-// wait into stalls long enough to miss the ring-fill deadline.
+// Socket page granularity in words; frames pad up to a whole number. 64 B is the host socket's PCIe alignment (its
+// smallest legal page); larger pages concentrate the same credit wait into stalls long enough to miss the ring-fill
+// deadline.
 constexpr static std::uint32_t SPSC_SPAN_PAGE_WORDS = 16;
-
-// Live words one RISC contributes. Head and tail are monotonic, so the subtraction is wrap-safe; a run wider
-// than the ring means a torn snapshot and is clamped here and counted by the caller.
-constexpr std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
-    const std::uint32_t run = tail - head;
-    return run > cap ? cap : run;
-}
 
 // NoC L1->PCIe write congruence quantum (NOC_PCIE_WRITE_ALIGNMENT_BYTES), in words.
 constexpr static std::uint32_t SPSC_SPAN_PACK_ALIGN_WORDS = 4;
@@ -143,20 +152,40 @@ constexpr std::uint32_t spsc_span_pack_pad(std::uint32_t start_counter, std::uin
 // split: the one-read image saves a NoC issue at the saturation boundary, but at sustained rates it inflates
 // egress by the remainder. Both sides derive this from (start, extent) alone; the wire carries no flag.
 constexpr static std::uint32_t SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS = 64;
+static_assert(
+    (PROFILER_L1_VECTOR_SIZE & (PROFILER_L1_VECTOR_SIZE - 1)) == 0,
+    "relay and decoder mask ring offsets with PROFILER_L1_VECTOR_SIZE - 1");
 constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, std::uint32_t ring_cap) {
     return (start & (ring_cap - 1u)) + extent > ring_cap && ring_cap - extent <= SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
 }
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
 
-// Control block of a packed frame: just the words the decoder walks. The L1 vector is 64 words laid out for
-// 24 RISCs, ~50 of them dead on the wire.
+// Control block of a packed frame: control-vector words SPSC_WIRE_CV_BASE..+16 exactly as the relay's one 64 B NoC
+// read of them lands in the frame -- the lanes' state slots and their tails. The heads and XY the relay adds go in
+// the prefix (SpscWirePrefix).
 constexpr static std::uint32_t SPSC_SPAN_WIRE_CTRL_WORDS = 16;
+constexpr static std::uint32_t SPSC_WIRE_CV_BASE = 16;
+// Most bytes a relay pushes between two bytes_sent writes, so everything landed lies below the bytes_sent the host
+// reads plus this: a host reader that copied a frame proves the device had not reached it.
+constexpr static std::uint32_t SPSC_NOTIFY_CAP_BYTES = 128u * 1024u;
 enum SpscWireCtrl : std::uint32_t {
-    SPSC_WIRE_HEAD_0 = 0,  // ..4
-    SPSC_WIRE_TAIL_0 = 5,  // ..9
-    SPSC_WIRE_XY = 10,
+    SPSC_WIRE_TIMER_0 = SPSC_STATE_TIMER_0 - SPSC_WIRE_CV_BASE,  // 0..4
+    SPSC_WIRE_TAIL_0 = SPSC_RING_TAIL_0 - SPSC_WIRE_CV_BASE,     // 8..12
 };
+constexpr std::uint32_t spsc_wire_prog_word(std::uint32_t risc) {  // 5..7, 13..14
+    return spsc_state_prog_word(risc) - SPSC_WIRE_CV_BASE;
+}
+enum SpscWirePrefix : std::uint32_t {
+    SPSC_PREFIX_HEAD_0 = 2,  // ..6
+    SPSC_PREFIX_XY = 7,
+};
+static_assert(
+    SPSC_WIRE_CV_BASE % 16 == 0 && SPSC_STATE_TIMER_0 >= SPSC_WIRE_CV_BASE &&
+        SPSC_WIRE_TAIL_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_SPAN_WIRE_CTRL_WORDS &&
+        spsc_wire_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_SPAN_WIRE_CTRL_WORDS &&
+        SPSC_PREFIX_HEAD_0 + PROFILER_SPSC_TENSIX_RISC == SPSC_PREFIX_XY && SPSC_PREFIX_XY < SPSC_SPAN_PREFIX_WORDS,
+    "the control block is one 64 B window of the control vector; heads and XY fit the prefix");
 
 // ---- Wire codes shared with the producer and the host decoder --------------------------------------
 //
@@ -203,9 +232,5 @@ constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     const std::uint32_t n = SPSC_SPAN_PREFIX_WORDS + payload_words;
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }
-
-static_assert(
-    (SPSC_SPAN_PREFIX_WORDS + PROFILER_L1_CONTROL_VECTOR_SIZE) % SPSC_SPAN_PAGE_WORDS == 0,
-    "the payload must start on a socket page boundary");
 
 }  // namespace kernel_profiler

@@ -5,6 +5,8 @@
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 
 #include <algorithm>
+#include <array>
+#include <memory>
 #include <thread>
 #include <utility>
 
@@ -25,33 +27,32 @@ namespace {
 
 thread_local bool t_in_consumer = false;
 
-// One consumer thread's reader, walker and decoder for one of a producer's streams.
-struct AttachedStream {
-    BroadcastRing<RingLine>::Reader reader;
-    FrameWalker walker;
-    StreamDecoder dec;
-    profiler::SpanDecodeState state;
-
-    AttachedStream(
-        BroadcastRing<RingLine>::Reader r, const CaptureContext::Device& dev, uint32_t dev_index, uint8_t* scratch) :
-        reader(std::move(r)) {
-        state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
-        state.core_of_xy.load(dev.core_xy);
-        dec.st = &state;
-        dec.dev = dev_index;
-        dec.sink.buf = scratch;
-    }
-};
-struct Attached {
-    Producer* producer = nullptr;
-    std::vector<AttachedStream> streams;  // never resized after attach: dec.st points into it
-};
-
 }  // namespace
+
+namespace api = experimental::streaming_profiler;
+
+// A consumer's position in one stream and the decoder that turns its frames into records.
+struct Service::AttachedStream {
+    profiler::SpanDecodeState state;
+    std::vector<profiler::SpscRecConsts> lanes;
+    StreamDecoder dec;
+    uint64_t cursor = 0;   // bytes, absolute: the next frame this consumer reads
+    uint64_t dropped = 0;  // bytes of frames this consumer never saw
+    uint64_t stalls_reported = 0;
+};
+struct Service::Attached {
+    Producer* producer = nullptr;
+    uint64_t capture = 0;
+    std::vector<std::unique_ptr<AttachedStream>> streams;  // stable: dec.st points into the stream
+};
+
+// Frames decoded per delivery; bounds the consumer's scratch and the callback's batch.
+constexpr uint32_t kBatchFrames = 64;
 
 struct Service::Consumer {
     std::string name;
-    RecordCallback cb;
+    BatchCallback cb;
+    uint64_t captures = 0;  // producers attached so far; the capture number its callback sees
     ConsumerHandle handle = 0;
     std::thread thread;
     std::atomic<bool> stop{false};
@@ -61,29 +62,11 @@ struct Service::Consumer {
     std::atomic<uint64_t> dropped{0};
 };
 
-Service::Service() = default;
+Service::Service() { init_site_registry(); }
 
 Service& service() {
     static ttsl::Indestructible<Service> instance;
     return instance.get();
-}
-
-Service::~Service() {
-    tracy_.reset();  // unsubscribes, so before the consumer list goes
-    std::vector<std::unique_ptr<Consumer>> consumers;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        consumers.swap(consumers_);
-    }
-    for (auto& c : consumers) {
-        c->stop.store(true, std::memory_order_release);
-    }
-    wake_consumers();
-    for (auto& c : consumers) {
-        if (c->thread.joinable()) {
-            c->thread.join();
-        }
-    }
 }
 
 void Service::post_control(Consumer& c, Producer* producer, bool attach) {
@@ -100,7 +83,7 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
     ack_cv_.wait(lk, [&] { return pending_acks_ == 0; });
 }
 
-ConsumerHandle Service::add_consumer(std::string name, RecordCallback cb) {
+ConsumerHandle Service::add_consumer(std::string name, BatchCallback cb) {
     TT_FATAL(!t_in_consumer, "streaming profiler: add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> topo(topology_mu_);
     auto c = std::make_unique<Consumer>();
@@ -133,13 +116,7 @@ void Service::remove_consumer(ConsumerHandle handle) {
     victim->stop.store(true, std::memory_order_release);
     wake_consumers();
     victim->thread.join();
-    if (const uint64_t dropped = victim->dropped.load(std::memory_order_relaxed); dropped != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] consumer \"{}\" removed having dropped {} records",
-            victim->name,
-            dropped);
-    }
+    warn_missed(*victim);
 }
 
 void Service::attach_producer(Producer& producer) {
@@ -166,11 +143,16 @@ void Service::detach_producer(Producer& producer) {
             post_control(*c, &producer, false);
         }
         wait_acks(lk);
-        producers_.erase(std::find(producers_.begin(), producers_.end(), &producer));
+        producers_.erase(it);
         last = producers_.empty();
     }
     if (last) {
-        log_consumer_drops();
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            for (const auto& c : consumers_) {
+                warn_missed(*c);
+            }
+        }
         for (const auto& write : file_sinks_) {
             write();
         }
@@ -182,48 +164,34 @@ bool Service::is_active() const {
     return !producers_.empty();
 }
 
-void Service::log_consumer_drops() const {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& c : consumers_) {
-        if (const uint64_t dropped = c->dropped.load(std::memory_order_relaxed); dropped != 0) {
-            log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" dropped {} records", c->name, dropped);
-        }
+void Service::warn_missed(const Consumer& c) {
+    if (const uint64_t dropped = c.dropped.load(std::memory_order_relaxed); dropped != 0) {
+        log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" missed {} bytes of frames", c.name, dropped);
     }
 }
 
 void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions) {
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        if (builtins_registered_) {
-            return;
+    std::call_once(builtins_once_, [&] {
+        if (rtoptions.get_streaming_profiler_tracy_enabled()) {
+            tracy_ = std::make_unique<TracySink>(*this);
         }
-        builtins_registered_ = true;
-    }
-    namespace api = experimental::streaming_profiler;
-    std::vector<std::function<void()>> sinks;
-    if (rtoptions.get_streaming_profiler_tracy_enabled()) {
-        tracy_ = std::make_unique<TracySink>(*this);
-    }
-    auto add_public = [&]<typename C>(const char* name, std::shared_ptr<C> c) {
-        using B = typename C::Batch;
-        add_consumer(name, make_public_adapter(B::channels, [c](const api::Batch<api::Channel::All>& full) {
-                         (*c)(api::detail::narrow<B::channels>(full));
-                     }));
-    };
-    if (const std::string& path = rtoptions.get_streaming_profiler_zone_csv_path(); !path.empty()) {
-        auto c = std::make_shared<ZoneCsvConsumer>();
-        add_public("zone-csv", c);
-        sinks.push_back([c, path] { c->write_csv(path); });
-    }
-    if (const std::string& path = rtoptions.get_streaming_profiler_ops_csv_path(); !path.empty()) {
-        auto c = std::make_shared<OpsCsvConsumer>();
-        add_public("ops-csv", c);
-        sinks.push_back([c, path] { c->write_csv(path); });
-    }
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto& s : sinks) {
-        file_sinks_.push_back(std::move(s));
-    }
+        auto add_public = [&]<typename C>(const char* name, std::shared_ptr<C> c) {
+            using B = typename C::Batch;
+            add_consumer(name, [c](const api::Batch<api::RecordType::All>& full, uint64_t) {
+                (*c)(api::Batch<B::types>(full));
+            });
+        };
+        if (const std::string& path = rtoptions.get_streaming_profiler_zone_csv_path(); !path.empty()) {
+            auto c = std::make_shared<ZoneCsvConsumer>(path);
+            add_public("zone-csv", c);
+            file_sinks_.push_back([c] { c->write_csv(); });
+        }
+        if (const std::string& path = rtoptions.get_streaming_profiler_ops_csv_path(); !path.empty()) {
+            auto c = std::make_shared<OpsCsvConsumer>(path);
+            add_public("ops-csv", c);
+            file_sinks_.push_back([c] { c->write_csv(); });
+        }
+    });
 }
 
 void Service::consumer_thread(Consumer& c) {
@@ -231,43 +199,100 @@ void Service::consumer_thread(Consumer& c) {
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     t_in_consumer = true;
-    std::vector<Rec> scratch(kConsumerScratchRecs + profiler::kSpscSinkSlackRecs);  // slack, not capacity
     std::vector<Attached> attached;
+    const size_t rec_bytes =
+        (size_t{kBatchFrames} * kFrameRecsReserve + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
+    const size_t data_bytes = size_t{kBatchFrames} * kFrameDataBytesReserve;
+    auto zones_buf = std::make_unique_for_overwrite<uint8_t[]>(rec_bytes);
+    auto events_buf = std::make_unique_for_overwrite<uint8_t[]>(rec_bytes);
+    auto data_buf = std::make_unique_for_overwrite<uint8_t[]>(data_bytes);
+    constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
+    std::array<uint32_t, kBatchFrames> frame_words;
+    auto frames_buf = std::make_unique_for_overwrite<std::byte[]>(kFramesBytes);
 
     auto attach = [&](Producer* p) {
         Attached a;
         a.producer = p;
         const CaptureContext& ctx = p->capture_context();
-        const auto streams = p->streams();
-        a.streams.reserve(streams.size());
-        for (const ProducerStream& ps : streams) {
-            a.streams.emplace_back(
-                ps.ring->make_reader(), ctx.devices[ps.dev], ps.dev, reinterpret_cast<uint8_t*>(scratch.data()));
+        for (const ProducerStream& ps : p->streams()) {
+            auto s = std::make_unique<AttachedStream>();
+            s->cursor = ps.walked->load(std::memory_order_acquire);
+            const CaptureContext::Device& dev = ctx.devices[ps.dev];
+            s->state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
+            s->state.core_of_xy.load(dev.core_xy);
+            s->lanes.reserve(dev.lanes.size());
+            for (const auto& core : dev.lanes) {
+                s->lanes.push_back(record_consts(core, p->clock(ps.dev)));
+            }
+            s->dec.st = &s->state;
+            s->dec.lanes = s->lanes.data();
+            a.streams.push_back(std::move(s));
         }
+        a.capture = ++c.captures;
         attached.push_back(std::move(a));
     };
 
-    auto deliver = [&](Attached& a, StreamDecoder& dec, uint64_t dd) {
-        const auto end = dec.end_batch();
-        if (end.records == 0 && dd == 0 && end.stalls == 0) {
-            return;
-        }
+    auto deliver = [&](Attached& a, AttachedStream& s, const StreamDecoder::Produced& n, uint64_t dropped) {
+        api::Batch<api::RecordType::All> b;
+        b.zones_ = std::span<const api::Zone>(reinterpret_cast<const api::Zone*>(zones_buf.get()), n.zones);
+        b.events_ = std::span<const api::Event>(reinterpret_cast<const api::Event*>(events_buf.get()), n.events);
+        b.timestamped_data_ = std::ranges::subrange(
+            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(data_buf.get())),
+            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(data_buf.get()) + n.data_bytes));
+        b.dropped_ = dropped;
+        b.stall_count_ = s.dec.stall_zones - s.stalls_reported;
+        s.stalls_reported = s.dec.stall_zones;
         try {
-            c.cb(RecordBatch{
-                .records = std::span<const Rec>(scratch.data(), end.records),
-                .dropped_delta = dd,
-                .context = &a.producer->capture_context(),
-                .clocks = a.producer->clocks(),
-                .stall_delta = end.stalls});
-        } catch (const std::exception& e) {
-            log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", c.name, e.what());
+            c.cb(b, a.capture);
+        } catch (const std::exception& ex) {
+            log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", c.name, ex.what());
         }
+        s.dec.commit();
     };
 
+    // One delivery of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position.
+    // False when the stream had nothing new.
+    auto read = [&](Attached& a, AttachedStream& s, uint32_t stream_index) {
+        const ProducerStream& ps = a.producer->streams()[stream_index];
+        const Walked w = walk_frames(
+            ps.fifo,
+            s.cursor,
+            ps.walked->load(std::memory_order_acquire),
+            std::span<std::byte>(frames_buf.get(), kFramesBytes),
+            frame_words,
+            [&] { return a.producer->live_head(stream_index); });
+        if (w.cursor == s.cursor) {
+            return false;
+        }
+        s.cursor = w.cursor;
+        s.dropped += w.dropped;
+        StreamDecoder::Produced n{0, 0, 0};
+        const std::byte* p = frames_buf.get();
+        for (uint32_t i = 0; i < w.frames; i++) {
+            const uint32_t fw = frame_words[i];
+            const auto out = s.dec.decode_frame(
+                reinterpret_cast<const uint32_t*>(p),
+                fw,
+                {zones_buf.get() + size_t{n.zones} * profiler::kSpscRecBytes,
+                 events_buf.get() + size_t{n.events} * profiler::kSpscRecBytes,
+                 data_buf.get() + n.data_bytes});
+            n.zones += out.zones;
+            n.events += out.events;
+            n.data_bytes += out.data_bytes;
+            p += size_t{fw} * 4;
+        }
+        deliver(a, s, n, w.dropped);
+        return true;
+    };
+    // One delivery per stream per round, so no stream's ring laps while an earlier one is drained to empty.
     auto pass = [&](Attached& a) {
         bool any = false;
-        for (AttachedStream& s : a.streams) {
-            any |= s.walker.pass(s.reader, s.dec, [&](uint64_t dd) { deliver(a, s.dec, dd); });
+        for (bool progress = true; progress;) {
+            progress = false;
+            for (uint32_t i = 0; i < a.streams.size(); i++) {
+                progress |= read(a, *a.streams[i], i);
+            }
+            any |= progress;
         }
         return any;
     };
@@ -281,15 +306,8 @@ void Service::consumer_thread(Consumer& c) {
         while (pass(a)) {
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
-            const AttachedStream& s = a.streams[i];
-            StreamStats stats = s.dec.stats;
-            stats.dropped = s.reader.dropped();
-            stats.heads.reserve(s.state.lanes.size());
-            for (const profiler::SpscLane& lane : s.state.lanes) {
-                stats.heads.push_back(lane.seeded != 0 ? lane.head : 0u);
-            }
-            c.dropped.fetch_add(stats.dropped, std::memory_order_relaxed);
-            p->finish_stream(static_cast<uint32_t>(i), stats);
+            c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
+            p->finish_stream(static_cast<uint32_t>(i), a.streams[i]->dropped, a.streams[i]->dec.stats);
         }
         attached.erase(it);
     };
@@ -320,7 +338,8 @@ void Service::consumer_thread(Consumer& c) {
     IdleBackoff backoff(0);
     for (;;) {
         const uint32_t seen = wake_token();
-        if (c.control_pending.exchange(false, std::memory_order_acq_rel)) {
+        if (c.control_pending.load(std::memory_order_acquire)) {
+            c.control_pending.store(false, std::memory_order_release);
             handle_control(true);
         }
         if (pass_all()) {
@@ -335,11 +354,10 @@ void Service::consumer_thread(Consumer& c) {
         }
         wait_wake(seen);
     }
-    // Stopped mid-capture: the readers go before the rings they read, and any control still queued is acknowledged
-    // without work.
+    // Stopped mid-capture: the readers go before the queues they read.
     for (const Attached& a : attached) {
-        for (const AttachedStream& s : a.streams) {
-            c.dropped.fetch_add(s.reader.dropped(), std::memory_order_relaxed);
+        for (const auto& s : a.streams) {
+            c.dropped.fetch_add(s->dropped, std::memory_order_relaxed);
         }
     }
     attached.clear();

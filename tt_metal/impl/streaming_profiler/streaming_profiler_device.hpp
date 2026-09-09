@@ -32,20 +32,18 @@ class IDevice;
 
 namespace streaming_profiler {
 
-// The step a failed bring-up was in, for the message that disables the profiler.
-const std::string& bringup_step();
-
 // One device whose relays came up: the sockets the receiver ingests and what its consumers need to decode them.
 struct CapturedDevice {
     uint32_t chip_id = 0;
+    int numa_node = -1;                                            // the node the sockets bind their FIFOs to
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;  // one per relay, in relay order
     CaptureContext::Device ctx;
-    experimental::streaming_profiler::Clock clock;
+    DeviceClock clock;
 };
 
 // What quiesce() reports per (device index, socket index): Drained, the relay pushed its last page and waits on
 // its socket barrier; Done, it saw every byte acked.
-enum class RelayState { Drained, Done };
+enum class RelayState { Running, Drained, Done };
 using RelayStateFn = std::function<void(uint32_t device_index, uint32_t socket_index, RelayState)>;
 
 // The relays of one capture: up to kMaxRelays DRISCs per device, each sweeping a band of the worker grid into its
@@ -60,13 +58,13 @@ public:
     // Brings the relays up on every eligible local Blackhole device and syncs each clock. A device that fails is
     // logged and left unarmed, so its markers are overwritten rather than blocked on.
     std::vector<CapturedDevice> boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
-    // Waits for the producer rings to drain (unblocking back-pressure if they do not), then stops every relay
-    // through its stop word (1 = quiesce, 2 = release the NIU), reporting each relay's states through `on_state`
-    // (may be empty). The resident idle FW is left alone.
+    // Stops every relay through its stop word (1 = quiesce, then 2 = release the NIU once it is done), reporting
+    // each relay's states through `on_state` (may be empty), then disarms the device's producers. A relay that does
+    // not finish within 10 s is a fault. The resident idle FW is left alone.
     void quiesce(const RelayStateFn& on_state);
     // After the relays swept to empty and the capture detached: the producer-owned stall counters, and every
     // worker lane's own tail against the consumed-words mirror `heads` (empty when nothing decoded the device).
-    void verify_completeness(uint32_t device_index, std::span<const uint32_t> heads);
+    void verify_completeness(uint32_t device_index);
 
 private:
     static constexpr uint32_t kMaxRelays = 8;
@@ -116,9 +114,8 @@ private:
         const distributed::MeshCoordinate& coord,
         uint32_t d);
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
-    // a full ring until then), cleared at teardown if a producer is still publishing after the drain budget.
+    // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
     void set_producers_armed(const DeviceCtx& ctx, bool armed);
-    bool wait_producer_rings_drained(const DeviceCtx& ctx, std::chrono::milliseconds budget);
     void write_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
     // A DRISC L1 address as the host reaches it over the NoC.
     uint64_t relay_noc_addr(uint32_t l1) const { return drisc_l1_noc_ + (l1 - drisc_l1_base_); }

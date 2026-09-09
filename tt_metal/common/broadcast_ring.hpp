@@ -64,43 +64,13 @@ public:
      */
     explicit BroadcastRing(size_t capacity) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        owned_(std::make_unique<std::byte[]>(capacity_ * sizeof(Slot) + kFalseSharingSize - 1)),
-        slots_(aligned_slots(owned_.get())),
-        writer_(&shared_state_, view()) {
-        std::uninitialized_default_construct_n(slots_, capacity_);
-    }
-
-    /** @brief Tag for the constructor over storage another producer writes; see that constructor. */
-    struct AdoptStorage {};
-
-    /**
-     * @brief Constructs a broadcast ring over exactly @p capacity slots that an external producer (a DMA engine,
-     *        another process) writes in place; the slots are adopted as they are, never constructed or destroyed
-     *        here. @p capacity must be a power of two and @p storage exactly capacity * sizeof(T) bytes, aligned to
-     *        kFalseSharingSize. That producer's progress is reported through Writer::publish_external().
-     */
-    BroadcastRing(size_t capacity, std::span<std::byte> storage, AdoptStorage) :
-        capacity_(capacity),
-        slots_(reinterpret_cast<Slot*>(storage.data())),
-        adopted_(true),
-        writer_(&shared_state_, view()) {
-        static_assert(kTriviallyCopyable, "adopted storage is raw memory; T must be trivially copyable");
-        TT_FATAL(
-            capacity != 0 && std::has_single_bit(capacity), "an adopted BroadcastRing needs a power-of-two capacity");
-        TT_FATAL(storage.size() == capacity * sizeof(Slot), "adopted storage must hold exactly capacity slots");
-        TT_FATAL(
-            (reinterpret_cast<uintptr_t>(storage.data()) & (kFalseSharingSize - 1)) == 0,
-            "adopted storage must be {}-byte aligned",
-            kFalseSharingSize);
-    }
+        slots_(std::make_unique<Slot[]>(capacity_)),
+        writer_(&shared_state_, view()) {}
 
     ~BroadcastRing() {
         TT_FATAL(
             active_readers_.load(std::memory_order_relaxed) == 0,
             "BroadcastRing readers must be destroyed before the ring");
-        if (!adopted_) {
-            std::destroy_n(slots_, capacity_);
-        }
     }
 
     [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
@@ -130,19 +100,6 @@ public:
         {
             static_assert(kMoveStoreNoexcept, "T must be nothrow-movable");
             publish_impl(items);
-        }
-
-        /**
-         * @brief Publishes an external producer's progress in adopted storage: items below @p head are fully
-         *        written and readable, and that producer may be writing or overwriting any item below @p claim, so
-         *        readers treat items below claim - capacity as lost. Both are monotonic and claim >= head. Only
-         *        the ring's own readers are ordered here; whatever lets the producer overwrite (a credit written to
-         *        a device) is the caller's to order after this call.
-         */
-        void publish_external(uint64_t head, uint64_t claim) noexcept {
-            shared_state_->claim.store(claim, std::memory_order_relaxed);
-            shared_state_->head.store(head, std::memory_order_release);
-            head_cache_ = head;
         }
 
         /**
@@ -261,57 +218,6 @@ public:
         /** @brief Reads one item into @p out; returns false when none is available (caught up or dropped). */
         [[nodiscard]] bool read(T& out) noexcept(kLoadNoexcept) { return !read_batch({&out, 1}).empty(); }
 
-        /**
-         * @brief Zero-copy read: up to @p max_items of this reader's next items in place, oldest first, stopping at
-         *        the ring's wrap. The writer may overwrite them while they are in use, so consume the view, then
-         *        commit() to learn whether what was consumed was intact; nothing derived from the view may leave
-         *        the consumer before that. A reader too far behind drops its oldest items first (dropped()). Empty
-         *        when caught up.
-         */
-        [[nodiscard]] std::span<const T> peek(size_t max_items) noexcept {
-            static_assert(kTriviallyCopyable, "an in-place view needs trivially copyable items");
-            const SharedState* const shared_state = shared_state_;
-            const uint64_t head = shared_state->head.load(std::memory_order_acquire);
-            if (cursor_ >= head || max_items == 0) {
-                return {};
-            }
-            const uint64_t claim_before = shared_state->claim.load(std::memory_order_relaxed);
-            const SlotsView view = view_;
-            const uint64_t max_lag = view.capacity - std::min<uint64_t>(writer_advance_estimate_, view.capacity >> 1);
-            if (uint64_t lag = claim_before - cursor_; lag > max_lag) {
-                const uint64_t drop = lag - max_lag;
-                dropped_ += drop;
-                cursor_ += drop;
-            }
-            const uint64_t start = cursor_;
-            const size_t to_wrap = view.capacity - static_cast<size_t>(start & (view.capacity - 1));
-            const size_t n = std::min<uint64_t>({max_items, head - start, to_wrap});
-            peek_claim_ = claim_before;
-            return {reinterpret_cast<const T*>(&view.slot_at(start)), n};
-        }
-
-        /**
-         * @brief Retires the first @p n items of the current peek() if none of them could have been overwritten
-         *        since it was taken; the rest of the view stays peeked. Otherwise the items the writer lapped are
-         *        dropped, the cursor moves to the oldest intact item and false is returned: the consumer must
-         *        discard everything it derived from the view and peek() again.
-         */
-        [[nodiscard]] bool commit(size_t n) noexcept {
-            // the consumer's slot loads are ordered before this reload, as in read_batch
-            std::atomic_thread_fence(std::memory_order_acquire);
-            const uint64_t claim = shared_state_->claim.load(std::memory_order_relaxed);
-            observe_advance(claim - peek_claim_);
-            peek_claim_ = claim;
-            if (claim - cursor_ > view_.capacity) {
-                const uint64_t oldest = claim - view_.capacity;
-                dropped_ += oldest - cursor_;
-                cursor_ = oldest;
-                return false;
-            }
-            cursor_ += n;
-            return true;
-        }
-
         using WakeToken = typename WakeTokenAtomic::value_type;
 
         /** @brief Snapshots the wake state to pass to wait(); take it before testing any wait condition. */
@@ -355,7 +261,6 @@ public:
             cursor_(other.cursor_),
             dropped_(other.dropped_),
             writer_advance_estimate_(other.writer_advance_estimate_),
-            peek_claim_(other.peek_claim_),
             active_readers_(std::exchange(other.active_readers_, nullptr)) {}
         Reader& operator=(Reader&& other) noexcept {
             if (this != &other) {
@@ -365,7 +270,6 @@ public:
                 cursor_ = other.cursor_;
                 dropped_ = other.dropped_;
                 writer_advance_estimate_ = other.writer_advance_estimate_;
-                peek_claim_ = other.peek_claim_;
                 active_readers_ = std::exchange(other.active_readers_, nullptr);
             }
             return *this;
@@ -406,7 +310,6 @@ public:
         // decaying max of how far the writer advances while we copy a batch, plus headroom;
         // decays so it tracks recent advances rather than pinning to the highest ever seen
         uint64_t writer_advance_estimate_ = 0;
-        uint64_t peek_claim_ = 0;  // claim as of the current peek(); the advance between commits feeds the estimate
         std::atomic<uint32_t>* active_readers_;
     };
 
@@ -489,17 +392,10 @@ private:
         alignas(kFalseSharingSize) WakeTokenAtomic wake_token{0};
     };
 
-    SlotsView view() const noexcept { return {slots_, capacity_}; }
-
-    static Slot* aligned_slots(std::byte* storage) noexcept {
-        const uintptr_t base = reinterpret_cast<uintptr_t>(storage);
-        return reinterpret_cast<Slot*>((base + kFalseSharingSize - 1) & ~uintptr_t{kFalseSharingSize - 1});
-    }
+    SlotsView view() const noexcept { return {slots_.get(), capacity_}; }
 
     const size_t capacity_;
-    std::unique_ptr<std::byte[]> owned_;
-    Slot* const slots_;
-    const bool adopted_ = false;
+    const std::unique_ptr<Slot[]> slots_;
     SharedState shared_state_;
     mutable std::atomic<uint32_t> active_readers_{0};
     Writer writer_;

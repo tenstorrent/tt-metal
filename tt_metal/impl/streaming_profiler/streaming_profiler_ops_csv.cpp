@@ -9,26 +9,33 @@
 #include <string>
 #include <string_view>
 
+#include <tt_stl/assert.hpp>
+
 namespace tt::tt_metal::streaming_profiler {
 
+namespace api = experimental::streaming_profiler;
+
+OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : f_(std::fopen(path.c_str(), "w")) {
+    TT_FATAL(f_ != nullptr, "streaming profiler: cannot open {} for the ops CSV", path);
+}
+
 void OpsCsvConsumer::operator()(const Batch& batch) {
-    for (const auto& clk : batch.clocks) {
-        devices_[clk.chip_id] = DeviceMeta{clk.chip_id, clk.frequency_ghz};
-    }
-    for (const auto& z : batch.zones) {
-        if (z.runtime_id == 0 || !z.site.name.ends_with("-KERNEL")) {
+    for (const auto& z : batch.zones()) {
+        if (z.runtime_id() == 0 || !z.site().name.ends_with("-KERNEL")) {
             continue;
         }
-        const uint32_t risc = static_cast<uint32_t>(z.core.risc);
-        const uint32_t core_key = (static_cast<uint32_t>(z.core.logical.y) << 16) | static_cast<uint32_t>(z.core.logical.x);
+        const api::Core c = z.core();
+        if (!devices_.contains(c.chip_id)) {
+            devices_.emplace(c.chip_id, DeviceMeta{c.chip_id, z.frequency_ghz()});
+        }
+        const uint32_t risc = static_cast<uint32_t>(c.risc);
+        const uint32_t core_key = (static_cast<uint32_t>(c.logical.y) << 16) | static_cast<uint32_t>(c.logical.x);
         // The wrapper zone never self-nests, so the k-th one on a lane for a prog is execution k.
-        uint32_t& completed = pair_count_
-            [(static_cast<uint64_t>(z.core.chip_id) << 56) | (static_cast<uint64_t>(core_key) << 24) |
-             (static_cast<uint64_t>(risc) << 20) | (z.runtime_id & 0xFFFFFu)];
-        OpAgg& op = ops_[{z.core.chip_id, z.runtime_id, completed}];
+        uint32_t& completed = pair_count_[{c.chip_id, core_key, risc, z.runtime_id()}];
+        OpAgg& op = ops_[{c.chip_id, z.runtime_id(), completed}];
         completed++;
-        const uint64_t start = z.start_timestamp;
-        const uint64_t end = z.end_timestamp;
+        const uint64_t start = z.start_timestamp();
+        const uint64_t end = z.end_timestamp();
         auto& core = op.cores[core_key];
         op.k_start = std::min(op.k_start, start);
         op.k_start_last = std::max(op.k_start_last, start);
@@ -43,11 +50,8 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
     }
 }
 
-void OpsCsvConsumer::write_csv(const std::string& path) const {
-    FILE* f = std::fopen(path.c_str(), "w");
-    if (f == nullptr) {
-        return;
-    }
+void OpsCsvConsumer::write_csv() {
+    FILE* const f = f_;
     std::fputs(
         "DEVICE ID,GLOBAL CALL COUNT,EXECUTION,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
         "DEVICE KERNEL DURATION [ns],DEVICE KERNEL DURATION DM START [ns],"

@@ -7,11 +7,13 @@
 // per-RISC splits), joinable against a classic ops_perf_results CSV on GLOBAL CALL COUNT. The classic FW
 // columns have no counterpart: this producer's FW wrapper emits no markers. Trace replays reuse a host-id,
 // so an op's executions are split by ordinal: per (lane, prog) the k-th wrapper pair is execution k.
-// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>; written when the last capture detaches.
+// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>; the file is opened on construction and written when the last
+// capture detaches.
 #pragma once
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <string>
 #include <tuple>
@@ -24,10 +26,11 @@ namespace tt::tt_metal::streaming_profiler {
 
 class OpsCsvConsumer {
 public:
-    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::Channel::Zones>;
+    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::Zones>;
+    explicit OpsCsvConsumer(const std::string& path);
     void operator()(const Batch& batch);
     // Call only after the consumer can no longer receive batches.
-    void write_csv(const std::string& path) const;
+    void write_csv();
 
 private:
     static constexpr uint32_t kNumRisc = 5;
@@ -46,10 +49,10 @@ private:
         double frequency_ghz = 0.0;
     };
 
+    FILE* f_ = nullptr;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (chip, runtime host-id, execution)
-    std::unordered_map<uint64_t, uint32_t> pair_count_;              // (chip, core, risc, prog) -> completed pairs
-    // Snapshot: the clocks live on the receiver and are gone by the exit-path write_csv.
-    std::unordered_map<uint32_t, DeviceMeta> devices_;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> pair_count_;  // (chip, core, risc, prog)
+    std::unordered_map<uint32_t, DeviceMeta> devices_;  // from the records: one frequency per chip
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

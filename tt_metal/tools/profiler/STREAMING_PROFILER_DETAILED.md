@@ -210,21 +210,23 @@ export TT_METAL_STREAMING_PROFILER=1
 
 One switch — it also arms the device-side markers. Leave `TT_METAL_DEVICE_PROFILER` unset.
 
-### 1.4 Subscribe
+### 1.4 Register a callback
 
 From `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace
 `tt::tt_metal::experimental::streaming_profiler`):
 
 ```cpp
-auto h = Subscribe("my-tool", [](const Batch<Channel::Zones>& b) { /* ... */ });
-// later: Unsubscribe(h);
+auto h = RegisterCallback("my-tool", [](const Batch<RecordType::Zones>& b) { /* ... */ });
+// later: UnregisterCallback(h);
 ```
 
-Subscribe any time — before the device opens, mid-capture, or between captures; the subscription
-persists until `Unsubscribe`. Your callback runs on its own thread; if you're slow you drop only your
-own records (`b.dropped`), never anyone else's. Spans are only valid during the call, so copy what
-you keep. Subscriptions live on the process-wide `streaming_profiler::Service`; each capture's
-receiver attaches to it as a producer, so one subscription sees every MeshDevice.
+Register any time — before the device opens, mid-capture, or between captures; the callback
+persists until `UnregisterCallback`. It runs on its own thread; if you're slow you drop only your
+own records (`b.dropped()`), never anyone else's. A batch's spans and a `TimestampedData`'s
+`payload()` are valid only during the call; everything else about a record is the record's own, so
+copy the 48-byte values out and post-process them whenever you like. Callbacks live on the process-wide
+`streaming_profiler::Service`; each capture's receiver attaches to it as a producer, so one callback
+sees every MeshDevice.
 
 ### 1.5 What you get
 
@@ -233,43 +235,39 @@ ships most zones atomically (one 3-word packet at scope close, carrying end + du
 that still ship as start/end pairs (the profiler-stall zone, the >3.2 s long-zone fallback, DRISC
 relay self-zones) are paired for you on the host. Either way you never see halves.
 
+Every record is a self-contained 48-byte value, exactly as the decoder wrote it: its device timestamps, the
+core, the running program, and the chip clock (frequency and host offset) in force when it was recorded,
+so host-time conversion needs nothing outside the record. The site name resolves through the process-wide
+zone-name registry, which lives as long as the process:
+
 ```cpp
-enum class RecType : uint32_t {
-    Zone = 1,   // a complete zone: data.zone = {start, duration}
-    Data = 3,   // point marker with payload: data.ts; payload follows via Ext (+ Cont)
-    Event = 4,  // point marker, no payload: data.ts; complete in itself
-    Ext = 5,    // Data continuation: id = payload word count, data.ext = payload words 1-2
-    Cont = 6,   // one uint64 of Data payload (words 3 and up): data.payload
+class Record {  // what every kind carries
+    const Site& site() const;   // name and source location
+    Core core() const;          // chip, logical and physical (NoC 0) coordinates, RISC
+    uint32_t runtime_id() const;  // host id of the program on the core, 0 = none yet
+    double frequency_ghz() const;
 };
-
-struct RecMeta {
-    uint32_t spare : 16;
-    uint32_t lane : 10;  // which (core, RISC) stream: lane = core_index * 5 + risc
-    uint32_t dev : 3;    // device index into the capture context
-    RecType type : 3;
+class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (site().name == kStallZoneName)
+    uint64_t start_timestamp() const;  // device ticks
+    uint64_t end_timestamp() const;
+    std::chrono::nanoseconds duration() const;
+    std::chrono::steady_clock::time_point start_time() const;
+    std::chrono::steady_clock::time_point end_time() const;
 };
-
-struct Rec {
-    // The active member is decided by meta.type.
-    union {
-        struct {
-            uint64_t start;     // device timestamp of the zone open
-            uint64_t duration;  // device cycles
-        } zone;
-        uint64_t ts;       // Data / Event
-        uint64_t ext;      // Ext
-        uint64_t payload;  // Cont
-    } data;
-    uint32_t id;            // structural zone id -> resolves to the zone's name
-    RecMeta meta;
-    uint32_t prog;          // runtime host-id of the op this lane is executing (0 = none yet)
+class TimestampedData : public Record {  // a DeviceTimestampedData marker
+    uint64_t timestamp() const;
+    std::chrono::steady_clock::time_point time() const;
+    std::span<const uint64_t> payload() const;  // two 32-bit words per element, first word high; batch-scoped
+};
+class Event : public Record {  // a DeviceFlag marker
+    uint64_t timestamp() const;
+    std::chrono::steady_clock::time_point time() const;
 };
 ```
 
-Ordering: cross-lane interleaving is arbitrary — key any state you keep by
-`(meta.dev, meta.lane)`. A zone is delivered when it **ends**, so under nesting
-`data.zone.start` isn't monotonic within a lane; `start + duration` is complete information
-either way.
+Ordering: cross-lane interleaving is arbitrary — key any state you keep by `core()`. A zone is
+delivered when it **ends**, so under nesting `start_timestamp()` isn't monotonic within a lane;
+start and end together are complete information either way.
 
 ### 1.6 The call pattern
 
@@ -277,10 +275,10 @@ The ops-CSV consumer in `tt_metal/impl/streaming_profiler/streaming_profiler_ops
 reference.
 
 ```cpp
-void MyConsumer::operator()(const Batch<Channel::Zones>& batch) {
-    for (const Zone& z : batch.zones) {
-        // z.site.name, z.core (chip, coordinate, RISC), z.runtime_id; device ticks in z.start_timestamp /
-        // z.end_timestamp, host time via z.start_time() / z.duration()
+void MyConsumer::operator()(const Batch<RecordType::Zones>& batch) {
+    for (const Zone& z : batch.zones()) {
+        // z.site().name, z.core() (chip, coordinate, RISC), z.runtime_id(); device ticks in
+        // z.start_timestamp() / z.end_timestamp(), host time via z.start_time() / z.duration()
     }
 }
 ```
@@ -325,7 +323,7 @@ worker RISC ──2/3/5-word zone packets──▶ L1 SPSC marker ring, one per 
     │                                     pipeline is lossless end to end (the stall is itself a zone).
     ▼
 DRISC relay — one per DRAM view (≤ 8), resident on the bank's spare DRISC from device open to teardown
-    CV pass    read every core's five tails (32 B/core), decide the ship set (25 % lane fill / half-ring
+    CV pass    read every core's tails and lane state (one 64 B block/core), decide the ship set (25 % lane fill / half-ring
                lane trigger / age); idle backoff grows the poll gap to a 5 µs ceiling
     gather     read each live run STRAIGHT to its packed wire offset in a staging slot, so the staged slot
                IS the frame's wire image (16 B src≡dst congruence pads, spsc_span_pack_pad())
@@ -337,14 +335,19 @@ DRISC relay — one per DRAM view (≤ 8), resident on the bank's spare DRISC fr
     ▼
 D2H socket host FIFO, one per relay (FIFO_MB, default 64 MiB; plain pinned mmap, no TLB window)
     ▼
-host receiver — one ingest thread per socket stream: poll + frame + copy + ack fused; frames are
-    NT-streamed VERBATIM from the FIFO into a per-stream BroadcastRing (RING_MB, default 512 MiB) and
-    acked as they land.  The ring, not the FIFO, is the capture's elastic buffer; one ring per stream
-    keeps each ring single-writer.
+host receiver — one ingest thread per device: it walks each frame's header in place, publishes a handle (page
+    offset, page count) into the stream's `BroadcastRing<uint64_t>` and credits the pages back right after. It copies
+    nothing, and the device never waits on decode or on a consumer. The FIFO is the ring: a frame stays readable
+    until the device has lapped it.
     ▼
-consumers — every consumer thread decodes and pairs for itself before its callback: the registered
-    callbacks (§1.4), the Tracy sink (opt-in), ops / zone / stall CSV, and an internal audit consumer that
-    decodes every stream for the wire-integrity report ingest (a pure copier) cannot produce.
+consumers — every consumer thread reads handles, has the receiver fetch the frames' bytes out of the FIFO and decodes
+    them itself, 64 frames per delivery, into self-contained records for its callback: the registered callbacks
+    (§1.4), the Tracy sink (opt-in), ops / zone CSV. The fetch keeps only frames the device cannot have reached
+    since -- everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap --
+    so a lagging consumer loses whole frames, from the handle ring or from that check, and reports the bytes in
+    `dropped()`; every frame carries each lane's timer high word and runtime id in its control block, so the
+    decoder reseeds exactly at the next frame and drops only what it cannot place (ZONE_S until the lane's next
+    absolute zone), never a wrong record.
 ```
 
 ### 2.2 The relay
@@ -404,17 +407,23 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   minutes wrong for a DRAM core — §N+46) and **one shared frequency** for every context on the chip
   (per-core slopes are biased and fan the rows apart — §N+47/§N+48). Residual measured with a common
   trigger: 0.18 µs (§N+48); cross-domain offset constant to 0.1 ppm while both domains are active (§N+49).
-- `streaming_profiler_receiver.{hpp,cpp}` — ingest and rings as in §2.1. A lagging consumer drops its own
-  oldest lines (counted per consumer); decode recovers from a device-side drop by head adoption, resync
-  counters and re-anchoring timestamps at the next absolute zone. Decode is vectorized (AVX2 zone blocks,
-  §N+54/§N+68) and memory-latency bound (§N+55–§N+57).
+- `streaming_profiler_receiver.{hpp,cpp}` — ingest as in §2.1: the D2H FIFO is the ring. The ingest thread walks
+  each frame's header in place, publishes a `frame_handle` (page offset and length) into the stream's
+  `BroadcastRing<uint64_t>`, and returns the socket's credits at once; it copies nothing. A consumer reads handles and
+  has the receiver `fetch` the frames' bytes out of the FIFO, keeping only those the device cannot have reached since:
+  everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap, and a frame is
+  overwritten only by writes one FIFO past it. Both losses are whole frames, counted in `Batch::dropped()` bytes.
+  Decode lives in the consumers (`streaming_profiler_decode.hpp`, one `StreamDecoder` per consumer per stream): it
+  recovers from a gap by reseeding lane state from the frame's control words (the producer's per-RISC state
+  slots, written after its tail so a frame never carries a value its words do not) and re-anchoring at the next
+  absolute zone. Decode is vectorized (AVX2 zone blocks, §N+54/§N+68) and memory-latency bound (§N+55–§N+57).
 - `spsc_marker_decode.hpp` (the decode single source of truth), `spsc_packet.h` (plain-C packet
   constants shared with the device's `ppfmt`), `hw/inc/hostdev/streaming_profiler_common.h` (span/frame
   geometry, pack-pad rule, `SPSC_SPAN_RAW_FLAG`).
-- Consumers: `streaming_profiler_service.{hpp,cpp}` (subscriptions, one thread each, reading every attached
-  receiver's rings), `streaming_profiler_api.cpp` (the public `Subscribe`, decoding records into the public types),
-  `streaming_profiler_consumer.{hpp,cpp}` (the internal record contract, `ZoneNameMirror`),
-  `streaming_profiler_decode.hpp` (the frame decode the audit and the consumers share),
+- Consumers: `streaming_profiler_service.{hpp,cpp}` (callbacks, one thread each, reading every attached
+  receiver's queues), `streaming_profiler_api.cpp` (the public `RegisterCallback`, the process-wide site table),
+  `streaming_profiler_consumer.hpp` (the internal record contract),
+  `streaming_profiler_decode.hpp` (the frame decoder),
   `streaming_profiler_ops_csv`, `streaming_profiler_zone_csv`,
   `streaming_profiler_tracy` (the Tracy sink; per-relay
   anchors, k-way merge of a context's lanes by timestamp so Tracy's 2^31-tick unwrap heuristic never fires —

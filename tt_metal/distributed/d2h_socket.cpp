@@ -300,12 +300,13 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     } else if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = this->sender_virtual_core(*mesh_device, sender_device_id);
-        // Not every core has a static window (a DRAM channel gets one on its preferred port only), and only one
-        // spanning the config buffer can carry notify_sender()'s writes.
         if (!cluster.is_mock_or_emulated()) {
             auto* tlb_manager = cluster.get_driver()->get_chip(sender_device_id)->get_tlb_manager();
             const tt_xy_pair tlb_core(sender_virtual_core.x, sender_virtual_core.y);
-            if (tlb_manager->is_tlb_mapped(tlb_core, config_buffer_address_, required_config_buffer_size())) {
+            // A DRAM channel's static window covers only its preferred port, so a DRISC sender on another port may
+            // have none.
+            if (sender_core_type_ == HalProgrammableCoreType::TENSIX ||
+                tlb_manager->is_tlb_mapped(tlb_core, config_buffer_address_, required_config_buffer_size())) {
                 sender_core_tlb_ = tlb_manager->get_tlb_window(tlb_core);
             }
         }
@@ -324,7 +325,10 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
         pcie_writer_ = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
         };
-    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && sender_core_tlb_ != nullptr) {
+    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated() && sender_core_tlb_ != nullptr) {
+        // This process owns a mesh_device and hence has statically initialized TLBs.
+        // Entire device address space for Blackhole is statically mapped.
+        // Safe to use static TLBs without requiring the driver to do a reconfig.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
@@ -735,26 +739,36 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
-    const uint32_t num_bytes = num_pages * page_size_;
+    uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
     this->wait_for_bytes(num_bytes);
 
-    const uint32_t head_bytes = std::min(num_bytes, fifo_curr_size_ - read_ptr_);
-    const uint32_t tail_bytes = num_bytes - head_bytes;
+    uint32_t head_bytes = num_bytes;
+    if (read_ptr_ + num_bytes > fifo_curr_size_) {
+        head_bytes = fifo_curr_size_ - read_ptr_;
+    }
+    uint32_t tail_bytes = num_bytes - head_bytes;
+
     uint32_t* base = using_hugepage_ ? hugepage_data_host_ptr_ : host_buffer_.get();
-    uint32_t* head = base + (read_ptr_ / sizeof(uint32_t));
+    uint32_t* src = base + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
         for (uint32_t i = 0; i < head_bytes; i += k_x86_clflush_line_bytes) {
-            _mm_clflush(reinterpret_cast<char*>(head) + i);
+            _mm_clflush(reinterpret_cast<char*>(src) + i);
         }
         for (uint32_t i = 0; i < tail_bytes; i += k_x86_clflush_line_bytes) {
             _mm_clflush(reinterpret_cast<char*>(base) + i);
         }
         _mm_lfence();
     }
-    std::memcpy(data, head, head_bytes);
-    std::memcpy(static_cast<char*>(data) + head_bytes, base, tail_bytes);
-    this->pop(num_pages, notify_sender);
+    std::memcpy(data, src, head_bytes);
+    if (tail_bytes > 0) {
+        std::memcpy(static_cast<char*>(data) + head_bytes, base, tail_bytes);
+    }
+    this->pop_bytes(num_bytes);
+
+    if (notify_sender) {
+        this->notify_sender();
+    }
 }
 
 void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {
@@ -762,6 +776,16 @@ void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {
     if (notify_sender) {
         this->notify_sender();
     }
+}
+
+uint32_t D2HSocket::bytes_sent() const {
+    if (using_hugepage_) {
+        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        _mm_lfence();
+        return *hugepage_bytes_sent_host_ptr_;
+    }
+    tt_driver_atomics::mfence();
+    return *const_cast<const volatile uint32_t*>(bytes_sent_ptr_);
 }
 
 uint32_t D2HSocket::pages_available() {

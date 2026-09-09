@@ -79,17 +79,23 @@ struct SpscLane {
     // one.
     uint64_t cursor = 0;
     uint64_t last_ts = 0;  // the last record's timestamp; lanes emit in end order, so a step back is a torn read
-    // (batch_seq << 32) | byte offset just past the last timestamped record in the sink (a Data head, not its
-    // Ext/Cont); 0 = none. A regression repairs that record while it is still in the scratch, so the offset is only
-    // meaningful within its own batch.
-    uint64_t last_rec = 0;
+    // The last timestamped record, wherever it went; nullptr = none. A regression repairs that record in place, so it
+    // is only meaningful while last_rec_seq is the current batch, i.e. until its owner publishes it.
+    uint8_t* last_rec = nullptr;
+    uint64_t last_rec_seq = 0;
+    uint32_t last_rec_zone = 0;  // a zone's second qword is a duration a repair may move; a point's is not
     uint32_t timer_hi = 0;  // sticky wall-clock high half
     uint32_t prog = 0;      // sticky runtime host-id (every RISC emits its own at launch)
     uint32_t head = 0;      // monotonic words-consumed mirror; head(N) == tail(N-1)
     uint32_t seeded = 0;
+    // Set at the start and after every gap in the wire: the next frame's state slots reseed timer_hi and prog before
+    // any of its words are decoded on stale state.
+    uint32_t need_state = 1;
+    // Set until an absolute zone re-anchors the cursor; ZONE_S runs seen meanwhile are skipped.
+    uint32_t need_anchor = 1;
 };
 
-// The lanes of one socket's frame stream. Written only by the thread decoding that stream.
+// Written only by the thread decoding that stream.
 struct SpanDecodeState {
     std::vector<SpscLane> lanes;
     CoreTable core_of_xy;
@@ -97,21 +103,18 @@ struct SpanDecodeState {
     void reset(uint32_t num_cores) { lanes.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, {}); }
 };
 
-// Every record a consumer sees is the public 32 B Rec {start|ts, duration, meta<<32 | id, prog}, composed straight
-// into the sink's buffer. Stores are cached, not NT: the consumer re-reads the scratch immediately. ZONE_S and EVENT
-// blocks write their last quad whole and a point packet writes its Ext and first Cont before knowing they count, so
-// the buffer needs kSpscSinkSlackRecs of slack past cap.
-inline constexpr uint32_t kSpscRecBytes = 32;
+// Every record a consumer sees is the public 48 B record (experimental::streaming_profiler::Record): 32 bytes
+// composed from the packet and the lane's constants, {start|ts, duration|payload, zone id, runtime id, coordinates},
+// then a 16-byte tail of lane constants, {chip, RISC, frequency, offset}, written straight into its
+// kind's region of the batch buffer; Data payload elements go to the batch's arena. Stores are cached, not NT: the
+// consumer reads the buffers immediately. Block kernels write their last quad whole, so a region needs
+// kSpscSinkSlackRecs of slack past cap.
+inline constexpr uint32_t kSpscRecBytes = 48;
 inline constexpr uint32_t kSpscSinkSlackRecs = 8;
-// RecType codes, pinned by the receiver's layout probe.
-inline constexpr uint32_t kSpscRecTypeZone = 1;
-inline constexpr uint32_t kSpscRecTypeData = 2;
-inline constexpr uint32_t kSpscRecTypeEvent = 3;
-inline constexpr uint32_t kSpscRecTypeExt = 4;
-inline constexpr uint32_t kSpscRecTypeCont = 5;
-struct SpscRecSink {
-    uint8_t* buf = nullptr;
-    uint64_t off = 0;  // bytes written
+// A lane's record constants in record byte order: dwords 6-7 (the coordinates) and the tail.
+struct SpscRecConsts {
+    uint32_t coords[2];
+    uint32_t tail[4];
 };
 
 // What a block kernel reports: 16 bytes so it returns in registers; the caller knows the first record's timestamp
@@ -316,54 +319,35 @@ inline uint64_t spsc_ts_at(const uint32_t* src, uint32_t k, uint64_t th_hi) {
     }
 }
 
-// Everything a lane's records share: the constant half of each record kind, {0, th, 0, 0, 0, meta|type, prog, 0}
-// (the 64-bit-timestamp kinds without th), and the qword broadcasts the 2-word kernels compose from. Built at lane
-// entry; a STICKY_TIMER re-blends only the th lanes, a STICKY_PROG only the prog lanes.
+// Everything a lane's records share: the constant half of each record kind, {0, th, 0, 0, 0, prog, coords, coords}
+// (the 64-bit-timestamp kinds without th), the record tail, and the qword broadcasts the 2-word kernels compose from.
+// Built at lane entry; a STICKY_TIMER re-blends only the th lanes, a STICKY_PROG only the prog lanes.
 struct SpscLaneConsts {
     uint64_t th_hi;
-    __m256i tv, pv;             // th << 32 / prog, per qword
-    __m256i mv_zone, mv_event;  // meta | type << 29, high dword of every qword
-    __m256i zone_half, zone_half64, point_half64, ext_half, cont_half;
-    __m256i point_half[2];  // [0] EVENT, [1] DATA
+    __m256i tv, mv, coords_v;  // th << 32 / prog << 32 / the coordinates, per qword
+    __m256i zone_half, zone_half64, point_half, point_half64;
+    __m128i tail;
 };
 inline void spsc_lane_consts_th(SpscLaneConsts& c, uint32_t th) {
     c.th_hi = static_cast<uint64_t>(th) << 32;
     c.tv = _mm256_set1_epi64x(static_cast<long long>(c.th_hi));
     const __m256i thv = _mm256_set1_epi32(static_cast<int>(th));
     c.zone_half = _mm256_blend_epi32(c.zone_half, thv, 0x02);
-    c.point_half[0] = _mm256_blend_epi32(c.point_half[0], thv, 0x02);
-    c.point_half[1] = _mm256_blend_epi32(c.point_half[1], thv, 0x02);
+    c.point_half = _mm256_blend_epi32(c.point_half, thv, 0x02);
 }
 inline void spsc_lane_consts_prog(SpscLaneConsts& c, uint32_t prog) {
-    c.pv = _mm256_set1_epi64x(prog);
+    c.mv = _mm256_set1_epi64x(static_cast<long long>(static_cast<uint64_t>(prog) << 32));
     const __m256i pgv = _mm256_set1_epi32(static_cast<int>(prog));
-    for (__m256i* h :
-         {&c.zone_half,
-          &c.zone_half64,
-          &c.point_half64,
-          &c.ext_half,
-          &c.cont_half,
-          &c.point_half[0],
-          &c.point_half[1]}) {
-        *h = _mm256_blend_epi32(*h, pgv, 0x40);
+    for (__m256i* h : {&c.zone_half, &c.zone_half64, &c.point_half, &c.point_half64}) {
+        *h = _mm256_blend_epi32(*h, pgv, 0x20);
     }
 }
-inline void spsc_lane_consts(SpscLaneConsts& c, uint32_t lane, uint32_t dev, uint32_t th, uint32_t prog) {
-    const uint32_t meta = (lane << 16) | (dev << 26);
-    const auto half = [meta](uint32_t type) {
-        return _mm256_setr_epi32(0, 0, 0, 0, 0, static_cast<int>(meta | (type << 29)), 0, 0);
-    };
-    c.mv_zone =
-        _mm256_set1_epi64x(static_cast<long long>(static_cast<uint64_t>(meta | (kSpscRecTypeZone << 29)) << 32));
-    c.mv_event =
-        _mm256_set1_epi64x(static_cast<long long>(static_cast<uint64_t>(meta | (kSpscRecTypeEvent << 29)) << 32));
-    c.zone_half = half(kSpscRecTypeZone);
-    c.zone_half64 = c.zone_half;
-    c.point_half[0] = half(kSpscRecTypeEvent);
-    c.point_half64 = c.point_half[0];
-    c.point_half[1] = half(kSpscRecTypeData);
-    c.ext_half = half(kSpscRecTypeExt);
-    c.cont_half = half(kSpscRecTypeCont);
+inline void spsc_lane_consts(SpscLaneConsts& c, const SpscRecConsts& r, uint32_t th, uint32_t prog) {
+    const __m256i half =
+        _mm256_setr_epi32(0, 0, 0, 0, 0, 0, static_cast<int>(r.coords[0]), static_cast<int>(r.coords[1]));
+    c.zone_half = c.zone_half64 = c.point_half = c.point_half64 = half;
+    c.coords_v = _mm256_set1_epi64x(static_cast<long long>(r.coords[0] | (static_cast<uint64_t>(r.coords[1]) << 32)));
+    c.tail = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r.tail));
     spsc_lane_consts_th(c, th);
     spsc_lane_consts_prog(c, prog);
 }
@@ -374,7 +358,7 @@ inline __m256i spsc_half(const SpscLaneConsts& c) {
     if constexpr (F.kind == Kind::Zone) {
         return F.has_ts_hi() ? c.zone_half64 : c.zone_half;
     } else {
-        return F.has_ts_hi() ? c.point_half64 : c.point_half[0];
+        return F.has_ts_hi() ? c.point_half64 : c.point_half;
     }
 }
 
@@ -407,7 +391,7 @@ inline __m256i spsc_w0_mask() {
     constexpr auto L = [](int k) { return (k % F.words == 0 && k / F.words < 8 / F.words) ? 0x07FFFFFF : -1; };
     return _mm256_setr_epi32(L(0), L(1), L(2), L(3), L(4), L(5), L(6), L(7));
 }
-// The lanes of a composed record that come from the constant half rather than the packet: the meta, prog and pad
+// The lanes of a composed record that come from the constant half rather than the packet: the prog and coordinate
 // lanes always, plus each field the format lacks.
 template <PacketFormat F>
 constexpr int spsc_blend_s() {
@@ -420,9 +404,10 @@ constexpr int spsc_blend_d() {
 
 // Composes packet `r` of a masked load into the public record at o and returns the composed vector: a lane permute
 // puts {ts_lo, ts_hi, dur_lo, dur_hi, id} in place, a blend supplies the constant half, and subtracting
-// {dur, 0, ...} leaves {start, dur, meta|id, prog} with the borrow in the high half.
+// {dur, 0, ...} leaves {start, dur, id | prog << 32, coords} with the borrow in the high half; the lane's tail
+// follows.
 template <PacketFormat F, uint32_t r>
-inline __m256i spsc_compose(__m256i l, __m256i half, uint8_t* o) {
+inline __m256i spsc_compose(__m256i l, __m256i half, __m128i tail, uint8_t* o) {
     constexpr int b = static_cast<int>(r * F.words);
     constexpr auto at = [](uint8_t f) { return f == kAbsent ? 0 : b + f; };
     const __m256i s = _mm256_blend_epi32(
@@ -439,6 +424,7 @@ inline __m256i spsc_compose(__m256i l, __m256i half, uint8_t* o) {
     } else {
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(o), s);
     }
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(o + 32), tail);
     return s;
 }
 
@@ -468,27 +454,32 @@ inline uint32_t spsc_quad_count(__m256i c) {
     }
     return std::countr_zero(~static_cast<uint32_t>(_mm256_movemask_pd(_mm256_castsi256_pd(c))) & 0x1Fu);
 }
-// Four records from per-qword-lane halves: {a, b} is a record's first 16 bytes (start|ts, duration) and {m, pv}
-// its second (meta|id, prog). Written whole; a partial quad's spare records land in the sink's slack.
-inline void spsc_store_quad(uint8_t* o, __m256i a, __m256i b, __m256i m, __m256i pv) {
+// Four records from per-qword-lane halves: {a, b} is a record's first 16 bytes (start|ts, duration), {m, coords}
+// its next 16 (id | prog << 32, the coordinates) and `tail` its last. Written whole; a partial quad's spare records
+// land in the sink's slack.
+inline void spsc_store_quad(uint8_t* o, __m256i a, __m256i b, __m256i m, __m256i coords, __m128i tail) {
     const __m256i ab_lo = _mm256_unpacklo_epi64(a, b);
     const __m256i ab_hi = _mm256_unpackhi_epi64(a, b);
-    const __m256i mp_lo = _mm256_unpacklo_epi64(m, pv);
-    const __m256i mp_hi = _mm256_unpackhi_epi64(m, pv);
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o), _mm256_permute2x128_si256(ab_lo, mp_lo, 0x20));
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + 32), _mm256_permute2x128_si256(ab_hi, mp_hi, 0x20));
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + 64), _mm256_permute2x128_si256(ab_lo, mp_lo, 0x31));
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + 96), _mm256_permute2x128_si256(ab_hi, mp_hi, 0x31));
+    const __m256i mc_lo = _mm256_unpacklo_epi64(m, coords);
+    const __m256i mc_hi = _mm256_unpackhi_epi64(m, coords);
+    constexpr uint32_t R = kSpscRecBytes;
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o), _mm256_permute2x128_si256(ab_lo, mc_lo, 0x20));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + R), _mm256_permute2x128_si256(ab_hi, mc_hi, 0x20));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + 2 * R), _mm256_permute2x128_si256(ab_lo, mc_lo, 0x31));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + 3 * R), _mm256_permute2x128_si256(ab_hi, mc_hi, 0x31));
+    for (uint32_t k = 0; k < 4; k++) {
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(o + k * R + 32), tail);
+    }
 }
 
 // One F record from its words, reported like a run of one.
 template <PacketFormat F>
-inline SpscBlockResult spsc_one(const uint32_t* p, uint32_t readable, const SpscLaneConsts& c, SpscRecSink& sw) {
+inline SpscBlockResult spsc_one(const uint32_t* p, uint32_t readable, const SpscLaneConsts& c, uint8_t* dst) {
     spsc_compose<F, 0>(
         _mm256_and_si256(spsc_words(p, static_cast<int32_t>(readable)), spsc_w0_mask<F>()),
         spsc_half<F>(c),
-        sw.buf + sw.off);
-    sw.off += kSpscRecBytes;
+        c.tail,
+        dst);
     SpscBlockResult out{spsc_ts_at<F>(p, 0, c.th_hi), 1, 0, 0, 0};
     if constexpr (F.kind == Kind::Zone) {
         out.stalls = (p[0] & 0x07FFFFFFu) == kSpscStallZoneId ? 1u : 0u;
@@ -518,7 +509,7 @@ inline bool spsc_run4(const uint32_t* p) {
 // `avail` authorizes loads, never emits.
 template <PacketFormat F>
 __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
-    const uint32_t* p, uint32_t avail, uint32_t max_recs, const SpscLaneConsts& c, SpscRecSink& sw) {
+    const uint32_t* p, uint32_t avail, uint32_t max_recs, const SpscLaneConsts& c, uint8_t* dst) {
     constexpr uint32_t W = F.words;
     constexpr uint32_t R = spsc_recs_per_load<F>;
     static_assert(R == 1 || R == 2);
@@ -536,12 +527,13 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
     const __m256i lane_0 = spsc_lane0();
     const __m256i lane_3 = _mm256_setr_epi32(0, 0, 0, -1, 0, 0, 0, 0);
     const __m256i w0_mask = spsc_w0_mask<F>();
-    const __m256i stall = _mm256_set1_epi32(static_cast<int>(kSpscStallZoneId));
     const __m256i ones = _mm256_set1_epi32(-1);
     const __m256i half = spsc_half<F>(c);
+    const __m128i tail = c.tail;
     const __m256i z = _mm256_setzero_si256();
     const uint64_t th_hi = c.th_hi;
     const uint32_t* const p0 = p;
+    const __m256i stall = _mm256_set1_epi32(static_cast<int>(kSpscStallZoneId));
     __m256i prev = z, back = z, stall_hit = z, wrap_hit = z;
     uint32_t total = 0;
     while (max_recs != 0 && avail >= W) {
@@ -576,10 +568,10 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
         uint32_t i = 0;
         for (; (i + 1) * R <= n; i++) {
             const __m256i l = _mm256_and_si256(v[i], w0_mask);
-            uint8_t* const o = sw.buf + sw.off + kSpscRecBytes * R * i;
-            const __m256i s0 = spsc_compose<F, 0>(l, half, o);
+            uint8_t* const o = dst + kSpscRecBytes * R * i;
+            const __m256i s0 = spsc_compose<F, 0>(l, half, tail, o);
             if constexpr (R == 2) {
-                const __m256i s1 = spsc_compose<F, 1>(l, half, o + kSpscRecBytes);
+                const __m256i s1 = spsc_compose<F, 1>(l, half, tail, o + kSpscRecBytes);
                 back = _mm256_or_si256(back, _mm256_or_si256(_mm256_cmpgt_epi64(prev, s0), _mm256_cmpgt_epi64(s0, s1)));
                 prev = s1;
                 if constexpr (F.has_dur_hi()) {
@@ -598,7 +590,7 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
         if constexpr (R == 2) {
             if (2 * i < n) {  // an odd last record: the load's second record is not ours
                 const __m256i l = _mm256_and_si256(v[i], w0_mask);
-                const __m256i s0 = spsc_compose<F, 0>(l, half, sw.buf + sw.off + kSpscRecBytes * 2 * i);
+                const __m256i s0 = spsc_compose<F, 0>(l, half, tail, dst + kSpscRecBytes * 2 * i);
                 back = _mm256_or_si256(back, _mm256_cmpgt_epi64(prev, s0));
                 prev = s0;
                 if constexpr (F.has_dur_hi()) {
@@ -608,7 +600,7 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
             }
         }
         total += n;
-        sw.off += kSpscRecBytes * n;
+        dst += kSpscRecBytes * n;
         if (n < kBlockRecs) {
             break;
         }
@@ -641,12 +633,7 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
 // bounds the emits.
 template <PacketFormat F>
 __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
-    const uint32_t* p,
-    uint32_t readable,
-    uint32_t max_recs,
-    uint64_t cursor,
-    const SpscLaneConsts& c,
-    SpscRecSink& sw) {
+    const uint32_t* p, uint32_t readable, uint32_t max_recs, uint64_t cursor, const SpscLaneConsts& c, uint8_t* dst) {
     static_assert(F.words == 2);
     constexpr bool kDelta = F.delta16;
     static_assert(kDelta ? F.kind == Kind::Zone : (F.kind == Kind::Point && F.ts_lo == 1));
@@ -656,6 +643,8 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
     const __m256i z = _mm256_setzero_si256();
     const __m256i id_mask = _mm256_set1_epi64x(0x07FFFFFF);
     const __m256i dur_mask = _mm256_set1_epi64x(0xFFFF);
+    const __m256i mv = c.mv, coords = c.coords_v;
+    const __m128i tail = c.tail;
     // The cursor rides as a broadcast vector: the next block's starts need it as one, and the block total is already
     // a broadcast lane of the carry tree.
     __m256i cv = _mm256_set1_epi64x(static_cast<long long>(cursor));
@@ -721,20 +710,19 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
             pfx[2] = _mm256_add_epi64(pfx[2], c2);
             pfx[3] = _mm256_add_epi64(pfx[3], c3);
         }
-        uint8_t* const dst = sw.buf + sw.off;
         for (uint32_t i = 0; i < 4 && 4 * i < n; i++) {
             if constexpr (kDelta) {
                 const __m256i d64 = _mm256_and_si256(_mm256_srli_epi64(v[i], 32), dur_mask);
                 const __m256i s64 = _mm256_sub_epi64(_mm256_add_epi64(cv, pfx[i]), d64);
-                const __m256i m64 = _mm256_or_si256(_mm256_and_si256(v[i], id_mask), c.mv_zone);
-                spsc_store_quad(dst + 128 * i, s64, d64, m64, c.pv);
+                const __m256i m64 = _mm256_or_si256(_mm256_and_si256(v[i], id_mask), mv);
+                spsc_store_quad(dst + 4 * kSpscRecBytes * i, s64, d64, m64, coords, tail);
             } else {
                 const __m256i ts64 = _mm256_or_si256(_mm256_srli_epi64(v[i], 32), c.tv);
-                const __m256i m64 = _mm256_or_si256(_mm256_and_si256(v[i], id_mask), c.mv_event);
-                spsc_store_quad(dst + 128 * i, ts64, z, m64, c.pv);
+                const __m256i m64 = _mm256_or_si256(_mm256_and_si256(v[i], id_mask), mv);
+                spsc_store_quad(dst + 4 * kSpscRecBytes * i, ts64, z, m64, coords, tail);
             }
         }
-        sw.off += kSpscRecBytes * n;
+        dst += kSpscRecBytes * n;
         total += n;
         if constexpr (kDelta) {
             if (n < 16u) {
@@ -775,80 +763,60 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
 // A run of F records through the layout its width selects. `cursor` is read by delta16 formats only.
 template <PacketFormat F>
 inline SpscBlockResult spsc_block(
-    const uint32_t* p,
-    uint32_t readable,
-    uint32_t max_recs,
-    uint64_t cursor,
-    const SpscLaneConsts& c,
-    SpscRecSink& sw) {
+    const uint32_t* p, uint32_t readable, uint32_t max_recs, uint64_t cursor, const SpscLaneConsts& c, uint8_t* dst) {
     if constexpr (F.words == 2) {
-        return spsc_block_qword<F>(p, readable, max_recs, cursor, c, sw);
+        return spsc_block_qword<F>(p, readable, max_recs, cursor, c, dst);
     } else {
-        return spsc_block_strided<F>(p, readable, max_recs, c, sw);
+        return spsc_block_strided<F>(p, readable, max_recs, c, dst);
     }
 }
 
-// One point packet, a Point kind or the Data kind, with no branch on which: the head {ts, 0, meta|id, prog}, then an
-// Ext (payload words 0-1 and the count) and a Cont (words 2-3) written unconditionally and only counted for a Data
-// packet, so a Point's two spare records land in the slack the next record overwrites. Payload words past the count
-// read as zero. Only a payload beyond four words takes the loop. Returns the records the packet counts for; `n` is
-// the payload word count (0 for a Point).
-// `dm` is all ones for a Data packet and zero for a Point; everything Data-only is masked by it, never selected by
-// a branch, so random alternation costs no mispredicts.
-inline uint32_t spsc_point(
-    const uint32_t* p, uint32_t readable, uint32_t dm, uint32_t n, const SpscLaneConsts& c, SpscRecSink& sw) {
+// One point packet, a Point kind or the Data kind: the record {ts, value count, id | prog << 32, coords, tail} at
+// `dst`, and a Data packet's payload words right after it as values (word 2k << 32 | word 2k+1, the last
+// zero-padded), so the record is kSpscRecBytes + 8 * count long. `n` is the payload word count, 0 for a Point:
+// everything Data-only is masked by it, never selected by a branch, so random alternation costs no mispredicts; the
+// first four payload words are stored unconditionally (a Point's land past its record, in the slack the next record
+// overwrites) and only a payload beyond them takes the loop. Words past `readable` read as zero. Returns the values
+// written.
+inline uint32_t spsc_point(const uint32_t* p, uint32_t readable, uint32_t n, const SpscLaneConsts& c, uint8_t* dst) {
     constexpr int kTs = kSpscDataFormat.ts_lo;
     constexpr int kPayload = kSpscDataFormat.words;
-    static_assert(kPayload == 3, "the Ext/Cont permutes below index a 3-word head");
-    const uint32_t conts = n > 2u ? (n - 1u) / 2u : 0u;
-    const uint32_t recs = 1u + (dm & (1u + conts));
+    const uint32_t elems = (n + 1u) >> 1;
+    uint64_t* const pay = reinterpret_cast<uint64_t*>(dst + kSpscRecBytes);
     const __m256i lane_idx = spsc_lane_idx();
-    // The head and payload 0-4 of the packet, the payload lanes zeroed past the count and past readable. Always a
-    // masked load: a branch on the packet's size would follow the type and mispredict on alternation.
+    // The head and payload words 0-4 of the packet, the payload lanes zeroed past the count and past readable.
     const uint32_t words = std::min(readable, static_cast<uint32_t>(kPayload) + n);
     const __m256i l = _mm256_maskload_epi32(
         reinterpret_cast<const int*>(p), _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(words)), lane_idx));
-    const __m256i type_half = c.point_half[dm & 1u];
     const __m256i head = _mm256_blend_epi32(
-        _mm256_permutevar8x32_epi32(
-            _mm256_and_si256(l, _mm256_setr_epi32(0x07FFFFFF, -1, -1, -1, -1, -1, -1, -1)),
-            _mm256_setr_epi32(kTs, 0, 0, 0, 0, 0, 0, 0)),
-        type_half,
-        0xEE);
-    uint8_t* const dst = sw.buf + sw.off;
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst), head);
-    const __m256i ext = _mm256_blend_epi32(
-        _mm256_permutevar8x32_epi32(l, _mm256_setr_epi32(kPayload + 1, kPayload, 0, 0, 0, 0, 0, 0)),
-        _mm256_blend_epi32(c.ext_half, _mm256_set1_epi32(static_cast<int>(n)), 0x10),
-        0xFC);
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 32), ext);
-    const __m256i cont = c.cont_half;
-    _mm256_storeu_si256(
-        reinterpret_cast<__m256i*>(dst + 64),
         _mm256_blend_epi32(
-            _mm256_permutevar8x32_epi32(l, _mm256_setr_epi32(kPayload + 3, kPayload + 2, 0, 0, 0, 0, 0, 0)),
-            cont,
-            0xFC));
+            _mm256_permutevar8x32_epi32(
+                _mm256_and_si256(l, _mm256_setr_epi32(0x07FFFFFF, -1, -1, -1, -1, -1, -1, -1)),
+                _mm256_setr_epi32(kTs, 0, 0, 0, 0, 0, 0, 0)),
+            c.point_half,
+            0xEE),
+        _mm256_set1_epi64x(static_cast<long long>(elems)),
+        0x0C);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst), head);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + 32), c.tail);
+    // Elements 0-1 from the packet's first four payload words, high word first.
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(pay),
+        _mm256_permutevar8x32_epi32(
+            l, _mm256_setr_epi32(kPayload + 1, kPayload, kPayload + 3, kPayload + 2, 0, 0, 0, 0)));
     if (__builtin_expect(n > 4u, 0)) {
-        uint8_t* o = dst + 96;
-        const uint32_t pw = readable > 3u ? std::min(readable - 3u, n) : 0u;
+        const uint32_t pw = readable > static_cast<uint32_t>(kPayload) ? std::min(readable - kPayload, n) : 0u;
         for (uint32_t k = 4; k < n; k += 8) {
             const uint32_t left = std::min(n - k, pw > k ? pw - k : 0u);
             const __m256i pl = _mm256_maskload_epi32(
                 reinterpret_cast<const int*>(p + kPayload + k),
                 _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(left)), lane_idx));
-            for (uint32_t j = 0; j < 4 && k + 2 * j < n; j++) {
-                const __m256i idx =
-                    _mm256_setr_epi32(static_cast<int>(2 * j + 1), static_cast<int>(2 * j), 0, 0, 0, 0, 0, 0);
-                _mm256_storeu_si256(
-                    reinterpret_cast<__m256i*>(o),
-                    _mm256_blend_epi32(_mm256_permutevar8x32_epi32(pl, idx), cont, 0xFC));
-                o += 32;
-            }
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(pay + k / 2),
+                _mm256_permutevar8x32_epi32(pl, _mm256_setr_epi32(1, 0, 3, 2, 5, 4, 7, 6)));
         }
     }
-    sw.off += kSpscRecBytes * recs;
-    return recs;
+    return elems;
 }
 
 }  // namespace tt::tt_metal::profiler

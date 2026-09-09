@@ -99,6 +99,8 @@ constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;  // words
 constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;
+constexpr uint32_t STATE_TIMER_INDEX = SPSC_STATE_TIMER_0 + myRiscID;
+constexpr uint32_t STATE_PROG_INDEX = spsc_state_prog_word(myRiscID);
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
 constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
@@ -138,6 +140,8 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 
 // Last high half emitted in a STICKY_TIMER; ~0 forces a fresh sticky on a launch's first marker.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
+[[maybe_unused]] static uint32_t g_prog_pending =
+    0xFFFFFFFFu;  // validators: the runtime id awaiting the launch's publish
 
 // Lane cursor: the end of the last S/ATOMIC zone, mirrored exactly by the decoder. hi = ~0 is invalid (no S
 // can match it, so the next zone ships ATOMIC and re-anchors both sides).
@@ -169,6 +173,19 @@ inline __attribute__((always_inline)) void publish_tail() {
     profiler_control_buffer[TAIL_INDEX] = wIndex;
 }
 
+// A lane-state slot must never show a value the published tail does not cover, so the tail goes first and a fence
+// separates the two stores (see SPSC_STATE_TIMER_0).
+inline __attribute__((always_inline)) void publish_state(uint32_t index, uint32_t value) {
+    if constexpr (PROFILER_VALIDATES_ZONE) {
+        if (!zoneValid) {
+            return;
+        }
+    }
+    publish_tail();
+    asm volatile("fence" ::: "memory");
+    profiler_control_buffer[index] = value;
+}
+
 // The fence pays the posted ring stores' latency, so paying it once per SPSC_PUBLISH_BATCH_WORDS is most of
 // the close-side saving; the trigger is wIndex crossing a batch boundary. Visibility lags by at most one
 // batch within a launch; launch boundaries and the stall path publish unconditionally, and blocking is
@@ -193,6 +210,10 @@ inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) 
         profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
         wIndex++;
         g_prev_timer_hi = hi;
+        // Every lane re-anchors its cursor within one high-word period, so a decoder that lost frames waits at most
+        // that long for an absolute zone.
+        g_cursor_hi = 0xFFFFFFFFu;
+        publish_state(STATE_TIMER_INDEX, hi);
     }
 }
 
@@ -296,8 +317,7 @@ inline __attribute__((always_inline)) void mark_zone_close(uint32_t timer_id, ui
     // One OR-tree into one branch: cursor delta and duration both fit 16 bits and neither subtract borrowed; an
     // invalid cursor (hi = ~0) fails via c_hi_d. Fall-through because it is the dominant case on a dense lane.
     const uint32_t c_lo_d = lo - g_cursor_lo;
-    const uint32_t c_hi_d = hi - g_cursor_hi - (lo < g_cursor_lo);
-    if (__builtin_expect((((c_lo_d | lo_d) >> 16) | c_hi_d | hi_d) == 0, 1)) {
+    if (__builtin_expect((((c_lo_d | lo_d) >> 16) | (hi ^ g_cursor_hi) | hi_d) == 0, 1)) {
         ring_write_word(ppfmt::zone_s_w0(timer_id));
         ring_write_word((c_lo_d << 16) | lo_d);
         g_cursor_lo = lo;
@@ -331,13 +351,24 @@ inline __attribute__((always_inline)) void set_host_counter(uint32_t counter_val
         ring_ensure_room(1);
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_PROG, counter_value));
     }
-    publish_tail();
+    if constexpr (PROFILER_VALIDATES_ZONE) {
+        g_prog_pending = counter_value;
+    }
+    publish_state(STATE_PROG_INDEX, counter_value);
 }
 
 inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
     zoneValid = condition;
     if (condition) {
         publish_tail();
+        asm volatile("fence" ::: "memory");
+        if (g_prev_timer_hi != 0xFFFFFFFFu) {
+            profiler_control_buffer[STATE_TIMER_INDEX] = g_prev_timer_hi;
+        }
+        if (g_prog_pending != 0xFFFFFFFFu) {
+            profiler_control_buffer[STATE_PROG_INDEX] = g_prog_pending;
+            g_prog_pending = 0xFFFFFFFFu;
+        }
     } else {
         // Idle launch: rewind to the last committed tail; the rewound words may have moved our cursor past anything
         // the decoder sees, so invalidate it.
@@ -348,14 +379,6 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
 
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
-#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
-    defined(COMPILE_FOR_BRISC)
-    static bool s_xy_stamped = false;
-    if (!s_xy_stamped) {
-        profiler_control_buffer[SPSC_CORE_XY] = (my_y[0] << 16) | (my_x[0] & 0xFFFF);
-        s_xy_stamped = true;
-    }
-#endif
     // Seeded from TAIL_INDEX once per FW session, then monotonic across launches: the relay tracks its own head,
     // so re-reading the per-program-reset TAIL would rewind below it and duplicate zones.
     static bool s_windex_seeded = false;

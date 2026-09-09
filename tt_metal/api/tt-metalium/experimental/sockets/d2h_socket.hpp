@@ -309,6 +309,12 @@ public:
     uint32_t pages_available();
 
     /**
+     * @brief The device's bytes_sent word as it stands now: a monotonic 32-bit count of every byte it has pushed.
+     *        Safe to call from any thread.
+     */
+    uint32_t bytes_sent() const;
+
+    /**
      * @brief The FIFO's data region in host memory, for a reader that decodes pages in place instead of read():
      *        byte N of the stream lives at offset N mod fifo_size. Only the pinned, cache-coherent backing supports
      *        this; the hugepage fallback fatals.

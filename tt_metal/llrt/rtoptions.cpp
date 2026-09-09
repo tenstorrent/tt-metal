@@ -127,17 +127,17 @@ enum class EnvVarID {
     // ========================================
     // PROFILING & PERFORMANCE
     // ========================================
-    TT_METAL_DEVICE_PROFILER,                      // Enable the legacy device profiler
-    TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the above)
-    TT_METAL_STREAMING_PROFILER_TRACY,             // Attach the streaming profiler's Tracy sink
-    TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
-    TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
-    TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
-    TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
-    TT_METAL_STREAMING_PROFILER_NRELAYS,           // Streaming profiler DRISC relay count (0 = auto)
-    TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
-    TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
-    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER,              // Enable the legacy device profiler
+    TT_METAL_STREAMING_PROFILER,           // Enable the streaming device profiler (excludes TT_METAL_DEVICE_PROFILER)
+    TT_METAL_STREAMING_PROFILER_TRACY,     // Enable Tracy output for the streaming profiler
+    TT_METAL_STREAMING_PROFILER_DRAM_MB,   // Streaming profiler per-relay GDDR spool ring, MiB
+    TT_METAL_STREAMING_PROFILER_FIFO_MB,   // Streaming profiler host FIFO per D2H socket, MiB
+    TT_METAL_STREAMING_PROFILER_OPS_CSV,   // Streaming profiler ops CSV path
+    TT_METAL_STREAMING_PROFILER_ZONE_CSV,  // Streaming profiler zone CSV path
+    TT_METAL_STREAMING_PROFILER_NRELAYS,   // Streaming profiler DRISC relay count (0 = auto)
+    TT_METAL_DEVICE_PROFILER_DISPATCH,     // Enable dispatch core profiling
+    TT_METAL_PROFILER_SYNC,                // Enable synchronous profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,   // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_DEVICE_PROFILER_SYNC_EVENTS,          // Enable CB/semaphore synchronization-event profiling
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
@@ -955,7 +955,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // options) is active, and the two may not be enabled together (TT_FATAL below). The real-time
         // profiler is disabled while this is on (it reads the same L1 rings). The Tracy sink is NOT
         // implied: opt in with TT_METAL_STREAMING_PROFILER_TRACY=1; without it, records go only to
-        // subscribers (Subscribe / the TT_METAL_STREAMING_PROFILER_*_CSV writers).
+        // registered callbacks (RegisterCallback / the TT_METAL_STREAMING_PROFILER_*_CSV writers).
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER:
@@ -970,7 +970,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_STREAMING_PROFILER_TRACY
         // Attaches the Tracy sink to the streaming profiler. Off by default: the primary consumers are the
-        // subscribers (Subscribe / the CSV writers), and Tracy is one more, expensive, consumer.
+        // registered callbacks (RegisterCallback / the CSV writers), and Tracy is one more, expensive, consumer.
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER_TRACY=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_TRACY:

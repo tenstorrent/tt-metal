@@ -39,25 +39,27 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-using experimental::streaming_profiler::Clock;
-
 namespace {
 
 // Views 7 and 2 last: a roster truncated to fewer relays sheds the bring-up-fragile views first.
 constexpr std::array<uint32_t, 8> kRelayBankRoster = {5u, 6u, 4u, 1u, 0u, 3u, 7u, 2u};
-// Staging slots per relay, capped at what a DRISC's L1 fits; the spool's bounce slots need all of them.
+// Staging slots per relay, capped at what a DRISC's L1 fits; the spool's bounce slots need all of them, direct push
+// the relay's two generations of two slots.
 constexpr uint32_t kMaxStageSlots = 7;
-// One 64-byte record per core (landed tails, head mirror, wire XY) and byte-indexed core lists in the kernel.
-constexpr uint32_t kMaxRelayCores = 128;
-constexpr uint32_t kScratchBytes = kMaxRelayCores * 64;
+constexpr uint32_t kMinStageSlots = 4;
+// One 128-byte record per core (control-vector words 12..31, head mirror, wire XY; a power of two keeps the kernel's
+// record addressing a shift) and byte-indexed core lists in the kernel. 72 covers two relays on a 140-core grid; a
+// relay handed more cores refuses the capture with a message.
+constexpr uint32_t kMaxRelayCores = 72;
+constexpr uint32_t kScratchBytes = kMaxRelayCores * 128;
+static_assert(kScratchBytes % 64 == 0);
 constexpr uint32_t kCfgReserve = 8 * 1024;
 constexpr uint32_t kMiscBytes = 1024;  // done(64) + stop(64), with headroom
-constexpr uint32_t kPageSize = 64;
+constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
 // the stall site.
-thread_local std::string g_bringup_step = "(not started)";
 
 int64_t steady_now_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -69,11 +71,10 @@ uint32_t packed_xy(const CoreCoord& c) {
 }
 
 // Host<->device clock sync: the Tensix wall clock is read over NoC bracketed by host clock reads (Cristian's
-// algorithm; the midpoint cancels the round trip to first order). Without it device zones anchor at the time
-// the first marker was consumed and lag the host zones by the drain latency; `measured` is false then.
-// Samples 500 us apart: back to back they span only ~360 us and the fitted frequency then carries ~1e-4 of
-// error, which grows with time since the anchor; spaced they span ~50 ms.
-Clock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
+// algorithm; the midpoint cancels the round trip to first order). Samples 500 us apart: back to back they span only
+// ~360 us and the fitted frequency then carries ~1e-4 of error, which grows with time since the anchor; spaced they
+// span ~50 ms.
+DeviceClock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
     constexpr uint32_t kSpacingUs = 500;
     // RISCV_DEBUG_REG_WALL_CLOCK_L/H are Tensix debug registers by spec, but a DRAM tile answers them too, which
     // is what allows a per-relay anchor.
@@ -109,10 +110,7 @@ Clock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord&
     const int64_t rt_cut = rts[rts.size() / 2] + rts[rts.size() / 2] / 2;
     std::erase_if(samples, [rt_cut](const S& s) { return s.rt > rt_cut; });
 
-    Clock out{.chip_id = chip_id};
-    if (samples.size() < 2) {
-        return out;
-    }
+    DeviceClock out{.chip_id = chip_id};
     // Centered least squares: centering avoids cancellation at absolute-timestamp magnitudes.
     double hx = 0, dy = 0;
     for (const auto& s : samples) {
@@ -128,9 +126,6 @@ Clock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord&
         num += ddx * ddy;
         den += ddx * ddx;
     }
-    if (std::abs(den) < 1e-10) {
-        return out;
-    }
     const double slope = num / den;  // device cycles per host tick
 #ifdef TRACY_ENABLE
     const double ns_per_tick = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
@@ -145,7 +140,6 @@ Clock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord&
     out.anchor_host_ns =
         steady_now_ns() -
         static_cast<int64_t>(static_cast<double>(tracy::Profiler::GetTime() - static_cast<int64_t>(hx)) * ns_per_tick);
-    out.measured = out.frequency_ghz > 0.0;
     return out;
 }
 
@@ -153,7 +147,7 @@ Clock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord&
 // maps a window per DRAM channel only on the channel's preferred worker endpoint port (configure_static_tlbs
 // -> ddr_to_noc0) and the relay sits on the unused port, so it maps its own: 2 MB at address 0 spans the whole
 // 128 KB DRISC L1. Best-effort: windows are finite, and losing the race costs only the ~210 ns.
-void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const CoreCoord& drisc_virtual, uint32_t d) {
+void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const CoreCoord& drisc_virtual) {
     if (cluster.is_mock_or_emulated()) {
         return;
     }
@@ -163,7 +157,6 @@ void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const 
         return;
     }
     try {
-        g_bringup_step = fmt::format("relay {}: configure static TLB", d);
         tlb_manager->configure_tlb(tlb_core, /*tlb_size=*/2 * 1024 * 1024, /*address=*/0, tt::umd::tlb_data::Strict);
     } catch (const std::exception& e) {
         log_warning(
@@ -177,50 +170,26 @@ void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const 
 }
 
 // A resident relay launches fire-and-forget, so a core that never leaves reset produces no error and the
-// workload wedges on full rings; the heartbeat must leave 0 and then advance.
+// workload wedges on full rings; the heartbeat counts sweeps, and two of them prove the loop runs.
 bool relay_heartbeat_advanced(
-    tt::Cluster& cluster,
-    uint32_t device_id,
-    const CoreCoord& drisc_virtual,
-    uint64_t hb_addr,
-    uint64_t stop_addr,
-    uint32_t d) {
+    tt::Cluster& cluster, uint32_t device_id, const CoreCoord& drisc_virtual, uint64_t hb_addr, uint32_t d) {
     const tt_cxy_pair core(device_id, drisc_virtual);
-    uint32_t hb0 = 0, hb1 = 0;
+    uint32_t hb = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     while (std::chrono::steady_clock::now() < deadline) {
-        cluster.read_core(&hb0, sizeof(hb0), core, hb_addr);
-        if (hb0 != 0) {
-            break;
+        cluster.read_core(&hb, sizeof(hb), core, hb_addr);
+        if (hb >= 2) {
+            return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    // A single sample cannot tell a dead relay from a slow one; 200 ms is ~6000 idle sweeps.
-    if (hb0 != 0) {
-        const auto adv_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-        do {
-            cluster.read_core(&hb1, sizeof(hb1), core, hb_addr);
-            if (hb1 != hb0) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        } while (std::chrono::steady_clock::now() < adv_deadline);
-    }
-    if (hb0 != 0 && hb1 != hb0) {
-        return true;
-    }
-    uint32_t stopw = 0;
-    cluster.read_core(&stopw, sizeof(stopw), core, stop_addr);
     log_warning(
         tt::LogMetal,
-        "[streaming profiler] Device {}: relay {} FAILED TO START (heartbeat {} -> {} after "
-        "launch, stop word {}). The producers would block forever on a full ring and wedge the "
-        "workload, so capture is disabled for this run instead.",
+        "[streaming profiler] Device {}: relay {} FAILED TO START (heartbeat {} after launch). The producers would "
+        "block forever on a full ring and wedge the workload, so capture is disabled for this run instead.",
         device_id,
         d,
-        hb0,
-        hb1,
-        stopw);
+        hb);
     return false;
 }
 
@@ -240,17 +209,12 @@ void set_drisc_niu_stream_mode(IDevice* device, const std::vector<CoreCoord>& dr
         CoreRangeSet(ranges),
         DramConfig{.noc = NOC::NOC_0, .compile_args = {1u}});
     const std::string who = fmt::format("niu-mode[{} cores]", drisc_logicals.size());
-    g_bringup_step = who + ":CompileProgram";
     detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
-    g_bringup_step = who + ":WriteRuntimeArgs";
     detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
     // Launch and wait split so a failure names which half stalled; a stall on the first label means a core was
     // already in stream mode when this run began.
-    g_bringup_step = who + ":LaunchProgram(dram_barrier,no-wait)";
     detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-    g_bringup_step = who + ":WaitProgramDone(poll-after-flip)";
     detail::WaitProgramDone(device, p);
-    g_bringup_step = who + ":done";
 }
 
 }  // namespace
@@ -259,7 +223,6 @@ Devices::DeviceCtx::DeviceCtx() = default;
 Devices::DeviceCtx::~DeviceCtx() = default;
 Devices::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
-const std::string& bringup_step() { return g_bringup_step; }
 
 Devices::~Devices() = default;
 
@@ -288,7 +251,7 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint32_t fixed = kCfgReserve + kScratchBytes + kMiscBytes;
     l1_.n_stage = std::min(region > fixed ? (region - fixed) / slot_bytes_ : 0u, kMaxStageSlots);
-    if (l1_.n_stage == 0) {
+    if (l1_.n_stage < kMinStageSlots) {
         log_warning(tt::LogMetal, "[streaming profiler] DRISC L1 too small for a relay; skipping");
         return {};
     }
@@ -316,6 +279,8 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
             continue;
         }
         ctx.out.chip_id = ctx.chip_id;
+        ctx.out.numa_node =
+            static_cast<int>(MetalContext::instance(context_id_).get_cluster().get_numa_node_for_device(ctx.chip_id));
         out.push_back(std::move(ctx.out));
         devices_.push_back(std::move(ctx));
     }
@@ -346,19 +311,11 @@ bool Devices::boot_device(
     set_producers_armed(ctx, true);
 
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    ctx.out.clock = ctx.cores.empty() ? Clock{} : sync_device_clock(cluster, ctx.chip_id, ctx.cores.front().virt);
-    if (!ctx.out.clock.measured) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] Device {} clock sync FAILED; falling back to first-marker anchoring "
-            "(device zones will lag the host zones by the drain latency)",
-            ctx.chip_id);
-        const double aiclk_ghz = cluster.get_device_aiclk(ctx.chip_id) / 1000.0;
-        ctx.out.clock = Clock{
-            .frequency_ghz = aiclk_ghz > 0.0 ? aiclk_ghz : 1.0,
-            .anchor_host_ns = steady_now_ns(),
-            .chip_id = ctx.chip_id};
-    }
+    ctx.out.clock = sync_device_clock(cluster, ctx.chip_id, ctx.cores.front().virt);
+    TT_FATAL(
+        ctx.out.clock.frequency_ghz > 0.0,
+        "streaming profiler: device {} wall clock did not advance during clock sync",
+        ctx.chip_id);
     return true;
 }
 
@@ -368,8 +325,8 @@ void Devices::write_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint3
         .write_core(&value, sizeof(value), tt_cxy_pair(ctx.chip_id, virt), prof_l1_ + index * sizeof(uint32_t));
 }
 
-// Core identity is not on the wire: the producing core writes its NoC coordinate into SPSC_CORE_XY and core_xy
-// resolves it to the core index the lanes are numbered by.
+// Core identity is not in the packets: the relay stamps each frame with the NoC coordinate the host seeded it with,
+// and core_xy resolves it to the core index the lanes are numbered by.
 void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t chip = ctx.chip_id;
@@ -390,13 +347,11 @@ void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevic
                 zero_ctrl.data(), static_cast<uint32_t>(zero_ctrl.size()), tt_cxy_pair(chip, c.virt), prof_l1_);
             cap.core_xy.push_back(packed_xy(c.virt));
             for (uint32_t r = 0; r < kNRisc; r++) {
-                cap.lanes.push_back(LaneInfo{
-                    chip,
-                    static_cast<uint16_t>(lx),
-                    static_cast<uint16_t>(ly),
-                    static_cast<uint16_t>(c.physical.x),
-                    static_cast<uint16_t>(c.physical.y),
-                    static_cast<uint8_t>(r)});
+                cap.lanes.push_back(experimental::streaming_profiler::Core{
+                    .logical = logical,
+                    .physical = c.physical,
+                    .chip_id = chip,
+                    .risc = static_cast<experimental::streaming_profiler::Risc>(r)});
             }
             ctx.cores.push_back(c);
         }
@@ -572,16 +527,16 @@ bool Devices::launch_relay(
     relay.virt = ctx.device->virtual_core_from_logical_core(relay.logical, CoreType::DRAM);
     const tt_cxy_pair drisc(chip, relay.virt);
 
-    configure_relay_static_tlb(cluster, chip, relay.virt, d);
+    configure_relay_static_tlb(cluster, chip, relay.virt);
 
     try {
-        g_bringup_step = fmt::format("relay {}: D2HSocket construct (writes config into DRISC L1)", d);
         auto socket = std::make_unique<distributed::D2HSocket>(
             mesh_device,
             distributed::MeshCoreCoord{coord, CoreCoord(phys.x, phys.y)},
             (rtopts.get_streaming_profiler_fifo_mb() << 20) / kPageSize * kPageSize,
             distributed::D2HSocket::ExternalConfigBuffer{
-                .address = l1_.cfg, .sender_core_type = HalProgrammableCoreType::DRAM});
+                .address = l1_.cfg, .sender_core_type = HalProgrammableCoreType::DRAM},
+            distributed::D2HSocket::ProcessScope::InProcess);
         socket->set_page_size(kPageSize);
 
         // Zero the relay core's own profiler ring: the relay is built with PROFILE_KERNEL, firmware writes zone
@@ -623,10 +578,6 @@ bool Devices::launch_relay(
                 l1_.n_stage,
                 d);
         }
-        TT_FATAL(
-            my_cores * 32u <= slot_bytes_,
-            "CV-first tails staging ({} cores x 32 B) does not fit inside the slot past the pipeline",
-            my_cores);
         auto relay_id = CreateKernel(
             *program,
             "tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp",
@@ -645,12 +596,9 @@ bool Devices::launch_relay(
 
         detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
         detail::WriteRuntimeArgsToDevice(ctx.device, *program, /*force_slow_dispatch=*/true);
-        g_bringup_step = fmt::format("relay {}: relay kernel LaunchProgram", d);
         detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 
-        g_bringup_step = fmt::format("relay {}: heartbeat verify", d);
-        if (!relay_heartbeat_advanced(
-                cluster, chip, relay.virt, relay_noc_addr(l1_.done) + 4, relay_noc_addr(l1_.stop), d)) {
+        if (!relay_heartbeat_advanced(cluster, chip, relay.virt, relay_noc_addr(l1_.done) + 4, d)) {
             return false;
         }
         TT_FATAL(d == ctx.out.sockets.size(), "sockets must form a contiguous prefix");
@@ -658,19 +606,13 @@ bool Devices::launch_relay(
         relay.program = std::move(program);
     } catch (const std::exception& e) {
         // A code-region overflow fails the load, not the start, and the run then exits 0 with every marker dropped.
-        const std::string what = e.what();
-        const bool elf_too_big = what.find("overflows region") != std::string::npos;
         log_error(
             tt::LogMetal,
-            "[streaming profiler] Device {}: DRISC {} FAILED TO LOAD{} -- THIS CAPTURE WILL BE EMPTY. No "
-            "device zones will be produced and the run will still exit 0.{} ({})",
+            "[streaming profiler] Device {}: DRISC {} FAILED TO LOAD -- THIS CAPTURE WILL BE EMPTY; the run will still "
+            "exit 0 ({})",
             chip,
             d,
-            elf_too_big ? " (relay kernel ELF EXCEEDS THE DRISC CODE REGION)" : "",
-            elf_too_big ? " Reduce relay-kernel code: a u64 division anywhere in the kernel costs a "
-                          "956 B soft-div."
-                        : "",
-            what);
+            e.what());
         return false;
     }
     return true;
@@ -679,75 +621,27 @@ bool Devices::launch_relay(
 // Producers boot unarmed (enumerate_worker_grid() clears PROFILER_ARMED on every Tensix core of the device) and
 // only block on a full ring once armed, so a core no relay drains can never wedge device close. Arming follows the
 // relays coming up; a relay that fails leaves the whole device unarmed and its markers are overwritten instead.
-// Disarming is the only path that drops a marker: a producer still publishing after the drain budget, unblocked so
-// device close does not wedge in wait_until_cores_done().
 void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
     for (const WorkerCore& c : ctx.cores) {
         write_ctrl_word(ctx, c.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
     }
 }
 
-// Head is relay-written and tail producer-written, so head == tail on every RISC means everything published
-// was consumed. Must precede the quiesce: dispatch cores emit zones through device close and would park in
-// ring_ensure_room against stopped relays.
-bool Devices::wait_producer_rings_drained(const DeviceCtx& ctx, std::chrono::milliseconds budget) {
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    std::vector<uint8_t> drained(ctx.cores.size(), 0);
-    std::vector<uint32_t> ht(2 * kernel_profiler::PROFILER_SPSC_MAX_RISC, 0);
-    const auto dl = std::chrono::steady_clock::now() + budget;
-    size_t pending = ctx.cores.size();
-    while (pending != 0 && std::chrono::steady_clock::now() < dl) {
-        pending = 0;
-        for (size_t ci = 0; ci < ctx.cores.size(); ci++) {
-            if (drained[ci] != 0) {
-                continue;
-            }
-            cluster.read_core(
-                ht.data(),
-                static_cast<uint32_t>(ht.size() * sizeof(uint32_t)),
-                tt_cxy_pair(ctx.chip_id, ctx.cores[ci].virt),
-                prof_l1_);
-            bool empty = true;
-            for (uint32_t r = 0; r < kNRisc; r++) {
-                empty &= ht[kernel_profiler::SPSC_RING_HEAD_0 + r] == ht[kernel_profiler::SPSC_RING_TAIL_0 + r];
-            }
-            drained[ci] = empty ? 1u : 0u;
-            pending += empty ? 0u : 1u;
-        }
-    }
-    return pending == 0;
-}
-
 void Devices::quiesce(const RelayStateFn& on_state) {
-    for (const auto& ctx : devices_) {
-        if (!wait_producer_rings_drained(ctx, std::chrono::seconds(2))) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] Device {}: producers still publishing after the 2 s drain budget -- "
-                "unblocking ring back-pressure so device close cannot wedge; markers still in flight on those "
-                "cores are DROPPED",
-                ctx.chip_id);
-            set_producers_armed(ctx, false);
-        }
-    }
-
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     for (uint32_t di = 0; di < devices_.size(); di++) {
         const DeviceCtx& ctx = devices_[di];
+        const auto write_stop = [&](uint32_t d, uint32_t word) {
+            cluster.write_core(
+                &word, sizeof(word), tt_cxy_pair(ctx.chip_id, ctx.relays[d].virt), relay_noc_addr(l1_.stop));
+        };
         for (uint32_t d = 0; d < ctx.n_relays; d++) {
-            const Relay& relay = ctx.relays[d];
-            if (relay.program == nullptr) {
-                continue;
-            }
-            const tt_cxy_pair drisc(ctx.chip_id, relay.virt);
-            const auto write_stop = [&](uint32_t word) {
-                cluster.write_core(&word, sizeof(word), drisc, relay_noc_addr(l1_.stop));
-            };
-            write_stop(kernel_profiler::kRelayStopQuiesce);
+            const tt_cxy_pair drisc(ctx.chip_id, ctx.relays[d].virt);
+            write_stop(d, kernel_profiler::kRelayStopQuiesce);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            uint32_t state = 0;
             bool drained = false;
-            while (std::chrono::steady_clock::now() < deadline) {
+            for (;;) {
+                uint32_t state = 0;
                 cluster.read_core(&state, sizeof(state), drisc, relay_noc_addr(l1_.done));
                 state &= kernel_profiler::kRelayDoneMask;
                 if (state == kernel_profiler::kRelayDoneWord) {
@@ -757,110 +651,84 @@ void Devices::quiesce(const RelayStateFn& on_state) {
                     on_state(di, d, RelayState::Drained);
                     drained = true;
                 }
+                TT_FATAL(
+                    std::chrono::steady_clock::now() < deadline,
+                    "streaming profiler: device {} relay {} did not finish within 10 s of its stop (state {:#x})",
+                    ctx.chip_id,
+                    d,
+                    state);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            if (state != kernel_profiler::kRelayDoneWord) {
-                log_warning(
-                    tt::LogMetal, "[streaming profiler] Device {}: DRISC relay did not acknowledge stop", ctx.chip_id);
-            } else if (on_state) {
+            if (on_state) {
                 // done follows the relay's socket barrier, so the host has already acked every byte this socket will
                 // carry.
                 on_state(di, d, RelayState::Done);
             }
-            // Release restores the NIU; NOC2AXI takes this L1 out of the host's view, so it comes last.
-            write_stop(kernel_profiler::kRelayStopRelease);
+        }
+        // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
+        set_producers_armed(ctx, false);
+        // Release restores the NIU; NOC2AXI takes this L1 out of the host's view, so it comes last.
+        for (uint32_t d = 0; d < ctx.n_relays; d++) {
+            write_stop(d, kernel_profiler::kRelayStopRelease);
         }
     }
 }
 
 // One MMIO pass per worker core: the producer-owned stall counters, and each lane's tail against the consumed-words
 // mirror.
-void Devices::verify_completeness(uint32_t device_index, std::span<const uint32_t> heads) {
+void Devices::verify_completeness(uint32_t device_index) {
     const DeviceCtx& ctx = devices_[device_index];
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     std::vector<uint32_t> cv(kernel_profiler::SPSC_CONTROL_END, 0);
-    uint64_t total = 0, worst = 0;
-    uint64_t stranded_words = 0, stranded_lanes = 0, checked_lanes = 0;
-    uint32_t worst_lane = 0, worst_lane_words = 0;
-    uint64_t risc_total[kNRisc] = {};
-    struct CoreStall {
-        uint32_t count, vx, vy, idx;
-    };
-    std::vector<CoreStall> stalled_cores;
+    uint64_t total = 0, stranded_words = 0, stranded_lanes = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> stalled;  // (stalls, core index)
     for (size_t ci = 0; ci < ctx.cores.size(); ci++) {
-        const CoreCoord& v = ctx.cores[ci].virt;
         cluster.read_core(
-            cv.data(), kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t), tt_cxy_pair(ctx.chip_id, v), prof_l1_);
-        uint64_t core_total = 0;
+            cv.data(),
+            kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),
+            tt_cxy_pair(ctx.chip_id, ctx.cores[ci].virt),
+            prof_l1_);
+        uint32_t core_total = 0;
         for (uint32_t r = 0; r < kernel_profiler::SPSC_STALL_COUNT_MAX; r++) {
             core_total += cv[kernel_profiler::SPSC_STALL_COUNT_0 + r];
-            if (r < kNRisc) {
-                risc_total[r] += cv[kernel_profiler::SPSC_STALL_COUNT_0 + r];
-            }
         }
         total += core_total;
-        worst = std::max(worst, core_total);
         if (core_total != 0) {
-            stalled_cores.push_back(
-                {static_cast<uint32_t>(core_total),
-                 static_cast<uint32_t>(v.x),
-                 static_cast<uint32_t>(v.y),
-                 static_cast<uint32_t>(ci)});
+            stalled.emplace_back(core_total, static_cast<uint32_t>(ci));
         }
-        for (uint32_t r = 0; r < kNRisc && !heads.empty(); r++) {
-            const uint32_t lane = static_cast<uint32_t>(ci) * kNRisc + r;
-            const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-            const int32_t left = static_cast<int32_t>(tail - (lane < heads.size() ? heads[lane] : 0));
-            checked_lanes++;
+        for (uint32_t r = 0; r < kNRisc; r++) {
+            const int32_t left = static_cast<int32_t>(
+                cv[kernel_profiler::SPSC_RING_TAIL_0 + r] - cv[kernel_profiler::SPSC_RING_HEAD_0 + r]);
             if (left > 0) {
                 stranded_lanes++;
                 stranded_words += static_cast<uint32_t>(left);
-                if (static_cast<uint32_t>(left) > worst_lane_words) {
-                    worst_lane_words = static_cast<uint32_t>(left);
-                    worst_lane = lane;
-                }
             }
         }
     }
     if (total != 0) {
-        std::sort(stalled_cores.begin(), stalled_cores.end(), [](const CoreStall& a, const CoreStall& b) {
-            return a.count > b.count;
-        });
+        std::sort(stalled.begin(), stalled.end(), std::greater<>());
         std::string top;
-        for (size_t i = 0; i < stalled_cores.size(); i++) {
-            const auto& c = stalled_cores[i];
-            top += fmt::format("{}({},{})#{}={}", i != 0 ? " " : "", c.vx, c.vy, c.idx, c.count);
+        for (const auto& [count, ci] : stalled) {
+            const CoreCoord& v = ctx.cores[ci].virt;
+            top += fmt::format("{}({},{})#{}={}", top.empty() ? "" : " ", v.x, v.y, ci, count);
         }
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] Device {}: {} profiler stalls on {} of {} cores (worst core {}); by RISC BR {} | NC "
-            "{} | "
-            "T0 {} | T1 {} | T2 {}; top cores (virt x,y)=count: {}",
+            "[streaming profiler] Device {}: {} profiler stalls on {} of {} cores; (virt x,y)#index=stalls: {}",
             ctx.chip_id,
             total,
-            stalled_cores.size(),
+            stalled.size(),
             ctx.cores.size(),
-            worst,
-            risc_total[0],
-            risc_total[1],
-            risc_total[2],
-            risc_total[3],
-            risc_total[4],
             top);
     }
     if (stranded_lanes != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] COMPLETENESS: device {} -- {}/{} lanes fully drained; {} lanes stranded {} "
-            "words (worst lane {}: {}) <<< stop-path sweep-to-empty contract violated; the capture tail is "
-            "incomplete",
+            "[streaming profiler] Device {}: {} words on {} lanes were published after the relay's last sweep and are "
+            "not in the capture",
             ctx.chip_id,
-            checked_lanes - stranded_lanes,
-            checked_lanes,
-            stranded_lanes,
             stranded_words,
-            worst_lane,
-            worst_lane_words);
+            stranded_lanes);
     }
 }
 

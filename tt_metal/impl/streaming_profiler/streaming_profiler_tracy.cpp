@@ -65,8 +65,7 @@ TracySink::TracySink(Service& service) : service_(service), srcloc_table_(kSrclo
     anchor_tracy_ = tracy::Profiler::GetTime();
 #endif
     base_ = probe();
-    handle_ =
-        service_.add_consumer("tracy", make_public_adapter(api::Channel::All, [this](const Batch& b) { on_batch(b); }));
+    handle_ = service_.add_consumer("tracy", [this](const Batch& b, uint64_t capture) { on_batch(b, capture); });
 }
 
 TracySink::~TracySink() {
@@ -78,26 +77,28 @@ TracySink::~TracySink() {
 #endif
 }
 
-void TracySink::on_batch(const Batch& batch) {
+void TracySink::on_batch(const Batch& batch, uint64_t capture) {
     // A map may only start fresh between captures: re-measuring an offset mid-capture moved every later zone by the
     // read pair's jitter, and a zone spanning the change no longer contained its children.
-    if (!batch.clocks.empty() &&
-        (batch.clocks.size() != capture_clocks_ || batch.clocks[0].anchor_host_ns != capture_anchor_)) {
+    if (capture != capture_) {
         start_capture_map();
-        capture_clocks_ = batch.clocks.size();
-        capture_anchor_ = batch.clocks[0].anchor_host_ns;
+        capture_ = capture;
     } else if (ns_since_epoch(std::chrono::steady_clock::now()) >= next_refine_ns_) {
         refine_map();
     }
-    for (const api::Zone& z : batch.zones) {
+    for (const api::Zone& z : batch.zones()) {
         push_zone(
-            z.core, z.site.name, ns_since_epoch(z.start_time()), ns_since_epoch(z.end_time()), z.stall ? kStallColor : 0);
+            z.core(),
+            z.site().name,
+            ns_since_epoch(z.start_time()),
+            ns_since_epoch(z.end_time()),
+            z.site().name == api::kStallZoneName ? kStallColor : 0);
     }
-    for (const api::TimestampedData& d : batch.timestamped_data) {
-        push_marker(d.core, d.site.name, ns_since_epoch(d.time()), d.runtime_id, d.payload);
+    for (const api::TimestampedData& d : batch.timestamped_data()) {
+        push_marker(d.core(), d.site().name, ns_since_epoch(d.time()), d.runtime_id(), d.payload());
     }
-    for (const api::Event& e : batch.events) {
-        push_marker(e.core, e.site.name, ns_since_epoch(e.time()), e.runtime_id, {});
+    for (const api::Event& e : batch.events()) {
+        push_marker(e.core(), e.site().name, ns_since_epoch(e.time()), e.runtime_id(), {});
     }
 }
 
@@ -168,7 +169,7 @@ TracySink::Lane TracySink::lane(const Core& core) {
         return lane_hit_;
     }
     Lane ln;
-    ln.risc = static_cast<uint32_t>(core.risc) % 5;
+    ln.risc = static_cast<uint32_t>(core.risc);
 #if defined(TRACY_ENABLE)
     auto [it, fresh] = cores_.try_emplace(key & ~uint64_t{0xFF});
     CoreEntry& ce = it->second;
@@ -297,14 +298,13 @@ void TracySink::push_marker(
     marker.chip_id = core.chip_id;
     marker.core_x = core.logical.x;
     marker.core_y = core.logical.y;
-    marker.risc = kRisc[static_cast<uint32_t>(core.risc) % 5];
+    marker.risc = kRisc[static_cast<uint32_t>(core.risc)];
     marker.timestamp = static_cast<uint64_t>(to_timeline(timestamp_ns));
     marker.runtime_host_id = runtime_id;
     marker.marker_type = values.empty() ? tracy::TTDeviceMarkerType::FLAG : tracy::TTDeviceMarkerType::DATA;
     marker.marker_name = std::string(name);
     marker.file = "kernel_profiler";
     marker.line = 0;
-    // The first two uint64s ride the marker's dedicated fields; the rest go into the metadata map.
     if (!values.empty()) {
         marker.data = values[0];
     }

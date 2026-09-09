@@ -5,8 +5,9 @@
 // The relay's compact profiler packet wire format. Each (core, risc) lane is kept separate end to end, so
 // identity is structural and packets carry no core/risc or framing bits. A packet is two 32-bit words:
 // word0 = [31:27] type(5) | [26:0] low27, word1 = payload32. Markers carry the 27-bit structural zone id
-// (tu_id(17) << 10 | local(10)) and timer_low; timer_hi rides the rare STICKY_TIMER. Plain C, read by the host
-// decoder; the producer keeps its own copy of the packer (ppfmt in kernel_profiler_streaming.hpp).
+// (tu_id(13) << 14 | local(14), hostdevcommon/profiler_zone_id.h) and timer_low; timer_hi rides the rare STICKY_TIMER.
+// Plain C, read by the host decoder; the producer keeps its own copy of the packer (ppfmt in
+// kernel_profiler_streaming.hpp).
 
 #ifndef SPSC_PACKET_H
 #define SPSC_PACKET_H
@@ -62,18 +63,8 @@
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
 #define PP_LOW27_MASK 0x7FFFFFFu /* [26:0]: timer_hi (sticky) or the full 27-bit zone id (marker) */
 
-#define PP_TIMER_HI_MASK 0x7FFFFFFu /* 27-bit high half (fits low27 of a sticky word0) */
-
 static inline uint32_t pp_type(uint32_t w0) { return (w0 >> PP_TYPE_SHIFT) & PP_TYPE_MASK; }
 static inline uint32_t pp_low27(uint32_t w0) { return w0 & PP_LOW27_MASK; }
-static inline uint32_t pp_timer_hi(uint32_t w0) { return pp_low27(w0); }
-static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
-
 static inline int pp_is_bulkspan(uint32_t w0) { return pp_type(w0) == PP_BULK_SPAN; }
-
-/* reconstruct the 59-bit device timestamp from a marker's 32-bit low + the lane's sticky 27-bit high. */
-static inline uint64_t pp_full_ts(uint32_t timer_hi, uint32_t timer_low) {
-    return ((uint64_t)(timer_hi & PP_TIMER_HI_MASK) << 32) | (uint64_t)timer_low;
-}
 
 #endif /* SPSC_PACKET_H */

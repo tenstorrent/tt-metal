@@ -25,18 +25,18 @@ void kernel_main() {
 
 Host callback — a zone arrives as one record, whole, when it closes. The public API is
 `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace `tt::tt_metal::experimental::streaming_profiler`);
-subscribe with a callable taking the `Batch` of the channels you want:
+register a callable taking the `Batch` of the record types you want:
 
 ```cpp
-auto h = Subscribe("zone-sink", [](const Batch<Channel::Zones>& b) {
-    for (const Zone& z : b.zones) {
+auto h = RegisterCallback("zone-sink", [](const Batch<RecordType::Zones>& b) {
+    for (const Zone& z : b.zones()) {
         fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
-            z.site.name,                 // "compute"
-            z.duration().count(), z.core.chip_id, z.core.logical.x, z.core.logical.y,
-            static_cast<int>(z.core.risc), z.runtime_id);
+            z.site().name,               // "compute"
+            z.duration().count(), z.core().chip_id, z.core().logical.x, z.core().logical.y,
+            static_cast<int>(z.core().risc), z.runtime_id());
     }
 });
-// later: Unsubscribe(h);
+// later: UnregisterCallback(h);
 ```
 
 ![zone scopes](docs/zone_gifs/zone_scopes.gif)
@@ -61,11 +61,11 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — a `TimestampedData` record arrives assembled, its payload as a span of uint64 words:
 
 ```cpp
-auto h = Subscribe("data-sink", [](const Batch<Channel::TimestampedData>& b) {
-    for (const TimestampedData& d : b.timestamped_data) {
+auto h = RegisterCallback("data-sink", [](const Batch<RecordType::TimestampedData>& b) {
+    for (const TimestampedData& d : b.timestamped_data()) {
         fmt::print("{} @ {}: value={}\n",
-            d.site.name,                                     // "BYTES-MOVED"
-            d.time().time_since_epoch().count(), d.payload[0]);
+            d.site().name,                                   // "BYTES-MOVED"
+            d.time().time_since_epoch().count(), d.payload()[0]);
     }
 });
 ```
@@ -89,11 +89,11 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — an `Event` is a name and a time, nothing else:
 
 ```cpp
-auto h = Subscribe("flag-sink", [](const Batch<Channel::Events>& b) {
-    for (const Event& e : b.events) {
+auto h = RegisterCallback("flag-sink", [](const Batch<RecordType::Events>& b) {
+    for (const Event& e : b.events()) {
         fmt::print("{} @ {} on core ({},{})\n",
-            e.site.name, e.time().time_since_epoch().count(),   // "LOOP-START" @ host time
-            e.core.logical.x, e.core.logical.y);
+            e.site().name, e.time().time_since_epoch().count(), // "LOOP-START" @ host time
+            e.core().logical.x, e.core().logical.y);
     }
 });
 ```

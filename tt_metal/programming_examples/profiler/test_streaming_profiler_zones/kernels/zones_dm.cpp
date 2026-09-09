@@ -74,8 +74,8 @@ void kernel_main() {
 #endif
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BENCH_ADDR) + kSlot * 2u;
     // BENCH_KIND 0 = spin only, 1 = empty zone (3 words), 2 = DeviceFlag (3 words), 3 = DeviceTimestampedData
-    // (6 words), 4 / 5 = DeviceZoneScopedNIf with an opaque runtime true / false; the burst stays under the 512-word
-    // ring so it never blocks.
+    // (6 words), 4 / 5 = DeviceZoneScopedNIf with an opaque runtime true / false, 6 = DeviceZoneSetCounter (the
+    // launch path's STICKY_PROG + publish); the burst stays under the 512-word ring so it never blocks.
     constexpr uint32_t kBurst = BENCH_KIND == 3 ? 64 : 100;
     uint32_t cycles = 0, markers = 0;
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
@@ -91,6 +91,8 @@ void kernel_main() {
             uint32_t on = BENCH_KIND == 4;
             asm volatile("" : "+r"(on));
             DeviceZoneScopedNIf(ZTAG "_BENCH", on != 0);
+#elif BENCH_KIND == 6
+            DeviceZoneSetCounter(i + 1);  // the launch path's runtime-id sticky and publish
 #endif
             // BENCH_DELAY nop iterations keep the ring from filling, so the marker's own cost is what is timed;
             // kind 0 (no marker) prices the loop and spin for subtraction.

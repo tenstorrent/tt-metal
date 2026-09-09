@@ -8,39 +8,39 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
-#include <chrono>
 #include <thread>
 #include <utility>
 #include <vector>
 #include <sys/prctl.h>
 #include <pthread.h>
+#include <numa.h>
 
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
-#include <umd/device/driver_atomics.hpp>
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 
-#include "tt_metal/common/broadcast_ring.hpp"
 #include "context/metal_context.hpp"
 #include "llrt/zone_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
+namespace api = experimental::streaming_profiler;
+
 namespace {
 
 // Credits go back about once per relay push rather than per poll.
 constexpr uint32_t kAckBatchPages = 8 * profiler::kSpscMaxFramePages;
-constexpr uint32_t kPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
-// 64 MiB is ~1.6 ms of device egress at 40 GB/s: the ingest stall the device rides out before it backpressures.
-constexpr uint64_t kRunwayPages = (64ull << 20) / kPageBytes;
-// Idle probe period. Under ~50 us sleep_for rounds up unless the timer slack is shrunk; raising it to 200 us
-// doubled the relays' worst credit wait, since no credit returns during the sleep.
-constexpr uint32_t kProbeSleepCapUs = 5;
+constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+constexpr uint32_t kPageBytes = kPageWords * 4;
+// Idle probe period: credits are returned as soon as pages are walked, so a sleep only delays the frames that land
+// during it, never a credit the device is short of (the FIFO holds over a millisecond of egress).
+constexpr uint32_t kProbeSleepCapUs = 100;
 
 }  // namespace
 
@@ -52,51 +52,25 @@ void set_os_thread_name(const std::string& n) {
 
 Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> devices) :
     relays_(std::move(relays)), devices_(std::move(devices)) {
-    TT_FATAL(
-        devices_.size() <= kStreamingProfilerMaxDevices,
-        "record dev field holds {} devices",
-        kStreamingProfilerMaxDevices);
-    // The scalar decode packs meta through the bit-field; the vector paths pack it by hand, so pin the layout.
-    static_assert(static_cast<uint32_t>(RecType::Zone) == profiler::kSpscRecTypeZone);
-    static_assert(static_cast<uint32_t>(RecType::Data) == profiler::kSpscRecTypeData);
-    static_assert(static_cast<uint32_t>(RecType::Event) == profiler::kSpscRecTypeEvent);
-    static_assert(static_cast<uint32_t>(RecType::Ext) == profiler::kSpscRecTypeExt);
-    static_assert(static_cast<uint32_t>(RecType::Cont) == profiler::kSpscRecTypeCont);
-    const RecMeta meta_probe{0, 5, 2, RecType::Data};
-    TT_FATAL(
-        std::bit_cast<uint32_t>(meta_probe) == ((5u << 16) | (2u << 26) | (2u << 29)),
-        "RecMeta bit-field layout does not match the vectorized packer");
     for (uint32_t d = 0; d < devices_.size(); d++) {
         auto& dev = devices_[d];
-        TT_FATAL(
-            dev.ctx.lanes.size() <= kStreamingProfilerMaxLanes,
-            "record lane field holds {} lanes, device has {}",
-            kStreamingProfilerMaxLanes,
-            dev.ctx.lanes.size());
-        ctx_.devices.push_back(dev.ctx);
-        clocks_.push_back(dev.clock);
         for (uint32_t sk = 0; sk < dev.sockets.size(); sk++) {
             auto s = std::make_unique<Stream>();
             s->sock = dev.sockets[sk].get();
             s->dev = d;
             s->sock_idx = sk;
-            const std::span<std::byte> fifo = s->sock->host_fifo();
+            s->fifo = s->sock->host_fifo();
             TT_FATAL(
-                s->sock->get_fifo_curr_size() == fifo.size() && fifo.size() % kPageBytes == 0,
-                "streaming profiler: the host FIFO must be a whole number of pages");
-            s->capacity = fifo.size() / kPageBytes;
-            TT_FATAL(
-                std::has_single_bit(s->capacity),
-                "TT_METAL_STREAMING_PROFILER_FIFO_MB must be a power of two: the FIFO is the frame ring");
-            s->keep = s->capacity - std::min<uint64_t>(kRunwayPages, s->capacity / 4);
-            s->claim = s->capacity;
-            s->ring =
-                std::make_unique<BroadcastRing<RingLine>>(s->capacity, fifo, BroadcastRing<RingLine>::AdoptStorage{});
+                s->sock->get_fifo_curr_size() == s->fifo.size() && s->fifo.size() % kPageBytes == 0 &&
+                    std::has_single_bit(s->fifo.size()),
+                "streaming profiler: the host FIFO must be a power-of-two number of pages");
+            s->capacity = s->fifo.size() / kPageBytes;
             streams_.push_back(std::move(s));
         }
+        ctx_.devices.push_back(dev.ctx);
     }
     for (const auto& st : streams_) {
-        streams_view_.push_back({st->ring.get(), st->dev});
+        streams_view_.push_back({st->fifo, &st->walked_bytes, st->dev});
     }
 }
 
@@ -106,11 +80,7 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
     try {
         devices = relays->boot(mesh_device);
     } catch (const std::exception& e) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] init failed at step [{}] ({}); disabled for this session.",
-            bringup_step(),
-            e.what());
+        log_warning(tt::LogMetal, "[streaming profiler] init failed ({}); disabled for this session.", e.what());
         relays->quiesce({});
         return nullptr;
     }
@@ -136,70 +106,123 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
 
 Receiver::~Receiver() {
     relays_->quiesce([this](uint32_t device_index, uint32_t socket_index, RelayState state) {
-        Stream& s = stream(device_index, socket_index);
-        (state == RelayState::Done ? s.producers_done : s.drained).store(true, std::memory_order_release);
+        stream(device_index, socket_index).relay.store(state, std::memory_order_release);
     });
-    stop_.store(true, std::memory_order_release);
     for (auto& t : ingest_threads_) {
         t.join();
     }
     service().detach_producer(*this);
     for (uint32_t d = 0; d < devices_.size(); d++) {
-        relays_->verify_completeness(d, final_lane_heads(d));
+        relays_->verify_completeness(d);
     }
     log_report();
-    const auto zm = llrt::ZoneMetaRegistry::instance().stats();
+    const uint64_t foreign = llrt::ZoneMetaRegistry::instance().foreign_sections();
     const uint64_t collisions = llrt::ZoneMetaRegistry::instance().collisions();
-    if (collisions != 0 || zm.foreign_sections != 0) {
+    if (collisions != 0 || foreign != 0) {
         log_warning(
             tt::LogMetal,
             "[streaming profiler] zone names: {} id collisions, {} foreign metadata sections ignored (the JIT "
             "cache holds ELFs from a different .tt_zone_meta layout)",
             collisions,
-            zm.foreign_sections);
+            foreign);
     }
 }
 
-// The device is the ring's writer. Its progress is the socket's bytes_sent; the pages it may still write or
-// overwrite are bounded by the credits the host returned, so the ring's horizon is acked + capacity and credits are
-// returned only up to arrived - keep. That keeps `keep` pages behind the device intact for lagging readers while
-// the device always has the runway ahead. Once the relay has published drained it writes nothing more, so everything
-// is acked for its socket barrier and the horizon stays where it is.
-bool Receiver::ingest_pass(Stream& s) {
-    // pages_available counts from the last ack, so it includes the pages already published
+bool Receiver::poll(Stream& s) {
+    // pages_available counts from the last ack, so it includes the pages already seen
     const uint64_t arrived = s.acked + s.sock->pages_available();
-    const bool drained = s.drained.load(std::memory_order_acquire);
+    TT_FATAL(
+        arrived >= s.arrived,
+        "streaming profiler: device {} socket {} bytes_sent went backwards ({} to {} pages)",
+        s.dev,
+        s.sock_idx,
+        s.arrived,
+        arrived);
     if (arrived == s.arrived) {
-        if (drained && s.acked < arrived) {
-            s.sock->pop(static_cast<uint32_t>(arrived - s.acked), true);
-            s.acked = arrived;
-        }
-        if (s.producers_done.load(std::memory_order_acquire)) {
-            s.retired = true;
-        }
         return false;
     }
     s.arrived = arrived;
-    auto& w = s.ring->writer();
-    if (drained) {
-        w.publish_external(arrived, s.claim);
-        s.sock->pop(static_cast<uint32_t>(arrived - s.acked), true);
-        s.acked = arrived;
-        return true;
-    }
-    // The credit write may go through a write-combining PCIe window, which x86 does not order behind the cached
-    // claim store; the sfence keeps the horizon visible before the device can act on the credit.
-    const uint64_t ack_to = arrived > s.keep ? arrived - s.keep : 0;
-    if (ack_to - s.acked >= kAckBatchPages) {
-        s.claim = ack_to + s.capacity;
-        w.publish_external(arrived, s.claim);
-        tt_driver_atomics::sfence();
-        s.sock->pop(static_cast<uint32_t>(ack_to - s.acked), true);
-        s.acked = ack_to;
-    } else {
-        w.publish_external(arrived, s.claim);
+    s.arrived_bytes.store(arrived * kPageBytes, std::memory_order_release);
+    s.fullest = std::max(s.fullest, arrived - s.acked);
+    if (s.consumed < arrived) {
+        __builtin_prefetch(s.page(s.consumed));
     }
     return true;
+}
+
+// Frames are walked one per stream per round so the header loads of a device's streams are in flight together: a
+// frame's header is a dependent DRAM miss, and walked back to back they would serialize at that latency. Every
+// landed page below `arrived` is a frame header or inside the frame before it: the relay notifies only bytes the
+// PCIe tile has acknowledged.
+bool Receiver::walk_frame(Stream& s) {
+    namespace kp = kernel_profiler;
+    if (s.consumed >= s.arrived) {
+        return false;
+    }
+    const uint32_t* page = reinterpret_cast<const uint32_t*>(s.page(s.consumed));
+    const uint32_t w0 = page[0];
+    const uint32_t w1 = page[1];
+    TT_FATAL(
+        pp_is_bulkspan(w0) && w1 >= kp::SPSC_SPAN_WIRE_CTRL_WORDS && w1 <= profiler::kSpscMaxPayloadWords,
+        "streaming profiler: device {} socket {} page {} is not a frame header ({:#010x} {:#010x}); {} of {} pages "
+        "landed",
+        s.dev,
+        s.sock_idx,
+        s.consumed,
+        w0,
+        w1,
+        s.arrived - s.acked,
+        s.capacity);
+    const uint32_t fw = kp::spsc_span_frame_words(w1);
+    const uint64_t frame_pages = fw / kPageWords;
+    if (s.arrived - s.consumed < frame_pages) {
+        return false;
+    }
+    s.frames++;
+    s.consumed += frame_pages;
+    // The next header is known; the ones after are guessed at the same stride, which a relay shipping a core per
+    // sweep hits every time, so several of the walk's dependent misses are in flight instead of one. Never past
+    // `arrived`: the device rewrites those pages before the walk reaches them.
+    for (uint64_t p = s.consumed; p < s.arrived && p <= s.consumed + 3 * frame_pages; p += frame_pages) {
+        __builtin_prefetch(s.page(p));
+    }
+    // Credits go back as the walk earns them: a pass over eight sockets can run long once any of them is behind, and
+    // credits held until its end would let the others fill meanwhile.
+    if (s.consumed - s.acked >= kAckBatchPages) {
+        s.sock->pop(static_cast<uint32_t>(s.consumed - s.acked), true);
+        s.acked = s.consumed;
+    }
+    return true;
+}
+
+bool Receiver::publish(Stream& s) {
+    const uint64_t walked = s.consumed * kPageBytes;
+    if (walked == s.walked_bytes.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    s.walked_bytes.store(walked, std::memory_order_release);
+    return true;
+}
+
+// Credits only ever follow the walk, and a drained relay reports done only when every byte it sent is credited, so
+// done means the walk has consumed every landed page.
+bool Receiver::settle(Stream& s) {
+    const bool published = publish(s);
+    const RelayState relay = s.relay.load(std::memory_order_acquire);
+    if (relay == RelayState::Running) {
+        return published;
+    }
+    if (s.acked < s.consumed) {
+        s.sock->pop(static_cast<uint32_t>(s.consumed - s.acked), true);
+        s.acked = s.consumed;
+    }
+    s.retired = relay == RelayState::Done;
+    return published;
+}
+
+uint64_t Receiver::live_head(uint32_t stream) const {
+    const Stream& s = *streams_[stream];
+    return widen_head(s.arrived_bytes.load(std::memory_order_acquire), s.sock->bytes_sent());
 }
 
 void Receiver::ingest_thread(std::vector<Stream*> streams) {
@@ -211,8 +234,12 @@ void Receiver::ingest_thread(std::vector<Stream*> streams) {
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     prctl(PR_SET_TIMERSLACK, 1000);  // default 50 us slack would round every probe sleep up to it
-    IdleBackoff backoff(kProbeSleepCapUs);
-    std::chrono::steady_clock::time_point stop_deadline{};
+    // The sockets bind their FIFOs to the device's node; walked from the other node, the headers' dependent misses
+    // run at half the rate and the FIFOs fill.
+    if (const int node = devices_[streams.front()->dev].numa_node; node >= 0 && numa_available() != -1) {
+        numa_run_on_node(node);
+    }
+    IdleBackoff backoff(kProbeSleepCapUs, 0);
     for (;;) {
         bool any = false;
         bool all_retired = true;
@@ -221,25 +248,31 @@ void Receiver::ingest_thread(std::vector<Stream*> streams) {
                 continue;
             }
             all_retired = false;
-            if (ingest_pass(*s)) {
-                any = true;
-            }
+            any |= poll(*s);
         }
         if (all_retired) {
             break;
         }
-        if (any) {
+        for (bool progress = true; progress;) {
+            progress = false;
+            for (Stream* s : streams) {
+                if (!s->retired) {
+                    progress |= walk_frame(*s);
+                }
+            }
+        }
+        bool published = false;
+        for (Stream* s : streams) {
+            if (!s->retired) {
+                published |= settle(*s);
+            }
+        }
+        if (published) {
             service().wake_consumers();
+        }
+        if (any) {
             backoff.reset();
             continue;
-        }
-        if (stop_.load(std::memory_order_acquire)) {
-            if (stop_deadline == std::chrono::steady_clock::time_point{}) {
-                stop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-            }
-            if (std::chrono::steady_clock::now() >= stop_deadline) {
-                break;
-            }
         }
         backoff.idle();
     }
@@ -254,78 +287,54 @@ Receiver::Stream& Receiver::stream(uint32_t device_index, uint32_t socket_index)
     TT_THROW("streaming profiler: no stream for device {} socket {}", device_index, socket_index);
 }
 
-void Receiver::finish_stream(uint32_t stream, const StreamStats& stats) {
+void Receiver::finish_stream(uint32_t stream, uint64_t dropped_bytes, const StreamStats& st) {
     std::lock_guard<std::mutex> lk(stats_mu_);
     Stream& s = *streams_[stream];
-    if (stats.records >= s.stats.records) {
-        s.stats = stats;
-    }
-}
-
-std::vector<uint32_t> Receiver::final_lane_heads(uint32_t device_index) const {
-    const size_t nl = ctx_.devices[device_index].lanes.size();
-    std::vector<uint32_t> heads;
-    for (const auto& s : streams_) {
-        if (s->dev != device_index || s->stats.heads.empty()) {
-            continue;
-        }
-        heads.resize(nl, 0);
-        for (size_t l = 0; l < nl && l < s->stats.heads.size(); l++) {
-            heads[l] = std::max(heads[l], s->stats.heads[l]);
-        }
-    }
-    return heads;  // empty when no subscriber decoded the device: nothing to check completeness against
+    s.consumer_dropped = std::max(s.consumer_dropped, dropped_bytes);
+    StreamStats& c = s.consumer_stats;
+    c.records = std::max(c.records, st.records);
+    c.zones = std::max(c.zones, st.zones);
+    c.order_regressions = std::max(c.order_regressions, st.order_regressions);
+    c.epoch_fixes = std::max(c.epoch_fixes, st.epoch_fixes);
 }
 
 void Receiver::log_report() const {
-    uint64_t pages = 0;
-    bool decoded = false;
+    uint64_t pages = 0, frames = 0, consumer_dropped = 0;
+    std::string fill;
     StreamStats t;
     for (const auto& s : streams_) {
+        fill += fmt::format("{}{}%", fill.empty() ? "" : " ", s->fullest * 100 / s->capacity);
         pages += s->arrived;
-        decoded |= !s->stats.heads.empty();
-        t.records += s->stats.records;
-        t.zones += s->stats.zones;
-        t.order_regressions += s->stats.order_regressions;
-        t.bad_frames += s->stats.bad_frames;
-        t.epoch_fixes += s->stats.epoch_fixes;
-        t.resync_words += s->stats.resync_words;
-        t.anomalies += s->stats.anomalies;
-        t.unknown_core_frames += s->stats.unknown_core_frames;
-        t.dropped += s->stats.dropped;
-    }
-    if (!decoded) {
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] capture: {:.1f} MB from {} device(s); no subscriber decoded it",
-            pages * static_cast<double>(kPageBytes) / 1e6,
-            devices_.size());
-        return;
+        frames += s->frames;
+        consumer_dropped += s->consumer_dropped;
+        const StreamStats& c = s->consumer_stats;
+        t.records += c.records;
+        t.zones += c.zones;
+        t.order_regressions += c.order_regressions;
+        t.epoch_fixes += c.epoch_fixes;
     }
     log_info(
         tt::LogMetal,
-        "[streaming profiler] capture: {} zones, {} records, {:.1f} MB from {} device(s)",
+        "[streaming profiler] capture: {} frames, {:.1f} MB from {} device(s); the fullest consumer decoded {} zones, "
+        "{} records; FIFO high-water marks {}",
+        frames,
+        pages * static_cast<double>(kPageBytes) / 1e6,
+        devices_.size(),
         t.zones,
         t.records,
-        pages * static_cast<double>(kPageBytes) / 1e6,
-        devices_.size());
+        fill);
     if (t.epoch_fixes != 0) {
         log_info(
             tt::LogMetal, "[streaming profiler] {} timestamps repaired for the wall-clock latch race", t.epoch_fixes);
     }
-    if (t.dropped != 0 || t.resync_words != 0 || t.order_regressions != 0 || t.bad_frames != 0 || t.anomalies != 0 ||
-        t.unknown_core_frames != 0) {
+    if (consumer_dropped != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] capture loss: {} lines dropped by the reporting subscriber, {} resync words, {} "
-            "order "
-            "regressions, {} bad frames, {} anomalies, {} unknown-core frames",
-            t.dropped,
-            t.resync_words,
-            t.order_regressions,
-            t.bad_frames,
-            t.anomalies,
-            t.unknown_core_frames);
+            "[streaming profiler] {:.1f} MB of frames missed by the slowest consumer",
+            consumer_dropped / 1e6);
+    }
+    if (t.order_regressions != 0) {
+        log_warning(tt::LogMetal, "[streaming profiler] {} order regressions", t.order_regressions);
     }
 }
 
