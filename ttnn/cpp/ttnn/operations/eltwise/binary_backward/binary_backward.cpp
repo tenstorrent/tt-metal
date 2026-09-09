@@ -720,21 +720,9 @@ std::vector<std::optional<Tensor>> div_bw(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     if (rounding_mode == std::nullopt) {
-        float t_nan = std::nanf("");
-        float t_inf = std::numeric_limits<float>::infinity();
-        float neg_inf = -std::numeric_limits<float>::infinity();
         if (are_required_outputs.at(0)) {
             ttnn::multiply(
                 grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
-            ttnn::where(
-                ttnn::eqz(other, output_mem_config),
-                ttnn::where(
-                    ttnn::eqz(grad_tensor, output_mem_config),
-                    t_nan,
-                    ttnn::multiply(ttnn::sign(grad_tensor, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                    output_mem_config),
-                input_grad.value(),
-                output_mem_config);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
@@ -748,24 +736,6 @@ std::vector<std::optional<Tensor>> div_bw(
                 std::nullopt,
                 output_mem_config,
                 other_grad);
-            ttnn::where(
-                ttnn::eqz(other, output_mem_config),
-                ttnn::where(
-                    ttnn::eqz(grad_tensor, output_mem_config),
-                    t_nan,
-                    ttnn::where(
-                        ttnn::eqz(input_a, output_mem_config),
-                        t_nan,
-                        ttnn::multiply(
-                            ttnn::multiply(
-                                ttnn::sign(input_a, output_mem_config), neg_inf, std::nullopt, output_mem_config),
-                            ttnn::sign(grad_tensor, output_mem_config),
-                            std::nullopt,
-                            output_mem_config),
-                        output_mem_config),
-                    output_mem_config),
-                other_grad.value(),
-                output_mem_config);
             result[1] = other_grad;
         }
     } else {
