@@ -408,3 +408,36 @@ entry coverage is unchanged. See `review_round_05.md` for all resolutions,
 including the documented pre-existing RMSNorm 2D dispatch follow-up and the
 unverified DiT Welford numerical impact. No existing test tolerance or skip was
 weakened. A fresh review and the full prepared regression remain due.
+
+## Sixth Claude review: mixed statistics dtype
+
+Fresh Opus 5/high round 6 verified the Welford reader correction and identified
+one missed format condition in the standard post-all-gather factory. RMSNorm's
+new auxiliary format follows the statistics tensor, while its unpack-mode gate
+still followed the input tensor. BF16 input with FP32 statistics consequently
+failed program-spec validation. An independent N300 reproduction at the clean
+review checkpoint produced 6 passes and 2 such failures; evidence is preserved
+under `generated/reduce_migration_reviews/mixed_stats_repro_20260909/`.
+
+The unpack mode now follows the actual auxiliary format. Added eight T036 cases
+covering both mixed BF16/FP32 directions, both norms and one/four statistics
+pairs, without changing the helper's default dtype or numerical checks. SM077
+adds the smallest failing RMSNorm configuration. Also removed the Welford
+factory's dead auxiliary allocation and stale comments, enforced its LayerNorm
+contract locally and removed the unreachable RMSNorm compute selection.
+
+The review's run-twice documentation concern was a false positive: the imported
+wrapper in `utility_functions.py:144` calls `_run_twice` at line 80, which executes
+the op twice and asserts exact output equality at line 83. See
+`review_round_06.md` for all resolutions and deferred pre-existing observations.
+
+Native build and pre-commit passed. All eight new mixed-dtype tests passed
+(`reduce-migration-uusolvow`), followed by complete T036/T038/T159 checks:
+**152 passed, 106 upstream skips**, with no failures/errors
+(`reduce-migration-ybtk53_l`). Current manifests contain **178 full groups, 1,000
+definitions, 18,860 known cases; 77 sanity cases, 63 available on N300**. Kernel
+entry coverage remains 130/144. The unchanged original reproduction then passed
+8/8, including no-weight cases and both same-dtype controls. The expanded N300
+sanity passed **63/63** without skips/failures (`reduce-migration-5txgugv1`).
+JUnit agrees with every post-fix result. A fresh review and the full prepared
+regression remain due.

@@ -517,7 +517,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b.
         if (in_data_format == tt::DataFormat::Float32) {
             unpack_via_src(compute_gen1, POST_INPUT);
-            unpack_via_src(compute_gen1, POST_REDUCE);  // the scaler tile mirrors the input's dtype
+        }
+        // RMSNorm's planned auxiliary format follows the stats tensor, which can differ from the input.
+        if (scaler_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_REDUCE);
         }
         if (stats_data_format == tt::DataFormat::Float32) {
             unpack_via_src(compute_gen1, POST_STATS);

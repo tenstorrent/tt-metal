@@ -885,7 +885,8 @@
         "test_layer_norm_post_all_gather_non_tile_aligned_width",
         "test_layer_norm_post_all_gather_bias_only_matches_torch",
         "test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major",
-        "test_layer_norm_post_all_gather_welford_with_program_cache"
+        "test_layer_norm_post_all_gather_welford_with_program_cache",
+        "test_post_all_gather_mixed_stats_dtype_with_program_cache"
       ],
       "notes": [],
       "id": "T036"
@@ -3514,8 +3515,8 @@
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 15,
-    "added_collected_cases": 400,
+    "added_test_definitions": 16,
+    "added_collected_cases": 408,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }
