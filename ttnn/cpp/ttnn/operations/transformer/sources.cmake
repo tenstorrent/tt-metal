@@ -2,7 +2,6 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_TRANSFORMER_SRCS
-    attention_softmax/attention_softmax.cpp
     concatenate_heads/concatenate_heads.cpp
     sdpa/device/ring_fusion.cpp
     sdpa/device/joint_sdpa_device_operation.cpp
@@ -44,7 +43,6 @@ set(TTNN_OP_TRANSFORMER_SRCS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_TRANSFORMER_NANOBIND_SRCS
-    attention_softmax/attention_softmax_nanobind.cpp
     concatenate_heads/concatenate_heads_nanobind.cpp
     sdpa/sdpa_nanobind.cpp
     sdpa_decode/sdpa_decode_nanobind.cpp
