@@ -80,3 +80,15 @@
       timeout: 6
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+
+- name: Streaming profiler sanity
+  cmd: run_streaming_profiler_test
+  skus:
+    # Blackhole only: the streaming profiler needs programmable DRAM (DRISC) cores for its relay, so there
+    # is nothing to run on wh_n150/wh_n300.
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
