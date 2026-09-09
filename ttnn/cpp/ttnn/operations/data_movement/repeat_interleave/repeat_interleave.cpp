@@ -61,6 +61,10 @@ Tensor repeat_interleave_native(
         // along any of the 4 dims can be expressed via ttnn::upsample(..., "nearest"), which has a
         // native sharded kernel, keeping the tensor sharded end-to-end (no interleaved round-trip).
         // TILE layout and non-4D tensors are not covered and fall through to the round-trip below.
+        // A DRAM-sharded input is also excluded: upsample's sharded kernel borrows its input directly
+        // as an L1 circular buffer and hard-requires an L1-resident input ("not L1-resident (L1 is
+        // required)"), so a DRAM-sharded input must take the round-trip fallback (which unshards to
+        // interleaved DRAM first) rather than upsample.
         //
         // Deliberately do NOT pass output_mem_config into upsample/reshape/transpose below: for
         // HEIGHT/BLOCK-sharded inputs, upsample selects its sharded factory from the input, and an
@@ -69,7 +73,7 @@ Tensor repeat_interleave_native(
         // output would silently ignore a differing requested config. Always compute the native sharded
         // result first (letting the config be derived from the input), then convert to whatever the
         // caller actually requested at the very end (a no-op if it already matches).
-        if (input_a.layout() == Layout::ROW_MAJOR && rank == 4) {
+        if (input_a.layout() == Layout::ROW_MAJOR && rank == 4 && input_a.memory_config().is_l1()) {
             const auto& shape = input_a.logical_shape();
             ttnn::Tensor native_result;
             if (nd == 1 || nd == 2) {
