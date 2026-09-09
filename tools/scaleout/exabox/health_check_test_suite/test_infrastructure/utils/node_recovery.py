@@ -8,8 +8,10 @@ Bare-Slurm only: many fabric failures are transient link/training faults that a
 power cycle clears, so a failed run reboots the node once and requeues the job
 so the suite reruns on a clean boot. Everything here goes through Slurm
 (``scontrol``), which the Kubernetes/orchestration deployment has no equivalent
-for — a pod restart doesn't power-cycle the host — so that deployment skips the
-reboot path entirely and goes straight to ticketing.
+for — a pod restart doesn't power-cycle the host — so that deployment skips this
+module entirely. It reboots out of band instead: its launcher power cycles the
+node through the BMC between attempts and tells the runner where it sits in that
+loop with ``--last-iteration``, which is what defers ticketing there.
 
 Under Slurm the runner itself now executes inside the tt-metal image, which
 carries no Slurm client and no route to the node's munge socket, so it cannot

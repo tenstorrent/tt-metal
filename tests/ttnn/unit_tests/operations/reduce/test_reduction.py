@@ -987,18 +987,18 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, keepdim, dim, op",
+    argnames="tensor_shape, keepdim, dim, op, error_msg",
     argvalues=[
-        ([], True, None, "mean"),
-        ([], True, None, "std"),
-        ([32], False, -1, "sum"),
-        ([32, 0], True, 0, "max"),
-        ([0, 0, 0], True, 2, "min"),
-        ([0, 32, 0], False, -2, "std"),
-        ([32, 32, 32, 0], False, 3, "var"),
+        ([], True, None, "mean", None),
+        ([], True, None, "std", None),
+        ([32], False, -1, "sum", None),
+        ([32, 0], True, 0, "max", None),
+        ([0, 0, 0], True, 2, "min", "Expected reduction dim 2 to have non-zero size"),
+        ([0, 32, 0], False, -2, "std", None),
+        ([32, 32, 32, 0], False, 3, "var", None),
     ],
 )
-def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, error_msg, expect_error):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -1024,10 +1024,15 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
         torch_errored = True
 
     ttnn_errored = False
-    try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except RuntimeError:
+    if error_msg:
+        with expect_error(RuntimeError, error_msg):
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
         ttnn_errored = True
+    else:
+        try:
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+        except RuntimeError:
+            ttnn_errored = True
 
     assert torch_errored == ttnn_errored, f"torch: {torch_errored}, ttnn: {ttnn_errored}"
 

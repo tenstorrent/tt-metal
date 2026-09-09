@@ -42,8 +42,6 @@ void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::Mes
     uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
     const std::vector<uint32_t> args = {delay_cycles, xy_start.x, xy_start.y};
     fixture->RunProgram(mesh_device, "tests/tt_metal/tt_metal/test_kernels/device_print/print_with_wait.cpp", args);
-    // Close system instantly after running to attempt to cut off prints.
-    fixture->TearDownTestSuite();
 
     // Check the print log against expected output.
     vector<std::string> expected_output;

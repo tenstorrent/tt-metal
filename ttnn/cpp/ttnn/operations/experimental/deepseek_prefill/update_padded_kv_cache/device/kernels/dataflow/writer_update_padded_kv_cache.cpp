@@ -20,15 +20,19 @@
 //     override_runtime_arguments). Kept out of the program hash the same way.
 // `layer_idx`, `num_layers` and `cluster_axis` stay in the hash (structural) in both paths.
 //
-// Compile args: [0]=cb_id_out, [1]=has_metadata, [2]=cb_id_meta, [3]=tile_height, [4..]=cache
-// accessor, then (metadata path only) ONE metadata accessor (the two 1-element tensors share an
-// identical layout, so the same accessor serves both reads). tile_height divides kv tokens into the
+// Optional `valid_global` (end of the chunk's REAL tokens) arrives the same two ways in common arg 10.
+// Set, the chip writes only the page-rows holding real tokens; unset, the whole padded slab.
+//
+// Compile args: [0]=cb_id_out, [1]=has_metadata, [2]=cb_id_meta, [3]=tile_height, [4]=has_valid,
+// [5..]=cache accessor, then (metadata path only) ONE metadata accessor (the 1-element tensors share
+// an identical layout, so the same accessor serves every read). tile_height divides kv tokens into the
 // page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel handles both layouts.
 //
 // The body lives in a template on `HasMeta` so the `if constexpr` below actually DISCARDS (does not
 // instantiate) the unused branch — `kernel_main` is not a template, so an `if constexpr` there would
 // still instantiate the metadata branch's TensorAccessor and fail to compile the scalar program.
-template <bool HasMeta>
+// `HasValid` is a template param so the no-clamp program keeps the original loop.
+template <bool HasMeta, bool HasValid>
 static void run_writer() {
     // Per-core runtime args (buffers arrive as Buffer* bindings -> addresses).
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -48,14 +52,18 @@ static void run_writer() {
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(3);
-    constexpr auto cache_args = TensorAccessorArgs<4>();
+    // [4] is has_valid, consumed as the HasValid template param.
+    constexpr auto cache_args = TensorAccessorArgs<5>();
 
     Noc noc;
 
-    // Resolve the two per-request values (slot_idx, and kv_actual_global already divided into the
-    // page-row unit) from whichever source this program was compiled for.
+    // Resolve the per-request values (in page-row units) from whichever source this program was
+    // compiled for.
     uint32_t slot_idx;
     uint32_t kv_actual_global_t;
+    // Real tokens as page-rows, rounded up to 32 (zero_padded_kv_cache clears the partial block).
+    uint32_t valid_global_t = 0;
+    constexpr uint32_t kClampGranularityTokens = 32;
     if constexpr (HasMeta) {
         // Metadata path: NoC-read element [0] (page 0, 4 bytes) of each 1-element uint32 tensor into
         // the L1-scratch CB. Each read targets dst offset 0 (DRAM-read dst-alignment: a 4-byte read into
@@ -90,11 +98,27 @@ static void run_writer() {
         noc.async_read_barrier();
         invalidate_l1_cache();  // same fresh-metadata refetch as above
         kv_actual_global_t = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0] / tile_height;
+
+        if constexpr (HasValid) {
+            // Same scratch slot, same fresh-metadata refetch as above.
+            const auto s_valid = TensorAccessor(meta_args, get_common_arg_val<uint32_t>(10));
+            noc.async_read(s_valid, cb_meta, kMetadataReadBytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            const uint32_t valid_tokens = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
+            valid_global_t = kClampGranularityTokens *
+                             ((valid_tokens + kClampGranularityTokens - 1) / kClampGranularityTokens) / tile_height;
+        }
         cb_meta.push_back(1);
     } else {
         // Scalar path: per-call values arrive as common runtime args (patched on cache hits).
         slot_idx = get_common_arg_val<uint32_t>(8);
         kv_actual_global_t = get_common_arg_val<uint32_t>(9) / tile_height;
+        if constexpr (HasValid) {
+            const uint32_t valid_tokens = get_common_arg_val<uint32_t>(10);
+            valid_global_t = kClampGranularityTokens *
+                             ((valid_tokens + kClampGranularityTokens - 1) / kClampGranularityTokens) / tile_height;
+        }
     }
 
     // Cache linearization: users outer, layers inner.
@@ -117,7 +141,24 @@ static void run_writer() {
         (my_sp_coord < boundary_chip ? chunk_local_t : (my_sp_coord == boundary_chip ? boundary_offset_t : 0));
 
     const uint32_t input_Ht = chunk_local_t;
+
+    // Real rows are a prefix on every chip, so their end is the staircase above at valid_global_t.
+    uint32_t rows_to_write = input_Ht;
+    if constexpr (HasValid) {
+        const uint32_t end_slab_idx = valid_global_t / chunk_global_t;
+        const uint32_t end_chip = (valid_global_t / chunk_local_t) % sp_factor;
+        const uint32_t end_offset_t = valid_global_t % chunk_local_t;
+        const uint32_t end_idxt =
+            end_slab_idx * chunk_local_t +
+            (my_sp_coord < end_chip ? chunk_local_t : (my_sp_coord == end_chip ? end_offset_t : 0));
+        rows_to_write = (end_idxt > update_idxt) ? (end_idxt - update_idxt) : 0;
+        if (rows_to_write > input_Ht) {
+            rows_to_write = input_Ht;
+        }
+    }
+
     const uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
+
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
     CircularBuffer cb(cb_id_out);
 
@@ -136,10 +177,14 @@ static void run_writer() {
         const uint32_t block = core_blocks_written + blk;
         const uint32_t row = block % input_Ht;
         const uint32_t page0 = start_idx + (block / input_Ht) * cache_HtWt + row * Wt;
+        const bool keep = !HasValid || row < rows_to_write;
         for (uint32_t w = 0; w < Wt; ++w) {
             cb.wait_front(onepage);
-            noc.async_write(cb, s, page_bytes, {}, {.page_id = page0 + w});
-            noc.async_writes_flushed();
+            // A skipped page is still POPPED: the reader streams the whole padded slab either way.
+            if (keep) {
+                noc.async_write(cb, s, page_bytes, {}, {.page_id = page0 + w});
+                noc.async_writes_flushed();
+            }
             cb.pop_front(onepage);
         }
     }
@@ -148,5 +193,10 @@ static void run_writer() {
 
 void kernel_main() {
     constexpr bool has_metadata = get_compile_time_arg_val(1);
-    run_writer<has_metadata>();
+    constexpr bool has_valid = get_compile_time_arg_val(4);
+    if constexpr (has_valid) {
+        run_writer<has_metadata, true>();
+    } else {
+        run_writer<has_metadata, false>();
+    }
 }

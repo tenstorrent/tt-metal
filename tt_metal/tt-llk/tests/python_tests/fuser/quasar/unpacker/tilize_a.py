@@ -10,6 +10,7 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import DestAccumulation
 
@@ -64,15 +65,15 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id = compute_unit.src_a.buf_desc_id
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(BfdResource.UNP0)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         full_ct_dim = compute_unit.src_a.tile_count_x
         block_ct_dim = block.block_tiles_x
 
         return (
-            f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
-            f"({buf_desc_id}, {full_ct_dim}, {block_ct_dim}, {tensor_shape});\n"
+            bfd_program + f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
+            f"({bfd_current(BfdResource.UNP0)}, {full_ct_dim}, {block_ct_dim}, {tensor_shape});\n"
         )
 
     def unpack(
@@ -82,12 +83,15 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         num_faces_r_dim = compute_unit.src_a.tile_shape.num_faces_r_dim
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        l1_row_idx = f"{block.tile_id_global} * {num_faces_r_dim} * {face_r_dim}"
 
         return (
-            f"_llk_unpack_tilize_<p_unpacr::UNP_A>"
-            f"({block.tile_id_global} * {num_faces_r_dim} * {face_r_dim});\n"
+            f"_llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>"
+            f"({tensor_shape}, {l1_row_idx});\n"
+            f"_llk_unpack_tilize_<p_unpacr::UNP_A>(0);\n"
         )
 
     def uninit(

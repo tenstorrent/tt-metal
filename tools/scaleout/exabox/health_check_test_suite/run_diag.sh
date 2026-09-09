@@ -11,6 +11,7 @@
 #   light   ~5 min  snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
 #   medium          light + eth bandwidth + GDDR fast-pattern stress
 #   deploy          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth bandwidth
+#                   + didt matmul stress (pytest, galaxy mesh)
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
 # Can be used as the ENTRYPOINT of a docker image
@@ -27,7 +28,7 @@ Usage: $0 {light|medium|deploy} [diag_runner.py options]
 Tiers:
   light    Smoke check: snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
   medium   light + eth bandwidth + GDDR fast-pattern stress
-  deploy   3 resets + full GDDR pattern set + eth bandwidth
+  deploy   3 resets + full GDDR pattern set + eth bandwidth + didt matmul stress (pytest)
 
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps

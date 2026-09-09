@@ -252,7 +252,7 @@ uint32_t get_chip_id_for_asic(const umd::ClusterDescriptor& cluster_desc, AsicID
 
 void validate_eth_fw_versions(
     PhysicalSystemDescriptor& psd,
-    const tt::umd::semver_t& peer_ethernet_firmware_version,
+    const tt::umd::SemVer& peer_ethernet_firmware_version,
     const std::string& my_host_name,
     const std::string& peer_host_name) {
     TT_FATAL(
@@ -750,7 +750,7 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::SemVer(0, 0, 0));
     // Get Firmware Bundle Version from the driver
     psd.get_firmware_bundle_version() = cluster_desc.get_cluster_firmware_bundle_version();
 

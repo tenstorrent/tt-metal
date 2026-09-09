@@ -65,7 +65,7 @@ tt::tt_metal::ProgramDescriptor ApplyDeviceDelayDeviceOperation::create_descript
         mesh_dispatch_coordinate.has_value(),
         "ApplyDeviceDelayDeviceOperation::create_descriptor requires a mesh dispatch coordinate");
     const ttnn::MeshCoordinate& mesh_coordinate = mesh_dispatch_coordinate.value();
-    log_info(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
+    log_debug(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
 
     tt::tt_metal::ProgramDescriptor desc;
 
@@ -84,7 +84,7 @@ tt::tt_metal::ProgramDescriptor ApplyDeviceDelayDeviceOperation::create_descript
 
     desc.kernels.push_back(std::move(kernel_desc));
 
-    log_info(tt::LogAlways, "Created delay program at mesh coordinate: {}", mesh_coordinate);
+    log_debug(tt::LogAlways, "Created delay program at mesh coordinate: {}", mesh_coordinate);
     return desc;
 }
 
@@ -98,7 +98,7 @@ ttnn::operations::debug::ApplyDeviceDelayDeviceOperation::tensor_return_value_t 
     const CoreRangeSet& subdevice_core_range_set) {
     using OperationType = ttnn::operations::debug::ApplyDeviceDelayDeviceOperation;
 
-    log_info(tt::LogAlways, "Initializing delay op structs");
+    log_debug(tt::LogAlways, "Initializing delay op structs");
     auto operation_attributes = OperationType::operation_attributes_t{
         .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
     auto tensor_args = OperationType::tensor_args_t{};

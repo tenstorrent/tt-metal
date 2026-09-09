@@ -24,8 +24,10 @@ void kernel_main() {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     // Per-shard page size in bytes: shard width for BLOCK/WIDTH-sharded output (a logical row
-    // spans multiple shards), full unpadded row otherwise. Feeds noc_async_write_sharded's
-    // multi-shard row split, same mechanism used by the ROW_MAJOR-input factory.
+    // spans multiple shards), the destination buffer's aligned page size for HEIGHT-sharded output
+    // (one row per page, padded up to the buffer alignment), full unpadded row for interleaved.
+    // Feeds noc_async_write_sharded's multi-shard row split and the accessor's page stride, same
+    // mechanism used by the ROW_MAJOR-input factory.
     constexpr uint32_t writer_page_size = get_compile_time_arg_val(2);
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
