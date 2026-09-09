@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 
 import pytest
-import torch
 from loguru import logger
 from PIL import Image
 
@@ -34,6 +33,8 @@ from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
+    assert_generation_ok,
+    frames_for_export,
     is_host,
     log_pipeline_perf,
     pretest_user_repl,
@@ -41,7 +42,6 @@ from .common_av import (
     run_user_generations,
     run_user_ref_generations,
     run_warm_generation,
-    to_uint8_frames,
     weights_dir,
     write_artifacts,
 )
@@ -88,7 +88,7 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
         mesh_device=mesh_device,
         weights_dir=weights,
         dit_fsdp=False,
-        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+        vae_output_type="yuv420",
     )
 
     benchmark_profiler = BenchmarkProfiler()
@@ -104,8 +104,7 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    assert output.num_frames == expected_frames, f"generated {output.num_frames} frames, expected {expected_frames}"
-    assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
+    assert_generation_ok(output, expected_frames)
 
     num_forwards = NUM_INFERENCE_STEPS - 1
     log_pipeline_perf(
@@ -125,7 +124,7 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     if is_host():
         artifacts = artifact_dir("h3_t2va_artifacts")
         stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
-        frames = to_uint8_frames(output)
+        frames = frames_for_export(output)
         write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
 
     run_user_generations(
@@ -237,6 +236,7 @@ def test_ref2va_performance(mesh_device, reset_seeds):
         dit_fsdp=True,
         trace_denoise=True,
         bucket_denoise=True,
+        vae_output_type="yuv420",
     )
 
     benchmark_profiler = BenchmarkProfiler()
@@ -253,8 +253,7 @@ def test_ref2va_performance(mesh_device, reset_seeds):
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    assert output.num_frames == expected_frames, f"generated {output.num_frames} frames, expected {expected_frames}"
-    assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
+    assert_generation_ok(output, expected_frames)
 
     num_forwards = NUM_INFERENCE_STEPS - 1
     log_pipeline_perf(
@@ -275,7 +274,7 @@ def test_ref2va_performance(mesh_device, reset_seeds):
     if is_host():
         artifacts = artifact_dir("h3_ref2va_perf_artifacts")
         stem = f"ref2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
-        frames = to_uint8_frames(output)
+        frames = frames_for_export(output)
         write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
 
     run_user_ref_generations(
