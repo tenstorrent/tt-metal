@@ -360,11 +360,11 @@ Packer Efficiency = PACKER0_DEST_READ_REQ / PACKER_BUSY * 100
 
 Unpacker write duty cycle. Despite the name this is **not** backpressure: the numerators are bare write-enable counts, so a low value means the unpacker was not writing, which is not evidence that math refused data.
 
-*Counter group: TDMA_UNPACK. Computed, exported as `unpack_to_math_flow0_pct`, `unpack_to_math_flow1_pct`, `unpack_to_math_flow_pct`.*
+*Counter group: TDMA_UNPACK. Computed, exported as `unpack_to_math_flow0_ratio`, `unpack_to_math_flow1_ratio`, `unpack_to_math_flow_ratio` (raw ratios; the request counter also sees THCON and other-thread writes, so they can exceed 1).*
 
 ```
-flow0 = SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0 * 100
-flow1 = SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0 * 100
+flow0 = SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0
+flow1 = SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0
 combined = mean(flow0, flow1)          # mean of the two ratios, not the ratio of two means
 ```
 
@@ -411,23 +411,6 @@ Full Wait TN = WAITING_FOR_NONFULL_SEM_N / INSTRN_OUT_L * 100
 
 ---
 
-### TDMA Stall Metrics
-
-#### 23. Unpacker N Write Efficiency
-
-Fraction of unpacker-busy cycles that actually completed a write.
-
-*Counter group: TDMA_UNPACK. Computed, exported as `unpack0_write_eff_pct`, `unpack1_write_eff_pct`, `unpack_write_eff_pct`.*
-
-```
-Unpacker0 Write Eff = SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0 * 100
-Unpacker1 Write Eff = SRCB_WRITE_ACTUAL / UNPACK1_BUSY_THREAD0 * 100
-```
-
-**Use case:** Identifies whether unpacker stalls are from port contention or overwrite blocking. Compare with metrics 16 and 17.
-
----
-
 ### Upstream formulas, not computed here
 
 These come from the upstream report and nothing in tt-llk evaluates them. The counters are in the
@@ -438,7 +421,7 @@ per-zone CSV, so they can be worked out by hand. Counter names are as they appea
 |---|---|---|---|---|
 | 2 | SFPU Utilisation | FPU | `SFPU Util = SFPU_COUNTER / FPU_OUT_L * 100` | both |
 | 5 | Math Pipeline Utilisation | TDMA_UNPACK | `Math Pipeline Utilisation = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100` | both |
-| 6 | FPU Execution Efficiency | FPU + INSTRN_THREAD | `FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100` | both |
+| 6 | FPU Execution Efficiency (ratio) | FPU + INSTRN_THREAD | `FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1` | both |
 | 7 | Math-to-Pack Handoff Ratio | TDMA_PACK | `Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100` | both |
 | 10 | Thread N Issue Rate | INSTRN_THREAD | `TN Issue Rate = THREAD_INSTRUCTIONS_N / INSTRN_OUT_L` | both |
 | 11 | SrcA/SrcB Valid Wait | INSTRN_THREAD | `SrcA Valid Wait = WAITING_FOR_SRCA_VALID / INSTRN_OUT_L * 100 SrcB Valid Wait = WAITING_FOR_SRCB_VALID / INSTRN_OUT_L * 100` | both |
@@ -458,7 +441,7 @@ per-zone CSV, so they can be worked out by hand. Counter names are as they appea
 | 32 | CFG / SFPU / THCON / MOVE Idle Wait | INSTRN_THREAD | `CFG Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / INSTRN_OUT_L * 100 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / INSTRN_OUT_L * 100 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / INSTRN_OUT_L * 100 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / INSTRN_OUT_L * 100` | both |
 | 33 | L1 TDMA Bundle Util | L1 (mux 0) | `L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L1_OUT_L * 100` | both |
 | 34 | NoC Ring 0/1 Outgoing/Incoming Util | L1 (Ring 0 on mux 0, Ring 1 on mux 1) | `NoC Ring 0 Outgoing Util = avg(L1_0_NOC_RING0_OUTGOING_0, L1_0_NOC_RING0_OUTGOING_1) / L1_OUT_L * 100 NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMING_1) / L1_OUT_L * 100` | both |
-| 35 | RISC Core L1 Util | L1 (mux 1) | `RISC Core L1 Util = L1_1_RISC_CORE / L1_OUT_L * 100` | Blackhole only |
+| 35 | L1 Port 2 Util | L1 (mux 0) | `L1 Port 2 Util = L1_0_TDMA_BUNDLE_0_RISC / L1_OUT_L * 100` (TDMA bundle 0 with BRISC, TRISC0 and NCRISC) | both |
 | 36 | NoC Ring 0/1 Outgoing/Incoming Backpressure | L1 | `NoC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100` | both |
 | 37 | L1 Unpacker / Packer Port Backpressure | L1 (mux 0) | `L1 Unpacker BP = (L1_0_UNPACKER_0 - L1_0_UNPACKER_0_GRANT) / L1_0_UNPACKER_0 * 100 L1 Packer Port BP = (L1_0_PORT1 - L1_0_PORT1_GRANT) / L1_0_PORT1 * 100` | both |
 | 38 | L1 Total Bandwidth Util | L1 (mux 0) | `L1 Total BW Util = sum(all 8 port req counts) / (8 * L1_OUT_L) * 100` | both |

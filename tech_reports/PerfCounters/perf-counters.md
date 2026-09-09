@@ -203,14 +203,16 @@ Measures backpressure from math stage to unpackers.
 | **Counter group** | UNPACK |
 
 ```
-Unpacker-to-Math Data Flow = avg(SRCA_WRITE_REQ, SRCB_WRITE_REQ) /
-                             avg(UNPACK0_BUSY_THREAD0, UNPACK1_BUSY_THREAD0) * 100
+flow0 = SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0
+flow1 = SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0
+Unpacker-to-Math Data Flow = mean(flow0, flow1)      # raw ratio, can exceed 1
 ```
 
-- **High value (>80%)**: Unpackers can write to source registers when busy. Good data flow.
-- **Low value (<30%)**: Unpackers are busy but rarely request a source register write. Math is not consuming data fast enough.
+- **Near 1**: the unpacker writes a source register on most busy cycles.
+- **Low value (<0.3)**: the unpacker is busy but rarely requests a source register write. Math is not consuming data fast enough.
+- **Above 1**: writes from THCON or another thread landed while this unpacker was idle; the request counter is not a subset of the busy counter, which is why this is a ratio and not a percentage.
 
-**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **Unpacker Write Efficiency** (#42) to distinguish backpressure from other stall types.
+**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **SrcA/SrcB Write Actual Efficiency** to separate blocked writes from missing writes.
 
 ---
 
@@ -948,30 +950,9 @@ Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
 
 ---
 
-**42. Unpacker0/1 Write Efficiency**
-
-Source register write throughput per unpacker — fraction of unpacker-busy cycles where the write actually succeeded (port-OK).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Unpacker0 Write Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0 * 100
-Unpacker1 Write Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0 * 100
-```
-
-- **High value (>80%)**: Unpacker spends most busy time successfully writing data.
-- **Low value (<40%)**: Unpacker busy but writes are blocked (port contention or less data than busy cycles).
-
-**Use case:** Identifies unpacker bottlenecks — low efficiency combined with high Unpack Busy cycles suggests port contention or register overwrite stalls.
-
----
-
 **43. FPU Execution Efficiency**
 
-FPU active cycles as fraction of math instruction availability on the math thread.
+FPU active cycles per cycle the math thread had a math instruction available. A raw ratio: FPU_COUNTER counts dequeues from every thread, so it is not a subset of thread 1's availability.
 
 | | |
 |---|---|
@@ -979,11 +960,11 @@ FPU active cycles as fraction of math instruction availability on the math threa
 | **Counter group** | FPU + INSTRN |
 
 ```
-FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1 * 100
+FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1      # raw ratio
 ```
 
-- **High value (>80%)**: FPU executes whenever math work is available (compute-efficient).
-- **Low value (<30%)**: Math instructions pending but FPU not running (pipeline stalls).
+- **Near or above 1**: FPU executes whenever math work is available (compute-efficient).
+- **Low value (<0.3)**: Math instructions available but FPU not running (pipeline stalls).
 
 **Use case:** Distinguishes compute-bound (high efficiency) from stall-bound (low efficiency) workloads on the math path.
 

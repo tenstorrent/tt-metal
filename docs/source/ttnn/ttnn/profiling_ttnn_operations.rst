@@ -173,9 +173,9 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 - **Packer Efficiency (%)**: Fraction of packer-busy cycles where dest data was available (``PACKER0_DEST_READ_REQ / PACKER_BUSY``). For workloads that don't use the packer (``PACKER_BUSY = 0``), falls back to the dest-read grant rate (``DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ``). 100% means the packer never waited for data.
 - **Math-to-Pack Handoff Ratio (%)**: Ratio of math-availability cycles to packer-busy cycles (``MATH_NOT_SCOREBOARD_STALLED / PACKER_BUSY``). Values >100% mean math produces output faster than packer consumes it; <100% means packer is the consumer bottleneck. Falls back to ``MATH_NOT_SCOREBOARD_STALLED / ref_cnt`` when the packer isn't used.
-- **Unpacker-to-Math Data Flow (%)**: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.
+- **Unpacker-to-Math Data Flow (ratio)**: Source register write requests per unpacker busy cycle (``SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0``, same for srcB). A raw ratio: THCON and other-thread writes also count, so it can exceed 1.
 - **Math Pipeline Utilization (%)**: Fraction of math-available cycles where the math instruction actually issued (``MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE``). 100% means every available math instruction issued immediately.
-- **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability on thread 1 (``FPU_COUNTER / MATH_INSTRN_AVAILABLE_1``). Distinguishes compute-bound (high) from stall-bound (low) workloads.
+- **FPU Execution Efficiency (ratio)**: FPU active cycles per cycle thread 1 had a math instruction available (``FPU_COUNTER / MATH_INSTRN_AVAILABLE_1``). A raw ratio: the FPU also dequeues other threads' work. Distinguishes compute-bound (high) from stall-bound (low) workloads.
 
 *Thread Analysis*
 
@@ -211,9 +211,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 - **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts not blocked by port contention (``SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ``). 100% = no port blocking.
 - **SrcB Write Actual Efficiency (%)**: Same for srcB (``SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ``).
-- **Unpacker0 Write Efficiency (%)**: Fraction of Unpacker 0 busy cycles where the srcA write succeeded (``SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0``).
-- **Unpacker1 Write Efficiency (%)**: Same for Unpacker 1 using srcB.
-- **Unpacker Write Efficiency (%)**: Average of Unpacker0/1 Write Efficiency (per core, then aggregated).
 
 *L1 Memory Utilization*
 

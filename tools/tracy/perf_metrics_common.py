@@ -57,9 +57,15 @@ def pct(value: "float | None") -> "float | None":
 
 
 def bounded(value: "float | None") -> "float | None":
-    """Clamp a fraction to [0, 1]. The tt-1xx L1 grant counters are the interface ready line, not qualified
-    by a request, so grant/request can exceed 1 when the interface sits ready with nothing to do."""
+    """Clamp a fraction to [0, 1]. The L1 grant counter is the arbiter accept for its port, so grant never exceeds
+    request on Blackhole (0 of 924 port/op pairs in the selector sweep); the clamp stays as a guard for Wormhole,
+    which was not measured, and for the scoreboard stall whose two counters start in separate groups."""
     return None if value is None else min(1.0, max(0.0, value))
+
+
+def strict(v: "CounterView", *names) -> bool:
+    """True only when every named counter was captured, so a same-bank fraction reads N/A rather than 0 or 100."""
+    return all(v.has(n) for n in names)
 
 
 def one_minus(value: "float | None") -> "float | None":
@@ -123,8 +129,13 @@ L1_UNPACKER1_EXT = (
 L1_UNPACKER0_EXT = tuple(f"L1_4_UNPACKER0_EXT_IF_{j}" for j in (1, 2, 3, 4, 5)) + tuple(
     f"L1_5_UNPACKER0_EXT_IF_{j}" for j in (6, 7)
 )
-L1_EXT_PACK = tuple(f"L1_3_EXT_PACKER_{i}" for i in (2, 3, 4, 5)) + tuple(f"L1_4_EXT_PACKER_{i}" for i in (6, 7))
-L1_TAG_SEARCH = ("L1_4_TAG_SEARCH_PACKER_1",)
+# Packer L1 interfaces on banks 3-4 (ports 26-34); port 34 is packer interface 1, arbitrated with the tag-search
+# accelerator that tt-metal never enables.
+L1_EXT_PACK = (
+    tuple(f"L1_3_EXT_PACKER_{i}" for i in (2, 3, 4, 5))
+    + tuple(f"L1_4_EXT_PACKER_{i}" for i in (6, 7))
+    + ("L1_4_PACKER_IF_1_TAG_SEARCH",)
+)
 L1_TDMA_BUNDLE = ("L1_0_TDMA_BUNDLE_0_RISC", "L1_0_TDMA_BUNDLE_1_TRISC")
 L1_ALL = (
     L1_RING0
@@ -135,7 +146,6 @@ L1_ALL = (
     + L1_UNPACKER1_EXT
     + L1_UNPACKER0_EXT
     + L1_EXT_PACK
-    + L1_TAG_SEARCH
     + L1_TDMA_BUNDLE
 )
 
@@ -154,8 +164,8 @@ def compute_metrics(v: CounterView) -> dict:
 
     fpu_instruction = v.count("FPU", "FPU_COUNTER")
     fpu_or_sfpu = v.count("FPU", "MATH_COUNTER")
-    fpu_utilization = safe_div(fpu_instruction, fpu_cycles)
-    compute_utilization = safe_div(fpu_or_sfpu, fpu_cycles)
+    fpu_utilization = safe_div(fpu_instruction, fpu_cycles) if v.has("FPU_COUNTER") else None
+    compute_utilization = safe_div(fpu_or_sfpu, fpu_cycles) if v.has("MATH_COUNTER") else None
 
     unpack_thread_stall = _instrn_rate("THREAD_STALLS_0")
     math_thread_stall = _instrn_rate("THREAD_STALLS_1")
@@ -168,21 +178,21 @@ def compute_metrics(v: CounterView) -> dict:
     srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
     unpack0_busy = v.count("TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = v.count("TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
-    unpack0_eff = safe_div(srca_write, unpack0_busy)
-    unpack1_eff = safe_div(srcb_write, unpack1_busy)
-    unpack_eff = avg_pair(unpack0_eff, unpack1_eff)
 
+    # UNBOUNDED ratios: source writes per unpacker busy cycle. SRCA_WRITE_REQ also counts THCON and thread-1
+    # writes, so it is not a subset of UNPACK0_BUSY_THREAD0; above 1 means writes from outside the unpacker.
     srca_avail = v.count("TDMA_UNPACK", "SRCA_WRITE_REQ")
     srcb_avail = v.count("TDMA_UNPACK", "SRCB_WRITE_REQ")
-    flow0 = safe_div(srca_avail, unpack0_busy)
-    flow1 = safe_div(srcb_avail, unpack1_busy)
+    flow0 = safe_div(srca_avail, unpack0_busy) if strict(v, "SRCA_WRITE_REQ", "UNPACK0_BUSY_THREAD0") else None
+    flow1 = safe_div(srcb_avail, unpack1_busy) if strict(v, "SRCB_WRITE_REQ", "UNPACK1_BUSY_THREAD0") else None
     flow_avg = avg_pair(flow0, flow1)
 
     # Packer Metrics: aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
     packer_busy = v.count("TDMA_PACK", "PACKER_BUSY")
-    pack_utilization = safe_div(packer_busy, pack_cycles)
+    pack_utilization = safe_div(packer_busy, pack_cycles) if v.has("PACKER_BUSY") else None
     dest_read = v.count("TDMA_PACK", "PACKER0_DEST_READ_REQ")
-    pack_dest_eff = safe_div(dest_read, packer_busy)
+    # A dest read request implies a non-empty packer request FIFO, which is the packer busy condition.
+    pack_dest_eff = safe_div(dest_read, packer_busy) if strict(v, "PACKER0_DEST_READ_REQ", "PACKER_BUSY") else None
 
     math_available = v.count("TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
     # No src-data stall metric: MATH_SRC_DATA_READY is gated on dec_instr_alu while
@@ -194,14 +204,13 @@ def compute_metrics(v: CounterView) -> dict:
     unpacker1_ext_l1_util = mean_port_util(v, "L1", L1_UNPACKER1_EXT, l1_cycles)
     unpacker0_ext_l1_util = mean_port_util(v, "L1", L1_UNPACKER0_EXT, l1_cycles)
     ext_pack_l1_util = mean_port_util(v, "L1", L1_EXT_PACK, l1_cycles)
-    tag_search_l1_util = mean_port_util(v, "L1", L1_TAG_SEARCH, l1_cycles)
     tdma_bundle_l1_util = mean_port_util(v, "L1", L1_TDMA_BUNDLE, l1_cycles)
     l1_mean_client_util = mean_port_util(v, "L1", L1_ALL, l1_cycles)
-    # NoC ring0 grant efficiency: ready cycles per request cycle. The L1 grant counter is the interface
-    # ready line, unqualified by the request, so this is clamped to [0, 1] (see bounded()).
-    _ring0_req = sum(v.count("L1", c) for c in L1_RING0 if v.has(c))
-    _ring0_grant = sum(v.count("L1", c + "_GRANT") for c in L1_RING0 if v.has(c + "_GRANT"))
-    noc_ring0_grant_eff = bounded(safe_div(_ring0_grant, _ring0_req))
+    # NoC ring0 grant efficiency: accepted per requested cycle, summed over the ports that carry both counters.
+    _ring0_pairs = [c for c in L1_RING0 if strict(v, c, c + "_GRANT")]
+    _ring0_req = sum(v.count("L1", c) for c in _ring0_pairs)
+    _ring0_grant = sum(v.count("L1", c + "_GRANT") for c in _ring0_pairs)
+    noc_ring0_grant_eff = bounded(safe_div(_ring0_grant, _ring0_req)) if _ring0_pairs else None
 
     thread0_ipc = _instrn_rate("THREAD_INSTRUCTIONS_0")
     thread1_ipc = _instrn_rate("THREAD_INSTRUCTIONS_1")
@@ -229,34 +238,55 @@ def compute_metrics(v: CounterView) -> dict:
     _engines = ("PACKER_BUSY_0", "PACKER_BUSY_1", "PACKER_BUSY_2", "PACKER_BUSY")
     packer_imbalance = safe_div(max(pb) - min(pb), max(pb)) if all(v.has(n) for n in _engines) else None
     dest_granted = v.count("TDMA_PACK", "DEST_READ_GRANTED_0")
-    pack_dest_grant_eff = safe_div(dest_granted, dest_read)
+    pack_dest_grant_eff = (
+        safe_div(dest_granted, dest_read) if strict(v, "DEST_READ_GRANTED_0", "PACKER0_DEST_READ_REQ") else None
+    )
 
-    srca_write_eff = safe_div(srca_write, srca_avail)
-    srcb_write_eff = safe_div(srcb_write, srcb_avail)
+    srca_write_eff = (
+        safe_div(srca_write, srca_avail) if strict(v, "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_REQ") else None
+    )
+    srcb_write_eff = (
+        safe_div(srcb_write, srcb_avail) if strict(v, "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_REQ") else None
+    )
 
     # Stall rates are complements of "not stalled" counters. The scoreboard one is cross-bank (numerator in
-    # TDMA_PACK, denominator in TDMA_UNPACK), so it is has()-gated and clamped at 0.
-    data_hazard_stall = one_minus(safe_div(v.count("TDMA_UNPACK", "MATH_NOT_D2S_STALLED"), math_available))
-    math_scoreboard_stall = (
-        bounded(one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED"), math_available)))
-        if v.has("MATH_NOT_SCOREBOARD_STALLED")
+    # TDMA_PACK, denominator in TDMA_UNPACK), so it is also clamped at 0.
+    data_hazard_stall = (
+        one_minus(safe_div(v.count("TDMA_UNPACK", "MATH_NOT_D2S_STALLED"), math_available))
+        if strict(v, "MATH_NOT_D2S_STALLED", "MATH_INSTRN_AVAILABLE")
         else None
     )
-    math_pipeline_util = safe_div(v.count("TDMA_UNPACK", "MATH_INSTRN_STARTED"), math_available)
+    math_scoreboard_stall = (
+        bounded(one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED"), math_available)))
+        if strict(v, "MATH_NOT_SCOREBOARD_STALLED", "MATH_INSTRN_AVAILABLE")
+        else None
+    )
+    math_pipeline_util = (
+        safe_div(v.count("TDMA_UNPACK", "MATH_INSTRN_STARTED"), math_available)
+        if strict(v, "MATH_INSTRN_STARTED", "MATH_INSTRN_AVAILABLE")
+        else None
+    )
 
     l1_port1 = first_present(v, L1_PORT1_NAMES)
     l1_port8 = first_present(v, L1_PORT8_NAMES)
 
-    sfpu_util = safe_div(v.count("FPU", "SFPU_COUNTER"), fpu_cycles)
+    sfpu_util = safe_div(v.count("FPU", "SFPU_COUNTER"), fpu_cycles) if v.has("SFPU_COUNTER") else None
+    # UNBOUNDED ratio: FPU busy cycles per cycle thread 1 had a math instruction ready. FPU_COUNTER counts
+    # dequeues from any thread, so it is not a subset of the thread-1 availability.
     fpu_exec_eff = (
-        safe_div(fpu_instruction, v.count("INSTRN_THREAD", "MATH_INSTRN_AVAILABLE_1")) if v.has("FPU_COUNTER") else None
+        safe_div(fpu_instruction, v.count("INSTRN_THREAD", "MATH_INSTRN_AVAILABLE_1"))
+        if strict(v, "FPU_COUNTER", "MATH_INSTRN_AVAILABLE_1")
+        else None
     )
     # UNBOUNDED ratio: available-math per busy packer (bank cycles when idle); >1 means the packer
     # is the handoff bottleneck.
     available_math = v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED")
-    math_to_pack_handoff = (
-        safe_div(available_math, packer_busy) if packer_busy > 0 else safe_div(available_math, pack_cycles)
-    )
+    if not strict(v, "MATH_NOT_SCOREBOARD_STALLED", "PACKER_BUSY"):
+        math_to_pack_handoff = None
+    elif packer_busy > 0:
+        math_to_pack_handoff = safe_div(available_math, packer_busy)
+    else:
+        math_to_pack_handoff = safe_div(available_math, pack_cycles)
 
     srca_clear_wait = _instrn_rate("WAITING_FOR_SRCA_CLEAR")
     srcb_clear_wait = _instrn_rate("WAITING_FOR_SRCB_CLEAR")
@@ -278,10 +308,19 @@ def compute_metrics(v: CounterView) -> dict:
     unpack_instrn_avail_t0 = _instrn_rate("UNPACK_INSTRN_AVAILABLE_0")
     pack_instrn_avail_t2 = _instrn_rate("PACK_INSTRN_AVAILABLE_2")
 
-    srca_write_ovr_blocked = one_minus(safe_div(v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_OVR"), srca_avail))
-    srcb_write_port_blocked = one_minus(safe_div(v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_PORT"), srcb_avail))
+    srca_write_ovr_blocked = (
+        one_minus(safe_div(v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_OVR"), srca_avail))
+        if strict(v, "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_REQ")
+        else None
+    )
+    srcb_write_port_blocked = (
+        one_minus(safe_div(v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_PORT"), srcb_avail))
+        if strict(v, "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ")
+        else None
+    )
 
-    risc_core_l1_util = (
+    # Port 2 carries TDMA bundle 0 (mover, packer read, THCON) together with BRISC, TRISC0 and NCRISC.
+    l1_port2_util = (
         safe_div(v.count("L1", "L1_0_TDMA_BUNDLE_0_RISC"), l1_cycles) if v.has("L1_0_TDMA_BUNDLE_0_RISC") else None
     )
     l1_port1_util = safe_div(v.count("L1", l1_port1), l1_cycles) if l1_port1 else None
@@ -298,9 +337,11 @@ def compute_metrics(v: CounterView) -> dict:
         if v.has("L1_0_PORT1_GRANT") and v.has("PACKER_BUSY") and not v.is_blackhole()
         else None
     )  # Wormhole only: Blackhole port 1 carries no packer
-    # Back-pressure = 1 - ready/request, clamped: the L1 grant counter is the ready line, see bounded().
-    l1_unpacker_backpressure = bounded(
-        one_minus(safe_div(v.count("L1", "L1_0_UNPACKER_0_GRANT"), v.count("L1", "L1_0_UNPACKER_0")))
+    # Back-pressure = 1 - accepted/requested; the grant is the arbiter accept, clamped only as a guard (bounded()).
+    l1_unpacker_backpressure = (
+        bounded(one_minus(safe_div(v.count("L1", "L1_0_UNPACKER_0_GRANT"), v.count("L1", "L1_0_UNPACKER_0"))))
+        if strict(v, "L1_0_UNPACKER_0", "L1_0_UNPACKER_0_GRANT")
+        else None
     )
     l1_port1_backpressure = (
         bounded(one_minus(safe_div(v.count("L1", L1_PORT1_GRANT[l1_port1]), v.count("L1", l1_port1))))
@@ -309,8 +350,11 @@ def compute_metrics(v: CounterView) -> dict:
     )
 
     def _bp(names):
-        req = sum(v.count("L1", n) for n in names if v.has(n))
-        grant = sum(v.count("L1", n + "_GRANT") for n in names if v.has(n + "_GRANT"))
+        pairs = [n for n in names if strict(v, n, n + "_GRANT")]  # request and grant of the same port only
+        if not pairs:
+            return None
+        req = sum(v.count("L1", n) for n in pairs)
+        grant = sum(v.count("L1", n + "_GRANT") for n in pairs)
         return bounded(one_minus(safe_div(grant, req)))
 
     _R0_OUT = ("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_1")
@@ -387,30 +431,38 @@ def compute_metrics(v: CounterView) -> dict:
         else None
     )
 
-    _ring1_req = sum(v.count("L1", c) for c in L1_RING1 if v.has(c))
-    _ring1_grant = sum(v.count("L1", c + "_GRANT") for c in L1_RING1 if v.has(c + "_GRANT"))
-    noc_ring1_grant_eff = bounded(safe_div(_ring1_grant, _ring1_req))
+    _ring1_pairs = [c for c in L1_RING1 if strict(v, c, c + "_GRANT")]
+    _ring1_req = sum(v.count("L1", c) for c in _ring1_pairs)
+    _ring1_grant = sum(v.count("L1", c + "_GRANT") for c in _ring1_pairs)
+    noc_ring1_grant_eff = bounded(safe_div(_ring1_grant, _ring1_req)) if _ring1_pairs else None
 
     any_thread_stall = _instrn_rate("ANY_THREAD_STALL")
 
     l1_unpacker1_ext_backpressure = _bp(L1_UNPACKER1_EXT)
     l1_unpacker0_ext_backpressure = _bp(L1_UNPACKER0_EXT)
     l1_ext_pack_backpressure = _bp(L1_EXT_PACK)
-    l1_tag_search_backpressure = _bp(L1_TAG_SEARCH)
 
     # Per-thread unpacker / src-write shares (fraction driven by each thread), bounded x/(x+y).
     _u0_t0 = v.count("TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     _u0_t1 = v.count("TDMA_UNPACK", "UNPACK0_BUSY_THREAD1")
     _u1_t0 = v.count("TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
     _u1_t1 = v.count("TDMA_UNPACK", "UNPACK1_BUSY_THREAD1")
-    unpack0_thread1_share = safe_div(_u0_t1, _u0_t0 + _u0_t1) if v.has("UNPACK0_BUSY_THREAD1") else None
-    unpack1_thread1_share = safe_div(_u1_t1, _u1_t0 + _u1_t1) if v.has("UNPACK1_BUSY_THREAD1") else None
+    unpack0_thread1_share = (
+        safe_div(_u0_t1, _u0_t0 + _u0_t1) if strict(v, "UNPACK0_BUSY_THREAD0", "UNPACK0_BUSY_THREAD1") else None
+    )
+    unpack1_thread1_share = (
+        safe_div(_u1_t1, _u1_t0 + _u1_t1) if strict(v, "UNPACK1_BUSY_THREAD0", "UNPACK1_BUSY_THREAD1") else None
+    )
     _sa_even = v.count("TDMA_UNPACK", "SRCA_WRITE_TID_EVEN")
     _sa_odd = v.count("TDMA_UNPACK", "SRCA_WRITE_TID_ODD")
     _sb_even = v.count("TDMA_UNPACK", "SRCB_WRITE_TID_EVEN")
     _sb_odd = v.count("TDMA_UNPACK", "SRCB_WRITE_TID_ODD")
-    srca_write_even_share = safe_div(_sa_even, _sa_even + _sa_odd) if v.has("SRCA_WRITE_TID_ODD") else None
-    srcb_write_even_share = safe_div(_sb_even, _sb_even + _sb_odd) if v.has("SRCB_WRITE_TID_ODD") else None
+    srca_write_even_share = (
+        safe_div(_sa_even, _sa_even + _sa_odd) if strict(v, "SRCA_WRITE_TID_EVEN", "SRCA_WRITE_TID_ODD") else None
+    )
+    srcb_write_even_share = (
+        safe_div(_sb_even, _sb_even + _sb_odd) if strict(v, "SRCB_WRITE_TID_EVEN", "SRCB_WRITE_TID_ODD") else None
+    )
 
     return {
         # Compute utilization
@@ -423,14 +475,10 @@ def compute_metrics(v: CounterView) -> dict:
         # Semaphore waits
         "math_sem_wait_pct": pct(math_sem_wait),
         "pack_sem_wait_pct": pct(pack_sem_wait),
-        # Unpacker write efficiency
-        "unpack0_write_eff_pct": pct(unpack0_eff),
-        "unpack1_write_eff_pct": pct(unpack1_eff),
-        "unpack_write_eff_pct": pct(unpack_eff),
-        # Unpacker-to-math flow
-        "unpack_to_math_flow0_pct": pct(flow0),
-        "unpack_to_math_flow1_pct": pct(flow1),
-        "unpack_to_math_flow_pct": pct(flow_avg),
+        # Unpacker-to-math flow (ratios: source writes per unpacker busy cycle)
+        "unpack_to_math_flow0_ratio": flow0,
+        "unpack_to_math_flow1_ratio": flow1,
+        "unpack_to_math_flow_ratio": flow_avg,
         # Packer metrics
         "pack_utilization_pct": pct(pack_utilization),
         "pack_dest_eff_pct": pct(pack_dest_eff),
@@ -448,7 +496,6 @@ def compute_metrics(v: CounterView) -> dict:
         "l1_unpacker1_ext_util_pct": pct(unpacker1_ext_l1_util),
         "l1_unpacker0_ext_util_pct": pct(unpacker0_ext_l1_util),
         "l1_ext_pack_util_pct": pct(ext_pack_l1_util),
-        "l1_tag_search_util_pct": pct(tag_search_l1_util),
         "l1_tdma_bundle_util_pct": pct(tdma_bundle_l1_util),
         # Per-thread instruction throughput
         "thread0_ipc_pct": pct(thread0_ipc),
@@ -472,7 +519,7 @@ def compute_metrics(v: CounterView) -> dict:
         "srcb_write_eff_pct": pct(srcb_write_eff),
         # Compute
         "sfpu_utilization_pct": pct(sfpu_util),
-        "fpu_exec_eff_pct": pct(fpu_exec_eff),
+        "fpu_exec_eff_ratio": fpu_exec_eff,
         "math_to_pack_handoff_ratio": math_to_pack_handoff,
         # Extra INSTRN waits
         "srca_clear_wait_pct": pct(srca_clear_wait),
@@ -499,7 +546,7 @@ def compute_metrics(v: CounterView) -> dict:
         "srca_write_ovr_blocked_pct": pct(srca_write_ovr_blocked),
         "srcb_write_port_blocked_pct": pct(srcb_write_port_blocked),
         # L1 per-port + grant efficiency
-        "risc_core_l1_util_pct": pct(risc_core_l1_util),
+        "l1_port2_util_pct": pct(l1_port2_util),
         "l1_port1_util_pct": pct(l1_port1_util),
         "l1_packer_port8_util_pct": pct(l1_packer_port8_util),
         "unpacker_l1_eff_ratio": unpacker_l1_eff,
@@ -533,7 +580,6 @@ def compute_metrics(v: CounterView) -> dict:
         "l1_unpacker1_ext_backpressure_pct": pct(l1_unpacker1_ext_backpressure),
         "l1_unpacker0_ext_backpressure_pct": pct(l1_unpacker0_ext_backpressure),
         "l1_ext_pack_backpressure_pct": pct(l1_ext_pack_backpressure),
-        "l1_tag_search_backpressure_pct": pct(l1_tag_search_backpressure),
         "unpack0_thread1_share_pct": pct(unpack0_thread1_share),
         "unpack1_thread1_share_pct": pct(unpack1_thread1_share),
         "srca_write_even_tid_share_pct": pct(srca_write_even_share),
@@ -547,18 +593,15 @@ METRIC_LABELS = {
     "fpu_utilization_pct": "FPU Util",
     "compute_utilization_pct": "MATH Util",
     "sfpu_utilization_pct": "SFPU Util",
-    "fpu_exec_eff_pct": "FPU Execution Efficiency",
+    "fpu_exec_eff_ratio": "FPU Execution Efficiency",
     "pack_utilization_pct": "Packer Utilization",
-    "unpack0_write_eff_pct": "Unpacker0 Write Efficiency",
-    "unpack1_write_eff_pct": "Unpacker1 Write Efficiency",
-    "unpack_write_eff_pct": "Unpacker Write Efficiency",
     "pack_dest_eff_pct": "Packer Efficiency",
     "pack_dest_grant_eff_pct": "Pack Dest Grant Efficiency",
     "math_pipeline_util_pct": "Math Pipeline Utilization",
     "math_to_pack_handoff_ratio": "Math-to-Pack Handoff Efficiency",
-    "unpack_to_math_flow_pct": "Unpacker-to-Math Data Flow",
-    "unpack_to_math_flow0_pct": "Unpacker-to-Math Data Flow (srcA)",
-    "unpack_to_math_flow1_pct": "Unpacker-to-Math Data Flow (srcB)",
+    "unpack_to_math_flow_ratio": "Unpacker-to-Math Data Flow",
+    "unpack_to_math_flow0_ratio": "Unpacker-to-Math Data Flow (srcA)",
+    "unpack_to_math_flow1_ratio": "Unpacker-to-Math Data Flow (srcB)",
     "unpack_thread_stall_pct": "Thread 0 Stall Rate",
     "math_thread_stall_pct": "Thread 1 Stall Rate",
     "pack_thread_stall_pct": "Thread 2 Stall Rate",
@@ -608,10 +651,9 @@ METRIC_LABELS = {
     "l1_tdma_bundle_util_pct": "L1 TDMA Bundle Util",
     "l1_unpacker1_ext_util_pct": "L1 Unpacker1 Ext Util",
     "l1_unpacker0_ext_util_pct": "L1 Unpacker0 Ext Util",
-    "l1_ext_pack_util_pct": "L1 Ext Packer Util",
-    "l1_tag_search_util_pct": "L1 Tag Search Util",
+    "l1_ext_pack_util_pct": "L1 Packer Interfaces Util",
     "l1_mean_client_util_pct": "L1 Mean Client Util",
-    "risc_core_l1_util_pct": "RISC Core L1 Util",
+    "l1_port2_util_pct": "L1 Port 2 Util",
     "noc_ring0_util_pct": "NOC Ring 0 Util",
     "noc_ring1_util_pct": "NOC Ring 1 Util",
     "noc_ring0_out_util_pct": "NOC Ring 0 Outgoing Util",
@@ -641,8 +683,7 @@ METRIC_LABELS = {
     "any_thread_stall_pct": "Any-Thread Stall Rate",
     "l1_unpacker1_ext_backpressure_pct": "L1 Unpacker1 Ext Backpressure",
     "l1_unpacker0_ext_backpressure_pct": "L1 Unpacker0 Ext Backpressure",
-    "l1_ext_pack_backpressure_pct": "L1 Ext Packer Backpressure",
-    "l1_tag_search_backpressure_pct": "L1 Tag Search Backpressure",
+    "l1_ext_pack_backpressure_pct": "L1 Packer Interfaces Backpressure",
     "unpack0_thread1_share_pct": "Unpacker0 T1 Share",
     "unpack1_thread1_share_pct": "Unpacker1 T1 Share",
     "srca_write_even_tid_share_pct": "SrcA Write Even-TID Share",
