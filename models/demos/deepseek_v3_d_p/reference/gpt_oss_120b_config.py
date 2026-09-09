@@ -29,9 +29,14 @@ class GptOss120BConfig:
     # Not enabled: the gpt-oss MoE builds TtRoutedExpert directly and forwards no threshold, so
     # nothing reads this. Both op-side blockers are gone -- moe_fused_swiglu carries SwiGluOai and
     # the per-expert bias, and TtRoutedExpert no longer refuses a threshold on biased experts.
+    # Re-cut for bf16 gate/up accumulators, which cost the fused op ~24% at long ISL and moved this
+    # crossover from 768 to 512. Measured through TtRoutedExpert with the SwiGluOai activation AND
+    # the expert biases, because the shared op runners cannot carry a bias on the composite side and
+    # a bias-free cut lands in the wrong place (see the paragraph above). Fused wins 512 by 1.04x and
+    # loses 768 by 1.04x, so the two costs cross inside that gap -- a thin margin at the cut itself.
     # Kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 512
     INTERMEDIATE_SIZE = 2880  # Dense FFN hidden dimension (same as MoE)
     HEAD_DIM = 64
 

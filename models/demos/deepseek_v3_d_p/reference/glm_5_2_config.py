@@ -29,7 +29,11 @@ class GLM52Config:
     # measured separately: the crossover is a function of the routed-expert matmul shape, expert
     # count and activation, and this model matches 5.1 on all of them (6144x2048, 256 experts,
     # top-8, no pre-projection, SiLU). Re-measure if any of those diverge.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 1792
+    # Re-cut for bf16 gate/up accumulators (which cost the fused op ~24% at long ISL): the crossover
+    # is 896, so 768 is the last count the fused op still wins. Bisected at 128-token steps rather
+    # than taken off the power-of-two sweep -- the coarse sweep only bounds it to (512, 1024], and
+    # 640/768 are both fused wins inside that gap.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 768
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

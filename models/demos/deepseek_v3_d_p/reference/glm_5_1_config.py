@@ -19,12 +19,13 @@ class GLM51Config:
     EMB_SIZE = 6144  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
-    # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
-    # 6144x2048 routed-expert shape (1.03x at 1792, 0.95x at 2048); it is the last full M_BLOCK
-    # boundary before the fused op opens another block while the composite's chunk
-    # schedule stays flat, so the two costs cross just above it.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 1792
+    # Routed-expert hybrid split: experts with <= this many active tokens go to moe_fused_swiglu,
+    # the rest to unified_routed_expert_moe. Measured on the 6144x2048 routed-expert shape.
+    # Re-cut for bf16 gate/up accumulators (which cost the fused op ~24% at long ISL): the crossover
+    # is 896, so 768 is the last count the fused op still wins. Bisected at 128-token steps rather
+    # than taken off the power-of-two sweep -- the coarse sweep only bounds it to (512, 1024], and
+    # 640/768 are both fused wins inside that gap.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 768
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

@@ -44,46 +44,50 @@ _MARGIN = 0.03
 _CEILING_ONLY = 1.0
 # Below the knee the kernel skips most chunks, so fixed overhead dominates and the median keeps a
 # long right tail. 512 is inside the knee rather than past it: it is the first count where compute
-# starts to cover the DRAM weight read, and its cross-sweep spread (1.6% on kimi_k26) leaves too
-# little headroom under _MARGIN to gate on. Everything past it holds inside 0.5%.
+# starts to cover the DRAM weight read. Everything past it holds inside 1% cross-sweep, while 256
+# spreads 3-5%, which is what _LOW_ISL_MARGIN covers.
 _LOW_ISL_MARGIN = 0.08
 _KNEE_TOKENS = 512
 
-# Keyed kimi_k26 until the name was found to match no entry in SINGLE_EXPERT_MODELS; the shape is
-# unchanged (7168 x 2048 on both configs), so these numbers carried over as measured.
-# Device duration in ns per (model, active), x_rm layout, 11x8 grid: median of 3 dispatches on a
-# BH p150b (2026-08-28). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
-# "RT-CAL" line in this dict's format, so one run regenerates the table.
+# Device duration in ns per (model, active), x_rm layout, 11x8 grid: per-cell MEDIAN OVER THREE
+# sweeps on a BH p150b (2026-09-08). Recalibrate on the perf runner (DDR-speed dependent): each case
+# logs an "RT-CAL" line in this dict's format, so one run regenerates the table -- but centre it over
+# several sweeps rather than copying one, because ISL 256 carries a 3-5% cross-sweep spread.
+#
+# Re-cut for bf16 gate/up accumulators. The cost climbs with token count -- +5% at 128 to +24% at
+# 5120 -- because those two accumulators went from bfp8 to 2 B/value, so the column all-to-all moves
+# ~1.9x the payload and the penalty is per-token rather than fixed. It also moved every crossover
+# against the composite one sweep step earlier; the model configs' hybrid thresholds follow.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 2_815,
-    ("kimi_k2_7", 128): 94_981,
-    ("kimi_k2_7", 256): 117_485,
-    ("kimi_k2_7", 512): 199_692,
-    ("kimi_k2_7", 1024): 344_132,
-    ("kimi_k2_7", 2048): 641_895,
-    ("kimi_k2_7", 4096): 1_227_771,
-    ("kimi_k2_7", 5120): 1_522_123,
-    ("glm_51", 0): 2_742,
-    ("glm_51", 128): 85_149,
-    ("glm_51", 256): 107_656,
-    ("glm_51", 512): 182_002,
-    ("glm_51", 1024): 318_281,
-    ("glm_51", 2048): 593_197,
-    ("glm_51", 4096): 1_144_483,
-    ("glm_51", 5120): 1_420_707,
+    ("kimi_k2_7", 0): 2_786,
+    ("kimi_k2_7", 128): 99_784,
+    ("kimi_k2_7", 256): 128_139,
+    ("kimi_k2_7", 512): 228_098,
+    ("kimi_k2_7", 1024): 413_117,
+    ("kimi_k2_7", 2048): 782_755,
+    ("kimi_k2_7", 4096): 1_520_810,
+    ("kimi_k2_7", 5120): 1_892_193,
+    ("glm_51", 0): 2_744,
+    ("glm_51", 128): 89_676,
+    ("glm_51", 256): 116_975,
+    ("glm_51", 512): 206_125,
+    ("glm_51", 1024): 377_474,
+    ("glm_51", 2048): 718_394,
+    ("glm_51", 4096): 1_404_145,
+    ("glm_51", 5120): 1_747_664,
 }
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
 # it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 2_751,
-    128: 85_021,
-    256: 124_976,
-    512: 219_777,
-    1024: 398_779,
-    2048: 752_027,
-    4096: 1_466_435,
-    5120: 1_820_459,
+    0: 2_764,
+    128: 89_949,
+    256: 126_833,
+    512: 231_401,
+    1024: 435_460,
+    2048: 844_275,
+    4096: 1_661_876,
+    5120: 2_068_973,
 }
 
 

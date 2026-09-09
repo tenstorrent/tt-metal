@@ -19,20 +19,13 @@ class MiniMaxM3Config:
 
     # FFN dimensions
     MOE_INTERMEDIATE_SIZE = 3072  # Routed-expert FFN hidden dimension
-    # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
-    # 6144x3072 routed-expert shape, where the composite's cost is flat inside a 1024-token
-    # chunk while the fused op's rises linearly, so the winner alternates rather than crossing
-    # once. 1536 is the aggregate-optimal cut over that sawtooth rather than the first crossing
-    # (1024): it beats the conservative 768 both on total cost (+0.4% against a per-count oracle
-    # vs +1.2%) and on worst single count (+8.5% at 1024 vs +27.2% at 1280). Measured under
-    # SwiGluOai, the activation these experts actually run.
-    # Not enabled: the M3 MoE builds TtRoutedExpert directly and forwards no threshold, so nothing
-    # reads this. Nothing on the op side blocks it any more -- moe_fused_swiglu carries SwiGluOai,
-    # and M3's only bias is the router's e_score_correction_bias, not an expert-FFN bias, so there
-    # is none to lose. Kept under _MEASURED so it is not re-derived; rename it back to
-    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 1536
+    # No routed-expert hybrid threshold. moe_fused_swiglu does not BUILD on this shape since the
+    # gate/up accumulators went bf16: the CB layout needs 1_610_112 bytes against a 1_461_248 budget
+    # on an 11x8 grid, so the op TT_FATALs at every token count rather than merely being slower at
+    # some of them. A threshold would be fiction -- these experts run on unified_routed_expert_moe
+    # only. Re-derive one once the fused op fits again; phase_cb_alias() is now dead for every shape
+    # (cb_gather_gate is bf16 while cb_h_slice and cb_out_tiles are bfp8, so the three page sizes can
+    # never agree), and that lost allocation is the L1 to recover.
     SHARED_INTERMEDIATE_SIZE = 3072  # Always-on shared expert
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 

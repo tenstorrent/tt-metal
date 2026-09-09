@@ -17,15 +17,13 @@ class DeepSeekV4ProConfig:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
-    # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
-    # token count on the 7168x3072 routed-expert shape (1.24-3.14x across 0-5120 tokens),
-    # so there is no crossover to place a threshold at. A bound this far above any
-    # per-expert region leaves the composite an empty band, which TtRoutedExpert reads as
-    # 'fused owns the layer' and drops the composite dispatch entirely.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
-    # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
-    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 2**31 - 1
+    # No routed-expert hybrid threshold. moe_fused_swiglu does not BUILD on this shape since the
+    # gate/up accumulators went bf16: the CB layout needs 1_694_592 bytes against a 1_461_248 budget
+    # on an 11x8 grid, so the op TT_FATALs at every token count rather than merely being slower at
+    # some of them. A threshold would be fiction -- these experts run on unified_routed_expert_moe
+    # only. Re-derive one once the fused op fits again; phase_cb_alias() is now dead for every shape
+    # (cb_gather_gate is bf16 while cb_h_slice and cb_out_tiles are bfp8, so the three page sizes can
+    # never agree), and that lost allocation is the L1 to recover.
     HEAD_DIM = 512
 
     # MoE configuration
