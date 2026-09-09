@@ -66,6 +66,129 @@ void append_absent_mcast_compile_time_args_to(Args& destination) {
     detail::append_args_to(destination, absent_mcast_compile_time_args());
 }
 
+// One exact receiver set and a nonempty ordered sender list.
+// One sender is fixed; multiple senders rotate in the supplied order.
+class McastGroup {
+public:
+    McastGroup(
+        tt::tt_metal::CoreRangeSet receivers,
+        std::vector<tt::tt_metal::CoreCoord> senders,
+        std::optional<uint32_t> ack_count_override = std::nullopt);
+
+    const tt::tt_metal::CoreRangeSet& receiver_cores() const { return receivers_; }
+    const std::vector<tt::tt_metal::CoreCoord>& senders() const { return senders_; }
+    bool rotating() const { return senders_.size() > 1; }
+    std::optional<uint32_t> ack_count_override() const { return ack_count_override_; }
+
+    const tt::tt_metal::CoreRangeSet& participating_cores() const { return participating_; }
+    tt::tt_metal::CoreRangeSet sender_only_cores() const;
+    bool is_sender(const tt::tt_metal::CoreCoord& core) const;
+    uint32_t num_senders() const;
+    // Remote fanout for a sender; zero for a non-sender.
+    uint32_t num_receivers(const tt::tt_metal::CoreCoord& core) const;
+    bool has_remote_receivers() const;
+
+    // These methods require a prepared group, obtained through family.group(index).
+    uint32_t ack_count(const tt::tt_metal::CoreCoord& core) const;
+    uint32_t num_rectangles() const;
+    std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const;
+    // Rejects cores outside this group's participating set, including cores in another group.
+    std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const;
+
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination, std::optional<bool> pre_handshake = std::nullopt) const {
+        detail::append_args_to(destination, compile_time_args(pre_handshake));
+    }
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
+        detail::append_args_to(destination, runtime_args(core));
+    }
+
+private:
+    friend class McastFamily;
+    // The family derives one common layout after preparing all groups.
+    struct ArgumentLayout {
+        uint32_t rotating_span = 0;
+        uint32_t rectangle_capacity = 1;
+        uint32_t ack_count = 0;
+        uint32_t uniform_remote_count = 0;
+        uint32_t uniform_loopback_count = 0;
+        dataflow_kernel_lib::SenderTransferMode transfer_mode =
+            dataflow_kernel_lib::SenderTransferMode::TransferModeUnknown;
+        bool has_remote_receivers = false;
+        uint32_t data_ready_id = 0;
+        uint32_t consumer_ready_id = UNUSED_SEM_ID;
+        uint32_t flags = 0;
+    };
+    struct PreparedState {
+        std::vector<tt::tt_metal::CoreRange> rectangles;
+        std::vector<uint32_t> sender_coords;
+        std::vector<std::vector<uint32_t>> sender_records;
+        std::vector<uint32_t> acks;
+        dataflow_kernel_lib::SenderTransferMode transfer_mode =
+            dataflow_kernel_lib::SenderTransferMode::TransferModeUnknown;
+    };
+    void prepare_(tt::tt_metal::IDevice* device, const McastConfig& cfg);
+    void set_argument_layout_(const ArgumentLayout& layout);
+    const PreparedState& prepared_state_() const;
+    const ArgumentLayout& argument_layout_() const;
+    uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;
+    tt::tt_metal::CoreRangeSet receivers_;
+    std::vector<tt::tt_metal::CoreCoord> senders_;
+    std::optional<uint32_t> ack_count_override_;
+    tt::tt_metal::CoreRangeSet participating_;
+    std::vector<uint32_t> fanouts_;
+    std::optional<PreparedState> prepared_;
+    std::optional<ArgumentLayout> layout_;
+};
+
+// Independent, disjoint groups sharing one protocol and semaphore allocation.
+// All groups use the same sender mode and number of sender rounds.
+class McastFamily {
+public:
+    McastFamily(tt::tt_metal::IDevice* device, std::vector<McastGroup> groups, const McastConfig& cfg = {});
+
+    // Prepared member in constructor order; rejects an out-of-range index.
+    const McastGroup& group(uint32_t index) const;
+    std::vector<tt::tt_metal::SemaphoreDescriptor> owned_semaphores() const;
+    std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const;
+    // Outside-family cores receive a correctly sized inactive argument block.
+    std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const;
+
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination, std::optional<bool> pre_handshake = std::nullopt) const {
+        detail::append_args_to(destination, compile_time_args(pre_handshake));
+    }
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
+        detail::append_args_to(destination, runtime_args(core));
+    }
+
+    bool is_sender(const tt::tt_metal::CoreCoord& core) const;
+    uint32_t num_receivers(const tt::tt_metal::CoreCoord& core) const;
+    // Resolved count for this sender; zero for a non-sender. Zero overrides are explicit.
+    uint32_t ack_count(const tt::tt_metal::CoreCoord& core) const;
+    uint32_t num_senders() const;
+    bool has_remote_receivers() const;
+    const tt::tt_metal::CoreRangeSet& receiver_cores() const;
+    const tt::tt_metal::CoreRangeSet& participating_cores() const;
+    tt::tt_metal::CoreRangeSet sender_only_cores() const;
+    uint32_t num_semaphores() const;
+    uint32_t next_base_sem_id() const;
+    uint32_t rectangle_capacity() const;
+    uint32_t num_rectangles(const tt::tt_metal::CoreCoord& core) const;
+
+private:
+    friend class Mcast1D;
+    friend class Mcast2D;
+    const McastGroup* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
+    std::vector<McastGroup> groups_;
+    McastConfig cfg_;
+    tt::tt_metal::CoreRangeSet receivers_;
+    tt::tt_metal::CoreRangeSet participating_;
+    McastGroup::ArgumentLayout layout_;
+};
+
 // Mcast1D-specific types.
 
 // Groups the receiver grid into independent row or column multicasts.
@@ -156,40 +279,7 @@ private:
         const tt::tt_metal::CoreRangeSet& sender_grid,
         Mcast1DShape shape);
 
-    std::pair<uint32_t, uint32_t> virt_(const tt::tt_metal::CoreCoord& logical) const;
-    tt::tt_metal::CoreCoord sender_of_(const tt::tt_metal::CoreCoord& core) const;
-    uint32_t line_index_(const tt::tt_metal::CoreCoord& core) const;
-    uint32_t sender_index_for_line_(uint32_t line) const;
-    tt::tt_metal::CoreCoord line_coord_(const tt::tt_metal::CoreCoord& core, uint32_t i) const;
-    std::vector<uint32_t> line_rect_(const tt::tt_metal::CoreCoord& core) const;
-    bool is_receiver_(const tt::tt_metal::CoreCoord& core) const;
-    uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const;
-
-    tt::tt_metal::IDevice* device_;
-    tt::tt_metal::CoreRangeSet grid_;
-    tt::tt_metal::CoreRangeSet receiver_grid_;
-    Mcast1DShape shape_;
-    uint32_t starting_sender_index_;
-    Mcast1DSenderPlacement sender_placement_;
-    McastConfig cfg_;
-    bool rotating_sender_ = false;
-    uint32_t origin_x_ = 0;
-    uint32_t origin_y_ = 0;
-    uint32_t GR_ = 1;
-    uint32_t GC_ = 1;
-    uint32_t span_ = 1;
-    uint32_t receiver_span_ = 1;
-    std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_;
-    // Per-line NoC bounds followed, in rotating mode, by the ordered virtual sender coordinates.
-    std::vector<std::vector<uint32_t>> prepared_topology_;
-    dataflow_kernel_lib::SenderTransferMode transfer_mode_ = dataflow_kernel_lib::SenderTransferMode::Invalid;
-    uint32_t uniform_remote_count_ = 0;
-    uint32_t uniform_loopback_count_ = 0;
-    bool has_remote_receivers_ = false;
-    uint32_t ack_count_ = 0;
-    bool owns_sems_ = true;
-    uint32_t data_ready_id_ = 0;
-    uint32_t consumer_ready_id_ = UNUSED_SEM_ID;
+    std::optional<McastFamily> family_;
 };
 
 // Mcast2D-specific types.
@@ -271,32 +361,8 @@ private:
     static std::vector<tt::tt_metal::CoreCoord> senders_from_grid_(
         const tt::tt_metal::CoreRangeSet& sender_grid, Mcast2DSenderOrder sender_order);
 
-    bool in_rect_(const tt::tt_metal::CoreCoord& core) const;
-    bool is_receiver_(const tt::tt_metal::CoreCoord& core) const;
-    uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const;
-
-    tt::tt_metal::IDevice* device_;
-    tt::tt_metal::CoreRangeSet participating_;
-    tt::tt_metal::CoreCoord sender_;
-    McastConfig cfg_;
-    bool rotating_sender_ = false;
-    uint32_t rx0_ = 0;
-    uint32_t ry0_ = 0;
-    uint32_t rx1_ = 0;
-    uint32_t ry1_ = 0;
-    uint32_t area_ = 1;
-    std::vector<tt::tt_metal::CoreCoord> senders_;
-    // NoC bounds followed, in rotating mode, by the ordered virtual sender coordinates.
-    std::vector<uint32_t> prepared_topology_;
-    bool sender_in_rect_ = true;
-    dataflow_kernel_lib::SenderTransferMode transfer_mode_ = dataflow_kernel_lib::SenderTransferMode::Invalid;
-    uint32_t uniform_remote_count_ = 0;
-    uint32_t uniform_loopback_count_ = 0;
-    bool has_remote_receivers_ = false;
-    bool owns_sems_ = true;
-    uint32_t ack_count_ = 0;
-    uint32_t data_ready_id_ = 0;
-    uint32_t consumer_ready_id_ = UNUSED_SEM_ID;
+    std::optional<McastFamily> family_;
+    bool sender_in_rect_ = false;
 };
 
 }  // namespace ttnn::kernel_lib::host

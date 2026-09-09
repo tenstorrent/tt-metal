@@ -50,6 +50,8 @@ void py_module_types(nb::module_& mod) {
     nb::class_<kh::Mcast1DRotatingSenderConfig>(mod, "Mcast1DRotatingSenderConfig");
     nb::class_<kh::Mcast2DFixedSenderConfig>(mod, "Mcast2DFixedSenderConfig");
     nb::class_<kh::Mcast2DRotatingSenderConfig>(mod, "Mcast2DRotatingSenderConfig");
+    nb::class_<kh::McastGroup>(mod, "McastGroup");
+    nb::class_<kh::McastFamily>(mod, "McastFamily");
     nb::class_<kh::Mcast1D>(mod, "Mcast1D");
     nb::class_<kh::Mcast2D>(mod, "Mcast2D");
 }
@@ -137,6 +139,53 @@ void py_module(nb::module_& mod) {
         .def_rw("sender_grid", &kh::Mcast2DRotatingSenderConfig::sender_grid)
         .def_rw("sender_order", &kh::Mcast2DRotatingSenderConfig::sender_order);
 
+    static_cast<nb::class_<kh::McastGroup>>(mod.attr("McastGroup"))
+        .def(
+            nb::init<CoreRangeSet, std::vector<CoreCoord>, std::optional<uint32_t>>(),
+            nb::arg("receivers"),
+            nb::arg("senders"),
+            nb::arg("ack_count_override") = nb::none())
+        .def("receiver_cores", &kh::McastGroup::receiver_cores)
+        .def("senders", &kh::McastGroup::senders)
+        .def("rotating", &kh::McastGroup::rotating)
+        .def("ack_count_override", &kh::McastGroup::ack_count_override)
+        .def("participating_cores", &kh::McastGroup::participating_cores)
+        .def("sender_only_cores", &kh::McastGroup::sender_only_cores)
+        .def("is_sender", &kh::McastGroup::is_sender, nb::arg("core"))
+        .def("num_senders", &kh::McastGroup::num_senders)
+        .def("num_receivers", &kh::McastGroup::num_receivers, nb::arg("core"))
+        .def("has_remote_receivers", &kh::McastGroup::has_remote_receivers)
+        .def("ack_count", &kh::McastGroup::ack_count, nb::arg("core"))
+        .def("num_rectangles", &kh::McastGroup::num_rectangles)
+        .def("compile_time_args", &kh::McastGroup::compile_time_args, nb::arg("pre_handshake") = nb::none())
+        .def("runtime_args", &kh::McastGroup::runtime_args, nb::arg("core"));
+    static_cast<nb::class_<kh::McastFamily>>(mod.attr("McastFamily"))
+        .def(
+            "__init__",
+            [](kh::McastFamily* self,
+               MeshDevice* device,
+               std::vector<kh::McastGroup> groups,
+               const kh::McastConfig& config) { new (self) kh::McastFamily(device, std::move(groups), config); },
+            nb::arg("device"),
+            nb::arg("groups"),
+            nb::arg("config") = kh::McastConfig{})
+        .def("group", &kh::McastFamily::group, nb::arg("index"), nb::rv_policy::reference_internal)
+        .def("compile_time_args", &kh::McastFamily::compile_time_args, nb::arg("pre_handshake") = nb::none())
+        .def("runtime_args", &kh::McastFamily::runtime_args, nb::arg("core"))
+        .def("owned_semaphores", &kh::McastFamily::owned_semaphores)
+        .def("num_semaphores", &kh::McastFamily::num_semaphores)
+        .def("next_base_sem_id", &kh::McastFamily::next_base_sem_id)
+        .def("is_sender", &kh::McastFamily::is_sender, nb::arg("core"))
+        .def("num_receivers", &kh::McastFamily::num_receivers, nb::arg("core"))
+        .def("ack_count", &kh::McastFamily::ack_count, nb::arg("core"))
+        .def("num_senders", &kh::McastFamily::num_senders)
+        .def("has_remote_receivers", &kh::McastFamily::has_remote_receivers)
+        .def("receiver_cores", &kh::McastFamily::receiver_cores)
+        .def("participating_cores", &kh::McastFamily::participating_cores)
+        .def("sender_only_cores", &kh::McastFamily::sender_only_cores)
+        .def("rectangle_capacity", &kh::McastFamily::rectangle_capacity)
+        .def("num_rectangles", &kh::McastFamily::num_rectangles, nb::arg("core"));
+
     // Mcast1D — the one host helper. Ctor takes the shape enum + config directly (no factories). The
     // Python device is a MeshDevice; the C++ ctor takes IDevice* (upcast at the call).
     static_cast<nb::class_<kh::Mcast1D>>(mod.attr("Mcast1D"))
@@ -166,7 +215,7 @@ void py_module(nb::module_& mod) {
             "runtime_args",
             &kh::Mcast1D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Uniform: 6 + 2*rotating_span words. Mixed sender classes add four prepared-descriptor words before the roles. Fixed senders have rotating_span=0. The final two words encode this core's roles and sender phase.)doc")
+            R"doc(Unified family runtime args: group header, ordered senders, prepared rectangles and final role/phase words.)doc")
         .def("is_sender", &kh::Mcast1D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast1D::num_receivers, nb::arg("core"))
         .def("ack_count", &kh::Mcast1D::ack_count, R"doc(The sender's handshake ACK wait-count on the wire.)doc")
@@ -206,7 +255,7 @@ void py_module(nb::module_& mod) {
             "runtime_args",
             &kh::Mcast2D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Uniform: 6 + 2*rotating_span words. Mixed sender classes add four prepared-descriptor words before the roles. Fixed senders have rotating_span=0. The final two words encode this core's roles and sender phase.)doc")
+            R"doc(Unified family runtime args: group header, ordered senders, prepared rectangles and final role/phase words.)doc")
         .def("is_sender", &kh::Mcast2D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast2D::num_receivers, nb::arg("core"))
         .def(

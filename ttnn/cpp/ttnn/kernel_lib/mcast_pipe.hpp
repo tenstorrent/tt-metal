@@ -8,7 +8,7 @@
 //
 // Wraps the recurring dataflow block:
 //
-//   stage a source L1 region -> multicast a block to a receiver rectangle ->
+//   stage a source L1 region -> multicast a block to an exact receiver set ->
 //   signal the receivers that the data is ready.
 //
 // Sender cores use `SenderPipe`; receiver cores use `ReceiverPipe`.
@@ -63,7 +63,7 @@ namespace dataflow_kernel_lib {
 enum class DataReadySignal { Flag, Counter };
 
 // Source L1 protection policy.
-//   * Guard: source L1 may be reused when send() returns.
+//   * Guard: source L1 may be reused when send() or send_signal() returns.
 //   * CallerManaged: the caller protects source L1 until a later NoC completion point.
 enum class SourceL1Guard { Guard, CallerManaged };
 
@@ -89,8 +89,10 @@ template <
     uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
     bool ROTATING_SENDER = false,
-    SenderTransferMode TRANSFER_MODE = SenderTransferMode::TransferModeUnknown>
+    SenderTransferMode TRANSFER_MODE = SenderTransferMode::TransferModeUnknown,
+    uint32_t MAX_RECTS = 1>
 class SenderPipe {
+    static_assert(MAX_RECTS >= 1 && MAX_RECTS <= MAX_MCAST_RECTANGLES, "Multicast supports one to three rectangles");
     static_assert(
         mcast_wire::concrete(TRANSFER_MODE) || TRANSFER_MODE == SenderTransferMode::TransferModeUnknown,
         "SenderPipe requires a concrete transfer mode or TransferModeUnknown");
@@ -100,8 +102,10 @@ class SenderPipe {
         "Pass it, or set PRE_HANDSHAKE=false for a fire-and-forget broadcast.");
 
 public:
-    // Bounds are already NoC-ordered; counts and concrete transfer mode are prepared on the host.
-    explicit SenderPipe(const Noc& noc, const SenderRuntimeArguments& runtime_args);
+    using RuntimeArguments = SenderRuntimeArgumentsFor<MAX_RECTS>;
+
+    // Capture prepared values once. Argument storage may be changed or destroyed after construction.
+    explicit SenderPipe(const Noc& noc, const RuntimeArguments& runtime_args);
 
     // ===== DATA channel (a block + a ready signal) =====
     // send() handles receiver readiness when enabled, data multicast, ready signaling, and source L1 protection.
@@ -113,34 +117,34 @@ public:
     // ===== CONTROL channel (a signal with no data block) =====
     // Handle receiver readiness when enabled, then broadcast a control signal.
     // Flag sends `value`; Counter records one event. Pairs with ReceiverPipe::receive_signal(round).
+    // CallerManaged requires the caller to preserve the local Flag semaphore value until the NoC
+    // has read it. Rotating Flag cleanup and Counter atomic completion remain protected in either policy.
+    template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     void send_signal(uint32_t value = VALID);
 
 private:
-    // ---- data multicast via the Noc object ----
-    template <SenderTransferMode MODE, SourceL1Guard SOURCE_GUARD>
-    FORCE_INLINE void send_for_transfer_mode_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
-    template <SourceL1Guard SOURCE_GUARD>
-    FORCE_INLINE void send_impl_(bool loopback, uint32_t src_l1, uint32_t dst_l1, uint32_t size);
-    FORCE_INLINE void send_data_(bool loopback, uint32_t src_l1, uint32_t dst_l1, uint32_t size, uint32_t mcast_dests);
-
-    // ---- signal the receivers the data is ready ----
-    FORCE_INLINE void signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value = VALID);
-
-    // ---- post-send fence ----
+    template <SenderTransferMode MODE>
+    FORCE_INLINE void send_rectangle_(
+        const RectangleRuntimeArguments& rectangle, uint32_t src_l1, uint32_t dst_l1, uint32_t size);
+    FORCE_INLINE void send_data_(
+        const RectangleRuntimeArguments& rectangle,
+        bool loopback,
+        uint32_t src_l1,
+        uint32_t dst_l1,
+        uint32_t size,
+        uint32_t mcast_dests);
+    FORCE_INLINE void signal_ready_(
+        const RectangleRuntimeArguments& rectangle, bool loopback, uint32_t mcast_dests, uint32_t value = VALID);
     template <SourceL1Guard SOURCE_GUARD>
     FORCE_INLINE void fence_(bool loopback);
-
-    // ---- local L1 self-copy (degenerate self-only guard) via the Noc object ----
     void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     Noc noc_;
-    NocBounds bounds_;
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
-    SenderTransferMode transfer_mode_;
-    uint32_t num_dests_excl_;
-    uint32_t num_dests_incl_;
-    uint32_t ack_count_;
+    RuntimeArguments args_;
+    // Sender membership selects the payload fence even when src == dst skips a local write.
+    bool loopback_ = false;
 };
 
 // =============================================================================
@@ -184,7 +188,7 @@ private:
 };
 
 // =============================================================================
-// McastArgs — the KERNEL counterpart of host::Mcast1D / host::Mcast2D.
+// McastArgs — the KERNEL counterpart of host::McastFamily (including Mcast1D / Mcast2D wrappers).
 // =============================================================================
 // Construct McastArgs with the starting offsets of the host helper's compile-time and runtime arguments.
 // Sender kernels call sender(noc), receiver kernels call receiver(noc), and rotating receivers pass the
@@ -207,6 +211,7 @@ static constexpr bool dependent_false = false;
 struct InactiveSenderPipe {
     template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void send(uint32_t, uint32_t, uint32_t) {}
+    template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t = VALID) {}
 };
 
@@ -251,14 +256,25 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     static constexpr uint32_t loopback_count = get_compile_time_arg_val(CT_BASE + mcast_wire::LOOPBACK_COUNT);
     static constexpr uint8_t sender_noc = (flags & mcast_wire::NOC1) ? 1 : 0;
 
-    using SenderPipe = dataflow_kernel_lib::
-        SenderPipe<noc_index, data_ready, pre_handshake, consumer_ready, signal, rotating, transfer_mode>;
+    static constexpr uint32_t rectangle_capacity = get_compile_time_arg_val(CT_BASE + mcast_wire::RECTANGLE_CAPACITY);
+    static_assert(
+        rectangle_capacity >= 1 && rectangle_capacity <= MAX_MCAST_RECTANGLES,
+        "Multicast supports one to three rectangles");
+    using SenderPipe = dataflow_kernel_lib::SenderPipe<
+        noc_index,
+        data_ready,
+        pre_handshake,
+        consumer_ready,
+        signal,
+        rotating,
+        transfer_mode,
+        rectangle_capacity>;
     using ReceiverPipe =
         dataflow_kernel_lib::ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>;
 
     static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + mcast_wire::CT_WORDS; }
     static constexpr uint32_t next_runtime_args_offset() {
-        return RT_BASE + mcast_wire::runtime_words(rotating_span, transfer_mode);
+        return RT_BASE + mcast_wire::runtime_words(rotating_span, rectangle_capacity);
     }
 
     // ---- pipe construction: NO behaviour knobs; everything comes from the wire ----
@@ -291,7 +307,7 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     uint32_t sender_y() const { return get_arg_val<uint32_t>(RT_BASE + mcast_wire::FIXED_SENDER_Y); }
 
 private:
-    SenderRuntimeArguments sender_runtime_arguments() const;
+    typename SenderPipe::RuntimeArguments sender_runtime_arguments() const;
 };
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
@@ -323,12 +339,11 @@ struct McastArgsImpl<false, CT_BASE, RT_BASE> {
 }  // namespace detail
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
-struct McastArgs
-    : detail::McastArgsImpl<(get_compile_time_arg_val(CT_BASE) == mcast_wire::PREPARED_RECTANGLE), CT_BASE, RT_BASE> {
+struct McastArgs : detail::McastArgsImpl<(get_compile_time_arg_val(CT_BASE) == mcast_wire::FAMILY), CT_BASE, RT_BASE> {
     static_assert(
         get_compile_time_arg_val(CT_BASE) == mcast_wire::ABSENT ||
-            get_compile_time_arg_val(CT_BASE) == mcast_wire::PREPARED_RECTANGLE,
-        "Unsupported multicast wire tag; rebuild host and kernels for prepared API v17");
+            get_compile_time_arg_val(CT_BASE) == mcast_wire::FAMILY,
+        "Unsupported multicast wire tag; rebuild host and kernels for the unified family format");
 };
 
 }  // namespace dataflow_kernel_lib

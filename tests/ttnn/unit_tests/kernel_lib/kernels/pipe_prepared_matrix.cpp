@@ -30,7 +30,12 @@ void kernel_main() {
     for (uint32_t r = 0; r < rounds; ++r) {
         if (mc.should_send(r)) {
             if constexpr (control) {
-                sender->send_signal();
+                if constexpr (caller_managed) {
+                    // Fixed senders keep VALID unchanged; rotating senders retain the cleanup fence.
+                    sender->send_signal<SourceL1Guard::CallerManaged>();
+                } else {
+                    sender->send_signal();
+                }
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst) =
                     mc.signal == DataReadySignal::Counter ? r + 1 : VALID;
             } else {

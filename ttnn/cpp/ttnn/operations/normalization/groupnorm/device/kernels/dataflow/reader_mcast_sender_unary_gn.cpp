@@ -14,6 +14,7 @@
 #include "groupnorm_zero_fill.hpp"
 #include "groupnorm_reader_rm.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -66,9 +67,6 @@ void kernel_main() {
     //
     //      // clang-format on
 
-    constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
-    constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
-
     constexpr uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
@@ -120,81 +118,16 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
+    tt_l1_ptr uint32_t* noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
+    tt_l1_ptr uint32_t* noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_mcast_cores));
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(5);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(6);
-
-    // mid mcast group
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(7);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(8);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(9);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(10);
-    const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(11);
-
-    // first mcast group
-    uint32_t mcast_first_group_dest_noc_start_x;
-    uint32_t mcast_first_group_dest_noc_start_y;
-    uint32_t mcast_first_group_dest_noc_end_x;
-    uint32_t mcast_first_group_dest_noc_end_y;
-    // last mcast group
-    uint32_t mcast_last_group_dest_noc_start_x;
-    uint32_t mcast_last_group_dest_noc_start_y;
-    uint32_t mcast_last_group_dest_noc_end_x;
-    uint32_t mcast_last_group_dest_noc_end_y;
-    tt_l1_ptr uint32_t* noc_coord_x;
-    tt_l1_ptr uint32_t* noc_coord_y;
-
-    // number of cores in mcast groups
-    uint32_t num_mcast_cores_first_group;
-    uint32_t num_mcast_cores_last_group;
-
-    // first and last group mcast coordinates passed directly in async_write_multicast calls below
-
-    if (has_mcast_first_group and has_mcast_last_group) {
-        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
-        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
-        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
-        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
-        num_mcast_cores_first_group = get_arg_val<uint32_t>(16);
-
-        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(17);
-        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(18);
-        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(19);
-        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(20);
-        num_mcast_cores_last_group = get_arg_val<uint32_t>(21);
-
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(22));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(22 + num_mcast_cores));
-
-    } else if (has_mcast_first_group and not has_mcast_last_group) {
-        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
-        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
-        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
-        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
-        num_mcast_cores_first_group = get_arg_val<uint32_t>(16);
-
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
-
-    } else if (not has_mcast_first_group and has_mcast_last_group) {
-        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
-        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
-        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
-        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
-        num_mcast_cores_last_group = get_arg_val<uint32_t>(16);
-
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
-
-    } else {
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
-    }
+    constexpr uint32_t operation_rt_args_end = 5 + 2 * num_mcast_cores;
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+        reduction_mcast_args;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
-    reduce_sender_sem.set(VALID);
+    Semaphore<> reduce_receiver_sem(reduction_mcast_args.consumer_ready);
+    auto reduction_pipe = reduction_mcast_args.sender(noc);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;
@@ -409,34 +342,8 @@ void kernel_main() {
                             }
 
                             if constexpr (num_mcast_cores > 1) {
-                                reduce_sender_sem.set_multicast(
-                                    noc,
-                                    mcast_dest_noc_start_x,
-                                    mcast_dest_noc_start_y,
-                                    mcast_dest_noc_end_x,
-                                    mcast_dest_noc_end_y,
-                                    num_mcast_cores_mid_group,
-                                    false);
-                                if (has_mcast_first_group) {
-                                    reduce_sender_sem.set_multicast(
-                                        noc,
-                                        mcast_first_group_dest_noc_start_x,
-                                        mcast_first_group_dest_noc_start_y,
-                                        mcast_first_group_dest_noc_end_x,
-                                        mcast_first_group_dest_noc_end_y,
-                                        num_mcast_cores_first_group,
-                                        false);
-                                }
-                                if (has_mcast_last_group) {
-                                    reduce_sender_sem.set_multicast(
-                                        noc,
-                                        mcast_last_group_dest_noc_start_x,
-                                        mcast_last_group_dest_noc_start_y,
-                                        mcast_last_group_dest_noc_end_x,
-                                        mcast_last_group_dest_noc_end_y,
-                                        num_mcast_cores_last_group,
-                                        false);
-                                }
+                                // This fixed sender keeps its signal source VALID for every send.
+                                reduction_pipe.send_signal<dataflow_kernel_lib::SourceL1Guard::CallerManaged>();
                             }
                         } else if (cur_read_iteration == 2) {
                             const auto dst_a = TensorAccessor(out_args, out_addr);
@@ -498,64 +405,7 @@ void kernel_main() {
                                 l1_read_addr_ex = dfb_ex2.get_read_ptr();
                             }
 
-                            MulticastEndpoint mcast_dst;
-                            noc.async_write_multicast(
-                                CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                                mcast_dst,
-                                num_bytes_read,
-                                num_mcast_cores_mid_group,
-                                {},
-                                {.noc_x_start = mcast_dest_noc_start_x, .noc_y_start = mcast_dest_noc_start_y, .noc_x_end = mcast_dest_noc_end_x, .noc_y_end = mcast_dest_noc_end_y, .addr = l1_read_addr_ex},
-                                true);
-                            reduce_sender_sem.set_multicast(
-                                noc,
-                                mcast_dest_noc_start_x,
-                                mcast_dest_noc_start_y,
-                                mcast_dest_noc_end_x,
-                                mcast_dest_noc_end_y,
-                                num_mcast_cores_mid_group,
-                                false);
-
-                            if (has_mcast_first_group) {
-                                MulticastEndpoint mcast_first_dst;
-                                noc.async_write_multicast(
-                                    CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                                    mcast_first_dst,
-                                    num_bytes_read,
-                                    num_mcast_cores_first_group,
-                                    {},
-                                    {.noc_x_start = mcast_first_group_dest_noc_start_x, .noc_y_start = mcast_first_group_dest_noc_start_y, .noc_x_end = mcast_first_group_dest_noc_end_x, .noc_y_end = mcast_first_group_dest_noc_end_y, .addr = l1_read_addr_ex},
-                                    true);
-                                reduce_sender_sem.set_multicast(
-                                    noc,
-                                    mcast_first_group_dest_noc_start_x,
-                                    mcast_first_group_dest_noc_start_y,
-                                    mcast_first_group_dest_noc_end_x,
-                                    mcast_first_group_dest_noc_end_y,
-                                    num_mcast_cores_first_group,
-                                    false);
-                            }
-
-                            if (has_mcast_last_group) {
-                                MulticastEndpoint mcast_last_dst;
-                                noc.async_write_multicast(
-                                    CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                                    mcast_last_dst,
-                                    num_bytes_read,
-                                    num_mcast_cores_last_group,
-                                    {},
-                                    {.noc_x_start = mcast_last_group_dest_noc_start_x, .noc_y_start = mcast_last_group_dest_noc_start_y, .noc_x_end = mcast_last_group_dest_noc_end_x, .noc_y_end = mcast_last_group_dest_noc_end_y, .addr = l1_read_addr_ex},
-                                    true);
-                                reduce_sender_sem.set_multicast(
-                                    noc,
-                                    mcast_last_group_dest_noc_start_x,
-                                    mcast_last_group_dest_noc_start_y,
-                                    mcast_last_group_dest_noc_end_x,
-                                    mcast_last_group_dest_noc_end_y,
-                                    num_mcast_cores_last_group,
-                                    false);
-                            }
-                            noc.async_write_barrier();
+                            reduction_pipe.send(l1_read_addr_ex, l1_read_addr_ex, num_bytes_read);
                             if (cur_read_iteration == 0) {
                                 dfb_ex.pop_front(1);
                             } else {
