@@ -1063,7 +1063,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     }
     if (name == "softplus") {
-        return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f, 0.0f});  // beta=1, threshold=20, approx_mode=0
+        return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f});  // beta=1, threshold=20
     }
     if (name == "xielu") {
         return UnaryWithParam(UnaryOpType::XIELU, {0.8f, 0.8f});  // alpha_p=0.8, alpha_n=0.8
