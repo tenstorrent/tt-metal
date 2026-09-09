@@ -311,6 +311,36 @@ class Qwen36Model:
         # complete, not merely queued, when the method returns.
         ttnn.synchronize_device(self.mesh_device)
 
+    @contextlib.contextmanager
+    def _linear_conv_state_as_composite(self):
+        """Present every linear layer's conv state in the composite layout.
+
+        The fused KDA decode path stores the state *as* its user-major window,
+        row-major ``[batch, kernel, channels]``; the composite layout every other
+        request-boundary method was written against is tiled
+        ``[1, batch, channels, kernel]``.  The two differ in both rank and which
+        axis is the fixed slot, so a method that assumes one silently does the
+        wrong thing on the other: ``reset_slots`` masked with a
+        ``(1, batch, 1, 1)`` mask and an in-place elementwise write, which a
+        row-major preallocated output rejects outright ("Optional output tensor
+        with Row Major input is not supported"), and ``remap_slots`` would have
+        permuted the *kernel* axis instead of the slot axis and corrupted the
+        state without failing.
+
+        Borrow/restore is the conversion the prefill chunk already uses, and it
+        round-trips bit exactly.  These are request boundaries, not the decode
+        step, so the two extra conversions per layer cost nothing that matters.
+        """
+        borrowed = []
+        try:
+            for layer in self.layers:
+                if layer.layer_kind == "linear_attention" and getattr(layer, "linear_kda_decode_ready", False):
+                    borrowed.append((layer, layer._linear_kda_borrow_legacy_conv_state()))
+            yield
+        finally:
+            for layer, window in borrowed:
+                layer._linear_kda_restore_window_conv_state(window)
+
     def reset_slots(self, slots):
         """Reset request-local linear state for selected fixed slots.
 
@@ -338,12 +368,13 @@ class Qwen36Model:
         )
         conv_mask = ttnn.reshape(mask, (1, self.batch, 1, 1))
         recurrent_mask = ttnn.reshape(mask, (self.batch, 1, 1, 1))
-        for layer in self.layers:
-            if layer.layer_kind != "linear_attention":
-                continue
-            ttnn.multiply(layer.caches["conv"], conv_mask, output_tensor=layer.caches["conv"])
-            ttnn.multiply(layer.caches["recurrent"], recurrent_mask, output_tensor=layer.caches["recurrent"])
-        ttnn.synchronize_device(self.mesh_device)
+        with self._linear_conv_state_as_composite():
+            for layer in self.layers:
+                if layer.layer_kind != "linear_attention":
+                    continue
+                ttnn.multiply(layer.caches["conv"], conv_mask, output_tensor=layer.caches["conv"])
+                ttnn.multiply(layer.caches["recurrent"], recurrent_mask, output_tensor=layer.caches["recurrent"])
+            ttnn.synchronize_device(self.mesh_device)
         ttnn.deallocate(mask)
 
     def remap_slots(self, remap):
@@ -357,18 +388,19 @@ class Qwen36Model:
             raise ValueError("linear-state slot remap must be a full permutation")
         if all(new == old for new, old in enumerate(remap)):
             return
-        for layer in self.layers:
-            if layer.layer_kind != "linear_attention":
-                continue
-            for name, dim in (("conv", 1), ("recurrent", 0)):
-                cache = layer.caches[name]
-                rows = [cache[:, old : old + 1] if dim == 1 else cache[old : old + 1] for old in remap]
-                reordered = ttnn.concat(rows, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.copy(reordered, cache)
-                for row in rows:
-                    ttnn.deallocate(row)
-                ttnn.deallocate(reordered)
-        ttnn.synchronize_device(self.mesh_device)
+        with self._linear_conv_state_as_composite():
+            for layer in self.layers:
+                if layer.layer_kind != "linear_attention":
+                    continue
+                for name, dim in (("conv", 1), ("recurrent", 0)):
+                    cache = layer.caches[name]
+                    rows = [cache[:, old : old + 1] if dim == 1 else cache[old : old + 1] for old in remap]
+                    reordered = ttnn.concat(rows, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.copy(reordered, cache)
+                    for row in rows:
+                        ttnn.deallocate(row)
+                    ttnn.deallocate(reordered)
+            ttnn.synchronize_device(self.mesh_device)
 
     def embed_tokens(self, token_ids):
         return ttnn.embedding(
@@ -634,9 +666,7 @@ class Qwen36Model:
         if logit_positions is None:
             raise ValueError("long streaming prefill returns terminal prompt logits only")
         sequence = token_ids.shape[-1]
-        stack_chunk_size = _streaming_prefill_chunk_size(
-            self.PREFILL_STACK_CHUNK_SIZE, self.page_size, self.batch
-        )
+        stack_chunk_size = _streaming_prefill_chunk_size(self.PREFILL_STACK_CHUNK_SIZE, self.page_size, self.batch)
         terminal_rows = [None] * self.batch
         for start in range(0, sequence, stack_chunk_size):
             end = min(start + stack_chunk_size, sequence)
