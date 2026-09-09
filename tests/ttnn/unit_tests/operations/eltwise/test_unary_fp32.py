@@ -314,7 +314,7 @@ def test_reciprocal_fp32_large_magnitude(device, exponent):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.reciprocal(input_tensor))
 
-    assert_with_ulp(golden, output_tensor, 2)
+    assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
 
 
 def test_reciprocal_fp32_special_values(device):
