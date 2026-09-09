@@ -218,6 +218,12 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    // Quasar cannot do 32-bit DEST block reduce_max (static_assert in
+    // llk_math_reduce_runtime_custom.h); force bf16 DEST there. NOTE: this overrides the caller's
+    // fp32_dest_acc_en request on Quasar and may affect numerical accuracy (PCC).
+    if (device->arch() == tt::ARCH::QUASAR) {
+        fp32_dest_acc_en = false;
+    }
     const bool exp_approx_mode = program_config.has_value() && program_config->exp_approx_mode.has_value()
                                      ? program_config->exp_approx_mode.value()
                                      : true;
