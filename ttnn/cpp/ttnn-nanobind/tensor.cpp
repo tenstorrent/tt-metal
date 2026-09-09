@@ -285,6 +285,50 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
 
     auto pyTensorSpec = static_cast<nb::class_<tt::tt_metal::TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
+        .def_static(
+            "with_padded_shape",
+            [](const ttnn::Shape& logical_shape,
+               const ttnn::Shape& padded_shape,
+               DataType dtype,
+               Layout layout,
+               const MemoryConfig& memory_config,
+               const std::optional<Tile>& tile) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+                return tt::tt_metal::TensorSpec(
+                    logical_shape,
+                    TensorLayout::fromPaddedShape(
+                        dtype, PageConfig(layout, tile), memory_config, logical_shape, padded_shape));
+#pragma GCC diagnostic pop
+            },
+            nb::arg("logical_shape"),
+            nb::arg("padded_shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("memory_config"),
+            nb::arg("tile") = nb::none(),
+            R"doc(
+                Create a tt::tt_metal::TensorSpec whose PADDED shape is stated explicitly.
+
+                The three ``__init__`` overloads derive the padded shape from the logical
+                shape and the layout's default alignment, which caps it at the tile round.
+                An operation that pads to a caller-named target beyond that round (for
+                example ``ttnn.tilize(..., output_padded_shape=...)``) needs the padded
+                shape itself, while the logical shape stays the caller's own.
+
+                ``padded_shape`` must be >= ``logical_shape`` in every dimension and, for
+                ``TILE_LAYOUT``, a whole number of tiles in the last two dimensions.
+                Passing ``padded_shape == logical_shape`` is equivalent to the matching
+                ``__init__`` overload.
+
+                Args:
+                    logical_shape: The tensor's logical shape.
+                    padded_shape: The physical (padded) shape to allocate.
+                    dtype: Data type.
+                    layout: ROW_MAJOR_LAYOUT or TILE_LAYOUT.
+                    memory_config: Placement (interleaved or sharded, DRAM or L1).
+                    tile: Optional tile geometry for TILE_LAYOUT.
+            )doc")
         .def(
             "__init__",
             [](tt::tt_metal::TensorSpec* t,

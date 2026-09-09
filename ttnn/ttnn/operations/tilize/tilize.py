@@ -249,18 +249,39 @@ SUPPORTED = {
     # Rank is not a geometry branch at or above 2: `derive_plan` folds
     # `shape[:-2]` into R generically and the reader indexes sticks linearly, so
     # 2/3/5/6 exercise no new code path and all came back bit-exact. Promoted
-    # from [4] by the verification pass. Ranks 0 and 1 stay OUT: they have no
-    # tile dims of their own, so they are reachable only with a pad requested
-    # and belong to the padding refinement.
-    "rank": [2, 3, 4, 5, 6],
+    # from [4] by the verification pass. Ranks 0 and 1 joined in Refinement 2:
+    # they have no tile dims of their own, so the pad SYNTHESIZES both (rank 0 ->
+    # one [32,32] tile, rank 1 -> [32, W]) and they are reachable only with a
+    # padding argument. Nothing special-cases them — a TILE TensorSpec's default
+    # alignment is already rank 2, so the padded shape comes out [32,32] /
+    # [32,W] on its own, and `derive_plan` left-pads the input's logical shape
+    # to 2 so H=1 / W=1 fall out of the same pad arithmetic as any other tail.
+    "rank": [0, 1, 2, 3, 4, 5, 6],
     # The orientation only re-linearizes shard -> core; the partition is read
     # through `corerange_to_cores(grid, n, row_wise=(orientation == ROW_MAJOR))`,
     # which is the same enumeration the buffer itself places shards with, so
     # COL_MAJOR needs no separate path.
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
-    "pad_mode": ["none"],
-    "pad_value": ["none"],
-    "alignment": ["tile_aligned"],
+    # Padding is `grid2d_padded` in op_design.md, and it is ADDITIVE on the block
+    # that already exists: the block grid, the core assignment, the CBs and the
+    # compute call are byte-identical to the unpadded path, and only the reader's
+    # `load_block` gains a fill. `auto` derives the target by rounding the last
+    # two dims up to the tile; `explicit` takes `output_padded_shape` and may
+    # exceed that round, in which case whole pad TILES are produced from the fill
+    # alone. `pad_value`'s three sign buckets are one code path — the fill is
+    # encoded host-side into the input dtype's bit pattern at the element width
+    # (`pad_fill_word`), so a negative fill is a two's-complement bit_cast that
+    # cannot truncate. See tilize_reader.cpp's PADDED INPUT block for the two
+    # separate pad regions (the W tail and the fully padded row).
+    "pad_mode": ["none", "auto", "explicit"],
+    "pad_value": ["none", "zero", "positive", "negative"],
+    # The W tail and the H tail are separate reader arithmetic, so they are
+    # separate axis values: the W tail is an in-place fill of the end of a row
+    # that has data, the H tail is a whole row sourced from `cb_pad_row`. The H
+    # tail additionally breaks the contiguous-stick-run invariant
+    # `read_sticks_for_tilize` is built on (source rows restart at each image
+    # boundary), which is why the padded reader segments its block per image.
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
     "tile_height": [32],
     "in_tile_height": ["none"],
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
@@ -340,9 +361,10 @@ def _check_request(input_tensor, *, tile):
             raise ValueError(f"tilize: `tile` height must be a power-of-two fraction of 32, got {tile_h}")
 
 
-def _check_pad_target(input_tensor, *, output_padded_shape):
-    """The explicit pad target must cover the input. Support-conditional: only
-    reachable once `pad_mode="explicit"` is in SUPPORTED."""
+def _check_pad_target(input_tensor, *, output_padded_shape, tile_h):
+    """The explicit pad target must cover the input and be a whole number of
+    tiles. Support-conditional: only reachable once `pad_mode="explicit"` is in
+    SUPPORTED."""
     if output_padded_shape is None:
         return
 
@@ -362,6 +384,15 @@ def _check_pad_target(input_tensor, *, output_padded_shape):
     for i, (t, s) in enumerate(zip(target, shape)):
         if t < s:
             raise ValueError(f"tilize: output_padded_shape[{i}]={t} is smaller than the input's {s}")
+
+    # A TILE tensor's physical extent IS a whole number of tiles, so a target
+    # that is not one names a shape the output cannot have. Malformed request,
+    # not a support gap.
+    if target[-2] % tile_h or target[-1] % TILE_WIDTH:
+        raise ValueError(
+            f"tilize: output_padded_shape's last two dims {target[-2:]} are not a whole number of "
+            f"{tile_h}x{TILE_WIDTH} tiles"
+        )
 
 
 def _check_alignment_request(axes, *, pad_requested):
@@ -517,7 +548,7 @@ def validate(
 
     # 3. Support-conditional malformed requests — the padding contract, which
     #    only becomes the caller's mistake once padding itself is supported.
-    _check_pad_target(input_tensor, output_padded_shape=output_padded_shape)
+    _check_pad_target(input_tensor, output_padded_shape=output_padded_shape, tile_h=axes["tile_height"])
     _check_alignment_request(axes, pad_requested=(axes["pad_mode"] != "none"))
 
     return axes
@@ -528,7 +559,22 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
-def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile):
+def _auto_padded_shape(logical_shape, tile_h):
+    """The target `pad_mode="auto"` implies: the last two dims rounded UP to the
+    tile, everything else untouched.
+
+    Rank 0 and 1 have no tile dims to round — the pad SYNTHESIZES them, which is
+    the same rank promotion a TILE `TensorSpec`'s own (rank-2) default alignment
+    performs, so `auto` at those ranks is exactly the default spec.
+    """
+    shape = [int(d) for d in list(logical_shape)]
+    shape = [1] * (2 - len(shape)) + shape
+    shape[-2] = math.ceil(shape[-2] / tile_h) * tile_h
+    shape[-1] = math.ceil(shape[-1] / TILE_WIDTH) * TILE_WIDTH
+    return shape
+
+
+def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile, padded_shape=None):
     """TensorSpec for the output at ANY placement.
 
     Three constructors, one per placement family: an ND config carries an
@@ -536,8 +582,21 @@ def _output_tensor_spec(logical_shape, out_dtype, out_memory_config, out_tile):
     the sharded overload is a `bad optional access` — the ND overload is the one
     that takes it. Interleaved goes through the plain overload for the same
     reason in reverse.
+
+    `padded_shape` is the fourth case and the only one that is NOT derivable from
+    the logical shape: an explicit pad target may exceed the tile round
+    (`[1,1,32,50] -> [1,1,32,128]`), and a spec's default alignment caps the
+    padded shape AT that round. `TensorSpec.with_padded_shape` states it
+    instead, for every placement at once (it takes the MemoryConfig whole), and
+    degenerates to the matching default when the target IS the round — which is
+    why it is used only where it has to be, keeping every already-covered call
+    on the constructor it was verified with.
     """
     shape = ttnn.Shape(list(logical_shape))
+    if padded_shape is not None:
+        return ttnn.TensorSpec.with_padded_shape(
+            shape, ttnn.Shape(list(padded_shape)), out_dtype, ttnn.TILE_LAYOUT, out_memory_config, out_tile
+        )
     if not out_memory_config.is_sharded():
         return ttnn.TensorSpec(shape, out_dtype, ttnn.TILE_LAYOUT, out_memory_config.buffer_type, out_tile)
     if out_memory_config.shard_spec is None:
@@ -586,13 +645,26 @@ def tilize(
     out_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
     out_dtype = dtype if dtype is not None else input_tensor.dtype
     out_tile = tile if tile is not None else ttnn.Tile([32, TILE_WIDTH])
+    out_tile_h = _tile_shape(out_tile)[0]
 
-    # The output's LOGICAL shape is the input's. A padded call would grow only
-    # the padded shape, which the TensorSpec derives from (logical shape, tile).
+    # The output's LOGICAL shape is the input's — a padded call grows ONLY the
+    # padded shape. Promoting the logical shape is the named bug, and it is what
+    # `to_torch(out) == x` (the unpadded oracle) catches.
+    #
+    # The padded shape is stated explicitly ONLY when the request needs it: an
+    # `output_padded_shape` that exceeds the tile round is unreachable from
+    # (logical shape, tile) alone. `pad_mode="auto"` and an `explicit` target at
+    # exactly the round are both the default spec's own answer, so they keep the
+    # Phase 0 / Refinement 1 constructors verbatim.
+    padded_shape = None
+    if output_padded_shape is not None:
+        target = [int(d) for d in list(output_padded_shape)]
+        if target != _auto_padded_shape(input_tensor.shape, out_tile_h):
+            padded_shape = target
     output_tensor = ttnn.allocate_tensor_on_device(
-        _output_tensor_spec(input_tensor.shape, out_dtype, out_memory_config, out_tile),
+        _output_tensor_spec(input_tensor.shape, out_dtype, out_memory_config, out_tile, padded_shape),
         device,
     )
 
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, low_l1=low_l1)
+    program_descriptor = create_program_descriptor(input_tensor, output_tensor, low_l1=low_l1, pad_value=pad_value)
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

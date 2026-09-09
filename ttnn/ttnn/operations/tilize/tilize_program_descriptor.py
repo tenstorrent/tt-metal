@@ -51,6 +51,7 @@ Deviation from op_design.md (recorded here and in l1_ledger.md), one item:
 from __future__ import annotations
 
 import math
+import struct
 from pathlib import Path
 
 import ttnn
@@ -60,6 +61,10 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # --- CB slots (semantic names; the numeric slot is just the buffer index) ---
 CB_INPUT_ROWS = 0  # reader -> compute: row-major sub-block, one page per tile
 CB_OUTPUT_TILES = 1  # compute -> writer: whole output tile pages
+# reader-local scratch: ONE block row pre-filled with the pad value, so a whole
+# pad row costs one DM-engine transfer instead of a RISC store loop. Allocated
+# only on the padded path (`plan.pad_active`).
+CB_PAD_ROW = 2
 
 # ---------------------------------------------------------------------------
 # Named block knobs — the single source of each. None is a tensor dimension.
@@ -113,6 +118,46 @@ OUTPUT_DEPTH_BATCHES = 2
 LEGAL_TILE_HEIGHTS = (1, 2, 4, 8, 16, 32)
 
 
+def _bfloat16_bits(value: float) -> int:
+    """`value` as a bfloat16 bit pattern, rounded to nearest EVEN.
+
+    bfloat16 is fp32's top 16 bits, so the encoding is a truncation plus the
+    round the hardware and torch both apply — a plain truncation would put a
+    different number in the pad region than the oracle's
+    `torch.nn.functional.pad(x.bfloat16(), value=v)` for any fill that is not
+    exactly representable. The `+1` carries into the exponent naturally, which
+    is also what makes an overflowing fill saturate to inf rather than wrap.
+    """
+    bits = struct.unpack("<I", struct.pack("<f", float(value)))[0]
+    upper, lower = (bits >> 16) & 0xFFFF, bits & 0xFFFF
+    if lower > 0x8000 or (lower == 0x8000 and (upper & 1)):
+        upper = (upper + 1) & 0xFFFF
+    return upper
+
+
+def pad_fill_word(dtype, value, elem_size: int) -> int:
+    """The fill as an `elem_size`-wide bit pattern in the INPUT's format.
+
+    The fill is written into `cb_input_rows`, whose data_format is the INPUT
+    dtype, so the encoding is the input's — the output cast happens later, at
+    pack time, exactly as it does for a real element.
+
+    A NEGATIVE fill on an integer dtype is a two's-complement bit_cast at the
+    element width and must not truncate: masking to `elem_size * 8` bits is the
+    whole rule, and it is written width-generically here so the integer dtypes
+    Refinement 5 adds need no second implementation.
+    """
+    if value is None:
+        value = 0
+    if dtype == ttnn.bfloat16:
+        return _bfloat16_bits(value)
+    if dtype == ttnn.float32:
+        return struct.unpack("<I", struct.pack("<f", float(value)))[0]
+    if dtype in (ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8):
+        return int(value) & ((1 << (elem_size * 8)) - 1)
+    raise RuntimeError(f"tilize: no pad-fill encoding for dtype {dtype}")
+
+
 def _largest_divisor_at_most(n: int, limit: int) -> int:
     """Coarsest divisor of `n` that is <= `limit`. Always exists (1 | n)."""
     limit = max(1, min(int(limit), int(n)))
@@ -160,6 +205,15 @@ class TilizePlan:
         # the reader on its strided branch.
         "input_pages_per_row",
         "in_page_width_bytes",
+        # --- padding (Refinement 2). All inert when `pad_active` is False, and
+        # the reader's non-padded branches are then byte-identical to Phase 0. ---
+        "pad_active",
+        "pad_word",
+        "elem_size",
+        "in_num_images",
+        "in_rows_per_image",
+        "in_row_bytes",
+        "rows_per_image_out",
     )
 
     def __init__(self, **kw):
@@ -176,8 +230,15 @@ class TilizePlan:
         return self.output_depth_batches * self.write_rows_per_barrier * self.block_width_tiles
 
     @property
+    def pad_row_bytes(self) -> int:
+        """cb_pad_row's single page: ONE block row of the fill (0 when unpadded)."""
+        return self.block_row_bytes if self.pad_active else 0
+
+    @property
     def l1_per_core_bytes(self) -> int:
-        return self.input_cb_pages * self.in_page_bytes + self.output_cb_pages * self.out_page_bytes
+        return (
+            self.input_cb_pages * self.in_page_bytes + self.output_cb_pages * self.out_page_bytes + self.pad_row_bytes
+        )
 
 
 _PLAN_CACHE: dict = {}
@@ -336,9 +397,10 @@ def _resident_l1_bytes(tensor, partition, num_cores: int) -> int:
     return math.ceil(total / max(1, num_cores))
 
 
-def plan_cache_key(input_tensor, output_tensor, *, low_l1: bool, grid) -> tuple:
+def plan_cache_key(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value) -> tuple:
     """Hashable identity of everything the plan derivation reads."""
     return (
+        tuple(input_tensor.shape),
         tuple(input_tensor.padded_shape),
         input_tensor.dtype,
         input_tensor.layout,
@@ -350,13 +412,14 @@ def plan_cache_key(input_tensor, output_tensor, *, low_l1: bool, grid) -> tuple:
         (output_tensor.tile.tile_shape[0], output_tensor.tile.tile_shape[1]),
         bool(low_l1),
         (grid.x, grid.y),
+        None if pad_value is None else float(pad_value),
     )
 
 
-def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePlan:
+def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=None) -> TilizePlan:
     """Rule 2, in its two ordered steps: (1) fill the grid, (2) take the
     coarsest block that fits L1. Nothing here is restated from a literal."""
-    key = plan_cache_key(input_tensor, output_tensor, low_l1=low_l1, grid=grid)
+    key = plan_cache_key(input_tensor, output_tensor, low_l1=low_l1, grid=grid, pad_value=pad_value)
     cached = _PLAN_CACHE.get(key)
     if cached is not None:
         return cached
@@ -403,6 +466,38 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
     in_page_width_elems = int(input_tensor.buffer_page_size()) // input_tensor.element_size()
     input_pages_per_row = max(1, math.ceil(int(shape[-1]) / max(1, in_page_width_elems)))
 
+    # --- the pad region: what the output grid covers MINUS the input -------
+    # Padding is `grid2d_padded` in op_design.md, and it is ADDITIVE on the
+    # block that already exists: the block grid, the core assignment, the CBs
+    # and the compute call are untouched; only `load_block` gains a fill.
+    #
+    # The pad extent is derived from the two shapes rather than from the
+    # request, and the two agree by construction: `validate()` refuses a
+    # non-tile-aligned input with no padding argument, so a pad REGION exists iff
+    # the output's padded grid reaches past the input's LOGICAL extent. Reading
+    # it off the geometry is what keeps `pad_active` False — and the Phase 0
+    # reader branches byte-identical — on every already-aligned call, padded or
+    # not (`explicit` at exactly the tile round asks for no fill and gets none).
+    #
+    # LOGICAL, not padded, on the input side: the pad boundary is where the
+    # caller's data ends, and a ROW_MAJOR tensor's padded shape rounds its last
+    # dim up to its PAGE width (a width-cutting shard sets that), which would
+    # claim page padding as real data.
+    elem_size = int(input_tensor.element_size())
+    in_logical = [int(d) for d in list(input_tensor.shape)]
+    in_logical = [1] * (2 - len(in_logical)) + in_logical  # rank 0/1: the pad SYNTHESIZES both tile dims
+    in_num_images = 1
+    for d in in_logical[:-2]:
+        in_num_images *= d
+    in_rows_per_image = in_logical[-2]
+    in_row_bytes = in_logical[-1] * elem_size
+    pad_active = (
+        in_num_images < num_images
+        or in_rows_per_image < rows_per_image * tile_h
+        or in_row_bytes < tensor_col_tiles * TILE_WIDTH * elem_size
+    )
+    pad_word = pad_fill_word(input_tensor.dtype, pad_value, elem_size) if pad_active else 0
+
     # --- who fixes the block grid: a shard spec, or the L1 solve? ---------
     # tilize has no dependent axis, so a shard is already a block. When one side
     # is L1-sharded its OWN partition is used verbatim and its CB is placed on
@@ -429,6 +524,14 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
     partition = None
     input_native = False
     output_native = False
+    if pad_active:
+        # A zero-copy input CB IS the resident shard, and the shard holds only
+        # the caller's own bytes — there is nowhere in it to put the fill, and
+        # nothing that could put it there without corrupting the input tensor.
+        # So a padded call reads its input through the accessor and fills a
+        # scratch CB. The OUTPUT side is unaffected: the packer writes whole
+        # tiles, pad positions included, straight into the output shard.
+        in_partition = None
     if in_partition is not None and in_partition.is_l1:
         partition, input_native = in_partition, True
         output_native = out_partition is not None and out_partition.is_l1 and out_partition.key == in_partition.key
@@ -474,6 +577,8 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
         # tensor. Shrink the depth knobs (never the block) if the pair overruns.
         def _scratch_bytes(depth_in, depth_out):
             total = 0
+            if pad_active:
+                total += block_width_tiles * (in_page_bytes // tile_h)  # cb_pad_row
             if not input_native:
                 total += depth_in * block_width_tiles * in_page_bytes
             if not output_native:
@@ -510,6 +615,12 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
         # which inverts to W_FIT below. Budget is read from the device, never a
         # literal; no tensor dimension appears.
         denom = INPUT_DEPTH_ROWS * in_page_bytes + OUTPUT_DEPTH_BATCHES * out_page_bytes
+        if pad_active:
+            # cb_pad_row is ONE block row: `block_width_tiles * TILE_WIDTH * elem`
+            # bytes, i.e. `in_page_bytes / tile_h` per tile of block width. Small,
+            # but it scales with the same knob, so it belongs in the same solve
+            # rather than being spent behind the budget's back.
+            denom += in_page_bytes // tile_h
         headroom = budget - OUTPUT_DEPTH_BATCHES * WRITE_BATCH_MIN_TILES * out_page_bytes
         w_fit = max(1, min(headroom // denom, FAST_TILIZE_WIDTH_CAP))
         w_cap = min(w_fit, LOW_L1_WIDTH_CAP) if low_l1 else w_fit
@@ -587,6 +698,13 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
         output_native=output_native,
         input_pages_per_row=input_pages_per_row,
         in_page_width_bytes=in_page_width_elems * input_tensor.element_size(),
+        pad_active=pad_active,
+        pad_word=pad_word,
+        elem_size=elem_size,
+        in_num_images=in_num_images,
+        in_rows_per_image=in_rows_per_image,
+        in_row_bytes=in_row_bytes,
+        rows_per_image_out=rows_per_image,
     )
     _PLAN_CACHE[key] = plan
     return plan
@@ -617,10 +735,11 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     *,
     low_l1: bool = False,
+    pad_value=None,
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()  # never a hardcoded core count
-    plan = derive_plan(input_tensor, output_tensor, low_l1=low_l1, grid=grid)
+    plan = derive_plan(input_tensor, output_tensor, low_l1=low_l1, grid=grid, pad_value=pad_value)
 
     tile_desc = ttnn.TileDescriptor(plan.tile_h, TILE_WIDTH)
 
@@ -676,6 +795,30 @@ def create_program_descriptor(
             ],
         )
 
+    # cb_pad_row: reader-local scratch holding ONE block row pre-filled with the
+    # fill value. Allocated only on the padded path. Its point is that a whole
+    # pad ROW then costs one DM-engine transfer from L1 to L1 instead of a RISC
+    # store loop over `block_row_bytes` — the reader seeds it once per kernel
+    # (32 elements by hand, then doubling local reads) and reads from it for
+    # every fully-padded row of every block. It has no producer/consumer pair:
+    # nothing is ever pushed or popped, so its `total_size` is exactly its one
+    # page and the reader only ever takes `get_write_ptr` of it.
+    cbs = [cb_input_rows, cb_output_tiles]
+    if plan.pad_active:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=plan.pad_row_bytes,
+                core_ranges=plan.all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_PAD_ROW,
+                        data_format=input_tensor.dtype,
+                        page_size=plan.pad_row_bytes,
+                    )
+                ],
+            )
+        )
+
     # ========== Kernels ==========
     # The CT "plan" block is identical in all three kernels: each derives its
     # own view of a block from the same numbers, which is why there is no
@@ -691,6 +834,15 @@ def create_program_descriptor(
         int(plan.input_native),
         plan.input_pages_per_row,
         plan.in_page_width_bytes,
+        # --- padding (inert, and the branch compiles out, when pad_active is 0)
+        int(plan.pad_active),
+        CB_PAD_ROW,
+        plan.elem_size,
+        plan.pad_word,
+        plan.in_num_images,
+        plan.in_rows_per_image,
+        plan.in_row_bytes,
+        plan.rows_per_image_out,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -758,5 +910,5 @@ def create_program_descriptor(
     return ttnn.ProgramDescriptor(
         kernels=[k for k in (reader_kernel, writer_kernel, compute_kernel) if k is not None],
         semaphores=[],
-        cbs=[cb_input_rows, cb_output_tiles],
+        cbs=cbs,
     )
