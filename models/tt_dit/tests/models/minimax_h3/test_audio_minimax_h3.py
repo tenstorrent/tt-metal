@@ -285,6 +285,33 @@ def test_encode(mesh_device, num_latent_frames, split_mode):
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_encode_pad_to_max_then_trim(mesh_device):
+    """Pad-to-604-hops-then-trim equals the direct encode.
+
+    Gates the right-pad invariance (per-op tail re-zeroing in the symmetric trunk, causal
+    ``pre_block``) that `references.encode_references` relies on: it pads every soundtrack to
+    `MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS` hops so the encoder runs one fixed shape, then trims
+    the pad latents. A failure here means silence latents leak into ref2va conditioning.
+    """
+    from ....pipelines.minimax_h3.references import MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS, pad_waveform_to_max_duration
+
+    reference, config = _build_reference()
+    torch.manual_seed(4)
+    num_latents = 207
+    waveform = torch.randn(2, 1, num_latents * HOP_LENGTH) * 0.1
+
+    tt_encoder = _tt_encoder(config, mesh_device)
+    tt_encoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
+
+    direct_mean, direct_logs = tt_encoder(waveform)
+    padded_mean, padded_logs = tt_encoder(pad_waveform_to_max_duration(waveform))
+
+    assert padded_mean.shape[2] == MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS
+    assert_quality(direct_mean, padded_mean[:, :, :num_latents], pcc=0.9999)
+    assert_quality(direct_logs, padded_logs[:, :, :num_latents], pcc=0.9999)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_roundtrip(mesh_device):
     """End to end: encode then decode on device, against the reference's own round trip."""
     reference, config = _build_reference()
