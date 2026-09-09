@@ -24,12 +24,7 @@ SequentialScheduler::SequentialScheduler(
     optimizers::OptimizerBase *optimizer,
     std::vector<std::unique_ptr<LRSchedulerBase>> schedulers,
     std::vector<size_t> milestones) :
-    LRSchedulerBase(optimizer),
-    m_schedulers(std::move(schedulers)),
-    m_milestones(std::move(milestones)),
-    m_current_scheduler_index(0),
-    m_current_step_in_scheduler(0),
-    m_last_lr(optimizer->get_lr()) {
+    LRSchedulerBase(optimizer), m_schedulers(std::move(schedulers)), m_milestones(std::move(milestones)) {
     if (m_schedulers.empty()) {
         throw std::invalid_argument("SequentialScheduler requires at least one scheduler.");
     }
@@ -53,8 +48,7 @@ SequentialScheduler::SequentialScheduler(
     // first child is active; restore its initial LR. Mirrors PyTorch's
     // SequentialLR, which resets the LR to initial_lr and redoes the initial
     // step of the first scheduler only.
-    m_last_lr = m_schedulers.front()->get_last_lr();
-    optimizer->set_lr(m_last_lr);
+    update_lr(m_schedulers.front()->get_last_lr());
 }
 void SequentialScheduler::step() {
     if (m_current_scheduler_index >= m_schedulers.size()) {
@@ -82,14 +76,10 @@ float SequentialScheduler::get_last_lr() const {
     }
     return m_last_lr;
 }
-float SequentialScheduler::get_current_lr() const {
-    // The current LR of the optimizer should reflect the last scheduler's step
-    return get_optimizer()->get_lr();
-}
 
 void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
     m_current_step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
-    m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+    const float restored_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
     m_current_scheduler_index = serialization::get_value_type<size_t>(dict, "m_current_scheduler_index");
 
     // Restore every wrapped child scheduler's state. Each child ``i`` reads
@@ -113,7 +103,7 @@ void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
     // Each child's set_state_dict pushed ITS saved live LR to the optimizer,
     // so the optimizer now holds the last child's — re-apply this chain's own
     // live LR (the active child's).
-    get_optimizer()->set_lr(m_last_lr);
+    update_lr(restored_last_lr);
 }
 serialization::StateDict SequentialScheduler::get_state_dict() const {
     serialization::StateDict res;
