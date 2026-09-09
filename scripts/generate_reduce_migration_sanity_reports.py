@@ -134,6 +134,16 @@ def nodeid(group: dict) -> str:
     return f"{group['source']}::{tests[0]}" if tests else group["source"]
 
 
+def kernel_labels(group: dict, kernels: dict) -> list[tuple[str, str]]:
+    """A group exercises these kernels; some have their primary case in another group."""
+    labels = []
+    for kernel_id in group["kernel_ids"]:
+        primary = (kernels.get(kernel_id) or {}).get("case")
+        suffix = "" if primary == group["id"] else f" (primary case {primary})"
+        labels.append((kernel_id, suffix))
+    return labels
+
+
 def environment_pairs(group: dict) -> list[str]:
     return [f"{key}={value}" for key, value in (group.get("environment") or {}).items()]
 
@@ -225,12 +235,13 @@ def write_markdown(path: Path, manifest: dict, collection: dict) -> None:
         "[manifest](sanity_test_suite.json), and [one-row-per-kernel CSV](sanity_kernel_coverage.csv).",
         "",
     ]
+    by_id = {k["id"]: k for k in manifest["kernels"]}
     for group in manifest["groups"]:
-        kernels = ", ".join(f"`{k}`" for k in group["kernel_ids"])
+        kernels = ", ".join(f"`{kid}`{suffix}" for kid, suffix in kernel_labels(group, by_id))
         out += [
             f"### {group['id']} — {group['family']}",
             "",
-            f"Lane: `{group['lane']}`. Primary kernels: {kernels}.",
+            f"Lane: `{group['lane']}`. Kernels: {kernels}.",
             "",
             group["selection"],
             "",
@@ -248,6 +259,7 @@ def write_markdown(path: Path, manifest: dict, collection: dict) -> None:
 def write_html(path: Path, manifest: dict, collection: dict) -> None:
     c = counts(manifest)
     groups = {g["id"]: g for g in manifest["groups"]}
+    by_id = {k["id"]: k for k in manifest["kernels"]}
     e = html.escape
     blob = f"https://github.com/tenstorrent/tt-metal/blob/{manifest['commit']}/"
     out = [
@@ -297,9 +309,7 @@ def write_html(path: Path, manifest: dict, collection: dict) -> None:
             f'<article class="card case" id="{group["id"]}" data-lane="{group["lane"]}">'
             f'<h3>{group["id"]} — {e(group["family"])}</h3>'
         )
-        meta = (
-            f'<p><b>Primary kernels:</b> {", ".join(group["kernel_ids"])} · <b>Lane:</b> <code>{group["lane"]}</code>'
-        )
+        meta = f'<p><b>Kernels:</b> {", ".join(kid + suffix for kid, suffix in kernel_labels(group, by_id))} · <b>Lane:</b> <code>{group["lane"]}</code>'
         if factories:
             meta += f" · <b>Factories:</b> {factories}"
         out.append(meta + "</p>")
@@ -342,11 +352,48 @@ def check_kernel_group_agreement(manifest: dict) -> None:
         for field in ("selection", "test_evidence"):
             if (kernel.get(field) or "") != (group.get(field) or ""):
                 drift.append(f"{kernel['id']} ({group['id']}) {field}")
+    for group in manifest["groups"]:
+        for kernel_id in group["kernel_ids"]:
+            kernel = next((k for k in manifest["kernels"] if k["id"] == kernel_id), None)
+            if kernel is None:
+                drift.append(f"{group['id']} lists unknown kernel {kernel_id}")
+            elif not kernel.get("case"):
+                drift.append(f"{group['id']} lists {kernel_id}, which has no primary case")
     if drift:
         raise SystemExit(
             "kernels[] disagrees with its group in sanity_test_suite.json; sync the kernel copies "
             "from the group entries first:\n  " + "\n  ".join(drift)
         )
+
+
+def check_counting_block(manifest: dict) -> None:
+    """The manifest's own counting block must agree with the data it summarizes."""
+    stated = manifest.get("counting") or {}
+    c = counts(manifest)
+    expected = {
+        "test_cases": c["cases"],
+        "python_cases": c["python"],
+        "cpp_cases": c["cpp"],
+        "kernel_entries": c["kernels"],
+        "covered_kernel_entries": c["covered"],
+        "uncovered_kernel_entries": c["uncovered"],
+    }
+    kinds = {kind: 0 for kind in KIND_LABELS}
+    lanes = {}
+    for kernel in manifest["kernels"]:
+        if kernel["status"] in COVERED_STATUSES:
+            kinds[kernel["kind"]] += 1
+    for group in manifest["groups"]:
+        lanes[group["lane"]] = lanes.get(group["lane"], 0) + 1
+    expected["covered_by_kind"] = kinds
+    expected["cases_by_lane"] = lanes
+    wrong = [
+        f"{key}: stated {stated.get(key)!r}, computed {value!r}"
+        for key, value in expected.items()
+        if stated.get(key) != value
+    ]
+    if wrong:
+        raise SystemExit("sanity_test_suite.json counting block is stale:\n  " + "\n  ".join(wrong))
 
 
 def write_csv(path: Path, manifest: dict) -> None:
@@ -405,6 +452,7 @@ def main() -> None:
         )
 
     check_kernel_group_agreement(manifest)
+    check_counting_block(manifest)
     write_markdown(report_dir / "sanity_test_suite.md", manifest, collection)
     write_html(report_dir / "sanity_test_suite.html", manifest, collection)
     write_csv(report_dir / "sanity_kernel_coverage.csv", manifest)

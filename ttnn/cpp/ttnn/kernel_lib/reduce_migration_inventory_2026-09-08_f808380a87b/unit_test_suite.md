@@ -6,6 +6,8 @@ Inventory commit: `f808380a87b320e24457c600cc79b05d7a0b8f73`. Collection date: 2
 
 **Pytest collection: 18,452 parametrized cases; 0 groups failed collection.** Cases include upstream skip/xfail marks, host validation and reference-only checks within the selected operation suites. The executed/pass count will depend on architecture, available devices, environment opt-ins and filters. Some tests also contain internal shape loops, which are one pytest case, not one case per loop iteration.
 
+The counts in this report describe the base inventory at the commit above. The migration since added **16 test definitions** and **408 collected cases**, so the runner's current manifest holds **1,000 definitions and 18,860 known cases**; `unit_test_suite.json` records the delta in `migration_regressions` and is what `scripts/run_reduce_migration_tests.py` reads.
+
 Collection used the checkout's default pytest target, `wormhole_b0`. Parameter expansion can differ on another architecture or with different environment/filter settings.
 
 [Manifest](unit_test_suite.json) · [Every selected test and its case count](unit_test_suite.csv) · [Collection results by source](unit_test_collection.json)

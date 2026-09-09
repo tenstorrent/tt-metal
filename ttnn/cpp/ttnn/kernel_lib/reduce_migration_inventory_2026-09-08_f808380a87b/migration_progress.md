@@ -472,3 +472,26 @@ unchanged: **178 full groups, 1,000 definitions, 18,860 known cases; 77 sanity
 cases, 63 available on N300**; kernel-entry coverage 130/144, now consistent
 across all four artifacts. A fresh review and the full prepared regression
 remain due.
+
+## Eighth Claude review: SATISFIED
+
+Fresh Opus 5/high round 8 reviewed `f90f03425d8` and returned **SATISFIED** with
+no required changes. It verified R7.1 from the regenerated install script, not
+just the source list, and confirmed the build tree is now configured after the
+rename, closing the blind spot that hid it. Build/install/packaging correctness
+was added to the review scope and found no second defect across every
+`sources.cmake` under `ttnn/` and `tt_metal/`, all six added files, all five
+deletions and every include in the 171 touched kernel files. The regenerated
+sanity reports reproduce byte-identically from the committed manifest.
+
+Addressed its non-blocking items: `unit_test_suite.md`/`.html` now point at the
+`migration_regressions` delta (16 definitions, 408 cases) and name the JSON as
+authoritative; the generator now validates the manifest's `counting` block and
+group/kernel membership. The `SM076`/`SM077` membership asymmetry was a mislabel
+rather than a data defect — those groups do exercise kernels whose primary case
+is `SM011` — so the reports now say "Kernels" and mark non-primary entries.
+Left open deliberately: regenerating the full-suite report bodies, and the stale
+ignored `build_Release/libexec/` install tree. See `review_round_08.md`.
+
+The review loop is complete. The full prepared regression — 178 groups, 1,000
+definitions, 18,860 known cases — is the last outstanding requirement.

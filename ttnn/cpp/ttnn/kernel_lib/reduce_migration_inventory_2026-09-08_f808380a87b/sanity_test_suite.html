@@ -57,468 +57,468 @@ python scripts/run_reduce_migration_sanity.py
 <option>blackhole-galaxy</option>
 </select><span id="visible" aria-live="polite"></span></div><div id="cases">
 <article class="card case" id="SM001" data-lane="common"><h3>SM001 — C++ reductions</h3>
-<p><b>Primary kernels:</b> S099, DF055 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH011, F098, F099, F100</p>
+<p><b>Kernels:</b> S099, DF055 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH011, F098, F099, F100</p>
 <p>BF16 tiled [64,64], mean over H: interleaved H transpose reader and reduce.cpp.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.MeanReduceH</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_reduction.cpp:554</p>
 </article>
 <article class="card case" id="SM002" data-lane="common"><h3>SM002 — C++ reductions</h3>
-<p><b>Primary kernels:</b> DF053 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH011, F099, F100</p>
+<p><b>Kernels:</b> DF053 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH011, F099, F100</p>
 <p>BF16 tiled [64,64], mean over W: universal reduce reader (compute already covered).</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.MeanReduceW</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_reduction.cpp:536</p>
 </article>
 <article class="card case" id="SM003" data-lane="common"><h3>SM003 — C++ reductions</h3>
-<p><b>Primary kernels:</b> S102, DF052 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F098, F099</p>
+<p><b>Kernels:</b> S102, DF052 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F098, F099</p>
 <p>ROW_MAJOR [1,1,64,64], sum W: row-major reduce compute and reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.RowMajorSumW</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_reduction.cpp:682</p>
 </article>
 <article class="card case" id="SM004" data-lane="common"><h3>SM004 — C++ reductions</h3>
-<p><b>Primary kernels:</b> S105, DF057 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F102</p>
+<p><b>Kernels:</b> S105, DF057 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F102</p>
 <p>32 users, width 64, top-k=1: deterministic sampled indices. Sampling still runs its MAX/SUM softmax helpers.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.SamplingGreedyTopK1</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_reduction.cpp:1392</p>
 </article>
 <article class="card case" id="SM005" data-lane="common"><h3>SM005 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S079, DF035 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F079, F080</p>
+<p><b>Kernels:</b> S079, DF035 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F079, F080</p>
 <p>TILE [1,1,32,64], two groups, 1x1 core grid, legacy (non-Welford) groupnorm.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.GroupNormNoMcastInterleaved</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:954</p>
 </article>
 <article class="card case" id="SM006" data-lane="common"><h3>SM006 — GroupNorm sharded formats</h3>
-<p><b>Primary kernels:</b> S080, DF036 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F081</p>
+<p><b>Kernels:</b> S080, DF036 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F081</p>
 <p>ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 destination accumulation. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.</p><p>One device with at least four cores in its first row.</p>
 <pre><code>tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_sharded_all_config[legacy-row_major-bf16-gb_bf16-N=1-C=128-H=1-W=512-num_groups=16-grid_y=1-grid_x=4]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/fused/test_group_norm.py:2137</p>
 </article>
 <article class="card case" id="SM007" data-lane="common"><h3>SM007 — C++ normalization</h3>
-<p><b>Primary kernels:</b> DF037 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH009</p>
+<p><b>Kernels:</b> DF037 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH009</p>
 <p>Tiled BF16 [1,1,32,64], no gamma/beta: ordinary interleaved layernorm reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.LayerNormInterleaved</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:393</p>
 </article>
 <article class="card case" id="SM008" data-lane="common"><h3>SM008 — C++ normalization</h3>
-<p><b>Primary kernels:</b> DF039 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH009</p>
+<p><b>Kernels:</b> DF039 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH009</p>
 <p>Tiled BF16 [1,1,32,64], ROW_MAJOR gamma/beta: rm_gb interleaved reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.LayerNormRowMajorGammaBeta</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:529</p>
 </article>
 <article class="card case" id="SM009" data-lane="common"><h3>SM009 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S083, DF040 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F083, F084</p>
+<p><b>Kernels:</b> S083, DF040 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F083, F084</p>
 <p>Tiled BF16 [1,1,32,64], WIDTH_SHARDED 1x1, use_welford defaults false, no ROW_MAJOR weights.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.LayerNormSharded1x1</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:485</p>
 </article>
 <article class="card case" id="SM010" data-lane="common"><h3>SM010 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S087, DF045 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH010, F087</p>
+<p><b>Kernels:</b> S087, DF045 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH010, F087</p>
 <p>One device, tiled [1,1,32,64]: layernorm pre-all-gather statistics, two tiles wide.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.DistributedLayerNormStats</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:628</p>
 </article>
 <article class="card case" id="SM011" data-lane="common"><h3>SM011 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S090, S091, DF044 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F085, F087</p>
+<p><b>Kernels:</b> S090, S091, DF044 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F085, F087</p>
 <p>One-device pre/post RMSNorm pipeline [1,1,32,64], num_devices=1; post uses metal2 compute.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.DistributedRmsNormEndToEnd</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:704</p>
 </article>
 <article class="card case" id="SM012" data-lane="common"><h3>SM012 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S088, DF043 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F087</p>
+<p><b>Kernels:</b> S088, DF043 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F087</p>
 <p>One device, [1,1,32,64], use_2d_core_grid=true: 2D pre-all-gather worker and merge code.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.DistributedRmsNorm2DGridStats</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:733</p>
 </article>
 <article class="card case" id="SM013" data-lane="common"><h3>SM013 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S093, DF046 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F088</p>
+<p><b>Kernels:</b> S093, DF046 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F088</p>
 <p>Tiled [1,1,32,32], last-dimension stable attention softmax.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.SoftmaxInterleavedUniform</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:71</p>
 </article>
 <article class="card case" id="SM014" data-lane="common"><h3>SM014 — C++ normalization</h3>
-<p><b>Primary kernels:</b> S095, DF048 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F089</p>
+<p><b>Kernels:</b> S095, DF048 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F089</p>
 <p>Tiled [1,1,32,32], one BLOCK_SHARDED core, no mask: ordinary sharded reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.SoftmaxShardedInPlace</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/test_normalization.cpp:129</p>
 </article>
 <article class="card case" id="SM015" data-lane="common"><h3>SM015 — generic reductions</h3>
-<p><b>Primary kernels:</b> DF054 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F098</p>
+<p><b>Kernels:</b> DF054 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F098</p>
 <p>BF16 [8,1,64,2048], WIDTH_SHARDED input/output: sharded input-column transpose reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py::test_sharded_reduce_h[dtype=DataType.BFLOAT16-out_sharded-in0_sharded-N=8]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py:21</p>
 </article>
 <article class="card case" id="SM016" data-lane="common"><h3>SM016 — generic reductions</h3>
-<p><b>Primary kernels:</b> DF051 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F099</p>
+<p><b>Kernels:</b> DF051 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F099</p>
 <p>Matched HEIGHT_SHARDED input/output on a 2x4 core grid, int32 MAX W: sharded reader with REDUCE_SCALER=1; only dataflow coverage is claimed.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py::test_reduce_w_height_sharded_orientation_matched[op=max-row_major]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py:192</p>
 </article>
 <article class="card case" id="SM017" data-lane="common"><h3>SM017 — MoE reduction</h3>
-<p><b>Primary kernels:</b> S104, DF056 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F101</p>
+<p><b>Kernels:</b> S104, DF056 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F101</p>
 <p>Smallest existing MoE numerical shape: [1,1,32,64], eight experts, two selected.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/reduce/test_moe.py::test_moe[N=1-C=1-H=32-W=64-k=32-E=8-e=2-BFLOAT16_B]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/reduce/test_moe.py:72</p>
 </article>
 <article class="card case" id="SM018" data-lane="common"><h3>SM018 — DeepSeek grouped gate</h3>
-<p><b>Primary kernels:</b> S051, DF020 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F052</p>
+<p><b>Kernels:</b> S051, DF020 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F052</p>
 <p>Existing minimal grouped-gate numerical configuration.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py::test_grouped_gate[minimal_case]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py:418</p>
 </article>
 <article class="card case" id="SM019" data-lane="common"><h3>SM019 — SSM sum reduction</h3>
-<p><b>Primary kernels:</b> S052, DF021 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F053</p>
+<p><b>Kernels:</b> S052, DF021 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F053</p>
 <p>BF16 H=32, W=1024, latent_size=32, DRAM input/output.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=32-W=1024-latent_size=32-dtype=DataType.BFLOAT16-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py:63</p>
 </article>
 <article class="card case" id="SM020" data-lane="common"><h3>SM020 — Moreh clip_grad_norm</h3>
-<p><b>Primary kernels:</b> S056, DP002 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F057</p>
+<p><b>Kernels:</b> S056, DP002 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F057</p>
 <p>Smallest existing clip-grad case, p=2, max_norm=2; step1 plus subsequent steps are checked. Contains two internal repetitions.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py::test_moreh_clip_grad_norm[num_parameters=32-norm_type=2.0-max_norm=2.0-range_of_wt=(1, 4)-range_of_ht=(1, 4)-range_of_c=(1, 4)-range_of_n=(1, 4)-range_of_padding=(0, 21, 10)-num_iters_of_each_case=2]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py:30</p>
 </article>
 <article class="card case" id="SM021" data-lane="common"><h3>SM021 — Moreh dot</h3>
-<p><b>Primary kernels:</b> S057, DF025 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F058</p>
+<p><b>Kernels:</b> S057, DF025 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F058</p>
 <p>One aligned BF16 tile row, dot length 32.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py::test_moreh_dot[dtype=DataType.BFLOAT16-input_shape=[1, 1, 1, 32]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py:96</p>
 </article>
 <article class="card case" id="SM022" data-lane="common"><h3>SM022 — Moreh group_norm</h3>
-<p><b>Primary kernels:</b> S059, DP004 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F059</p>
+<p><b>Kernels:</b> S059, DP004 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F059</p>
 <p>Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py::test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-small]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18</p>
 </article>
 <article class="card case" id="SM023" data-lane="common"><h3>SM023 — Moreh group_norm</h3>
-<p><b>Primary kernels:</b> S058, DP003 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F059</p>
+<p><b>Kernels:</b> S058, DP003 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F059</p>
 <p>Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py::test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-large]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18</p>
 </article>
 <article class="card case" id="SM024" data-lane="common"><h3>SM024 — Moreh group_norm</h3>
-<p><b>Primary kernels:</b> S060, S062, DP005, DP007 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F060, F061</p>
+<p><b>Kernels:</b> S060, S062, DP005, DP007 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F060, F061</p>
 <p>Small groupnorm backward, all gradients enabled: gamma/beta kernel plus small input-grad kernel.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm_backward[beta_requires_grad=True-gamma_requires_grad=True-input_requires_grad=True-affine=True-eps=1e-05-HW=[23, 23]-C_num_groups=[4, 1]-N=2]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:474</p>
 </article>
 <article class="card case" id="SM025" data-lane="common"><h3>SM025 — Moreh group_norm</h3>
-<p><b>Primary kernels:</b> S061, DP006 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F061</p>
+<p><b>Kernels:</b> S061, DP006 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F061</p>
 <p>Dedicated large groupnorm backward case; input gradient only, H=W=500.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_moreh_group_norm_backward_large_algorithm[beta_requires_grad=False-gamma_requires_grad=False-input_requires_grad=True-affine=False-eps=1e-05-HW=[500, 500]-C_num_groups=[4, 1]-N=2]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:622</p>
 </article>
 <article class="card case" id="SM026" data-lane="common"><h3>SM026 — Moreh layer_norm</h3>
-<p><b>Primary kernels:</b> DP009 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F062</p>
+<p><b>Kernels:</b> DP009 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F062</p>
 <p>Layernorm small reader; [1,20], one normalized dimension.</p><p>One device.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm[input_shape_normalized_dims=([1, 20], 1)-elementwise_affine=False-bfloat16-1e-5]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py:477</p>
 </article>
 <article class="card case" id="SM027" data-lane="common"><h3>SM027 — Moreh layer_norm</h3>
-<p><b>Primary kernels:</b> DP008 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F062</p>
+<p><b>Kernels:</b> DP008 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F062</p>
 <p>Layernorm large reader: all four dimensions normalized, 512 inner tiles exceed resident buffers.</p><p>One device.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_compute_kernel_options[fp32_dest_acc_en=False-input_shape_normalized_dims=([4, 8, 111, 113], 4)-elementwise_affine=False-bfloat16-0.05]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py:577</p>
 </article>
 <article class="card case" id="SM028" data-lane="wormhole"><h3>SM028 — Moreh layer_norm</h3>
-<p><b>Primary kernels:</b> DP010, DP012 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> F063, F064</p>
+<p><b>Kernels:</b> DP010, DP012 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> F063, F064</p>
 <p>Layernorm backward with width normalization and affine gradients; exercises the parameter H reduction and small input-gradient kernel.</p><p>One Wormhole device; upstream Moreh layernorm backward tests skip Blackhole.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_backward[input_shape_normalized_dims=([2, 20, 30], 1)-elementwise_affine=True-bfloat16-1e-5]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py:511</p>
 </article>
 <article class="card case" id="SM029" data-lane="wormhole"><h3>SM029 — Moreh layer_norm</h3>
-<p><b>Primary kernels:</b> DP011 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> F064</p>
+<p><b>Kernels:</b> DP011 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> F064</p>
 <p>Dedicated layernorm large backward [1,2,500,1000]; input gradient, two normalized dimensions.</p><p>One Wormhole device; upstream Moreh layernorm backward tests skip Blackhole.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_moreh_layer_norm_backward_large_algorithm[fp32_dest_acc_en=False-[1,2,500,1000]-normalized_dims=2-elementwise_affine=False-bfloat16-1e-5]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py:869</p>
 </article>
 <article class="card case" id="SM030" data-lane="common"><h3>SM030 — Moreh linear</h3>
-<p><b>Primary kernels:</b> S063, DF026 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F065</p>
+<p><b>Kernels:</b> S063, DF026 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F065</p>
 <p>Bias gradient with width 30: reduce H.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py::test_moreh_linear_backward[BFP16-fp32_dest_acc_en=False-requires_bias_grad=True-requires_grads=(True, False)-shapes=([31, 31], [30, 31], [1, 30], [31, 30])]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py:352</p>
 </article>
 <article class="card case" id="SM031" data-lane="common"><h3>SM031 — Moreh linear</h3>
-<p><b>Primary kernels:</b> S064, DP013 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F066</p>
+<p><b>Kernels:</b> S064, DP013 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F066</p>
 <p>Scalar bias gradient: reduce H and W.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py::test_moreh_linear_backward[BFP16-fp32_dest_acc_en=False-requires_bias_grad=True-requires_grads=(True, False)-shapes=([31, 31], [30, 31], [1, 1], [31, 30])]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py:352</p>
 </article>
 <article class="card case" id="SM032" data-lane="common"><h3>SM032 — Moreh mean</h3>
-<p><b>Primary kernels:</b> S065, DF027 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F067</p>
+<p><b>Kernels:</b> S065, DF027 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F067</p>
 <p>BF16 [17,22], dim=0 (height), keepdim=true.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py::test_moreh_mean_ttnn_dtype[ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape_dim=[[17, 22], [0]]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py:147</p>
 </article>
 <article class="card case" id="SM033" data-lane="common"><h3>SM033 — Moreh norm</h3>
-<p><b>Primary kernels:</b> S068, DP014 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F068</p>
+<p><b>Kernels:</b> S068, DP014 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F068</p>
 <p>BF16 rank-2 [32,32], p=0.0, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-N-p=0.0]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py:394</p>
 </article>
 <article class="card case" id="SM034" data-lane="common"><h3>SM034 — Moreh norm</h3>
-<p><b>Primary kernels:</b> S069, DP015 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F069</p>
+<p><b>Kernels:</b> S069, DP015 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F069</p>
 <p>BF16 rank-2 [32,32], p=0.0, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_norm[is_linalg_vector_norm=False-ttnn_dtype=DataType.BFLOAT16-keepdim=True-input_shape=[32, 32]-C-p=0.0]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py:394</p>
 </article>
 <article class="card case" id="SM035" data-lane="common"><h3>SM035 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S070, DF028 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F071</p>
+<p><b>Kernels:</b> S070, DF028 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F071</p>
 <p>Explicit Moreh softmax strategy SMALL_H, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxOpParallelizationStrategy.SMALL_H]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:437</p>
 </article>
 <article class="card case" id="SM036" data-lane="common"><h3>SM036 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S071, DF029 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F070</p>
+<p><b>Kernels:</b> S071, DF029 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F070</p>
 <p>Explicit Moreh softmax strategy LARGE_H, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxOpParallelizationStrategy.LARGE_H]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:437</p>
 </article>
 <article class="card case" id="SM037" data-lane="common"><h3>SM037 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S072, DF030 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F073</p>
+<p><b>Kernels:</b> S072, DF030 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F073</p>
 <p>Explicit Moreh softmax strategy SMALL_W, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxOpParallelizationStrategy.SMALL_W]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:437</p>
 </article>
 <article class="card case" id="SM038" data-lane="common"><h3>SM038 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S073, DF031 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F072</p>
+<p><b>Kernels:</b> S073, DF031 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F072</p>
 <p>Explicit Moreh softmax strategy LARGE_W, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxOpParallelizationStrategy.LARGE_W]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:437</p>
 </article>
 <article class="card case" id="SM039" data-lane="common"><h3>SM039 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S074, DP017 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F075</p>
+<p><b>Kernels:</b> S074, DP017 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F075</p>
 <p>Explicit Moreh softmax backward strategy SMALL_H, BF16 [32,32].</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_H]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:471</p>
 </article>
 <article class="card case" id="SM040" data-lane="common"><h3>SM040 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S075, DP016 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F074</p>
+<p><b>Kernels:</b> S075, DP016 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F074</p>
 <p>Explicit Moreh softmax backward strategy LARGE_H, BF16 [32,32].</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 0, MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:471</p>
 </article>
 <article class="card case" id="SM041" data-lane="common"><h3>SM041 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S076, DF032 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F077</p>
+<p><b>Kernels:</b> S076, DF032 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F077</p>
 <p>Explicit Moreh softmax backward strategy SMALL_W, BF16 [32,32].</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_W]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:471</p>
 </article>
 <article class="card case" id="SM042" data-lane="common"><h3>SM042 — Moreh softmax</h3>
-<p><b>Primary kernels:</b> S077, DF033 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F076</p>
+<p><b>Kernels:</b> S077, DF033 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F076</p>
 <p>Explicit Moreh softmax backward strategy LARGE_W, BF16 [32,32].</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_callback[dtype=DataType.BFLOAT16-shape_dim_strategy=[[32, 32], 1, MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W]]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:471</p>
 </article>
 <article class="card case" id="SM043" data-lane="common"><h3>SM043 — Moreh sum</h3>
-<p><b>Primary kernels:</b> S078, DF034 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F078</p>
+<p><b>Kernels:</b> S078, DF034 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F078</p>
 <p>BF16 [3,2,319,319], dim=2: Moreh height sum compute/reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum[bfloat16-keepdim-true-fp32_dest_acc_en=False-2-3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py:192</p>
 </article>
 <article class="card case" id="SM044" data-lane="common"><h3>SM044 — layer norm / RMS norm</h3>
-<p><b>Primary kernels:</b> DF042 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F083, F084</p>
+<p><b>Kernels:</b> DF042 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F083, F084</p>
 <p>Sharded layernorm with ROW_MAJOR gamma/beta and legacy compute selects rm_gb writer.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_norm_sharded_with_weight_and_bias_row_major[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-use_welford=False]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py:139</p>
 </article>
 <article class="card case" id="SM045" data-lane="common"><h3>SM045 — layer norm / RMS norm</h3>
-<p><b>Primary kernels:</b> S085, DF041 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F083, F084</p>
+<p><b>Kernels:</b> S085, DF041 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F083, F084</p>
 <p>One physical device simulates four partitions; sharded layernorm PRE_ALL_GATHER selects pre-all-gather compute/writer.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm[fuse_residual=False-max_atol_ex2=0.04-min_pcc_ex2=0.982-min_pcc_residual_add=0.997-min_pcc_ex=0.9997-max_atol_ex=0.01-core_grid=(8, 4)-mean=0-std=1-input_df=DataType.BFLOAT16-num_devices=4-input_width=2048-seed=0-is_rmsnorm=False]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py:314</p>
 </article>
 <article class="card case" id="SM046" data-lane="common"><h3>SM046 — layer norm / RMS norm</h3>
-<p><b>Primary kernels:</b> DF038 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH009</p>
+<p><b>Kernels:</b> DF038 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH009</p>
 <p>FP32 tiled input with TILE gamma/beta, W padded to 4096: &gt;2 MiB resident buffer demand forces the large-tensor reader; legacy compute.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm_with_weight_bias_and_residual_input[dtype=torch.float32-use_welford=False-h=19-w=4083]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/fused/test_layer_norm.py:407</p>
 </article>
 <article class="card case" id="SM047" data-lane="common"><h3>SM047 — softmax</h3>
-<p><b>Primary kernels:</b> S094, DF047 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F088</p>
+<p><b>Kernels:</b> S094, DF047 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F088</p>
 <p>Width 637 tiles: resident stable-softmax buffers exceed 90% of L1; dedicated large-kernel numerical test.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_softmax_large_non_divisible_width[Wt=637]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/fused/test_softmax.py:774</p>
 </article>
 <article class="card case" id="SM048" data-lane="common"><h3>SM048 — softmax</h3>
-<p><b>Primary kernels:</b> DF050 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F089</p>
+<p><b>Kernels:</b> DF050 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F089</p>
 <p>Sharded softmax with ROW_MAJOR attention mask selects the row-major-mask reader.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py::test_scale_mask_softmax_rm[bfloat8_b-in0_DRAM-no-causal-device_params={&#x27;l1_small_size&#x27;: 8192}]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py:213</p>
 </article>
 <article class="card case" id="SM049" data-lane="wormhole"><h3>SM049 — model operation unit tests</h3>
-<p><b>Primary kernels:</b> DF049 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> F089</p>
+<p><b>Kernels:</b> DF049 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> F089</p>
 <p>Single-device Falcon operation test, seq=64; calls scale_causal_mask_hw_dims_softmax_in_place with tiled mask.</p><p>One Wormhole device; fixed Falcon core grid.</p>
 <pre><code>models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py::test_FalconSoftmax_inference[{arch}-1x1_grid-0.99]</code></pre>
 <p class="muted">models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py:121</p>
 </article>
 <article class="card case" id="SM050" data-lane="blackhole"><h3>SM050 — indexer score</h3>
-<p><b>Primary kernels:</b> S039, DF009 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> F040</p>
+<p><b>Kernels:</b> S039, DF009 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> F040</p>
 <p>Indexer block-pool fallback, one group and 16 blocks per unit (&gt;8), reaches the reduce-helper branch.</p><p>One Blackhole device.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py::test_indexer_score_block_pool_large_blocks_per_unit[g1-bpu16]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py:1759</p>
 </article>
 <article class="card case" id="SM051" data-lane="blackhole"><h3>SM051 — KDA recurrence preparation</h3>
-<p><b>Primary kernels:</b> S040, DP001 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> F042</p>
+<p><b>Kernels:</b> S040, DP001 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> F042</p>
 <p>Small KDA contract case: 2 heads, 4 chunks, K=32,V=64; output and determinism checked.</p><p>One Blackhole device.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[unit-h2-n4-k32-v64]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py:315</p>
 </article>
 <article class="card case" id="SM052" data-lane="blackhole"><h3>SM052 — KDA gated RMS norm</h3>
-<p><b>Primary kernels:</b> S041, DF010 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> F043</p>
+<p><b>Kernels:</b> S041, DF010 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> F043</p>
 <p>Basic BF16 gated RMSNorm numerical case.</p><p>One Blackhole device.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_is_accurate_and_deterministic[bf16-output-bf16-input]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py:289</p>
 </article>
 <article class="card case" id="SM053" data-lane="common"><h3>SM053 — fused distributed RMS norm</h3>
-<p><b>Primary kernels:</b> S054, S055, DF023, DF024 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F055, F056</p>
+<p><b>Kernels:</b> S054, S055, DF023, DF024 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F055, F056</p>
 <p>Single-device simulated distributed RMSNorm, one head, sequence 128, hidden 1024, pre/post fusion.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_shapes[num_simulated_devices8-has_rope-has_weight-num_heads1-hidden_dim1024-seqlen128-BFLOAT16_stats-BFLOAT16_in]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py:238</p>
 </article>
 <article class="card case" id="SM054" data-lane="common"><h3>SM054 — DiT distributed layer norm</h3>
-<p><b>Primary kernels:</b> DF022 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH008</p>
+<p><b>Kernels:</b> DF022 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH008</p>
 <p>Single-device DiT layernorm pipeline, TP=1, sequence 512, width 2048, no affine.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_use_cases[tp1-tile_layout-no_affine-len512-dim2048-BFLOAT16_stats-BFLOAT16_in]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py:227</p>
 </article>
 <article class="card case" id="SM055" data-lane="common"><h3>SM055 — kernel library examples</h3>
-<p><b>Primary kernels:</b> S108, DF065 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F111</p>
+<p><b>Kernels:</b> S108, DF065 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F111</p>
 <p>Inline reduce+reciprocal correctness scenario; two fixed tile counts, fused/unfused variants.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py::test_compute_fusion_correctness</code></pre>
 <p>Pinned environment: <code>CF_SCENARIOS=reduce_recip</code></p>
 <p class="muted">tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py:140</p>
 </article>
 <article class="card case" id="SM056" data-lane="common"><h3>SM056 — kernel library examples</h3>
-<p><b>Primary kernels:</b> S109, DF066 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F112</p>
+<p><b>Kernels:</b> S109, DF066 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F112</p>
 <p>Inline helper variant, row reduction, BF16 accumulation; four fixed tile counts.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py::test_reduce_accumulate_correctness</code></pre>
 <p>Pinned environment: <code>RA_VARIANTS=helper</code>, <code>RA_DIMS=row</code>, <code>RA_ACCUMS=bf16</code></p>
 <p class="muted">tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py:164</p>
 </article>
 <article class="card case" id="SM057" data-lane="common"><h3>SM057 — kernel library examples</h3>
-<p><b>Primary kernels:</b> S111, DF067 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F114</p>
+<p><b>Kernels:</b> S111, DF067 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F114</p>
 <p>Inline reduce_fold method, BF16 input/accumulation, positive inputs; six fixed tile counts.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py::test_row_reduce_accumulate_correctness</code></pre>
 <p>Pinned environment: <code>RRA_METHODS=reduce_fold</code>, <code>RRA_PRECISIONS=bf16-bf16</code>, <code>RRA_DISTS=positive</code></p>
 <p class="muted">tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py:184</p>
 </article>
 <article class="card case" id="SM058" data-lane="common"><h3>SM058 — toy variance</h3>
-<p><b>Primary kernels:</b> S113, DF068 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F116</p>
+<p><b>Kernels:</b> S113, DF068 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F116</p>
 <p>Interleaved toy variance, aligned width 256.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py::test_toy_variance[variance-W=256_aligned]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py:42</p>
 </article>
 <article class="card case" id="SM059" data-lane="common"><h3>SM059 — toy variance</h3>
-<p><b>Primary kernels:</b> S114, DF069 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F117</p>
+<p><b>Kernels:</b> S114, DF069 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F117</p>
 <p>Sharded toy variance, two cores on one device, width 64 (one tile per core).</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py::test_toy_variance_width_sharded[variance-P=2_W=64_one_tile_each]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py:124</p>
 </article>
 <article class="card case" id="SM060" data-lane="common"><h3>SM060 — SDPA prefill / chunked</h3>
-<p><b>Primary kernels:</b> DF063 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH016</p>
+<p><b>Kernels:</b> DF063 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH016</p>
 <p>Standard SDPA, small causal BF16 sequence 256, head_dim 32; numerical check includes attention sink.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=256-d=32-k128-q32-causal-bf16]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py:754</p>
 </article>
 <article class="card case" id="SM061" data-lane="common"><h3>SM061 — SDPA / MLA decode</h3>
-<p><b>Primary kernels:</b> DF064 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH019</p>
+<p><b>Kernels:</b> DF064 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH019</p>
 <p>Decode SDPA, batch 4, sequence 1024, head_dim128, 8x4 grid, sliding window128.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_sliding_window[cur_pos_tensor-b=4-nh=8-nkv=1-s=1024-d=128-grid_size=(8, 4)-sliding_window_size=128-kv_bfp8_q_bf16]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py:369</p>
 </article>
 <article class="card case" id="SM062" data-lane="common"><h3>SM062 — joint SDPA</h3>
-<p><b>Primary kernels:</b> DF059 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH013</p>
+<p><b>Kernels:</b> DF059 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> DH013</p>
 <p>Smallest joint SDPA shape: sequence15 + joint19, one head and one batch.</p><p>One device; see the test for core-grid requirements.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py::test_joint_sdpa[d128-seq_len=15-joint_seq_len=19-nh1-b1-k128-q32-bfp8]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py:141</p>
 </article>
 <article class="card case" id="SM063" data-lane="blackhole"><h3>SM063 — sparse SDPA</h3>
-<p><b>Primary kernels:</b> DF062 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> DH018</p>
+<p><b>Kernels:</b> DF062 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> DH018</p>
 <p>Single-chunk sparse SDPA with all indices valid; PCC against a golden reference.</p><p>One Blackhole device.</p>
 <pre><code>tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_pcc_single_chunk[-all_valid]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py:255</p>
 </article>
 <article class="card case" id="SM064" data-lane="blackhole"><h3>SM064 — sparse SDPA MSA</h3>
-<p><b>Primary kernels:</b> DF061 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> DH017</p>
+<p><b>Kernels:</b> DF061 · <b>Lane:</b> <code>blackhole</code> · <b>Factories:</b> DH017</p>
 <p>Native MSA sparse SDPA random selection, H=16,S=8,topk=16; compares device output with golden.</p><p>One Blackhole device.</p>
 <pre><code>tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_pcc_random_selection</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py:75</p>
 </article>
 <article class="card case" id="SM065" data-lane="quasar"><h3>SM065 — Quasar model per-op tests</h3>
-<p><b>Primary kernels:</b> DF018 · <b>Lane:</b> <code>quasar</code> · <b>Factories:</b> DH006</p>
+<p><b>Kernels:</b> DF018 · <b>Lane:</b> <code>quasar</code> · <b>Factories:</b> DH006</p>
 <p>Quasar SDPA per-op numerical case, seq128, batch1.</p><p>Single logical device in the Quasar environment/emulator.</p>
 <pre><code>models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py::test_scaled_dot_product_attention[seq128-ttnn_mesh_device0]</code></pre>
 <p class="muted">models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py:47</p>
 </article>
 <article class="card case" id="SM066" data-lane="quasar"><h3>SM066 — Quasar model per-op tests</h3>
-<p><b>Primary kernels:</b> DF019 · <b>Lane:</b> <code>quasar</code> · <b>Factories:</b> DH007</p>
+<p><b>Kernels:</b> DF019 · <b>Lane:</b> <code>quasar</code> · <b>Factories:</b> DH007</p>
 <p>Quasar decode SDPA per-op numerical case, batch1, KV capacity256.</p><p>Single logical device in the Quasar environment/emulator.</p>
 <pre><code>models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py::test_scaled_dot_product_attention_decode[batch1-ttnn_mesh_device0]</code></pre>
 <p class="muted">models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py:57</p>
 </article>
 <article class="card case" id="SM067" data-lane="fabric-1x4"><h3>SM067 — UDM interleaved reduction</h3>
-<p><b>Primary kernels:</b> DF002 · <b>Lane:</b> <code>fabric-1x4</code> · <b>Factories:</b> DH002</p>
+<p><b>Kernels:</b> DF002 · <b>Lane:</b> <code>fabric-1x4</code> · <b>Factories:</b> DH002</p>
 <p>Small interleaved UDM width reduction.</p><p>Four devices, 1x4 mesh with 2D fabric; UDM gtest binary required.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp::MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Small</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp:324</p>
 </article>
 <article class="card case" id="SM068" data-lane="fabric-1x4"><h3>SM068 — UDM sharded reduction</h3>
-<p><b>Primary kernels:</b> DF003, DF004 · <b>Lane:</b> <code>fabric-1x4</code> · <b>Factories:</b> DH003</p>
+<p><b>Kernels:</b> DF003, DF004 · <b>Lane:</b> <code>fabric-1x4</code> · <b>Factories:</b> DH003</p>
 <p>Small sharded UDM width reduction instantiates sender and receiver kernels.</p><p>Four devices, 1x4 mesh with 2D fabric; UDM gtest binary required.</p>
 <pre><code>tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp::MeshDevice1x4Fabric2DUDMFixture.TestWidthReduction2D_Small</code></pre>
 <p class="muted">tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp:472</p>
 </article>
 <article class="card case" id="SM069" data-lane="wormhole-n300"><h3>SM069 — RMS all-gather</h3>
-<p><b>Primary kernels:</b> S035, DF007 · <b>Lane:</b> <code>wormhole-n300</code> · <b>Factories:</b> F035</p>
+<p><b>Kernels:</b> S035, DF007 · <b>Lane:</b> <code>wormhole-n300</code> · <b>Factories:</b> F035</p>
 <p>Fused RMS all-gather on N300, two devices, BF16, no residual add; smallest existing numeric case.</p><p>Exactly two Wormhole devices (N300), 2x1 fabric mesh.</p>
 <pre><code>tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300[silicon_arch_name={arch}-topology=Topology.Linear-device_params={&#x27;fabric_config&#x27;: FabricConfig.FABRIC_1D}-output_dtype=DataType.BFLOAT16-residual_dtype=DataType.BFLOAT16-input_dtype=DataType.BFLOAT16-2x1_grid-use_noc1_only=False-fused_add=False-num_iters=5-num_links=1-fp32_dest_acc_en=False-num_devices=2-elements_per_batch=2048-input_shard_grid={[0-0 - 3-7]}-output_shard_grid=None]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/ccl/test_minimals.py:1002</p>
 </article>
 <article class="card case" id="SM070" data-lane="blackhole-2x4"><h3>SM070 — attention-residual gather softmax</h3>
-<p><b>Primary kernels:</b> S036, DF008 · <b>Lane:</b> <code>blackhole-2x4</code> · <b>Factories:</b> F036</p>
+<p><b>Kernels:</b> S036, DF008 · <b>Lane:</b> <code>blackhole-2x4</code> · <b>Factories:</b> F036</p>
 <p>Plain AttnRes read, the smallest existing 2x4 fabric arm; 640 tokens per chip.</p><p>Exactly eight Blackhole devices, 2x4 physical box with 2D fabric.</p>
 <pre><code>tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py::test_matches_torch[silicon_arch_name={arch}-plain-fabric2d-mesh-2x4]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py:110</p>
 </article>
 <article class="card case" id="SM071" data-lane="galaxy"><h3>SM071 — DiT fused distributed RMS norm</h3>
-<p><b>Primary kernels:</b> S034, DF006 · <b>Lane:</b> <code>galaxy</code> · <b>Factories:</b> F034</p>
+<p><b>Kernels:</b> S034, DF006 · <b>Lane:</b> <code>galaxy</code> · <b>Factories:</b> F034</p>
 <p>WAN whole-row RMSNorm, TP=1, prompt length512, width5120. TP1 uses the drain-only writer; TP2 uses the all-gather worker writer.</p><p>Existing fixture opens a 4x8 Galaxy mesh (32 devices), then a TP1/TP2 submesh.</p>
 <pre><code>models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py::test_corr_det[{arch}-wan_tp1]</code></pre>
 <p>Pinned environment: <code>CORR_ONLY=cross_k_prompt_L512</code>, <code>CORR_DET_REPEATS=0</code></p>
 <p class="muted">models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py:560</p>
 </article>
 <article class="card case" id="SM072" data-lane="galaxy"><h3>SM072 — DiT fused distributed RMS norm</h3>
-<p><b>Primary kernels:</b> DF005 · <b>Lane:</b> <code>galaxy</code> · <b>Factories:</b> F034</p>
+<p><b>Kernels:</b> DF005 · <b>Lane:</b> <code>galaxy</code> · <b>Factories:</b> F034</p>
 <p>WAN whole-row RMSNorm, TP=2, prompt length512, width5120. TP1 uses the drain-only writer; TP2 uses the all-gather worker writer.</p><p>Existing fixture opens a 4x8 Galaxy mesh (32 devices), then a TP1/TP2 submesh.</p>
 <pre><code>models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py::test_corr_det[{arch}-wan_tp2]</code></pre>
 <p>Pinned environment: <code>CORR_ONLY=cross_k_prompt_L512</code>, <code>CORR_DET_REPEATS=0</code></p>
 <p class="muted">models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py:560</p>
 </article>
 <article class="card case" id="SM073" data-lane="wormhole-t3k"><h3>SM073 — ring joint SDPA</h3>
-<p><b>Primary kernels:</b> DF060 · <b>Lane:</b> <code>wormhole-t3k</code> · <b>Factories:</b> DH015</p>
+<p><b>Kernels:</b> DF060 · <b>Lane:</b> <code>wormhole-t3k</code> · <b>Factories:</b> DH015</p>
 <p>Existing numerical multi-batch ring-joint SDPA case on T3K.</p><p>Eight Wormhole devices, 2x4 T3K mesh.</p>
 <pre><code>tests/nightly/t3000/ccl/test_ring_joint_attention.py::test_ring_joint_sdpa_multi_batch_wh_t3k[{arch}-2x4-line]</code></pre>
 <p class="muted">tests/nightly/t3000/ccl/test_ring_joint_attention.py:213</p>
 </article>
 <article class="card case" id="SM074" data-lane="blackhole-galaxy"><h3>SM074 — experimental ring joint SDPA</h3>
-<p><b>Primary kernels:</b> DF058 · <b>Lane:</b> <code>blackhole-galaxy</code> · <b>Factories:</b> DH012</p>
+<p><b>Kernels:</b> DF058 · <b>Lane:</b> <code>blackhole-galaxy</code> · <b>Factories:</b> DH012</p>
 <p>Smallest fixed experimental ring-joint SDPA case: 1x4 submesh, sequence8960,10heads; five numerical iterations.</p><p>Blackhole Galaxy cluster required by upstream marker; test opens a 1x4 submesh.</p>
 <pre><code>models/tt_dit/tests/unit/test_exp_ring_joint_attention.py::test_exp_ring_joint_sdpa_dit_bh_glx_custom[{arch}-1x4-ring]</code></pre>
 <p class="muted">models/tt_dit/tests/unit/test_exp_ring_joint_attention.py:389</p>
 </article>
 <article class="card case" id="SM075" data-lane="wormhole"><h3>SM075 — BGE model-local SDPA</h3>
-<p><b>Primary kernels:</b> DF001 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> DH001</p>
+<p><b>Kernels:</b> DF001 · <b>Lane:</b> <code>wormhole</code> · <b>Factories:</b> DH001</p>
 <p>Small standard SDPA with two query heads and 128 KV tokens.</p><p>One Wormhole device.</p>
 <pre><code>tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py::test_bge_encoder_sdpa_reduce_auxiliary[runtime_lengths=False-streaming=False]</code></pre>
 <p class="muted">tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py:21</p>
 </article>
 <article class="card case" id="SM076" data-lane="common"><h3>SM076 — distributed Welford layer norm</h3>
-<p><b>Primary kernels:</b> DF044 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F086</p>
+<p><b>Kernels:</b> DF044 (primary case SM011) · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F086</p>
 <p>One-device Welford post-all-gather with hand-built mean/variance, BF16 input and weights, FP32 destination; exercises the shared reader without an auxiliary recipe.</p><p>One device. Statistics emulate one shard; no collective required.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py::test_layer_norm_post_all_gather_welford_with_program_cache[one_stats_pair-small-bf16]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py:228</p>
 </article>
 <article class="card case" id="SM077" data-lane="common"><h3>SM077 — distributed RMS norm</h3>
-<p><b>Primary kernels:</b> S090, DF044 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F085</p>
+<p><b>Kernels:</b> S090 (primary case SM011), DF044 (primary case SM011) · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F085</p>
 <p>One-device RMSNorm post-all-gather with BF16 input/weights, FP32 statistics and destination; guards the planned auxiliary buffer unpack format.</p><p>One device. Statistics emulate one shard; no collective required.</p>
 <pre><code>tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py::test_post_all_gather_mixed_stats_dtype_with_program_cache[one_stats_pair-rmsnorm-bf16_input_fp32_stats]</code></pre>
 <p class="muted">tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py:252</p>
