@@ -334,11 +334,38 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 }
 
 #ifdef COMPILE_FOR_TRISC
+#if defined(UCK_CHLKC_UNPACK)
+// Block the UNPACK RISC-V core until entry `tile_index` (relative to the current front) is resident in L1.
+//
+// On Quasar, wait_front() is a single posted TT_WAIT_TILES. It gates the *unpacker* (Tensix instructions
+// queued behind it stall until the tile counter has enough tiles) but returns to the RISC-V core
+// immediately, so a plain RISC load of the tile can run before the producer's NOC write has landed.
+// Blackhole's llk_wait_tiles is a RISC spin on the CB semaphore, which is why the raw load is safe there.
+//
+// 1. tensix_sync(): the pc_buf read blocks until this Tensix thread is idle, which retires the pending
+//    WAIT_TILES and any in-flight POP_TILES from the previous pop_front(). POP_TILES retires asynchronously
+//    (after the unpacker's rd-done) and tile_counters[].f.posted is live occupancy, so without this drain
+//    the poll below could pass on the previous entry's not-yet-retired credit.
+// 2. Poll the live tile count until it covers tile_index. In the common case the WAIT_TILES has already
+//    resolved after step 1 and this is one load. It covers tile_index > 0 after a wait_front(n), and is the
+//    backstop if tensix_sync() ever returned before the WAIT_TILES resolved.
+//
+// Only this peek path pays for the RISC-side wait; the normal wait_front/copy_tile/pop_front flow stays
+// hardware-gated with no RISC involvement.
+inline __attribute__((always_inline)) void dfb_riscv_wait_tile_resident(const DFBTCSlot& slot, uint32_t tile_index) {
+    ckernel::tensix_sync();
+    const uint8_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
+    while ((ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu) < tile_index + 1) {
+    }
+}
+#endif  // UCK_CHLKC_UNPACK
+
 inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
     uint32_t address = 0;
 #if defined(UCK_CHLKC_UNPACK)
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        dfb_riscv_wait_tile_resident(slot, tile_index);
         const uint32_t base_address =
             slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
@@ -363,11 +390,14 @@ T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) 
 #if defined(UCK_CHLKC_UNPACK)
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        dfb_riscv_wait_tile_resident(slot, tile_index);
         const uint32_t base_address =
             slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
-        value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
+        // Read through the uncached L1 alias: the producer writes L1 via NOC, bypassing the RISC data
+        // cache, so a cached load could return a stale line from an earlier lap.
+        value = reinterpret_cast<volatile T*>(byte_address + MEM_L1_UNCACHED_BASE)[element_offset];
         mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
         mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
     }

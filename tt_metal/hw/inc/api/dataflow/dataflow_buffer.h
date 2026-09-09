@@ -297,12 +297,18 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
+    // Returns the L1 byte address of entry tile_index relative to the current front. Called after wait_front().
+    // Address is mailbox-broadcast from UNPACK to MATH/PACK.
+    // On Quasar, wait_front() only gates the unpacker and does not block the RISC-V core, so UNPACK first blocks
+    // until the entry is resident in L1 (tensix_sync() + tile-counter poll) before publishing the address.
     uint32_t get_tile_address(uint32_t tile_index);
 
     // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
     // array from its L1 base address (not a byte offset); each step is sizeof(T) bytes
     // (default T=uint32_t → 4-byte words).
     // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
+    // On Quasar, UNPACK blocks until the entry is resident (see get_tile_address) and reads through the uncached
+    // L1 alias so a stale RISC data-cache line from an earlier lap is never returned.
     template <typename T = uint32_t>
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
