@@ -208,10 +208,16 @@ def run_moe_fused_swiglu(
 # Known-unfittable (grid, dims, layout) combinations -> reason. Strict, so making one fit turns CI
 # red on XPASS rather than leaving a stale entry. Each key is a space-separated set of id tokens that
 # must ALL appear in the param id.
-# Empty: the `depth_x` 2 -> 1 fallback now serves tiled x as well as row-major, and the reader drops
-# its cross-M-block prefetch there rather than aiming at a slot that does not exist, so dsv4_pro on
-# TILE x (emb 7168 / hidden 3072, the only shape that overshot at 11x8) fits.
-_XFAIL = {}
+_XFAIL = {
+    # 7168x3072 stopped fitting when the gate/up accumulators went bf16: cb_layout needs 1_694_592
+    # bytes against a 1_461_248 budget at 11x8, so the op TT_FATALs in the program factory before it
+    # runs -- every token count, both x layouts. The L1 went to phase_cb_alias(), which is now dead
+    # for EVERY shape (cb_gather_gate is bf16 while cb_h_slice and cb_out_tiles are bfp8, so the
+    # three views can never agree on page size); recovering it is worth ~233 KB here.
+    # Strict on purpose: this turns red on XPASS the moment the shape fits again, which is the
+    # signal that the threshold removed from DeepSeekV4ProConfig can be re-derived.
+    "dsv4_pro": "moe_fused_swiglu exceeds CB L1 on 7168x3072 under bf16 gate/up accumulators",
+}
 
 
 @pytest.fixture(autouse=True)
