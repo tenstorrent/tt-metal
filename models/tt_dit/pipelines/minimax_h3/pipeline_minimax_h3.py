@@ -199,7 +199,7 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 # image) up to the top rung, which must admit everything the arena caps do -- the full 12-reference
 # envelope packs to 322336 rows (Sigma of the ref2va caps), rounded up to the 1024 SP alignment.
 # Requests above it raise, as t2va's do above its top rung. Its optimal spacing is follow-on tuning.
-MINIMAX_H3_REF2VA_BUCKET_LADDER = (61440, 86016, 118784, 176128, 245760, 322560)
+MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 322560)
 
 
 def default_bucket_ladder(task: str) -> tuple[int, ...]:
@@ -1134,7 +1134,7 @@ class MiniMaxH3Pipeline:
                 sp_factor=self.sp_factor,
             )
             path = "ring" if p_cu is None or len(p_cu) <= 2 else "windowed"
-            self._host_log(f"vision tower {path} attention, {p_patches.shape[0]} padded patches")
+            # self._host_log(f"vision tower {path} attention, {p_patches.shape[0]} padded patches")
             sp_kw = {"mesh_axis": self.sp_axis, "shard_dim": 0} if self.sp_factor > 1 else {}
             merged, deepstack = tower.forward(
                 bf16_tensor(p_patches, device=self.mesh_device, **sp_kw),
@@ -2302,6 +2302,12 @@ class MiniMaxH3Pipeline:
             if not self.bucket_denoise:
                 return
             natural = self.last_seq_len.padded
+
+            if self.task == "ref2va":
+                self._warm_ref2va_prompt_encoder_envelope()
+            else:
+                self._warm_prompt_encoder_envelope()
+
             overrides = dict(rung_requests or {})
             # Bind every rung untraced, largest-first, then (when tracing) capture each: shapes, not
             # step counts, key every program, so one short generation per rung compiles the whole
@@ -2337,12 +2343,6 @@ class MiniMaxH3Pipeline:
                 fitted[rung] = request
             if not self.trace_denoise:
                 return
-            # ref2va loads different weights and a different prompt cap, so its encoder envelope is
-            # not the one the t2va walk compiles.
-            if self.task == "ref2va":
-                self._warm_ref2va_prompt_encoder_envelope()
-            else:
-                self._warm_prompt_encoder_envelope()
             capture_rungs = sorted(fitted, reverse=True)
             if host:
                 _tqdm_spacer()
@@ -2432,7 +2432,6 @@ class MiniMaxH3Pipeline:
 
             budget = min(MINIMAX_H3_MAX_TEXT_TOKENS, caps.prompt - vision_len)
             buckets = range(align_up(vision_len + 1), align_up(vision_len + budget) + 1, alignment)
-            unit_before = self.mesh_device.num_program_cache_entries()
             for bucket in buckets:
                 prompt = self._filler_prompt(min(bucket - vision_len, budget))
                 landed = align_up(vision_len + len(self.tokenizer(prompt, add_special_tokens=False)["input_ids"]))
@@ -2441,11 +2440,6 @@ class MiniMaxH3Pipeline:
                 ), f"filler landed on {landed}, expected bucket {bucket} (vision_len {vision_len})"
                 embeds, _ = self.encode_prompt(prompt, keyframes=keyframes)
                 ttnn.deallocate(embeds)
-            label = "t2va" if canvas is None else f"{n_keyframes} keyframe(s) at {canvas[1]}x{canvas[0]}"
-            self._host_log(
-                f"warmed prompt encoder for {label}: buckets {list(buckets)}, "
-                f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
-            )
 
         self._host_log(
             f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
@@ -2476,7 +2470,50 @@ class MiniMaxH3Pipeline:
                 kind="video", frames=np.full((num_frames, height, width, 3), 127, dtype=np.uint8)
             )
 
-        def run(label: str, references: list[MiniMaxH3PreparedReference], *, pad_to: int | None = None) -> None:
+        units: list[tuple[str, list[MiniMaxH3PreparedReference], int | None]] = []
+
+        def add(label: str, references: list[MiniMaxH3PreparedReference], *, pad_to: int | None = None) -> None:
+            units.append((label, references, pad_to))
+
+        pad_canvas = min(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
+        pad_size = min(served_reference_image_sizes(*pad_canvas), key=lambda size: size[0] * size[1])
+        for rung in MINIMAX_H3_REF2VA_PRESENTATION_LADDER:
+            add(f"presentation rung {rung}", [image_ref(pad_size)], pad_to=rung)
+
+        for canvas, size in served_envelope(self.task):
+            add(f"1 image at {size[1]}x{size[0]} (canvas {canvas[1]}x{canvas[0]})", [image_ref(size)])
+
+        max_canvas = max(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
+        add("2 images at max canvas", [image_ref(max_canvas) for _ in range(2)])
+        add(
+            "9 images at max canvas",
+            [image_ref(max_canvas) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)],
+        )
+
+        # A reference video resolves to the canvas of its own aspect, so it reaches per-run slice
+        # shapes no image geometry can; the frame count only moves the presentation length (a rung),
+        # so a minimal clip compiles the shape.
+        short_clip = align_num_frames(1)
+        for size in served_reference_video_canvases():
+            add(f"1 video at {size[1]}x{size[0]}", [video_ref(short_clip, size)])
+
+        video_canvas = resolve_canvas_size(*MINIMAX_H3_DEFAULT_ASPECT_RATIO)
+        for duration_s in (MINIMAX_H3_DURATIONS_S[0], MINIMAX_H3_DURATIONS_S[-1]):
+            frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            add(f"1 video {duration_s}s at {video_canvas[1]}x{video_canvas[0]}", [video_ref(frames, video_canvas)])
+        clip = align_num_frames(round(5 * MINIMAX_H3_FPS))
+        add("3 videos totaling 15s", [video_ref(clip, video_canvas) for _ in range(3)])
+
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for label, references, pad_to in tqdm.tqdm(
+            units,
+            desc="Warming ref2va prompt encoder",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
             unit_before = self.mesh_device.num_program_cache_entries()
             self._force_prompt_pad = pad_to
             try:
@@ -2492,35 +2529,6 @@ class MiniMaxH3Pipeline:
                 f"warmed prompt encoder for {label}: "
                 f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
             )
-
-        pad_canvas = min(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
-        pad_size = min(served_reference_image_sizes(*pad_canvas), key=lambda size: size[0] * size[1])
-        for rung in MINIMAX_H3_REF2VA_PRESENTATION_LADDER:
-            run(f"presentation rung {rung}", [image_ref(pad_size)], pad_to=rung)
-
-        for canvas, size in served_envelope(self.task):
-            run(f"1 image at {size[1]}x{size[0]} (canvas {canvas[1]}x{canvas[0]})", [image_ref(size)])
-
-        max_canvas = max(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
-        run("2 images at max canvas", [image_ref(max_canvas) for _ in range(2)])
-        run(
-            "9 images at max canvas",
-            [image_ref(max_canvas) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)],
-        )
-
-        # A reference video resolves to the canvas of its own aspect, so it reaches per-run slice
-        # shapes no image geometry can; the frame count only moves the presentation length (a rung),
-        # so a minimal clip compiles the shape.
-        short_clip = align_num_frames(1)
-        for size in served_reference_video_canvases():
-            run(f"1 video at {size[1]}x{size[0]}", [video_ref(short_clip, size)])
-
-        video_canvas = resolve_canvas_size(*MINIMAX_H3_DEFAULT_ASPECT_RATIO)
-        for duration_s in (MINIMAX_H3_DURATIONS_S[0], MINIMAX_H3_DURATIONS_S[-1]):
-            frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
-            run(f"1 video {duration_s}s at {video_canvas[1]}x{video_canvas[0]}", [video_ref(frames, video_canvas)])
-        clip = align_num_frames(round(5 * MINIMAX_H3_FPS))
-        run("3 videos totaling 15s", [video_ref(clip, video_canvas) for _ in range(3)])
 
         self._host_log(
             f"ref2va prompt encoder envelope warmed: "
