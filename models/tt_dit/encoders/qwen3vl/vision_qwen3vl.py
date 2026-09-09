@@ -28,7 +28,6 @@ import math
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -1142,10 +1141,10 @@ class Qwen3VlVisionModel(Module):
         _path = (
             ("ring" if _single_block else "windowed_sp") if self._p.sp else ("full" if _single_block else "windowed")
         )
-        logger.info(
-            f"vision tower: path={_path} tp={self._p.tp_factor} sp={self._p.sp_factor} "
-            f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
-        )
+        # logger.debug(
+        #     f"vision tower: path={_path} tp={self._p.tp_factor} sp={self._p.sp_factor} "
+        #     f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
+        # )
 
         real_tokens = None if logical_patches is None else logical_patches // self.spatial_merge_size**2
 
