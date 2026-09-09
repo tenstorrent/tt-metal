@@ -4474,11 +4474,12 @@ def test_matmul_mcast_in1_single_core_h_and_w_tail(device):
 @pytest.mark.parametrize(
     "m_tiles,n_tiles,grid,per_core_m,per_core_n,out_block_h,out_block_w,error",
     [
-        (1, 9, (2, 1), 2, 8, 2, 4, r"mcast_in1 requires N .*single per_core_N block"),
+        (1, 9, (2, 1), 1, 8, 1, 4, r"mcast_in1 requires N .*single per_core_N block"),
         (1, 3, (1, 1), 1, 8, 1, 4, r"logical N tail to be in the final internal W block"),
-        (3, 8, (1, 1), 8, 8, 4, 4, r"per_core_M \(8\) exceeds Mt \(3\)"),
+        # No case for the M-tail guards: they only fire when per_core_M exceeds Mt, which
+        # validation now rejects before reaching them.
     ],
-    ids=["multiple-x-blocks", "deep-w-tail", "per-core-m-exceeds-mt"],
+    ids=["multiple-x-blocks", "deep-w-tail"],
 )
 def test_matmul_mcast_in1_rejects_unsupported_distribution(
     device,
@@ -4507,6 +4508,31 @@ def test_matmul_mcast_in1_rejects_unsupported_distribution(
     )
 
     with expect_error(RuntimeError, error):
+        ttnn.matmul(in0, in1, program_config=program_config)
+
+
+@pytest.mark.parametrize("config_kind", ["2d", "1d_mcast_in1"])
+def test_matmul_per_core_m_exceeds_mt_rejected(device, expect_error, config_kind):
+    """per_core_M must not exceed Mt - the surplus rows have nowhere to land in the output."""
+    torch.manual_seed(0)
+    m, k, n = 128, 32, 64  # Mt = 4
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    if config_kind == "2d":
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=7,
+            per_core_N=2,
+            transpose_mcast=False,
+        )
+    else:
+        program_config = _mcast_in1_tail_config(grid=(1, 1), per_core_m=7, per_core_n=2, out_block_h=7, out_block_w=2)
+
+    with expect_error(RuntimeError, r"per_core_M \(7\) exceeds Mt \(4\)"):
         ttnn.matmul(in0, in1, program_config=program_config)
 
 

@@ -781,8 +781,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             num_blocks_x);
                         TT_FATAL(
                             per_core_M <= Mt,
-                            "{}: per_core_M ({}) exceeds Mt ({}). Computing more row tiles than are available "
-                            "overwrites memory beyond this tensor. Reduce per_core_M to at most Mt.",
+                            "{}: per_core_M ({}) exceeds Mt ({}). Each core would compute more output row tiles "
+                            "than the tensor has. Reduce per_core_M to at most Mt.",
                             config_name,
                             per_core_M,
                             Mt);
@@ -842,8 +842,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     Nt);
                 TT_FATAL(
                     program_config.per_core_M <= Mt,
-                    "{}: per_core_M ({}) exceeds Mt ({}). Computing more row tiles than are available overwrites "
-                    "memory beyond this tensor. Reduce per_core_M to at most Mt.",
+                    "{}: per_core_M ({}) exceeds Mt ({}). Each core would compute more output row tiles "
+                    "than the tensor has. Reduce per_core_M to at most Mt.",
                     config_name,
                     program_config.per_core_M,
                     Mt);
