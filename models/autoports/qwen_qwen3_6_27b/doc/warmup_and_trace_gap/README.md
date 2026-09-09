@@ -238,3 +238,66 @@ timeout.
 convention is a small declared set, and the trace region is 200 MB against 27B of
 weights. Choosing coverage is a budget decision, which is my reading of why F1
 was not a two-line fix.
+
+## How the shipped demo prefills, and what that says about the hang
+
+### F14. The demo for this same architecture also prefills one request at a time
+
+`models/demos/blackhole/qwen36/tt/qwen36_vllm.py` is the hand-written demo for
+`Qwen3_5ForConditionalGeneration` -- the same architecture this autoport serves,
+behind the same vLLM plugin. For the multi-device multi-slot case it takes
+`_prefill_forward_tp_batched`, whose docstring reads:
+
+> TP batched (max_num_seqs>1) prefill: prefill each request in this step into
+> its decode slot. vLLM prefills new requests while other slots decode, so each
+> user's B=1 state is written into row empty_slots[u] of the batched GDN buffers
+> without disturbing the live rows (model-owned, via prefill_paged_slots).
+
+and whose body is a per-request list, not a padded batch:
+
+```python
+token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
+host_logits = model.prefill_paged_slots(token_ids_list, pt, empty_slots, valid_lens=plens)
+logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)
+```
+
+So "batched" there means *batched decode slots*, not a batched prefill tensor.
+Every request is prefilled at B=1 into its own slot.
+
+*Observed:* read the file.
+
+### F15. Two things the demo does that this autoport does not
+
+- **`valid_lens=plens`** -- each request is prefilled to its own real length
+  (`tokens[u:u+1, :plens[u]]`). This autoport pads every request in a step to
+  the step's maximum, so a 128-token request scheduled alongside a 4096-token
+  one computes 4096.
+- **`_remap_gdn_slots(slot_remap)` in decode** -- when vLLM condenses slots, the
+  demo reindexes its per-slot GDN recurrent/conv state, because "GDN state is
+  model-internal" and the plugin only remaps its own buffers. This autoport has
+  `remap_decode_slots`, which appears to be the same idea; whether it covers the
+  same state is unverified.
+
+*Observed:* read the file, and compared against
+`tt/generator_vllm.py::prefill_forward` / `decode_forward`.
+
+### Interpretation -- not established fact
+
+**S6. This reframes the per-request fix.** I committed
+`QWEN36_PREFILL_PER_REQUEST` as a fix for a hang, with serialisation presented
+as its cost. F14 suggests that framing is wrong: per-request prefill is what the
+reference implementation for this architecture does, for a stated reason (GDN
+state is per-slot and must be written without disturbing live rows). On that
+reading the padded multi-row prefill was the anomaly, and its TTFT is not a
+compromise but simply what this architecture costs.
+
+I have **not** established that our multi-row path hangs *because* of GDN state
+writes. Eight variables were eliminated by experiment (see the commit for
+`71384bee159`) and the mechanism is still unknown. F14 is a strong hint about
+where to look, not a diagnosis.
+
+**S7. The remaining prefill gap is `valid_lens`.** Our per-request loop still
+pads each call to the step's maximum length. At the graded ISL 128 point every
+prompt is 128 so it costs nothing, but a mixed-length eval batch would pay for
+the longest prompt on every request. Worth fixing before reading any
+mixed-length eval timing.
