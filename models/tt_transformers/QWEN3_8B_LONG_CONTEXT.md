@@ -73,7 +73,7 @@ gaps in these captures are a profiler artefact, not real):
 TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B python -m tracy -r -p -v -n <tag> \
   --op-support-count 40000 -m pytest \
   models/tt_transformers/tests/test_long_context.py -s -k 32k-b1 --tracy_decode
-tt-perf-report generated/profiler/reports/<tag>/*/ops_perf_results_*.csv --start-signpost decode
+tt-perf-report generated/profiler/reports/<tag>/*/ops_perf_results_*.csv --start-signpost DECODE_START
 ```
 
 `--op-support-count 40000` is required: the chip tracks 1000 operations by default, a

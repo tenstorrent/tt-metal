@@ -736,11 +736,14 @@ def test_text_demo(
     decode_times = []
 
     row["stage"] = "decode"
-    # Timeline marker for the profiler. Everything after this is decode, so a report can be
-    # sliced to it with `tt-perf-report --start-signpost decode`; without it the warmup
-    # prefill, the timed prefill, and the decode steps are all averaged into one pool.
+    # Timeline markers for the profiler. Everything between DECODE_START and DECODE_END is
+    # decode, so a report can be sliced to it with `tt-perf-report --start-signpost
+    # DECODE_START`; without them the warmup prefill, the timed prefill, and the decode steps
+    # are all averaged into one pool. The names follow the convention tt-optimization-loop's
+    # phase parser reads -- a phase name plus a begin/end suffix -- so its `tt-opt observe`
+    # can find the decode window in this profile; a bare `decode` was unrecognised.
     # Safe outside a profiling run -- signpost() just logs its header.
-    signpost("decode")
+    signpost("DECODE_START")
     logger.info("Decoding...")
     for iteration in range(max_generated_tokens):
         # Teacher forcing, before the forward pass that consumes out_tok: score what the model
@@ -782,6 +785,7 @@ def test_text_demo(
             logger.info(f"Hit EOS at iteration {iteration}")
             break
         generated_tokens.append(token)
+    signpost("DECODE_END")
 
     # -- Step 9: report ------------------------------------------------------
     # Iteration 0 carries kernel compile and trace capture, so it is excluded

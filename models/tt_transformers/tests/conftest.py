@@ -72,8 +72,9 @@ def pytest_addoption(parser):
         help="Configure the run for Tracy profiling of the decode phase: disables Metal "
         "trace and caps generation at 2 tokens. Both are required -- trace replay under "
         "the profiler raises 'Device data mismatch', and a long decode loop overflows the "
-        "device marker buffer. The `decode` signpost means tt-perf-report defaults to the "
-        "decode phase. Not for measurement: the decode average degrades to one sample.",
+        "device marker buffer. Slice the report to decode with `tt-perf-report "
+        "--start-signpost DECODE_START`. Not for measurement: the decode average degrades to "
+        "one sample.",
     )
     parser.addoption(
         "--use_hf_rope",
