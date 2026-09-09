@@ -620,13 +620,12 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllFromAllPacketSizes2_0) 
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     CoreCoord sub_grid_size = mst_grid_size;
 
-    // On Quasar emulator, clamp to a 1x1 single-shot to fit the budget.
+    // packet_sizes_test caps the transaction and page sweep on Quasar for the emulator runtime budget.
     if (this->device().arch() == ARCH::QUASAR) {
-        if (mst_grid_size.x < 1 || mst_grid_size.y < 1) {
-            GTEST_SKIP() << "Skipping: Quasar emulator grid too small";
+        if (mst_grid_size.x * mst_grid_size.y < 2) {
+            GTEST_SKIP() << "Skipping: all-from-all needs >= 2 cores, but the grid is " << mst_grid_size.x << "x"
+                         << mst_grid_size.y;
         }
-        mst_grid_size = {1, 1};
-        sub_grid_size = {1, 1};
     }
 
     unit_tests::dm::all_from_all::packet_sizes_test(
@@ -650,11 +649,10 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllFromAllDirectedIdeal_2_
     uint32_t pages_reservable_per_transaction = max_reservable_pages / num_of_transactions_per_subordinate / 2;
 
     if (arch_ == ARCH::QUASAR) {
-        if (mst_grid_size.x < 1 || mst_grid_size.y < 1) {
-            GTEST_SKIP() << "Skipping: Quasar emulator grid too small";
+        if (mst_grid_size.x * mst_grid_size.y < 2) {
+            GTEST_SKIP() << "Skipping: all-from-all needs >= 2 cores, but the grid is " << mst_grid_size.x << "x"
+                         << mst_grid_size.y;
         }
-        mst_grid_size = {1, 1};
-        sub_grid_size = {1, 1};
         num_of_transactions_per_subordinate = 1;
         pages_reservable_per_transaction = 1;
     }

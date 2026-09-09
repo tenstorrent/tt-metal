@@ -1110,8 +1110,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastPacketSizes
     // Quasar emulator: full packet-size sweep across the whole grid times-out. Run a single
     // small config to exercise the Metal 2.0 host path + sender_unicast_2_0 kernel.
     if (this->device().arch() == ARCH::QUASAR) {
-        if (sub_grid_size.x < 2 && sub_grid_size.y < 1) {
-            GTEST_SKIP() << "Skipping: emulator grid too small for one_to_all unicast 2_0";
+        if (sub_grid_size.x * sub_grid_size.y < 2) {
+            GTEST_SKIP() << "Skipping: one_to_all unicast 2_0 needs >= 2 cores, but the grid is " << sub_grid_size.x
+                         << "x" << sub_grid_size.y;
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(this->device());
