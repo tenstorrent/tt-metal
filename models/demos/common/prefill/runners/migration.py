@@ -66,21 +66,21 @@ def _import_migration_client():
         ) from e
 
 
-def _attach_migration_client():
+def _attach_migration_client(timeout_s: float | None = None):
     cmd_q, table_q, resp_q = _resolve_queue_names()
     mod = _import_migration_client()
-    try:
-        client = mod.MigrationLayerClient(cmd_q, table_q, resp_q)
-    except RuntimeError as e:
-        raise RuntimeError(
-            f"[migration] could not attach MigrationLayerClient to queues "
-            f"({cmd_q}, {table_q}, {resp_q}): {e}. The orchestrator / inference server "
-            f"must launch migration_endpoint and create the shmem queues before the runner."
-        ) from e
+    # Runs at table-publish time, so a ctor race here kills rank 0: wait the transient window out.
+    client = _attach_with_retry(
+        lambda: mod.MigrationLayerClient(cmd_q, table_q, resp_q),
+        f"endpoint queues ({cmd_q})",
+        f"[migration] endpoint queues never became attachable (cmd={cmd_q}, table={table_q}, "
+        f"resp={resp_q}) — is migration_endpoint running and past queue init?",
+        timeout_s,
+    )
     return client, cmd_q, table_q, resp_q
 
 
-# How long to wait for the co-located migration worker's shm queues; 0 (the default) waits forever, or set PREFILL_MIGRATION_ATTACH_WAIT_S to a positive number of seconds to bound it.
+# Wait budget for the migration layer's shm queues: PREFILL_MIGRATION_ATTACH_WAIT_S seconds, 0 (default) = forever.
 _DEFAULT_MIGRATION_ATTACH_WAIT_S = 0.0
 _MIGRATION_ATTACH_HEARTBEAT_S = 15.0
 
@@ -96,6 +96,43 @@ def _migration_attach_wait_s() -> float:
             f"[migration] PREFILL_MIGRATION_ATTACH_WAIT_S={raw!r} is not a number; waiting indefinitely instead"
         )
         return _DEFAULT_MIGRATION_ATTACH_WAIT_S
+
+
+def _producer_not_ready(err: BaseException) -> bool:
+    """True for ctor throws a retry clears: shm_open ENOENT, header not published yet, or the table
+    lock file not there yet (migration_client.cpp:175/195/121 -- self-created rank queues init all
+    three headers before the lock file). EACCES/mmap never clear, hence the explicit ENOENT match.
+    """
+    msg = str(err)
+    if "header not initialized yet" in msg:
+        return True
+    return ("shm_open(" in msg or "table lock file" in msg) and "No such file or directory" in msg
+
+
+def _attach_with_retry(make_client, what: str, on_timeout: str, timeout_s: float | None = None):
+    """Construct a MigrationLayerClient, retrying only while its producer is still coming up.
+    Finding a queue is not the same as being able to use it; anything else re-raises on attempt one.
+    """
+    budget = _migration_attach_wait_s() if timeout_s is None else timeout_s
+    start = last_log = time.monotonic()
+    deadline = start + budget if budget > 0 else None
+    while True:
+        try:
+            return make_client()
+        except RuntimeError as e:
+            if not _producer_not_ready(e):
+                raise
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            raise RuntimeError(on_timeout)
+        if now - last_log >= _MIGRATION_ATTACH_HEARTBEAT_S:
+            last_log = now
+            bound = "no timeout" if deadline is None else f"{budget:.0f}s budget"
+            logger.info(
+                f"[migration] still waiting for {what} after {now - start:.0f}s ({bound}) — "
+                f"is the migration layer up on this host yet?"
+            )
+        time.sleep(0.25)
 
 
 def _deliver_local_device_map(device_map, rank: int, timeout_s: float | None = None) -> None:
@@ -133,7 +170,7 @@ def _deliver_local_device_map(device_map, rank: int, timeout_s: float | None = N
     deadline = start + budget if budget > 0 else None
     last_log = start
     trios, skipped = _discover()
-    # Queues that exist but are not ours will NEVER become usable, so warn here (and in the heartbeat) since with no deadline the raise below is unreachable.
+    # Queues that are not ours NEVER become usable, and with no deadline the raise below is dead code.
     if skipped and not trios:
         logger.warning(
             f"[migration] {len(skipped)} local worker queue(s) present but NOT accessible by this user — "
@@ -165,9 +202,17 @@ def _deliver_local_device_map(device_map, rank: int, timeout_s: float | None = N
         time.sleep(0.25)
         trios, skipped = _discover()
 
+    # _discover() only proves the cmd file is ours, not that the worker is past init: same wait applies.
     for cmd, table, resp in trios:
         try:
-            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
+            client = _attach_with_retry(
+                lambda cmd=cmd, table=table, resp=resp: mod.MigrationLayerClient(cmd, table, resp),
+                f"worker queue header init ({resp})",
+                f"[migration] worker queues found but never became attachable ({resp}) — is the "
+                f"migration_worker for this host healthy?",
+                timeout_s,
+            )
+            client.send_device_map(device_map)
             logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
         except RuntimeError as e:
             if "Permission denied" in str(e):
