@@ -30,13 +30,20 @@ inline constexpr uint32_t kReshapeTileWriteBatch = 8;
 // Populated by the routing layer from the input/output tensors and consulted
 // by both the program factory and supported.cpp's L1 gates.
 struct ReshapeCodegenParams {
+    // The output shapes are attributes, not tensor args: the device-operation
+    // inspector (tt::tt_metal::experimental::inspector) recursively visits
+    // tensor_args to count Tensors, and its reflection cannot descend through
+    // ttnn::Shape -- it reaches the shape's span<const uint32_t> view and
+    // throws "Unsupported visit of object of type". Attributes are never
+    // visited by that path. This mirrors the native reshape op's
+    // ReshapeOnDeviceParams, which carries the same two shapes.
+    ttnn::Shape output_logical_shape;
+    ttnn::Shape output_padded_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
 struct ReshapeCodegenInputs {
     Tensor input;
-    ttnn::Shape output_logical_shape;
-    ttnn::Shape output_padded_shape;
     std::optional<Tensor> optional_output_tensor;
 };
 

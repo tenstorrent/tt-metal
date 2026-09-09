@@ -30,20 +30,21 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
         input.layout() == tt::tt_metal::Layout::TILE || input.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Only tile and row major ReshapeCodegen supported!");
     TT_FATAL(input.padded_shape().rank() >= 1, "ReshapeCodegen requires rank >= 1 input");
-    TT_FATAL(tensor_args.output_padded_shape.rank() >= 1, "ReshapeCodegen requires rank >= 1 output");
+    TT_FATAL(operation_attributes.output_padded_shape.rank() >= 1, "ReshapeCodegen requires rank >= 1 output");
 
     TT_FATAL(
         ttnn::operations::data_movement::reshape_codegen::supported_by_codegen(
             input,
-            tensor_args.output_logical_shape,
-            tensor_args.output_padded_shape,
+            operation_attributes.output_logical_shape,
+            operation_attributes.output_padded_shape,
             operation_attributes.output_mem_config),
         "Input is not supported by ReshapeCodegen");
 
     if (tensor_args.optional_output_tensor.has_value()) {
         const auto& out = tensor_args.optional_output_tensor.value();
         TT_FATAL(
-            out.logical_shape() == tensor_args.output_logical_shape, "ReshapeCodegen optional output shape mismatch");
+            out.logical_shape() == operation_attributes.output_logical_shape,
+            "ReshapeCodegen optional output shape mismatch");
         TT_FATAL(out.dtype() == input.dtype(), "ReshapeCodegen optional output dtype mismatch");
         TT_FATAL(out.layout() == input.layout(), "ReshapeCodegen optional output layout mismatch");
         TT_FATAL(out.device() == input.device(), "ReshapeCodegen optional output must be on the same device");
@@ -58,13 +59,13 @@ ReshapeCodegenDeviceOperation::spec_return_value_t ReshapeCodegenDeviceOperation
     }
     const auto& input = tensor_args.input;
     return tt::tt_metal::TensorSpec(
-        tensor_args.output_logical_shape,
+        operation_attributes.output_logical_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             input.dtype(),
             input.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
-            tensor_args.output_logical_shape,
-            tensor_args.output_padded_shape));
+            operation_attributes.output_logical_shape,
+            operation_attributes.output_padded_shape));
 }
 
 ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperation::create_output_tensors(
@@ -91,13 +92,12 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t reshape_codegen(
     const ReshapeCodegenParams& params,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = ReshapeCodegenDeviceOperation;
+    ReshapeCodegenParams attributes = params;
+    attributes.output_logical_shape = output_logical_shape;
+    attributes.output_padded_shape = output_padded_shape;
     return ttnn::device_operation::launch<OperationType>(
-        params,
-        OperationType::tensor_args_t{
-            .input = input,
-            .output_logical_shape = output_logical_shape,
-            .output_padded_shape = output_padded_shape,
-            .optional_output_tensor = std::move(optional_output_tensor)});
+        attributes,
+        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
 
 }  // namespace ttnn::prim
