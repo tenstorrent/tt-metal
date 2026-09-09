@@ -1234,6 +1234,10 @@ ALWI void reduce(
     const uint32_t full_scaler_idx = auxiliary_tile_offset;
     const uint32_t partial_scaler_idx = auxiliary_tile_offset + (has_partial_scaler ? 1u : 0u);
     scaler_dfb.wait_front(auxiliary_tile_offset + scaler_tile_count);
+    if constexpr (is_sfpu) {
+        // Every pack in this call targets the same reduced output layout.
+        detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+    }
     constexpr uint32_t onetile = 1;
 
     // Pattern dispatch based on reduce_dim
@@ -1312,9 +1316,6 @@ ALWI void reduce(
             output_dfb.reserve_back(onetile);
             tile_regs_commit();
             tile_regs_wait();
-            if constexpr (is_sfpu) {
-                detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
-            }
             pack_tile(get_dst_index(accumulate), output_dfb_id);
             tile_regs_release();
             output_dfb.push_back(onetile);
@@ -1449,9 +1450,6 @@ ALWI void reduce(
                 output_dfb.reserve_back(onetile);
                 tile_regs_commit();
                 tile_regs_wait();
-                if constexpr (is_sfpu) {
-                    detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
-                }
                 pack_tile(dst_idx, output_dfb_id);
                 tile_regs_release();
                 output_dfb.push_back(onetile);
@@ -1614,9 +1612,6 @@ ALWI void reduce(
 
                 tile_regs_commit();
                 tile_regs_wait();
-                if constexpr (is_sfpu) {
-                    detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
-                }
                 for (uint32_t i = 0; i < current_chunk; ++i) {
                     output_dfb.reserve_back(onetile);
                     pack_tile(base_dst + i, output_dfb_id);

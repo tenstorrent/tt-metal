@@ -360,3 +360,22 @@ with the runner's counts. A fresh Opus 5/high review (round 4, session
 `4b52d738-f23e-4c1c-baed-6093ea8f9392`) is running; the full regression remains due.
 Clarified the SM006 description: its BF16 input uses BF16 L1 intermediates and
 FP32 destination accumulation; the BF8-mask transition is what the test guards.
+
+## Fourth Claude review and corrections
+
+Fresh Opus 5/high round 4 completed and returned CHANGES REQUIRED. It confirmed
+migration coverage, the earlier fixes, the groupnorm correction and the passing
+N300 checkpoint, then requested two additional fixes. SFPU reduction now sets
+its invariant output mask once per call, and Moreh dot requests INPUT so its
+planned auxiliary format does not depend on the previous multiply's unpack
+state. Addressed all four optional notes: corrected reader comments, removed
+unused reader locals without changing argument positions, distinguished the host
+softmax header name, and logged parameter-gradient maximum absolute errors.
+See `review_round_04.md` for the complete resolution table and original review.
+
+Native build and pre-commit checks passed. T052/T173/T175/T178 passed **186 cases
+with 4 upstream BF8 skips** (`reduce-migration-kuz604bw`); all four gradient
+boundary checks passed (`reduce-migration-kw3an9hl`). The complete available
+sanity suite then passed **61/61**, without skips or failures
+(`reduce-migration-y7lizu94`). Test bodies retain all numerical checks and
+thresholds. Another fresh review and the full 178-group regression remain due.

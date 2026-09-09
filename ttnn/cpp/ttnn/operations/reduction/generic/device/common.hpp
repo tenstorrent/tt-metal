@@ -95,7 +95,7 @@ struct RmPlan {
     uint32_t dst_datum_size;
 };
 
-// The tiled reader presents H columns as independent batches. RM readers already
+// Tiled H readers group columns to match the planned DEST accumulators. RM readers
 // identity-pad their tilized chunks, which are combined by a planned sequence.
 // Logical CB IDs are input=0, auxiliary=1, output=2, accumulator=3.
 ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(

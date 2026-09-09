@@ -27,8 +27,6 @@ void kernel_main() {
 
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t Wt = get_arg(args::Wt);
-    constexpr bool use_welford = get_arg(args::use_welford) != 0;
-
     // Match the independent column accumulators described by the host plan.
     constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
 
