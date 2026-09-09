@@ -127,7 +127,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const uint32_t num_tokens = scores_tensor.logical_shape()[0];  // tokens_per_device
     const uint32_t num_tokens_x32 = round_up(num_tokens, 32);
     // One score tile per (row tile, expert): the reader builds them, the compute kernel picks the group of the
-    // output tile's row tile.  Inputs taller than one row tile used to be scaled with the first tile's scores.
+    // output tile's row tile.
     const uint32_t num_row_tiles = num_tokens_x32 / tt::constants::TILE_HEIGHT;
 
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.

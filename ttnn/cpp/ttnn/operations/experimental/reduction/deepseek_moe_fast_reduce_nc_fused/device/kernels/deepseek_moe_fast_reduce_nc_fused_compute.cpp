@@ -10,8 +10,6 @@
 // The reader pre-loads one score tile per (row tile, expert) before signalling compute_scores: tile
 // r * reduction_dim_size + e holds in column 0 the scores of token rows 32 * r .. 32 * r + 31 for expert e
 // (broadcast to all columns).  An output tile at row tile r is scaled with the r-th group of score tiles.
-// Before this, one tile per expert (rows 0..31) scaled every output row tile, so an input taller than one row
-// tile (tokens > 32) weighted rows 32.. with the scores of rows 0..31.
 // Score tiles are kept resident and accessed by index throughout the loop.
 //
 // Initialization:
@@ -44,8 +42,6 @@ void kernel_main() {
     CircularBuffer cb_in1(compute_input_cb_id_1);
     CircularBuffer cb_out(compute_output_cb_id);
 
-    const uint32_t start_tile = get_arg_val<uint32_t>(0);
-
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
@@ -65,7 +61,7 @@ void kernel_main() {
     // Wait for all score tiles — they are pre-loaded once by the reader prologue
     // and remain resident for the entire kernel invocation.
     cb_in1.wait_front(num_score_tiles);
-    uint32_t tile_id = start_tile;
+    uint32_t tile_id = get_arg_val<uint32_t>(0);  // this core's first output tile id
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         const uint32_t row_tile = (tile_id / input_tensor_Wt) % num_row_tiles;
         const uint32_t score_tile_base = row_tile * reduction_dim_size;

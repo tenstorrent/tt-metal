@@ -42,6 +42,7 @@ constexpr uint16_t shared_expert_scale_bf16 = static_cast<uint16_t>(get_compile_
 constexpr uint32_t num_routed_experts = reduction_dim_size - num_shared_experts;
 
 constexpr uint32_t face2_offset = 512;  // face 2 starts 512 elements into tile
+constexpr uint32_t tile_height = 32;
 
 // TensorAccessor CT args, chained:
 //   activation @ 27, scores @ next, expert_indices @ next, expert_mapping @ next.
@@ -129,12 +130,7 @@ void kernel_main() {
     // Target: cb_scores holds num_row_tiles * reduction_dim_size tiles, one per (row tile r, expert e) at
     // index r * reduction_dim_size + e.  Tile (r, e): column 0 row j holds score[32 * r + j, e] (zero for the
     // padding rows past num_tokens in the last row tile).  Only column 0 is written; BroadcastType::COL reads
-    // column 0 alone.
-    //
-    // A single tile per expert (rows 0..31) used to be built for every token, so an input taller than one row
-    // tile (tokens > 32) had every output row tile weighted with the scores of rows 0..31, and rows past 31
-    // were written past the tile (into the next expert's tile and past the CB).  One tile per (row tile,
-    // expert) gives every output row its own score; the compute kernel picks the tile by the output tile's row.
+    // column 0 alone.  The compute kernel picks the tile by the output tile's row tile.
     //
     // BF16 32x32 tile face layout (4 faces, each 16x16):
     //   Face 0 (rows  0-15, cols  0-15): base offset 0   (uint16 index)
@@ -146,7 +142,7 @@ void kernel_main() {
     //   j < 16  → face 0 → uint16 index: j * 16
     //   j >= 16 → face 2 → uint16 index: 512 + (j-16) * 16
     ////////////////////////////////////////////////////////////////////////////
-    constexpr uint32_t num_row_tiles = num_tokens_x32 / 32;
+    constexpr uint32_t num_row_tiles = num_tokens_x32 / tile_height;
 
     // Step 1: Read all token rows from DRAM into scratch staging buffer
     cb_scores_rm.reserve_back(num_tokens);
@@ -212,8 +208,8 @@ void kernel_main() {
         for (uint32_t k = 0; k < reduction_dim_size; ++k) {
             volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + (r * reduction_dim_size + k) * tile_u16_stride;
             const bool is_shared_expert = (k >= num_routed_experts);
-            for (uint32_t j = 0; j < 32; ++j) {
-                const uint32_t t = r * 32 + j;
+            for (uint32_t j = 0; j < tile_height; ++j) {
+                const uint32_t t = r * tile_height + j;
                 // Column 0 of row j: face 0 for j < 16, face 2 for j >= 16.
                 const uint32_t col0_index = (j < 16) ? j * 16 : face2_offset + (j - 16) * 16;
                 if (t >= num_tokens) {

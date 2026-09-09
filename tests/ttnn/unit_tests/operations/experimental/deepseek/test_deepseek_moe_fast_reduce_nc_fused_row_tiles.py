@@ -7,7 +7,7 @@ deepseek_moe_fast_reduce_nc_fused with more than one row tile of tokens, on one 
 
 Every output row t must be the weighted sum of the expert slices with the scores of row t. The test
 checks that against a torch reference per 32-row slice (so a slice weighted with another slice's
-scores fails on its own) and checks that the T-row result equals the concatenation of the per-32-row
+scores fails on its own) and checks that the T-row result equals the concatenation of the per-row-tile
 results bitwise (the per-element MAC order does not depend on the input height).
 """
 
@@ -70,7 +70,7 @@ def _run_fused_reduce(mesh_device, activation, scores, indices, mapping, hidden_
     return ttnn.to_torch(outputs[0], dtype=torch.bfloat16)
 
 
-@pytest.mark.parametrize("tokens", [32, 64, 96, 128])
+@pytest.mark.parametrize("tokens", [32, 40, 64, 100, 128])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [2048])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
@@ -94,14 +94,15 @@ def test_deepseek_moe_fast_reduce_nc_fused_row_tiles(mesh_device, mesh_shape, to
     result = _run_fused_reduce(mesh_device, activation, scores, indices, mapping, hidden_size)
     assert result.shape == (1, 1, tokens, hidden_size)
 
-    for row_tile in range(tokens // 32):
-        rows = slice(32 * row_tile, 32 * (row_tile + 1))
+    num_row_tiles = (tokens + 31) // 32
+    for row_tile in range(num_row_tiles):
+        rows = slice(32 * row_tile, min(32 * (row_tile + 1), tokens))
         passed, pcc = comp_pcc(golden[:, :, rows, :], result[:, :, rows, :].float(), PCC_THRESHOLD)
         assert passed, f"rows {rows.start}..{rows.stop - 1}: pcc {pcc}"
 
-    # The T-row reduce equals the per-32-row reduces bitwise.
-    for row_tile in range(tokens // 32):
-        rows = slice(32 * row_tile, 32 * (row_tile + 1))
+    # The T-row reduce equals the per-row-tile reduces bitwise (the last one partial when T is not a multiple of 32).
+    for row_tile in range(num_row_tiles):
+        rows = slice(32 * row_tile, min(32 * (row_tile + 1), tokens))
         slice_result = _run_fused_reduce(
             mesh_device,
             activation[:, :, rows, :].contiguous(),
