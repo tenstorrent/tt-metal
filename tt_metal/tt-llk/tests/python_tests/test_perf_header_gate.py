@@ -307,13 +307,8 @@ def test_run_type_names_match_source():
 
 
 def test_metric_bases_match_source():
-    """The catalog's metric bases must equal the metric keys the shared engine computes.
-
-    The formulas live in tools/tracy/perf_metrics_common.py (metrics.py only adapts the
-    counter DataFrame to it), so that module is the source of truth for the *_pct and
-    *_ratio names. Read the dict keys via ast, not a text scan, so an unrelated string
-    literal (log line, docstring, m.get() arg) can neither trip nor evade the gate.
-    """
+    """The catalog's metric bases must equal the keys the shared engine computes. Read via ast, not a text
+    scan, so an unrelated string literal can neither trip nor evade the gate."""
     engine = next(
         parent / "tools" / "tracy" / "perf_metrics_common.py"
         for parent in ROOT.resolve().parents

@@ -18,12 +18,7 @@ DeviceOpsDict = Dict[int, List[OpDict]]
 
 
 class _TracyCounterView:
-    """Adapts one (op, core)'s counter rows to perf_metrics_common.CounterView.
-
-    Tracy's device frame gives per-counter `value` + `ref cnt`; the shared engine reads a counter's
-    value via count(bank, name) and a bank's reference cycles via cycles(bank). All counters in a bank
-    share one ref_cnt, so cycles(bank) returns the ref_cnt of any present counter in that bank.
-    """
+    """CounterView over one (op, core)'s Tracy rows; cycles(bank) is the ref cnt of any counter in that bank."""
 
     _BANK_REF = {
         "FPU": ("FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"),
@@ -62,12 +57,7 @@ def _is_blackhole(device_arch) -> bool:
 
 
 def compute_metrics_per_op(perf_counter_df, device_arch=""):
-    """Derived metrics per op via the shared compute_metrics, computed per core then aggregated.
-
-    For each op (run_host_id, trace_id_count) and each core, build a _TracyCounterView and call the
-    shared perf_metrics_common.compute_metrics; then reduce across cores to min/median/max/avg per
-    metric key (None/NaN excluded). Returns {op_key: {metric_key: {min, median, max, avg}}}.
-    """
+    """Per-op metrics: compute_metrics per core, then min/median/max/avg per key (None/NaN excluded)."""
     import math
 
     result = {}
@@ -95,8 +85,7 @@ def compute_metrics_per_op(perf_counter_df, device_arch=""):
     return result
 
 
-# Counter type name table, parsed from the PerfCounterType enum in perf_counters.hpp so it can't
-# drift from the compiled ordinals (the profiler stores counter_type as that enum ordinal).
+# Parsed from the enum so the names cannot drift from the compiled ordinals.
 try:
     COUNTER_TYPE_NAMES = _mc.perf_counter_type_names()
 except OSError:  # installed wheel: no header to parse, use the table shipped with the package
@@ -104,8 +93,7 @@ except OSError:  # installed wheel: no header to parse, use the table shipped wi
         COUNTER_TYPE_NAMES = {int(k): v for k, v in json.load(_f).items()}
 
 
-# CSV columns derive from METRIC_LABELS so they cannot drift from the engine; RATIO_LABELS carry a
-# " (ratio)" unit, the rest " (%)", and three utilizations keep their legacy "Avg ... on full grid" name.
+# Columns derive from METRIC_LABELS; three utilizations keep their legacy "Avg ... on full grid" name.
 _LEGACY_AVG_GRID_COLUMNS = {
     "SFPU Util": "Avg SFPU util on full grid (%)",
     "FPU Util": "Avg FPU util on full grid (%)",
@@ -242,7 +230,6 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
     print(f"\nTotal operations with metrics: {len(metrics_df)}")
 
-    # Display names derive from METRIC_LABELS; RATIO_LABELS print raw with a "(ratio)" unit.
     ratio_metrics = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     pct_metrics = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
 
@@ -286,13 +273,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
 
 def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores):
-    """Compute per-op perf counter metrics and return {per_op_stats, per_op_counts}.
-
-    Metric FORMULAS come from the shared perf_metrics_common.compute_metrics (single source, also used
-    by the LLK harness): computed per (op, core) via compute_metrics_per_op, reduced to min/median/max/
-    avg per op, and keyed by the shared METRIC_LABELS display names. per_op_counts (avg raw counts on
-    the full grid) are counts, not derived ratios, so they stay computed locally here.
-    """
+    """{per_op_stats, per_op_counts}: engine metrics keyed by METRIC_LABELS, plus raw average counts."""
     per_op = compute_metrics_per_op(perf_counter_df, device_arch)
     per_op_stats = {}
     for op, metrics in per_op.items():
@@ -325,12 +306,7 @@ def compute_device_only_metrics(
     perf_counter_df: pd.DataFrame,
     device_arch: str = "",
 ) -> Tuple[Dict[str, Dict], List[Dict]]:
-    """Compute device-only efficiency metrics; returns (agg_metrics, eff_summary_rows).
-
-    Formulas come from the shared perf_metrics_common.compute_metrics (single source, also used by the
-    LLK harness): computed per (op, core) via compute_metrics_per_op, reduced to min/median/max/avg per
-    op, keyed by METRIC_LABELS display names. eff_summary_rows keeps the historical CSV columns/order.
-    """
+    """(agg_metrics, eff_summary_rows) from the shared engine; the summary rows keep the historical CSV order."""
     per_op = compute_metrics_per_op(perf_counter_df, device_arch)
     agg_metrics: Dict[str, Dict] = {}
     for op, metrics in per_op.items():
@@ -342,7 +318,6 @@ def compute_device_only_metrics(
                         stat
                     ]
 
-    # Summary names derive from METRIC_LABELS; RATIO_LABELS get a "(ratio)" unit, the rest are percentages.
     _ratio_metric_names = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     _pct_metric_names = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
 

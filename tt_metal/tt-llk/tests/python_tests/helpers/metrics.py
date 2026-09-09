@@ -26,10 +26,7 @@ from .perf.schema import (
 
 
 class _DfCounterView:
-    """Adapts the counters.py long-form DataFrame to perf_metrics_common.CounterView.
-
-    Each counter reports one row per thread/core, so count/cycles average across those rows.
-    """
+    """CounterView over the counters.py long-form frame; count/cycles average over the per-thread/core rows."""
 
     def __init__(self, df: pd.DataFrame):
         self._df = df
