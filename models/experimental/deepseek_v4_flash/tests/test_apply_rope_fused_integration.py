@@ -79,3 +79,30 @@ def test_apply_rope_fused(device, reset_seeds, D, Rd, rows, cos_rows):
     assert (
         passing
     ), f"_apply_rope PCC < {PCC_THRESHOLD} (D={D}, Rd={Rd}, rows={rows}, cos_rows={cos_rows}): {pcc_message}"
+
+
+# The decode ``q`` layout: rows live on dims 1 and 2, not on dim -2 alone, and the op counts
+# them off the shard rather than the shape.
+@pytest.mark.parametrize("B, H, Dh, Rd", ((4, 64, 512, 64), (1, 32, 512, 64), (2, 32, 64, 64)))
+def test_apply_rope_fused_batched_heads(device, reset_seeds, B, H, Dh, Rd):
+    x = torch.randn(1, B, H, Dh, dtype=torch.float32)
+    cos = torch.randn(1, 1, 1, Rd, dtype=torch.float32)
+    sin = torch.randn(1, 1, 1, Rd, dtype=torch.float32)
+    rot = _interleaved_rotate_matrix(Rd)
+    ref = _torch_reference(x, cos, sin, rot, Rd)
+
+    kwargs = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x_tt = ttnn.from_torch(x, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+    cos_tt = ttnn.from_torch(cos, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
+    sin_tt = ttnn.from_torch(sin, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
+    rot_tt = ttnn.from_torch(rot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_tt = _apply_rope(x_tt, cos_tt, sin_tt, rot_tt, Rd)
+    assert list(out_tt.shape) == [1, B, H, Dh]
+    got = ttnn.to_torch(out_tt).reshape(ref.shape).float()
+
+    passing, pcc_message = comp_pcc(ref, got, pcc=PCC_THRESHOLD)
+    tag = f"B={B} H={H} Dh={Dh} Rd={Rd}"
+    logger.info(f"[apply_rope batched {tag}] {comp_allclose(ref, got)}")
+    logger.info(f"[apply_rope batched {tag}] PCC: {pcc_message}")
+    assert passing, f"_apply_rope batched PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"

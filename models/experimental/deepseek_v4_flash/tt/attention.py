@@ -3,7 +3,7 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config, _signpost
+from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpost
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     HC_FN_GCB,
@@ -413,53 +413,51 @@ def _rope_height_sharded_config(width: int, num_cores: int, device) -> ttnn.Memo
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor, rope_dim: int) -> ttnn.Tensor:
-    """Interleaved RoPE on the trailing ``rope_dim`` channels of ``x`` ([.., D]).
+def _apply_rope(
+    x: ttnn.Tensor,
+    cos: ttnn.Tensor,
+    sin: ttnn.Tensor,
+    rot: ttnn.Tensor,
+    rope_dim: int,
+    head_dim: int | None = None,
+) -> ttnn.Tensor:
+    """Interleaved RoPE on each ``head_dim``-wide block of ``x`` ([.., D]).
 
     ``cos`` / ``sin`` are ``[1,1,L,rope_dim]`` tables (broadcast over batch/heads);
     ``rot`` is the ``[rope_dim, rope_dim]`` ``rotate_half`` matrix. Leading "nope"
-    channels pass through untouched.
+    channels of each block pass through untouched. ``head_dim`` defaults to the
+    last dim of ``x`` (one block). Packed heads (``D = H * head_dim``) are split
+    on device.
 
     Delegates the whole calc to the fused ``ttnn.experimental.fused_partial_rope`` device
-    op: ``x`` is height-sharded one tile-row per core while ``cos`` / ``sin`` / ``trans_mat``
-    are DRAM-interleaved (the reader streams each core's rope tile-row), then the sharded
-    output is converted back to ``x``'s original memory config.
+    op. Unsharded ``x`` is width-sharded in L1 first. ``cos`` / ``sin`` / ``trans_mat``
+    are DRAM-interleaved (the reader streams each core's rope tiles). ROW_MAJOR ``x``
+    is computed as 1x32 faces.
 
     ``rows`` is every leading dim multiplied out, not just ``x.shape[-2]``: the batched
     inputs here are ``[1, B, H, Dh]`` (SDPA-decode's head layout), whose ``B*H`` rows are
-    contiguous because ``H`` is tile-aligned.
+    contiguous because ``H`` is tile-aligned. The op counts rows the same way off the
+    shard, so no reshape is needed to fold them onto dim -2.
     """
     _signpost("apply_rope start")
-    device = x.device()
     d = x.shape[-1]
-    shape = list(x.shape)
-    rows = 1
-    for dim in shape[:-1]:
-        rows *= dim
+    hd = d if head_dim is None else head_dim
+    assert d % hd == 0, f"last dim {d} is not a multiple of head_dim={hd}"
 
-    # The op reads one cos/sin tile-row per core, or a single tile-row broadcast across all
-    # rows on device (e.g. a shared decode position over heads). So cos/sin must cover either
-    # every input row or exactly one row.
-    assert cos.shape[-2] in (rows, 1), f"{cos.shape} not broadcastable to rows={rows}"
+    # # The op reads one cos/sin tile-row per core, or a single tile-row broadcast across all
+    # # rows on device (e.g. a shared decode position over heads). So cos/sin must cover either
+    # # every input row or exactly one row.
+    # assert cos.shape[-2] in (rows, 1), f"{cos.shape} not broadcastable to rows={rows}"
 
-    # cos/sin must already be DRAM-interleaved (the fused op's reader streams them from DRAM).
-    assert cos.memory_config().buffer_type == ttnn.BufferType.DRAM, "cos must be DRAM-interleaved"
-    assert sin.memory_config().buffer_type == ttnn.BufferType.DRAM, "sin must be DRAM-interleaved"
+    # # cos/sin must already be DRAM-interleaved (the fused op's reader streams them from DRAM).
+    # assert cos.memory_config().buffer_type == ttnn.BufferType.DRAM, "cos must be DRAM-interleaved"
+    # assert sin.memory_config().buffer_type == ttnn.BufferType.DRAM, "sin must be DRAM-interleaved"
 
-    tile_height = ttnn.TILE_SIZE if x.layout == ttnn.TILE_LAYOUT else 1
-    if not x.is_sharded():
-        x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, device, tile_height=tile_height))
+    # tile_height = ttnn.TILE_SIZE if x.layout == ttnn.TILE_LAYOUT else 1
+    # if not x.is_sharded():
+    #     x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, device, tile_height=tile_height))
 
-    # The op takes its row count off dim -2 alone, so a batched ``[1, B, H, Dh]`` has to be
-    # folded onto that dim first. The shard already spans all ``rows``, so both reshapes are
-    # metadata-only and the caller gets its own shape back.
-    mem_config = x.memory_config()
-    folded = shape[-2] != rows
-    if folded:
-        x = ttnn.reshape(x, [1, 1, rows, d], memory_config=mem_config)
-    out_sh = ttnn.experimental.fused_partial_rope(x, cos, sin, _trans_mat_for(rot), rope_dim)
-    if folded:
-        out_sh = ttnn.reshape(out_sh, shape, memory_config=mem_config)
+    out_sh = ttnn.experimental.fused_partial_rope(x, cos, sin, _trans_mat_for(rot), rope_dim, head_dim=hd)
     _signpost("apply_rope end")
     return out_sh
 
@@ -475,7 +473,9 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
 # in-place KV writer (it mutates the persistent cache buffer during capture,
 # unlike ``ttnn.copy`` which is rejected mid-capture).
 # ---------------------------------------------------------------------------- #
-def _sdpa_decode_output_config(q: ttnn.Tensor, grid_size: ttnn.CoreCoord) -> ttnn.MemoryConfig:
+def _sdpa_decode_output_config(
+    batch: int, heads: int, head_dim: int, layout: ttnn.Layout, grid_size: ttnn.CoreCoord
+) -> ttnn.MemoryConfig:
     """Native height-sharded output of ``sdpa_decode``: one reducer core per batch user.
 
     The writer has ``num_output_cores = B`` and places those reducers on the first
@@ -485,8 +485,7 @@ def _sdpa_decode_output_config(q: ttnn.Tensor, grid_size: ttnn.CoreCoord) -> ttn
     (TILE). Matching this spec lets the output CB alias the result buffer; any
     other grid or a width/block shard is either rejected or a reshard.
     """
-    batch, heads, head_dim = q.shape[1], q.shape[2], q.shape[3]
-    if q.layout == ttnn.ROW_MAJOR_LAYOUT:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
         shard_h = heads
     else:
         shard_h = ((heads + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -1537,12 +1536,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         The op's cheapest sharded output is height-sharded L1 on ``B`` cores (one
         reducer per user) with shard ``[H, Dh]``; see :func:`_sdpa_decode_output_config`.
         """
-        # sdpa_decode requires its K/V operands in DRAM. Q and the output share the
-        # native height-sharded layout (one batch user per reducer core) so the
-        # writer aliases the result buffer instead of bouncing through DRAM.
-        out_mem = _sdpa_decode_output_config(q, self._sdpa_pcfg.compute_with_storage_grid_size)
-        if q.memory_config() != out_mem:
-            q = ttnn.to_memory_config(q, out_mem)
+        h, dh = self.local_num_heads, self.head_dim
+        # Decode ``q`` from :meth:`_qkv` is still packed ``[1, 1, B, H*Dh]``; the PCC
+        # tests feed the op's head layout ``[1, B, H, Dh]`` directly.
+        packed = q.shape[-1] != dh
+        batch = q.shape[-2] if packed else q.shape[1]
+        grid_size = self._sdpa_pcfg.compute_with_storage_grid_size
+        out_mem = _sdpa_decode_output_config(batch, h, dh, q.layout, grid_size)
+        # Reshard while the last dim still matches the producer: packed Q is
+        # ``H*Dh`` wide, so the move uses one row of ``H*Dh`` per user (same bytes
+        # as ``[H, Dh]`` for ROW_MAJOR). The head-axis view comes after, so SDPA
+        # sees ``[1, B, H, Dh]``.
+        if packed:
+            shard_h = 1 if q.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.TILE_SIZE
+            grid = ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
+            q_mem = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(grid, [shard_h, q.shape[-1]], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+        else:
+            q_mem = out_mem
+        if q.memory_config() != q_mem:
+            q = ttnn.to_memory_config(q, q_mem)
+        if packed:
+            q = ttnn.experimental.view(q, [1, batch, h, dh])
         if cur_pos is not None:
             bounds = {"is_causal": True, "cur_pos_tensor": cur_pos}
         else:
@@ -1666,13 +1684,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """Fused SDPA-decode + output RoPE + grouped output projection.
 
-        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[1,B,H,Dh]``,
-        the shared K==V ``kv`` ``[B,1,Skv,Dh]`` (or ``paged``'s block pool) and either
-        ``sdpa_cur_pos`` or the additive ``mask`` ``[1,1,1,Skv]`` -> the block's hidden
-        output on packed rows, ``[1,1,B,D]``. ``kv`` is the layer's persistent buffer,
-        updated in place; the only per-path difference is where ``mask`` /
-        ``sdpa_cur_pos`` come from (host-built for eager, device-generated for the
-        traced path).
+        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` packed
+        ``[1, 1, B, H*Dh]`` (or already ``[1, B, H, Dh]``), the shared K==V ``kv``
+        ``[B, 1, Skv, Dh]`` (or ``paged``'s block pool) and either ``sdpa_cur_pos`` or
+        the additive ``mask`` ``[1,1,1,Skv]`` -> the block's hidden output on packed
+        rows, ``[1,1,B,D]``. ``kv`` is the layer's persistent buffer, updated in place;
+        the only per-path difference is where ``mask`` / ``sdpa_cur_pos`` come from
+        (host-built for eager, device-generated for the traced path).
         """
         attn = self._sdpa_decode(
             q, kv, mask, cur_pos=sdpa_cur_pos, paged=paged, sliding_window=sliding_window
@@ -1683,16 +1701,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     def _qkv(self, tokens: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Project + RoPE the query and (shared) K=V for the packed-row ``tokens`` ``[1, 1, B, D]``.
 
-        Returns ``q`` ``[1, B, H_local, Dh]`` (``H_local == H / TP``; equal to
-        ``H`` without TP) and the rotated, replicated ``kv`` ``[1, 1, B, Dh]``,
-        still on packed rows (pre-compressor, pre-cache). Shared by the decode paths.
+        Returns ``q`` ``[1, 1, B, H_local*Dh]`` (packed; ``H_local == H / TP``) and the
+        rotated, replicated ``kv`` ``[1, 1, B, Dh]``, still on packed rows
+        (pre-compressor, pre-cache). Shared by the decode paths.
 
-        Only ``q`` leaves the packed layout, because SDPA-decode is the one op here that
-        wants a head axis: the projections and norms all run over the single tile-row the
+        ``q`` stays packed through RoPE; :meth:`_sdpa_decode` is the one op that
+        wants a head axis, and it views ``[1, B, H, Dh]`` after the height-shard
+        reshard. The projections and norms all run over the single tile-row the
         batch occupies, so a B-user step issues the same ops a one-user step does.
         """
-        _, _, tokens_n, _ = tokens.shape
-        h, dh = self.local_num_heads, self.head_dim
         _profile(self.device)
         # matmul_decode's full-width hub mode reads A as ROW_MAJOR HEIGHT_SHARDED with the
         # whole of K replicated on each of the weight's B cores. Untilize+broadcast once onto
@@ -1717,16 +1734,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             ttnn.deallocate(q_b_input)
         assert self.fuse_q_b_norm, "q_b_norm must be fused"
 
-        # A ROW_MAJOR q has one physical row per head, so its shard must not be tile-padded:
-        # ``fused_partial_rope`` takes its row count straight off the shard height.
-        q_tile_height = ttnn.TILE_SIZE if q.layout == ttnn.TILE_LAYOUT else 1
-        q = ttnn.reshape(
-            q,
-            [1, tokens_n, h, dh],
-            memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device, tile_height=q_tile_height),
-        )
-        q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [1, B, H, Dh]
-
+        q = _apply_rope(q, cos, sin, self.rot, self.rope_dim, head_dim=self.head_dim)
         # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a
         # prefetched matmul that runs out of turn pops another weight's page (see
         # ``prefetch_weights``). Reuse q_a's replicated activation; kv's B cores are a
@@ -1831,7 +1839,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         b, s, _, d = hidden.shape
         assert s == 1, f"decode attends one token per user, but S == {s}"
         tokens = _pack_tokens(hidden)  # [1, 1, B, D]
-        q, kv_new = self._qkv(tokens, cos, sin)  # q [1,B,H,Dh], kv_new [1,1,B,Dh]
+        q, kv_new = self._qkv(tokens, cos, sin)  # q [1,1,B,H*Dh], kv_new [1,1,B,Dh]
         kv_new = _one_row_per_user(kv_new)  # [1, B, 1, Dh], one core per user for the write
         kv_new = _to_cache_row_layout(kv_new)
 
@@ -1879,11 +1887,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # Written, and one row per user is a whole tile of L1 each -- worth handing
         # back before the compressor and SDPA below ask for their own.
         ttnn.deallocate(kv_new)
-        # ``q`` is width-sharded over B*H rows of L1 and nothing reads it until the SDPA
-        # below, while the compressor in between is the step's L1 high-water mark. At a
-        # wide batch holding both at once is what leaves an op's circular buffers
-        # nowhere to go, so park q in DRAM across the compressor and bring it back in
-        # the layout SDPA expects. At batch 1 both fit and the round trip is dead cost.
+        # ``q`` is packed ``[1, 1, B, H*Dh]`` (width-sharded over the head dim) and
+        # nothing reads it until the SDPA below, while the compressor in between is the
+        # step's L1 high-water mark. At a wide batch holding both at once is what leaves
+        # an op's circular buffers nowhere to go, so park q in DRAM across the compressor
+        # and bring it back before SDPA height-shards it. At batch 1 both fit and the
+        # round trip is dead cost.
         q_config = q.memory_config() if b > 1 else None
         if q_config is not None:
             spilled = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
