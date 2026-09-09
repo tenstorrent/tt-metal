@@ -66,6 +66,28 @@ Program& persistent_run_on_mesh_device(
     return workload_out.get_programs().at(device_range);
 }
 
+// Park a pipe's credit counters at `units` on both endpoints, as if that many units had already
+// been delivered and acked: nothing in flight, and the cursor wherever `units` leaves it. Writes a
+// receiver's whole slot, so the cursor word in it is zeroed too -- callers pick a `units` that is a
+// whole number of laps, which is the state that pairs with a cursor at the ring base.
+void seed_pipe_credits(
+    distributed::MeshDevice& device,
+    const experimental::PrefetcherPipe& pipe,
+    const std::vector<CoreCoord>& receivers,
+    uint32_t units) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t words_per_slot = 2 * l1_alignment / sizeof(uint32_t);
+    std::vector<uint32_t> slot(words_per_slot, 0);
+    slot[0] = units;                                // entries_sent
+    slot[l1_alignment / sizeof(uint32_t)] = units;  // entries_acked
+    const uint32_t credit_base = pipe.config_address() + pipe.credit_reset_offset();
+    for (uint32_t ri = 0; ri < receivers.size(); ++ri) {
+        const uint32_t slot_addr = credit_base + 2 * ri * l1_alignment;
+        slow_dispatch::WriteToL1(device, pipe.sender_core(), slot_addr, slot, CoreType::WORKER);
+        slow_dispatch::WriteToL1(device, receivers[ri], slot_addr, slot, CoreType::WORKER);
+    }
+}
+
 uint32_t run_persistent_sender_push(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     experimental::PrefetcherPipe& pipe,
@@ -619,6 +641,30 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_PerReceiverCreditInterleaved_RingDe
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/5), 2u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CursorSurvivesCreditCounterWrap) {
+    // entries_sent is a free-running uint32, so a cursor derived from it as (sent % ring_units)
+    // only survives the 2^32 wrap when ring_units divides 2^32. This ring is 3 KiB = 192 units,
+    // which does not, and the credits start one entry short of the wrap: the second entry pushed
+    // here is the one that crosses it, and a derived cursor would place that entry back at the
+    // ring base, on top of the first.
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 3;
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
+    auto pipe = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 0), receiver_cores, entry_size * num_entries);
+
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t ring_units = (entry_size * num_entries) / l1_alignment;
+    ASSERT_NE(ring_units & (ring_units - 1), 0u) << "the wrap is only lossy when ring_units is not a power of two";
+    // The largest whole number of laps a uint32 counter can hold: a state a long-lived pipe really
+    // reaches, with the cursor at the ring base.
+    const uint32_t seed_units = static_cast<uint32_t>((0x100000000ull / ring_units) * ring_units);
+    seed_pipe_credits(*mesh_device, pipe, corerange_to_cores(receiver_cores), seed_units);
+
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, /*write_primitive=*/2), 2u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_DecoupledWriteThenCredit) {

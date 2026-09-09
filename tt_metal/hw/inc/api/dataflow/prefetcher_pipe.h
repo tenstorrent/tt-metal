@@ -216,8 +216,7 @@ public:
         if (is_sender) {
             CrossNodeSenderDFBInterface& iface = interface_.sender;
             if (iface.fifo_start_addr == epoch_fifo_start && iface.fifo_page_size == epoch_entry_size) {
-                l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] =
-                    iface.fifo_start_addr + derived_wr_offset(iface, 0);
+                l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_start_addr + sender_wr_offset(iface, 0);
             }
         } else {
             CrossNodeReceiverDFBInterface& iface = interface_.receiver;
@@ -277,7 +276,7 @@ public:
         for (uint32_t i = 0; i < num_recv; ++i) {
             volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, i);
             volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-            const uint32_t wr_offset = wr_offset_from_sent(iface, *sent_ptr);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             const uint32_t total_units_needed = units_for_write(iface, wr_offset, num_entries);
             do {
@@ -296,7 +295,7 @@ public:
 
         volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx);
         volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-        const uint32_t wr_offset = wr_offset_from_sent(iface, *sent_ptr);
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         const uint32_t total_units_needed = units_for_write(iface, wr_offset, num_entries);
         do {
@@ -336,7 +335,7 @@ public:
         uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
         uint32_t recv_src_offset = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_bytes(iface, wr_offset, bytes_per_recv);
 
             uint32_t current_src_addr = src_addr + recv_src_offset;
@@ -374,7 +373,7 @@ public:
 
         destination_offset_bytes_ = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
         }
@@ -394,7 +393,7 @@ public:
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t len_bytes = num_entries * entry_size;
-        const uint32_t wr_offset = derived_wr_offset(iface, receiver_idx);
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
         noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
@@ -413,7 +412,7 @@ public:
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
         const uint8_t noc_id = noc.get_noc_id();
         for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             const uint32_t num_units = units_for_write(iface, wr_offset, num_entries);
             increment_sender_credits_for_receiver<detail::default_noc_mode>(
@@ -427,7 +426,7 @@ public:
     FORCE_INLINE void push_back_to_receiver(uint32_t receiver_idx, uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
 
-        const uint32_t wr_offset = derived_wr_offset(iface, receiver_idx);
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         const uint32_t num_units = units_for_write(iface, wr_offset, num_entries);
         assert_contiguous_write(iface, wr_offset, num_entries);
         const uint8_t noc_id = noc.get_noc_id();
@@ -622,16 +621,34 @@ private:
         return iface.fifo_limit_page_aligned - iface.fifo_start_addr;
     }
 
-    // Byte offset of a receiver's next free slot given its durable entries_sent counter.
-    // Payload and pad/gap bytes are all represented in the monotonic counter, so the
-    // full-ring modulus remains valid while receivers advance independently (Flow C).
-    FORCE_INLINE static uint32_t wr_offset_from_sent(const CrossNodeSenderDFBInterface& iface, uint32_t sent_units) {
-        const uint32_t ring_units = fifo_size(iface) / L1_ALIGNMENT;
-        return (sent_units % ring_units) * L1_ALIGNMENT;
+    // A receiver's write cursor: a byte offset from the ring base, stored beside that receiver's
+    // credit counters and advanced with them (see advance_wr_offset). Durable across programs for
+    // the same reason the counters are -- it lives in the config page -- and independent of them
+    // for the reason PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD gives: entries_sent wraps at 2^32, which
+    // only preserves a (sent % ring_units) derivation when ring_units is a power of two. Receivers
+    // advance independently (Flow C), so each one carries its own cursor.
+    FORCE_INLINE static volatile tt_l1_ptr uint32_t* local_wr_offset_ptr(
+        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
+        return local_sent_ptr(iface, receiver_idx) + PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD;
     }
 
-    FORCE_INLINE static uint32_t derived_wr_offset(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
-        return wr_offset_from_sent(iface, *local_sent_ptr(iface, receiver_idx));
+    FORCE_INLINE static uint32_t sender_wr_offset(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
+        return *local_wr_offset_ptr(iface, receiver_idx);
+    }
+
+    // Advance a receiver's cursor by the units just credited to it. Payload and any trailing gap
+    // are both in `units` (units_for_write), so a lap is exactly the full allocation and one
+    // conditional subtract is enough: a single write can credit at most one lap.
+    FORCE_INLINE static void advance_wr_offset(
+        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint32_t units) {
+        volatile tt_l1_ptr uint32_t* offset_ptr = local_wr_offset_ptr(iface, receiver_idx);
+        const uint32_t ring_bytes = fifo_size(iface);
+        uint32_t next = *offset_ptr + units * L1_ALIGNMENT;
+        ASSERT(next <= 2 * ring_bytes);
+        if (next >= ring_bytes) {
+            next -= ring_bytes;
+        }
+        *offset_ptr = next;
     }
 
     // Producer writes must be contiguous (same rule as local CBs): wr_offset + len must
@@ -691,6 +708,7 @@ private:
         const uint64_t remote_sent_noc_addr = noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr, noc);
 
         *sent_ptr += adjustment;
+        advance_wr_offset(iface, receiver_idx, adjustment);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -727,7 +745,7 @@ private:
             const uint32_t num_recv =
                 cross_node_dfb_num_receivers(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
             for (uint32_t i = 0; i < num_recv; ++i) {
-                const uint32_t current_offset = derived_wr_offset(sender_cb_interface, i);
+                const uint32_t current_offset = sender_wr_offset(sender_cb_interface, i);
                 uint32_t next_offset = align(current_offset, page_size);
                 uint32_t adjustment_bytes = next_offset - current_offset;
                 if (next_offset >= cb_size_page_aligned) {
@@ -850,7 +868,7 @@ FORCE_INLINE uint64_t noc_traits_t<experimental::PrefetcherPipe>::dst_addr(
     volatile tt_l1_ptr uint32_t* xy =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * args.receiver_idx;
     const uint32_t local_address = iface.fifo_start_addr +
-                                   experimental::PrefetcherPipe::derived_wr_offset(iface, args.receiver_idx) +
+                                   experimental::PrefetcherPipe::sender_wr_offset(iface, args.receiver_idx) +
                                    dst.destination_offset_bytes_;
     return noc_address_backend::worker_address(xy[0], xy[1], local_address, noc.get_noc_id());
 }
