@@ -289,9 +289,11 @@ class WanTransformer3DModel(Module):
         self.cached_rope_features = {}
         self.output_dtype = output_dtype
 
-        assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
+        assert model_type in ["t2v", "i2v", "ti2v"], "model_type must be t2v, i2v, or ti2v"
         if model_type == "i2v":
             in_channels = 36
+        elif model_type == "ti2v":
+            assert in_channels == 48, "in_channels must be 48 for ti2v (Wan2.2-VAE latents)"
         else:
             assert in_channels == 16, "in_channels must be 16 for t2v"
 
@@ -747,6 +749,7 @@ class WanCheckpoint:
             text_dim=c.text_dim,
             freq_dim=c.freq_dim,
             ffn_dim=c.ffn_dim,
+            num_layers=c.num_layers,
             cross_attn_norm=c.cross_attn_norm,
             eps=c.eps,
             rope_max_seq_len=c.rope_max_seq_len,

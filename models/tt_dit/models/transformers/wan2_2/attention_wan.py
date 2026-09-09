@@ -25,7 +25,9 @@ class WanAttention(Module):
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
-        (True, 8, 4): (288, 512),
+        # (288,512) needs ~2.53MB SDPA circular buffers for head_dim=128, over BH's
+        # 1.5MB L1; (128,512) is the proven-fitting BH chunk (see (True,2,2) above).
+        (True, 8, 4): (128, 512),
         (True, 32, 4): (224, 512),
     }
     default_sdpa_chunk_size = (256, 256)
@@ -119,8 +121,9 @@ class WanAttention(Module):
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
+            # (256,256) non-ring SDPA CBs need ~2.53MB > BH 1.5MB L1 (head_dim=128); shrink to fit
+            q_chunk_size=128,
+            k_chunk_size=128,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
