@@ -88,8 +88,7 @@ GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
     const std::uint32_t per_core_width_tiles = (per_core_width + tile_width - 1) / tile_width;
     const std::uint32_t channels_per_group = width / num_groups;
     const std::uint32_t num_row_shards = height / per_core_height;
-    std::uint32_t batches_group_1 = num_batches > num_row_shards ? num_batches / num_row_shards : 1;
-    std::uint32_t batches_group_2 = batches_group_1;
+    const std::uint32_t batches_group_1 = num_batches > num_row_shards ? num_batches / num_row_shards : 1;
     const std::uint32_t num_col_shards = width / per_core_width;
     const std::uint32_t groups_per_core = num_groups > num_col_shards ? num_groups / num_col_shards : 1;
     const std::uint32_t block_width_tiles = find_max_tile_span(per_core_width, channels_per_group).first;
@@ -101,8 +100,6 @@ GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
         equal_batches_per_core = num_batches % num_row_shards == 0;
     }
     if (!equal_batches_per_core) {
-        batches_group_2 = num_batches / num_row_shards;
-        batches_group_1 = batches_group_2 + 1;
         const std::uint32_t per_batch_tiles = height_tiles / num_batches;
         block_height_group_1 = per_batch_tiles;
         block_height_group_2 = per_batch_tiles;
