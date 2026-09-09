@@ -25,6 +25,18 @@ def _interp_len(frames):
     return int(int(frames * LATENT_SCALE) * SR_SCALE)
 
 
+def _empty_wav(device):
+    """The empty-audio contract: a real waveform with zero samples.
+
+    The vocoder returns ``[batch, samples, channels]`` — measured ``(1, 4352, 1)`` bfloat16 TILE for
+    4 codes — so "no audio" is zero *samples* with the channel axis intact, in the same dtype and
+    layout. ``(1, 1, 0)`` would also be empty by ``numel()`` while claiming one sample in a tensor
+    with no channels to hold it, and would answer ``wav.shape[1] == 1`` to a caller asking for the
+    sample count.
+    """
+    return ttnn.from_torch(torch.zeros(1, 0, 1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+
 class TtXtts(LightweightModule):
     def __init__(self, device, state_dict, ref_decoder_full):
         """Build conditioning, GPT, generator, and HiFi decoder."""
@@ -114,7 +126,14 @@ class TtXtts(LightweightModule):
                 top_p=top_p,
                 min_new_tokens=min_new_tokens,
             )
-        wav = self._decode_wav(latents_tt, ref_wav_spk)
+        if latents_tt is None:
+            # Empty generation: eager generate() reports a step-0 STOP as zero codes and None
+            # latents (STOP is never emitted as a code). Nothing to vocode, and the upsampler
+            # would unpack None.shape. The sentinel differs from the traced path (None here, a
+            # [1, 0, 1024] tensor there), so one guard cannot serve both.
+            wav = _empty_wav(self.device)
+        else:
+            wav = self._decode_wav(latents_tt, ref_wav_spk)
         return wav, codes
 
     def inference_fully_traced(
@@ -186,9 +205,7 @@ class TtXtts(LightweightModule):
             # (latents_buf[i] holds code i-1's latent, so n codes need n+1 steps). There is
             # nothing to vocode, and the upsampler would build a program config with
             # per_core_M = 0 and divide by it. Return the empty-audio contract instead.
-            wav_dev = ttnn.from_torch(
-                torch.zeros(1, 1, 0), device=dev, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            wav_dev = _empty_wav(dev)
             vocoder_replay_s = 0.0
         else:
             # Warmup primes folded cond-bias (from_device is fatal inside a trace).
