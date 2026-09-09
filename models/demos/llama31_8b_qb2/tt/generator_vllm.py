@@ -6,15 +6,22 @@ from dataclasses import replace
 
 import torch
 
+import ttnn
 from models.demos.llama31_8b_qb2.tt.generator import LlamaGenerator
 
 
 class LlamaForCausalLM:
+    _fabric_router_config = ttnn.FabricRouterConfig()
+    _fabric_router_config.max_packet_payload_size_bytes = 8192
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
+        "fabric_config": {
+            "config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "router_config": _fabric_router_config,
+        },
     }
     decode_input_update_contract = 1
 

@@ -51,8 +51,12 @@ python -m vllm.entrypoints.openai.api_server \
     --served-model-name meta-llama/Llama-3.1-8B-Instruct \
     --block-size 128 --max-num-seqs 32 --max-model-len 131072 \
     --max-logprobs -1 --async-scheduling \
-    --additional-config '{"tt":{"sample_on_device_mode":"all","trace_region_size":268435456,"fabric_config":"FABRIC_1D_RING","fabric_max_packet_payload_size_bytes":8192,"l1_small_size":16384}}'
+    --additional-config '{"tt":{"sample_on_device_mode":"all","trace_region_size":268435456,"l1_small_size":16384}}'
 ```
+
+The model declares its 1D ring fabric and 8192-byte router payload in
+`model_capabilities["fabric_config"]`. The plugin applies these defaults before
+opening the mesh; they do not need to be repeated in the launch command.
 
 ## Verification and weekly CI
 

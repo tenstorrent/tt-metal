@@ -35,7 +35,6 @@ from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 print(json.dumps({"tt": {
     "sample_on_device_mode": "all",
     "trace_region_size": resolve_trace_region_size("llama3.1-8b-qb2", "bh_quietbox_2"),
-    "fabric_config": "FABRIC_1D_RING", "fabric_max_packet_payload_size_bytes": 8192,
     "l1_small_size": 16384,
 }}))
 PY
