@@ -35,6 +35,55 @@ DOMINANT = 16
 
 
 # ---------------------------------------------------------------------------
+# 0. Arch capability — the ONE axis value whose support is silicon-conditional
+# ---------------------------------------------------------------------------
+#
+# Every other axis value in SUPPORTED is a property of this op's own code and
+# is therefore arch-independent: the kernels never name a format, a buffer type
+# or a core count, so what runs on Wormhole runs on Blackhole. `fp8_e4m3` is the
+# single exception, and it is not this op's doing — the UNPACKER's fp8 tilize
+# datapath (`_llk_unpack_tilize_*` / the e4m3 ALU src format) exists only on
+# Blackhole. On Wormhole there is no instruction sequence, in this op or any
+# other, that can read an e4m3 stick, so the honest contract is "supported where
+# the silicon has it".
+#
+# Consequences of stating it here rather than anywhere else:
+#   * `validate()` iterates SUPPORTED, so on Wormhole an fp8 call is refused
+#     with `UnsupportedAxisValue` — the registry's own refusal — instead of
+#     reaching the kernels and producing a wrong tile.
+#   * `eval.verify_supported.dump_registry_snapshot` reads `mod.SUPPORTED`, so a
+#     scored run on Wormhole reports fp8's cells as `xfail_other` arch skips
+#     (out of the SUPPORTED rectangle) rather than as SUPPORTED cells that never
+#     produced evidence. That is exactly what the golden suite does with them:
+#     `helpers.skip_if_fp8_unsupported` skips every fp8 cell before `validate()`
+#     is reached, so on this silicon the value is unobservable either way and
+#     claiming it only over-claims the rectangle.
+#   * On Blackhole the identical file claims it, and the path below is unchanged
+#     and dtype-generic (`pad_fill_word` already carries an e4m3 encoder).
+#
+# `ttnn.get_arch_name()` needs no open device — it reads the cluster descriptor —
+# so this is safe at import time. The fallback keeps a module import working on a
+# host with no silicon visible at all (docs builds, unit-test collection): assume
+# the capability is absent, which under-claims rather than over-claims.
+def _arch_has_fp8_tilize() -> bool:
+    """True where the unpacker's fp8_e4m3 tilize datapath exists (Blackhole+)."""
+    try:
+        return "blackhole" in str(ttnn.get_arch_name()).lower()
+    except Exception:  # pragma: no cover — no cluster visible
+        return False
+
+
+ARCH_HAS_FP8_TILIZE = _arch_has_fp8_tilize()
+
+# Single source of truth for the input-dtype axis. The arch-conditional value is
+# APPENDED to the arch-independent list rather than the list being written twice,
+# so widening the unconditional set stays a one-place edit.
+_INPUT_DTYPES = [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8]
+if ARCH_HAS_FP8_TILIZE:
+    _INPUT_DTYPES.append(ttnn.fp8_e4m3)
+
+
+# ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS  — each reads inputs[0], the whole scenario dict
 # ---------------------------------------------------------------------------
 
@@ -230,12 +279,12 @@ SUPPORTED = {
     # `!is_block_float_format(unpack_src_format[input])` for exactly that
     # reason. They are legal OUTPUTS, where the packer does the compression.
     #
-    # `fp8_e4m3` is INPUT-only for the mirror reason (no TILE form) and is
-    # arch-gated to Blackhole; it is listed because the path is dtype-generic —
-    # no kernel and no host derivation names a format — but see the changelog:
-    # it could not be exercised on the Wormhole box this landed on, where the
-    # golden suite skips all of its cells before `validate()` is reached.
-    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3, ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8],
+    # `fp8_e4m3` is INPUT-only for the mirror reason (no TILE form) and is the
+    # one ARCH-CONDITIONAL value in this whole rectangle: `_INPUT_DTYPES` above
+    # appends it only where the unpacker's fp8 tilize datapath exists. The path
+    # itself is dtype-generic — no kernel and no host derivation names a format —
+    # so on Blackhole the same file claims it with no other change.
+    "dtype": _INPUT_DTYPES,
     "output_dtype": [
         ttnn.bfloat16,
         ttnn.float32,

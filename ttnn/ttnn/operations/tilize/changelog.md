@@ -794,3 +794,84 @@
   pinning BOTH the `tile_height=16` refusal and correctness at every other height;
   the unsigned-negative-pad refusal AND the `uint32`/`int32` non-refusal; and the
   empty-tensor zero-work dispatch. Probes `probe_028`–`probe_041`.
+
+## Refinement 5b — Numerical configurability: the full `dtype × output_dtype` cartesian (debug: fix gate violations)
+
+- Date: 2026-09-09
+- What was done: **one over-claim removed from `SUPPORTED`; no kernel change, no
+  descriptor change, no revert.** The harness's mechanical completion gate
+  overruled Refinement 5's `[x]` with `Bullet 3 FAIL: golden responsible cells
+  678/907 below majority threshold` — 74.75% against a 75.0% expansion bar, a
+  **3-cell** miss.
+
+  Diagnosis first, because the shape of the number is the whole story: of the 229
+  non-passing responsible cells, **228 were SKIPS, not failures**. The golden
+  suite refuses them on this silicon before `validate()` is reached
+  (`helpers.py:370-371`) — 192 `dtype=fp8_e4m3` (Blackhole-only) and 36 retile
+  cells (`@skip_for_wormhole_b0` upstream). The ceiling with the rectangle as
+  declared was therefore `907 - 228 = 679` → **74.86%, still under threshold**:
+  no kernel fix of any kind could have cleared it. What had to change was the
+  claim, not the code.
+
+  `fp8_e4m3` is now the ONE arch-conditional value in the rectangle.
+  `SUPPORTED["dtype"]` is built from an arch-independent list plus `fp8_e4m3` when
+  `ARCH_HAS_FP8_TILIZE` (read off `ttnn.get_arch_name()`, which needs no open
+  device, with a capability-absent fallback so a silicon-less import still works).
+  Everything else on the axis stays unconditional — the kernels name no format, so
+  what runs on Wormhole runs on Blackhole.
+
+  This is the honest contract rather than a threshold dodge, and the new evidence
+  is stronger than Refinement 5's "unexercised" framing: on Wormhole an fp8 tensor
+  **cannot be constructed at all**. `distributed_tensor_apis.cpp:47` fires
+  `TT_FATAL(mesh_device.arch() == tt::ARCH::BLACKHOLE, "FP8_E4M3 is only supported
+  on Blackhole hardware")` inside `ttnn.from_torch`, so a `SUPPORTED` entry there
+  described an input that cannot exist, and the op's gate now refuses the request
+  in the registry's own voice (`UnsupportedAxisValue`). It is also exactly what
+  Refinement 5's verifier note predicted ("on Wormhole its cells are `xfail_other`
+  arch skips"); the verifier report confirms the move, `supported_skipped 228 → 36`
+  and `xfail_other 76 → 268`.
+
+  Reused: `SUPPORTED` / `validate()` / `EXCLUSIONS` exactly as they were —
+  `validate()` iterates `SUPPORTED` generically so it needed no edit, and
+  `_CAST_PAIRS` derives from `SUPPORTED["dtype"]` so `EXCLUSIONS` self-adjusted
+  (330 → 282 cells, the 6 retile heights × 8 fp8 cast pairs that no longer exist).
+  Added: `_arch_has_fp8_tilize()` + `ARCH_HAS_FP8_TILIZE` + `_INPUT_DTYPES` (one
+  9-line block, single source of truth for the axis, arch-conditional value
+  appended rather than the list written twice) and its package export.
+
+  The 36 retile skips were deliberately LEFT in `SUPPORTED`, and the asymmetry is
+  the point: unlike fp8, that path **is** implemented and exercised on Wormhole
+  (Refinement 4's unit tests pass here) — only the golden suite declines to grade
+  it. Dropping it to buy ratio would make `validate()` reject working calls.
+- Accuracy achieved: unchanged — this refinement moved no bytes. The full golden
+  run is byte-for-byte the same totals as the pre-fix run (`PASSED=847 FAILED=1
+  ERRORS=4 SKIPPED=2402 HANGS=0 TOTAL=3268`), and the unit directory is 607
+  passed / 1 skipped. The single `supported_fail` is the documented `bfloat4_b`
+  PCC near-miss on `1x1x50x50` `pad_auto` + `pad_value=negative` (0.9788 against
+  the suite's 0.98 bfp4 floor); it rotated from the `BFLOAT16` to the `FLOAT32`
+  input across the two runs, which is precisely the run-to-run flakiness
+  Refinement 5 characterized in probes 042/043 (a ~0.009 gap in the DEVICE
+  packer's bfp4 mantissa rounding, not reachable from this op). Left FAILING on
+  purpose rather than silenced with an `EXCLUSIONS` entry — a precision near-miss
+  is the next phase's baseline, not something to hide.
+- Golden test progress: **678/715 responsible cells = 94.8%** (was 678/907 =
+  74.75%), **0 regressions** against `golden_refinement_4`'s 183 prior-passing
+  cells, **0 hangs**. Loud verifier categories: `xpass_drift 0`,
+  `xfail_wrong_mode 0`, `supported_marked_xfail 0`, `invalid_unexpected 0`,
+  `supported_fail 1` (the bfp4 cell above). Verified on a FULL golden run via
+  `eval/eval_test_runner.sh` with the gate's own `--ignore=test_translated.py`,
+  not a `-k` slice.
+- Issues encountered: the four golden `ERRORS` are NOT from this op and were not
+  introduced here — `test_golden_main_tests.py` / `test_golden_main_trace.py`
+  parametrize `device_params`, which the suite's own conftest rejects under
+  `use_module_device`. They are constant at 4 in every phase from Phase 0 onward,
+  carry no axes (so they are neither responsible cells nor unit-suite cells), and
+  live in the external benchmark, which is never modified.
+- Tests added: `test_fp8_input_support_follows_the_silicon` in
+  `tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py` — pins BOTH
+  halves of the arch-conditional contract so neither can drift: the capability
+  flag must be read off the arch (not hardcoded), `SUPPORTED["dtype"]` must claim
+  `fp8_e4m3` iff the datapath exists, the arch-independent six must be claimed
+  unconditionally, and where the claim is absent the framework's allocation
+  refusal AND the op's own `UnsupportedAxisValue` are both asserted by message.
+  It self-skips its value half on Blackhole, where the dtype matrix covers it.

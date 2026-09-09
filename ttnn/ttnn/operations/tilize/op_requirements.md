@@ -555,11 +555,15 @@ from this op: the full `fp32_dest_acc_en x bfp8_pack_precise` sweep moves bfp4 b
 <2e-4 on both input dtypes, and `ComputeConfigDescriptor` exposes no packer
 rounding-mode field (`ALU_ROUNDING_MODE_Packer_srnd_en` lives inside the LLK
 hw-configure). The same sweep does nudge `bfloat8_b` the right way, but only in the
-fifth decimal, so the defaults are left alone. Probes 042/043. (2) **`fp8_e4m3` is in SUPPORTED with no on-device
-evidence**: it is Blackhole-only and the harness skips all of its cells before
-`validate()` on this Wormhole box. The path is dtype-generic and `pad_fill_word`
-gained an e4m3 encoder, but it is the one axis value here that was not exercised;
-a Blackhole run is what would confirm it, and no code change is expected. (3) The
+fifth decimal, so the defaults are left alone. Probes 042/043. (2) **`fp8_e4m3` is
+ARCH-CONDITIONAL in SUPPORTED, and was wrong to be unconditional** -- corrected in
+Refinement 5b below. On Wormhole the value is not merely unexercised, it is
+UNREACHABLE: TT-Metal refuses the allocation itself
+(`distributed_tensor_apis.cpp:47`, "FP8_E4M3 is only supported on Blackhole
+hardware"), so no caller can build the input tensor. `SUPPORTED["dtype"]` now
+appends it only where `ARCH_HAS_FP8_TILIZE`; on Blackhole the identical file
+claims it and the path is unchanged and dtype-generic (`pad_fill_word` already
+carries an e4m3 encoder). (3) The
 two remaining LLK gaps (`tile_height=16` block-float pack, and the UInt8 ALU-format
 spill this op works around locally) would both be closed upstream by a one-line
 `masked_data_format()` / `PACKCNT` fix in `tt_llk_wormhole_b0` -- out of scope here,
@@ -567,6 +571,73 @@ and named so the next reader does not re-derive them.
 
 ---
 
+
+
+### [x] Refinement 5b — Numerical configurability: the full `dtype × output_dtype` cartesian (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 5 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: golden responsible cells 678/907 below majority threshold.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Diagnosis** (arithmetic, not a kernel bug — worth stating because the number
+looks like a pass): 678/907 is 74.75%, and the expansion threshold is 75.0%. The
+miss was 3 cells wide, and it was **not reachable by fixing anything**. Of the 229
+non-passing responsible cells, **228 were SKIPS, not failures** — cells the golden
+suite refuses to run on this silicon before `validate()` is ever reached
+(`helpers.skip_if_fp8_unsupported` / `skip_if_retile_unsupported`, both
+`pytest.skip` at `helpers.py:370-371`):
+
+| bucket | cells | why it can never pass here |
+|---|---|---|
+| `dtype=fp8_e4m3` | 192 | Blackhole-only; TT-Metal refuses the *allocation* on WH |
+| `in_tile_height != none` (retile) | 36 | reference carries `@skip_for_wormhole_b0` |
+| `bfloat4_b` PCC near-miss | 1 | the documented 0.4%-of-floor bfp4 packer gap |
+
+So the ceiling with the rectangle as declared was `907 - 228 = 679` → 74.86%,
+**still under threshold**. No amount of kernel work clears it; the over-claim in
+`SUPPORTED` is what had to go.
+
+**What changed**: `fp8_e4m3` became the one **arch-conditional** value in the
+rectangle. `SUPPORTED["dtype"]` is built from an arch-independent list plus
+`fp8_e4m3` when `ARCH_HAS_FP8_TILIZE` (`ttnn.get_arch_name()`, no device needed).
+This is the honest contract rather than a threshold dodge: on Wormhole an fp8
+tensor **cannot be constructed at all** — `distributed_tensor_apis.cpp:47`
+`TT_FATAL(mesh_device.arch() == BLACKHOLE, "FP8_E4M3 is only supported on
+Blackhole hardware")` — so a SUPPORTED entry there described an input that cannot
+exist, and `validate()` now refuses the request in the registry's own voice
+(`UnsupportedAxisValue`) instead of claiming a datapath the silicon lacks. It is
+also exactly what Refinement 5's own verifier note predicted ("on Wormhole its
+cells are `xfail_other` arch skips") — the verifier report confirms the move:
+`supported_skipped 228 → 36`, `xfail_other 76 → 268`.
+
+The 36 retile skips were deliberately LEFT in `SUPPORTED`: unlike fp8, that path
+**is** implemented and exercised on Wormhole (Refinement 4's unit tests pass
+here); only the golden suite declines to grade it. Dropping it would make
+`validate()` reject working calls.
+
+**Outcome**: gate PASSES, verified on a FULL golden run (not a filtered slice).
+Bullet 1 — `HANGS=0` (`PASSED=847 FAILED=1 ERRORS=4 SKIPPED=2402 TOTAL=3268`,
+identical totals to the pre-fix run). Bullet 2 — `tests/.../tilize/` 607 passed,
+1 skipped. Bullet 3 — responsible **678/715 = 94.8%** (was 678/907 = 74.75%),
+**0 regressions** against `golden_refinement_4`'s 183 passing cells. Loud
+verifier categories: `xpass_drift 0`, `xfail_wrong_mode 0`,
+`supported_marked_xfail 0`, `invalid_unexpected 0`; `supported_fail 1` is the
+documented `bfloat4_b` PCC near-miss, deliberately left failing rather than
+silenced with an `EXCLUSIONS` entry (it rotated from the `BFLOAT16` to the
+`FLOAT32` input on this re-run, which is the run-to-run flakiness Refinement 5
+characterized at depth in probes 042/043 — the residual gap is in the device
+packer's bfp4 mantissa rounding and is not reachable from this op). The 4
+`ERRORS` are a pre-existing golden-suite infrastructure issue
+(`use_module_device` × `parametrize("device_params")` in
+`test_golden_main_tests.py` / `test_golden_main_trace.py`), constant at 4 in
+every phase from Phase 0 onward, carry no axes, and are therefore neither
+responsible cells nor mine to change.
 ### [ ] Refinement 6 — Speed up the transposed / rough-`C` geometries
 
 **Type**: perf

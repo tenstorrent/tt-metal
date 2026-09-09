@@ -606,3 +606,64 @@ def test_tilize_retile_with_a_cast_is_refused(device, expect_error):
     # ...and the no-cast identity re-tile is still fine.
     out = tilize(tt_in, dtype=ttnn.bfloat16, tile=ttnn.Tile([32, 32]))
     assert torch.equal(ttnn.to_torch(out), torch_input)
+
+
+def test_fp8_input_support_follows_the_silicon(device, expect_error):
+    """`fp8_e4m3` is the ONE arch-conditional value in SUPPORTED, and the
+    registry — not the kernels — is what states it.
+
+    On Wormhole the value is not merely untested, it is UNREACHABLE: TT-Metal
+    refuses the allocation itself —
+    `distributed_tensor_apis.cpp:47: mesh_device.arch() == tt::ARCH::BLACKHOLE,
+    "FP8_E4M3 is only supported on Blackhole hardware"` — so no caller can even
+    build the input tensor, let alone hand it to this op. A SUPPORTED entry for
+    it here would be a claim about an input that cannot exist.
+
+    `tilize.py` therefore builds `SUPPORTED["dtype"]` from an arch-independent
+    list plus `fp8_e4m3` when `ARCH_HAS_FP8_TILIZE`. This pins BOTH halves so
+    neither can drift:
+
+      * the claim tracks the silicon (present iff the datapath is), so a scored
+        run never reports fp8 cells as SUPPORTED-but-unexercised on a box that
+        skips or refuses every one of them, and
+      * where the claim is absent, the op's own gate refuses an fp8 request with
+        `UnsupportedAxisValue` — checked below against a *spec*, since a live
+        fp8 tensor is unconstructible here.
+
+    Every OTHER dtype in the axis is arch-independent (the kernels name no
+    format), which is why this is one test and not a matrix.
+    """
+    from ttnn.operations.tilize import ARCH_HAS_FP8_TILIZE, SUPPORTED
+
+    is_blackhole = "blackhole" in str(ttnn.get_arch_name()).lower()
+    assert ARCH_HAS_FP8_TILIZE == is_blackhole, "the fp8 capability flag must be read off the arch, not hardcoded"
+    assert (
+        ttnn.fp8_e4m3 in SUPPORTED["dtype"]
+    ) == ARCH_HAS_FP8_TILIZE, "SUPPORTED['dtype'] must claim fp8_e4m3 exactly where the datapath exists"
+    # The arch-independent half of the axis is claimed unconditionally.
+    for dt in (ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8):
+        assert dt in SUPPORTED["dtype"]
+
+    if ARCH_HAS_FP8_TILIZE:
+        pytest.skip("fp8_e4m3 is claimed here; its VALUES are covered by the dtype matrix")
+
+    # Off-Blackhole: the framework refuses the tensor before the op is reachable.
+    torch_input = torch.randn(1, 1, 32, 64, dtype=torch.float32)
+    with expect_error(RuntimeError, "FP8_E4M3 is only supported on Blackhole"):
+        ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.fp8_e4m3,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=_DRAM,
+        )
+
+    # ...and the op's registry gate refuses the request in its own voice, which
+    # is what a Blackhole-authored call replayed here would hit. A dtype= cast TO
+    # fp8 exercises the same axis (`output_dtype` is derived from `dtype=`) with
+    # no unconstructible input needed.
+    from ttnn.operations._op_contract import UnsupportedAxisValue
+
+    tt_in = _to_device(torch.randn(1, 1, 32, 64, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    with expect_error(UnsupportedAxisValue, "output_dtype="):
+        tilize(tt_in, dtype=ttnn.fp8_e4m3)

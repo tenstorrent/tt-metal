@@ -4,6 +4,7 @@
 import sys as _sys
 
 from .tilize import (
+    ARCH_HAS_FP8_TILIZE,
     EXCLUSIONS,
     INPUT_TAGGERS,
     PROPERTIES,
@@ -12,7 +13,15 @@ from .tilize import (
     validate,
 )
 
-__all__ = ["tilize", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS", "PROPERTIES"]
+__all__ = [
+    "tilize",
+    "validate",
+    "INPUT_TAGGERS",
+    "SUPPORTED",
+    "EXCLUSIONS",
+    "PROPERTIES",
+    "ARCH_HAS_FP8_TILIZE",
+]
 
 
 # Bind the public top-level name. `ttnn.operations.tilize` is the load-bearing

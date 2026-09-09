@@ -272,3 +272,15 @@
 {"source":"tt-probe","pid":409704,"started_at_ms":1788984472980,"wait_ms":203,"run_ms":16536,"test_path":"tilize","exit_code":0}
 {"source":"tt-probe","pid":410106,"started_at_ms":1788984537748,"wait_ms":263,"run_ms":18431,"test_path":"tilize","exit_code":0}
 {"source":"run_safe_pytest","pid":410814,"started_at_ms":1788984625770,"wait_ms":2,"run_ms":23198,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":13,"precompile_programs":368}
+{"event": "phase", "phase": "refinement_5", "state": "end", "at_ms": 1788984693907}
+{"event": "phase", "phase": "refinement_5_golden", "state": "start", "at_ms": 1788984694433}
+{"source":"eval_test_runner","pid":412624,"started_at_ms":1788984694437,"wait_ms":2794,"run_ms":173341,"test_path":"eval/golden_tests/tilize/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_programs":727}
+{"event": "phase", "phase": "refinement_5_golden", "state": "end", "at_ms": 1788984870575}
+{"source":"run_safe_pytest","pid":424917,"started_at_ms":1788984873847,"wait_ms":2,"run_ms":22884,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":13,"precompile_programs":368}
+{"event": "phase", "phase": "refinement_5_debug", "state": "start", "at_ms": 1788984896875}
+{"source":"run_safe_pytest","pid":428964,"started_at_ms":1788985322764,"wait_ms":1,"run_ms":9071,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py","exit_code":1,"precompile_mode":"farm","precompile_reason":"nothing_to_compile","precompile_s":5,"precompile_programs":0}
+{"source":"run_safe_pytest","pid":429318,"started_at_ms":1788985344558,"wait_ms":2,"run_ms":9237,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py","exit_code":1,"precompile_mode":"farm","precompile_reason":"nothing_to_compile","precompile_s":5,"precompile_programs":0}
+{"source":"run_safe_pytest","pid":429590,"started_at_ms":1788985358176,"wait_ms":3,"run_ms":9263,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py","exit_code":1,"precompile_mode":"farm","precompile_reason":"nothing_to_compile","precompile_s":4,"precompile_programs":0}
+{"source":"run_safe_pytest","pid":429929,"started_at_ms":1788985390683,"wait_ms":2,"run_ms":9422,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"nothing_to_compile","precompile_s":5,"precompile_programs":0}
+{"source":"run_safe_pytest","pid":430201,"started_at_ms":1788985406517,"wait_ms":2,"run_ms":23361,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":13,"precompile_programs":368}
+{"source":"eval_test_runner","pid":431000,"started_at_ms":1788985455690,"wait_ms":2680,"run_ms":82654,"test_path":"eval/golden_tests/tilize/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_programs":727}
