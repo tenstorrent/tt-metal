@@ -21,19 +21,18 @@ enum class DataFormat : uint8_t;
 namespace tt::tt_metal {
 
 struct Tile {
+    /**
+     * Construct a Tile with a given tile shape (H, W).
+     *
+     * The tile face shape is derived automatically from the tile shape.
+     */
     Tile(
         std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH},
         bool transpose_tile = false);
 
-    // Explicit face layout.
-    //
-    // The single-argument constructor derives `face_shape` from `tile_shape` via a fixed table, which
-    // only ever yields the "tallest" face layout for a given tile. Use this overload when an operand
-    // packs its data into shorter, more numerous faces than that default: e.g. a 2x32 tile holding
-    // four 1x16 faces (a 2x2 face grid) rather than the default two 2x16 faces.
-    //
-    // `num_faces` stays derived (`tile_hw / face_hw`), so the face grid is always exactly
-    // `tile_shape / face_shape` and cannot be set inconsistently.
+    /**
+     * Construct a Tile with a given tile shape (H, W) and custom face shape (H, W).
+     */
     Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shape, bool transpose_tile = false);
 
     // Getter methods
@@ -58,9 +57,6 @@ struct Tile {
     auto attribute_values() const { return std::forward_as_tuple(tile_shape, face_shape, num_faces); }
 
 private:
-    // Fills in everything derived from `tile_shape` / `face_shape`. Shared by both constructors.
-    void init_derived_dims(bool transpose_tile);
-
     std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH};
     std::array<uint32_t, 2> face_shape = {constants::FACE_HEIGHT, constants::FACE_WIDTH};
     uint32_t tile_hw = constants::TILE_HW;
