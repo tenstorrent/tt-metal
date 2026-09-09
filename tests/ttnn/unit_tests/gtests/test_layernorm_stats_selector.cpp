@@ -146,44 +146,107 @@ TEST(LayerNormStatsSelector, InterleavedArchitectureAndLayoutPolicy) {
     bf16_partial_affine_below_crossover.has_beta = false;
 
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, true, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::BLACKHOLE,
+            false /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::SFPU_TWO_PASS);
     EXPECT_EQ(
         select_interleaved_statistics_backend(
-            true, tt::ARCH::BLACKHOLE, false, true, bf16_partial_affine_below_crossover),
+            true /*requested_use_welford*/,
+            tt::ARCH::BLACKHOLE,
+            false /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            bf16_partial_affine_below_crossover),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::BLACKHOLE,
+            false /*input_is_row_major*/,
+            false /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, true, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::WORMHOLE_B0,
+            false /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::SFPU_TWO_PASS);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, false, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::WORMHOLE_B0,
+            false /*input_is_row_major*/,
+            false /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::QUASAR, false, true, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::QUASAR,
+            false /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, true, true, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::BLACKHOLE,
+            true /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, true, false, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::BLACKHOLE,
+            true /*input_is_row_major*/,
+            false /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, true, true, params),
+        select_interleaved_statistics_backend(
+            true /*requested_use_welford*/,
+            tt::ARCH::WORMHOLE_B0,
+            true /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
-        select_interleaved_statistics_backend(false, tt::ARCH::BLACKHOLE, false, true, params),
+        select_interleaved_statistics_backend(
+            false /*requested_use_welford*/,
+            tt::ARCH::BLACKHOLE,
+            false /*input_is_row_major*/,
+            true /*fp32_dest_acc_en*/,
+            params),
         StatisticsBackend::TILE_REDUCTION);
 }
 
 TEST(LayerNormStatsSelector, ShardedArchitectureAndPrecisionPolicy) {
-    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::BLACKHOLE, true), StatisticsBackend::TILE_REDUCTION);
-    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::WORMHOLE_B0, true), StatisticsBackend::SFPU_TWO_PASS);
-    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false), StatisticsBackend::TILE_REDUCTION);
-    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::QUASAR, true), StatisticsBackend::TILE_REDUCTION);
-    EXPECT_EQ(select_sharded_statistics_backend(false, tt::ARCH::WORMHOLE_B0, true), StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(
+        select_sharded_statistics_backend(
+            true /*requested_use_welford*/, tt::ARCH::BLACKHOLE, true /*fp32_dest_acc_en*/),
+        StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(
+        select_sharded_statistics_backend(
+            true /*requested_use_welford*/, tt::ARCH::WORMHOLE_B0, true /*fp32_dest_acc_en*/),
+        StatisticsBackend::SFPU_TWO_PASS);
+    EXPECT_EQ(
+        select_sharded_statistics_backend(
+            true /*requested_use_welford*/, tt::ARCH::WORMHOLE_B0, false /*fp32_dest_acc_en*/),
+        StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(
+        select_sharded_statistics_backend(true /*requested_use_welford*/, tt::ARCH::QUASAR, true /*fp32_dest_acc_en*/),
+        StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(
+        select_sharded_statistics_backend(
+            false /*requested_use_welford*/, tt::ARCH::WORMHOLE_B0, true /*fp32_dest_acc_en*/),
+        StatisticsBackend::TILE_REDUCTION);
 }
 
 }  // namespace
