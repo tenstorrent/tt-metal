@@ -4,6 +4,8 @@
 
 #include "dispatch_fabric2d_device_operation.hpp"
 
+#include "ttnn/operations/ccl/ccl_common.hpp"
+
 #include "ttnn/device_operation.hpp"
 #include "dispatch_fabric2d_assignments.hpp"
 
@@ -68,6 +70,12 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "diametrically opposite chip across both directions",
         args.axis,
         extent);
+    TT_FATAL(
+        ttnn::ccl::is_axis_wrap_wired(*args.device, args.axis),
+        "dispatch_fabric2d: axis {} has no closing link, so it is not a ring. This op sends single hops "
+        "around one; run it on a topology that wraps that axis (e.g. FABRIC_2D_TORUS_Y or _TORUS_XY), not "
+        "a line or mesh.",
+        args.axis);
 
     // The relay sizes a chunk from the counts of a chip that is neither its origin nor its destination,
     // so it needs every source chip's boundaries, not just its own. offset_cumsum's fourth output is
@@ -93,10 +101,13 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: expert_dispatch_table must be INT32, got {}",
         tensor_args.expert_dispatch_table_tensor.dtype());
     TT_FATAL(
-        tensor_args.expert_dispatch_table_tensor.logical_shape()[-1] >= static_cast<int32_t>(args.num_routed_experts),
-        "dispatch_fabric2d: expert_dispatch_table last dim is {}, expected at least num_routed_experts {}",
+        tensor_args.expert_dispatch_table_tensor.logical_shape()[-1] >=
+            static_cast<int32_t>(args.num_routed_experts) + 1,
+        "dispatch_fabric2d: expert_dispatch_table last dim is {}, expected num_routed_experts + 1 = {}. The "
+        "extra column is a -1 sentinel: a padded token's expert id indexes it, so the lookup resolves to "
+        "'not in this group' without a bounds check on the hot path.",
         tensor_args.expert_dispatch_table_tensor.logical_shape()[-1],
-        args.num_routed_experts);
+        args.num_routed_experts + 1);
 
     const auto& input = tensor_args.input_tensor;
     validate_dram_row_major(input, "input_tensor");
