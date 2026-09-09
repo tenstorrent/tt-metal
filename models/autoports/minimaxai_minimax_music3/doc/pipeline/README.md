@@ -301,4 +301,25 @@ of the 4 devices' core states (`k_ids`, waypoints, attach / detach) and **zero**
 
 ## Stage review
 
-REVIEW_SECTION
+An independent `stage-review` subagent (fresh context, read-only, no device) reviewed commit `22334d12389` against the stage
+prompt and the `full-model` / `qualitative-check` skills, re-deriving the log-mel distance, wav PCC, every `audio_stats` /
+`code_stats` figure of the four clips, the crop / stitch and chunking arithmetic and the `weight_norm` fold from the raw
+artifacts (all matched), and returned `more-work-needed` with three P2 findings: (1) `pcc/results.json` mixed two runs and
+the README's provenance reference dangled; (2) the `10240 - prompt_len` context cap was undisclosed; (3) the free-running vs
+golden spectral differences were explained in prose while the path-matched control (the replay wav) was unused. It also
+found, by recomputation, that the README's free-running band-energy row was wrong. All were fixed in `a9c79005a65`
+(official gate rerun, disclosure + `context_frames` / `truncated_by_context` in the result, the replay control recorded
+and asserted, a 0.4 s / 34-latent case added, the row corrected). The second pass returned `more-work-needed` with one P2
+(Timings rows and a DiT compile-cost sentence still quoted the first run; the committed run showed the cost was a
+cold-kernel-cache effect) plus an off-by-one in `context_frames`; fixed in `3e9cdd15473` with a final gate rerun
+(`gate06_final3`). The third pass returned **`clean-pass`** with no required work, confirming every Timings cell and the
+compile figures against the committed JSON and logs, and the bit-identical PCC / log-mel / determinism values across the
+four gate runs. Its remaining notes are folded into "Open risks" above (context cap, end-token path and long prompts
+unexercised here; cold-cache first-request latency unmeasured; `keep_latents`; the duplicated window loop between
+`generate` and `ChunkDenoiser.denoise`; `_meta.commit` naming the parent commit). The review transcripts live in the
+Claude session log, not in the repo.
+
+Stage checkpoint commits on `jashan/minimax-music3` (worktree `~/tt-metal-mm3`, never pushed): `22334d12389` (pipeline,
+vocoder, tests, control script), `a9c79005a65` (work log, qualitative evidence, review fixes), `3e9cdd15473` (final gate
+evidence, context-cap fix) and the commit containing this paragraph. The pre-existing modified `doc/ar_generator/pcc/results.json`
+and `doc/flow_dit/pcc/results.json` in the worktree are stage-04 / stage-05 dirty state that this stage did not touch or commit.
