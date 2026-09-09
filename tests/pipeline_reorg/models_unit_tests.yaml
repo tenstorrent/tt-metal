@@ -192,7 +192,7 @@
 
 - name: Qwen3.6 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
