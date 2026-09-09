@@ -8,6 +8,7 @@
 #include "common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -46,11 +47,10 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::dst);
     Noc noc;
     DataflowBuffer dfb_input(dfb::in0);
-    DataflowBuffer dfb_pad_val(dfb::pad);
+    Scratchpad<uint8_t> pad(scratch::pad);
 
-    // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
-    dfb_pad_val.reserve_back(1);
-    uint32_t l1_write_addr = dfb_pad_val.get_write_ptr();
+    // Fill the pad-value scratchpad, generalized for any contiguous dtype.
+    uint32_t l1_write_addr = pad.get_base_address();
     volatile tt_l1_ptr uint8_t* pad_val_page = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
     const volatile tt_l1_ptr uint8_t* pad_val = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(&pad_value);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -58,8 +58,7 @@ void kernel_main() {
             pad_val_page[i * element_size + b] = pad_val[b];
         }
     }
-    dfb_pad_val.push_back(1);
-    // Our scratchpad DFB is now a tile full of padding.
+    // The scratchpad now holds a tile full of padding.
 
     bool within_input_region;
     uint32_t output_page_offset = start_offset;
