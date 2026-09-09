@@ -552,8 +552,6 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     )
 
 
-# Do not rename with a "test_2d_topk" prefix: ttsim-skip-list.yaml deselects that node id and
-# pytest --deselect matches on nodeid.startswith(), so it would be dropped on ttsim.
 @pytest.mark.parametrize("dim2", [64])
 @pytest.mark.parametrize("k", [32])
 def test_topk_fp32_uint32_indices(device, dim2, k):
@@ -578,8 +576,7 @@ def test_topk_fp32_uint32_indices(device, dim2, k):
     # ttnn.to_torch picks; no uint16 sign fixup is needed here.
     ttnn_torch_columns = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)
 
-    # Each returned index must name the column its value came from. Tie-safe: both sides are
-    # read from the same position, so this holds however the op breaks equal values.
+    # Each returned index must name the column its value came from.
     assert torch.equal(torch.gather(input, 1, ttnn_torch_columns), ttnn_torch_values)
 
     assert_numeric_metrics(
