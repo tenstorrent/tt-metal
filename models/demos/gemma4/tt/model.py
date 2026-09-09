@@ -86,11 +86,8 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     rope = Gemma4TextRotaryEmbedding(hf_config)
     # HF's rotary forward reads only ``x.device`` and ``x.dtype`` (and its
     # ``dynamic_rope_update`` decorator only ``x.device``); the values are never
-    # touched. A full [1, max_seq_len, hidden] dummy therefore scaled with the
-    # context: at max_seq_len=131072 it allocated 2.62 GiB (31B) / 1.88 GiB (12B)
-    # of host RAM and paid ~3 s of RNG at every model init for nothing. One
-    # element carries the same dtype/device and yields bit-identical cos/sin
-    # (torch.equal on both configs, all layer types, at 131072).
+    # touched. A full [1, max_seq_len, hidden] dummy therefore scales with
+    # context for unused data. One element carries the same dtype/device.
     x_dummy = torch.zeros(1, dtype=torch.float32)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
@@ -1683,9 +1680,8 @@ class Gemma4Model:
         self._prefill_input_ids_torch = tokens_torch
         self._prefill_batch_size = batch_size
         self._prefill_seq_len_per_user = per_user_seq_len
-        # Host embeds feed PLI only. Unconditional F.embedding over the vocab
-        # table was ~32 ms of start→Embeddings host gap at ISL 2048 on 31B
-        # (no PLI); skip when PLI is off. Same gate as _compute_per_layer_inputs.
+        # Host embeds feed PLI only. Skip the vocab-table lookup when PLI is
+        # off. Same gate as _compute_per_layer_inputs.
         if self.hidden_size_per_layer_input and self.per_layer_input_weights and self._embed_weight_cpu is not None:
             import torch.nn.functional as F
 

@@ -81,8 +81,8 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
 
 # Conservative interleaved-L1 budget for a *single* short-lived activation
 # (post-embed Tilize, RoPE cos/sin slices). Leaves headroom for concurrent
-# temps (LN stats, attention heads). seq=128 @ hidden=5376 BF16 ≈ 1.3 MiB → L1;
-# seq=512 ≈ 5.3 MiB → DRAM. Override / disable (0) via env.
+# temps (LN stats, attention heads). seq=128 @ hidden=5376 BF16 fits; seq=512
+# does not. Override / disable (0) via env.
 _DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -280,12 +280,10 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None, memory_config=Non
     result = ttnn.experimental.rotary_embedding(tensor, cos_cache, sin_cache, token_index, memory_config=memory_config)
 
     # In decode mode (token_index provided), dim 2 gets padded to 32. The
-    # (logical, padded) reshape restores the logical extent as METADATA — the
-    # trailing rows are ordinary tile padding, so no device copy is needed. The
-    # follow-up ``result[:, :, :orig_shape[2]]`` this used to do was a
-    # full-extent (identity) slice on the already-corrected logical shape, yet
-    # still launched a real SliceDeviceOperation: 2 per layer x 60 layers =
-    # 120 ops / ~0.43 ms per decode step on 31B.
+    # (logical, padded) reshape restores the logical extent as metadata — the
+    # trailing rows are ordinary tile padding, so no device copy is needed. A
+    # follow-up ``result[:, :, :orig_shape[2]]`` would be an identity slice on
+    # the already-corrected logical shape, yet still launch a SliceDeviceOperation.
     if token_index is not None and result.shape[2] != orig_shape[2]:
         result = ttnn.reshape(
             result,
@@ -675,10 +673,9 @@ def concat_heads(
         out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
-        # The padding is trailing tile padding, so a (logical, padded) reshape
-        # expresses the trim as metadata; the old ``out[:, :, :batch, :]`` slice
-        # launched a real SliceDeviceOperation per layer (60 ops / ~0.22 ms per
-        # decode step on 31B) to produce a bit-identical tensor.
+        # Trailing tile padding is a (logical, padded) reshape, not a slice —
+        # ``out[:, :, :batch, :]`` would launch a SliceDeviceOperation for a
+        # bit-identical tensor.
         if out.shape[2] != batch:
             out = ttnn.reshape(
                 out,

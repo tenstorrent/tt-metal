@@ -27,10 +27,10 @@ def default_num_links():
 
 
 def default_ccl_packet_bytes():
-    """Use the measured Wormhole packet widths; keep Blackhole's faster Fabric default.
+    """Wormhole packet-width override; Blackhole keeps the Fabric default.
 
-    12B stays on the Fabric default: a 3840 B override hung T3K vocab
-    all-gather after the first prefill-trace capture (4096 B pages).
+    Do not override 12B to 3840 B — vocab all-gather hung after the first
+    prefill-trace capture (4096 B pages).
     """
     if is_blackhole():
         return None
@@ -149,21 +149,8 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = True):
       * **Ring** on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
       * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense**
-        models. Trace-replay sweep of the 31B decode all-reduce
-        ([1,1,32,5376] bf16, 2/layer x 60 layers) on a 1x8 WH LoudBox:
-
-            sync all_reduce  Linear  114.4 us  -> 13.73 ms/step  (was default)
-            sync all_reduce  Ring     96.2 us  -> 11.55 ms/step  <-- now default
-            async RS+AG      Linear  131-142us -> 15.7-17.0 ms/step
-            async RS+AG      Ring    101-127us -> 12.2-15.2 ms/step
-
-        i.e. Ring is worth ~2.2 ms/step (~4% of a 50.6 ms decode step) and
-        sync beats async in every arm. Opening the mesh with
-        ``FABRIC_1D_RING`` instead of ``FABRIC_1D`` buys only a further
-        93.1 vs 96.2 us, so the topology is taken under plain ``FABRIC_1D``
-        and no harness device_params change is needed. ``num_links=2`` is NOT
-        usable here — it raises "Event Order Issue: expected to read back
-        completion signal for event 27 but got 14" (see default_num_links).
+        models. Use sync Ring under ``FABRIC_1D``; ``num_links=2`` raises an
+        Event Order Issue (see default_num_links).
       * **Linear** for **MoE** models on WH: Ring drops 26B-A4B
         ``test_full_model`` PCC below the TEMP 0.76 gate (~0.7505 vs
         ~0.77/0.94 with Linear / main).
@@ -363,9 +350,8 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
             return None
         padded_height = activation_physical_height(shape)
         # Decode always gathers into the one-tile residual island. Short
-        # prefill (M<=128) does the same when the LN/residual island is on —
-        # the pair the source branch uses for batch-1 TTFT. Broader
-        # height<=1024 gather without the island hung T3K warmup.
+        # prefill (M<=128) does the same when the LN/residual island is on.
+        # Gathering at height<=1024 without the island hung T3K warmup.
         if padded_height != ttnn.TILE_SIZE and not prefill_mlp_island_enabled(padded_height):
             return None
         return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)

@@ -255,8 +255,8 @@ class SharedMLP:
         if out_memcfg is None and rows <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         if program_config is not None and hidden_states.is_sharded():
-            # Decode keep-sharded island is proven. Prefill-sized 1D CBs on the
-            # LN width-shard clash on Wormhole — S2I to the interleaved config.
+            # Prefill-sized 1D CBs on the LN width-shard clash on Wormhole —
+            # S2I to the interleaved config. Decode keep-sharded island stays.
             matched = (
                 prefill_progcfg_1d_for_width_sharded_in0(rows, k, n, hidden_states.memory_config())
                 if rows <= TILE_SIZE

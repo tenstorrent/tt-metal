@@ -528,12 +528,12 @@ def _interleaved_mlp_prefill_config(m, k, n):
         return None, None, None
     if not in_prefill_l1_matmul_band(m):
         return None, None, None
-    # Default covers the 12B batch-1 TTFT band (M<=128). 31B hung mid-decode
-    # after short-prefill 1D (K>=5376); opt in with GEMMA4_PREFILL_1D_MLP=all.
+    # Default is M<=128 and K<5376 (12B short prefill). Do not enable 1D for
+    # K>=5376 — hung decode. Opt in with GEMMA4_PREFILL_1D_MLP=all.
     if env not in ("all", "full") and (int(m) > 128 or int(k) >= 5376):
         return None, None, None
-    # Swept for TP-sharded widths (31B TP=8 → n=5376). Full-width TP=1
-    # fused gate+up (n≈43k) overflows Wormhole L1 CBs and falls back dirty.
+    # For TP-sharded widths (31B TP=8 → n=5376). Full-width TP=1 fused
+    # gate+up (n≈43k) overflows Wormhole L1 CBs and falls back dirty.
     if int(n) > 8192:
         return None, None, None
     program_config = prefill_progcfg_1d(m, k, n)
@@ -791,9 +791,9 @@ def width_shard_matches_1d_progcfg(memcfg, program_config) -> bool:
 def prefill_progcfg_1d_for_width_sharded_in0(m, k, n, in0_memcfg, grid_size=None):
     """1D progcfg whose core grid matches ``in0_memcfg``, or ``None`` if impossible.
 
-    Prefers the sharded-in0 core count (LN island) over the interleaved sweep
-    winner. ``fuse_batch=True`` is required when in0 is sharded. ``in0_block_w``
-    must divide per-core K tiles, not full ``kt``.
+    Prefers the sharded-in0 core count (LN island) over the interleaved
+    core picker. ``fuse_batch=True`` is required when in0 is sharded.
+    ``in0_block_w`` must divide per-core K tiles, not full ``kt``.
     """
     cores = width_shard_core_count(in0_memcfg)
     if cores is None:
