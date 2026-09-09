@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
 #define MEM_SYSENG_BOOT_RESULTS_BASE 0x1EC0
