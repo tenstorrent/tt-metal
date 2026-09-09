@@ -5774,27 +5774,42 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_production_accuracy():
         )
 
 
-@pytest.mark.parametrize("chunks_from_end", [0, 1], ids=["final", "final-1"])
-def test_ring_joint_attention_gpt_oss_chunked_sliding_circular_cache_accuracy(chunks_from_end):
+def test_ring_joint_attention_gpt_oss_chunked_sliding_circular_cache_accuracy():
     """Production sliding+sink config read from the 2-slab CIRCULAR K/V cache of the bounded
-    sliding-window layout: the chunk and its predecessor are placed at slab g % 2 (after several
-    wraps), logical_n / kv_actual_isl stay absolute, circular_kv_cache=True. Both slab parities
-    are covered so each wrap placement is read at least once; same reference as the unbounded
-    production test."""
+    sliding-window layout: the chunk and its predecessor sit at slab g % 2 (after several wraps),
+    logical_n / kv_actual_isl stay absolute, circular_kv_cache=True. Both slab parities run through
+    ONE runtime: the first call creates the program, the second is a program-cache hit whose scalar
+    runtime args must relocate the circular halo for a new logical_n and parity. Same reference as
+    the unbounded production test."""
     mesh_config = gpt_oss_chunked_mesh_config()
-    chunk = GPT_OSS_CHUNKED_TOTAL_SEQ // GPT_OSS_CHUNKED_CHUNK_SIZE - 1 - chunks_from_end
-    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk)}):
-        run_ring_joint_sdpa_chunked(
-            mesh_config,
-            GPT_OSS_CHUNKED_MODEL,
-            chunk_size=GPT_OSS_CHUNKED_CHUNK_SIZE,
-            total_seq=GPT_OSS_CHUNKED_TOTAL_SEQ,
-            qk_configs=[(GPT_OSS_Q_CHUNK_SIZE, GPT_OSS_K_CHUNK_SIZE)],
-            persistent_buffer_mode="exact_per_chunk",
-            sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
-            use_attention_sink=True,
-            circular_kv_cache=True,
-        )
+    n_chunks = GPT_OSS_CHUNKED_TOTAL_SEQ // GPT_OSS_CHUNKED_CHUNK_SIZE
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        cache_entries = None
+        for chunk in (n_chunks - 2, n_chunks - 1):  # slab parity g % 2 = 1, then 0
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk)}):
+                run_ring_joint_sdpa_chunked(
+                    mesh_config,
+                    GPT_OSS_CHUNKED_MODEL,
+                    chunk_size=GPT_OSS_CHUNKED_CHUNK_SIZE,
+                    total_seq=GPT_OSS_CHUNKED_TOTAL_SEQ,
+                    qk_configs=[(GPT_OSS_Q_CHUNK_SIZE, GPT_OSS_K_CHUNK_SIZE)],
+                    persistent_buffer_mode="exact_per_chunk",
+                    sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                    use_attention_sink=True,
+                    circular_kv_cache=True,
+                    runtime=runtime,
+                )
+            if cache_entries is None:
+                cache_entries = runtime.mesh_device.num_program_cache_entries()
+                assert cache_entries > 0, "circular-cache dispatch did not populate the program cache"
+            else:
+                assert runtime.mesh_device.num_program_cache_entries() == cache_entries, (
+                    "second circular-cache chunk (other slab parity) must hit the cached program, not "
+                    "create a new one"
+                )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 def test_ring_joint_circular_kv_cache_rejects_metadata_path(expect_error):
