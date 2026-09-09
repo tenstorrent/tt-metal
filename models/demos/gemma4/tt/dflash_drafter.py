@@ -35,6 +35,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
+from models.demos.gemma4.tt.dram_sharded import dflash_fc_linear_config, linear_l1_safe, matmul_rows
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 _SHARD_ARGMAX_K = 32
@@ -256,7 +257,27 @@ class DFlashDrafter:
             )
 
         # fc + norms: replicated (fc is [6H, H] transposed for x@W — small).
-        self.fc = _dev("fc", sd["fc.weight"], None)
+        fc_bfp8 = _os.environ.get("GEMMA4_DFLASH_FC_BFP8", "0") == "1"
+        fc_dtype = ttnn.bfloat8_b if fc_bfp8 else dtype
+
+        def _dev_fc(name, w, mapper, transpose=True):
+            wt = w.transpose(-2, -1).contiguous() if transpose else w
+            wt = wt.unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+            return ttnn.as_tensor(
+                wt,
+                device=mesh_device,
+                dtype=fc_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mapper if mapper is not None else self._replicate,
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"dflash_{'rep_' if self.replicated else ''}{'bfp8_' if fc_bfp8 else ''}{name}"
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self.fc = _dev_fc("fc", sd["fc.weight"], None)
+        self._fc_k = int(self.fc.shape[-2])
+        self._fc_n = int(self.fc.shape[-1])
         self.hidden_norm_w = _dev("hidden_norm", sd["hidden_norm.weight"].reshape(1, 1, 1, -1), None, transpose=False)
         self.final_norm_w = _dev("final_norm", sd["norm.weight"].reshape(1, 1, 1, -1), None, transpose=False)
 
@@ -349,6 +370,28 @@ class DFlashDrafter:
         self._ctx_acc = None
         self._ctx_len = 0
 
+    def _fc_linear(self, taps_cat_tt, *, memory_config=None):
+        """``fc`` matmul: concat taps [*, 6*H] -> [*, H].
+
+        Mode via ``GEMMA4_DFLASH_FC_MODE`` (default ``auto_hifi4``): ttnn auto progcfg
+        + HiFi4 without fp32 dest-acc — sweep winner on T3K WH at 16x32256x5376.
+        ``legacy`` restores auto + ``self._ckc`` (HiFi4 + fp32 dest-acc).
+        """
+        out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        m = matmul_rows(taps_cat_tt)
+        pc, ckc = dflash_fc_linear_config(self.mesh_device, m, self._fc_k, self._fc_n)
+        if pc is not None:
+            return linear_l1_safe(
+                taps_cat_tt,
+                self.fc,
+                program_config=pc,
+                compute_kernel_config=ckc or self._ckc,
+                memory_config=out_mc,
+            )
+        if ckc is not None:
+            return ttnn.linear(taps_cat_tt, self.fc, compute_kernel_config=ckc, memory_config=out_mc)
+        return ttnn.linear(taps_cat_tt, self.fc, compute_kernel_config=self._ckc, memory_config=out_mc)
+
     # ------------------------------------------------------------------ ctx
 
     def reset(self):
@@ -385,7 +428,7 @@ class DFlashDrafter:
 
     def append_taps_tt(self, taps_cat_tt):
         """Append device taps [1, 1, rows, len(taps)*H] -> fc -> ctx buffer."""
-        proj = ttnn.linear(taps_cat_tt, self.fc, compute_kernel_config=self._ckc)  # replicated [1,1,rows,H]
+        proj = self._fc_linear(taps_cat_tt)  # replicated [1,1,rows,H]
         if self._ctx_acc is None:
             self._ctx_acc = proj
         else:
@@ -1314,7 +1357,7 @@ class DFlashFusedDecoder:
         # also land in the persistent fc_prev so the NEXT replay's start-of-body
         # merge can commit the accepted prefix on device.
         cat = ttnn.concat(self.tap_bufs, dim=3)
-        fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+        fc_out = d._fc_linear(cat)
         ttnn.assign(fc_out, self.fc_prev)
         fc_out.deallocate(True)
         # ONE fused id output ([1, K+P_v]: drafts then posterior) -> ONE
@@ -1360,7 +1403,7 @@ class DFlashFusedDecoder:
             cat = ttnn.concat([t[:, :, :rv, :] for t in g], dim=3)
             for t in g:
                 t.deallocate(True)
-            proj = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+            proj = d._fc_linear(cat)
             cat.deallocate(True)
             host = ttnn.to_torch(ttnn.get_device_tensors(proj)[0] if self._tp > 1 else proj)
             proj.deallocate(True)

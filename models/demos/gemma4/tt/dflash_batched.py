@@ -363,7 +363,7 @@ class DFlashBatchedDecoder:
                 v_b, _lp = self._sampler.sample(lg_b, enable_trace=False)
                 vidx_parts.append(v_b)
                 cat_b = ttnn.concat(self.tap_bufs, dim=3)
-                fc_parts.append(ttnn.linear(cat_b, d.fc, compute_kernel_config=d._ckc))
+                fc_parts.append(d._fc_linear(cat_b))
                 cat_b.deallocate(True)
             vidx = ttnn.concat(vidx_parts, dim=len(vidx_parts[0].shape) - 1)
             fc_out = ttnn.concat(fc_parts, dim=2)
@@ -422,7 +422,7 @@ class DFlashBatchedDecoder:
             # tensors with a fixed footprint, not per-replay leaks.
             # tap fc -> persistent for next commit
             cat = ttnn.concat(self.tap_bufs, dim=3)
-            fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+            fc_out = d._fc_linear(cat)
             ttnn.assign(fc_out, self.fc_prev)
             fc_out.deallocate(True)
         if self.out_draft is None:

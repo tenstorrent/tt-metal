@@ -1005,6 +1005,86 @@ def matmul_rows(x):
     return rows
 
 
+def dflash_fc_mode() -> str:
+    """DFlash ``fc`` matmul mode (see ``test_dflash_fc_sweep.py`` on T3K WH 1x8).
+
+    Swept 68 candidates at ``16 x 32256 x 5376`` (2026-09-09): **auto_hifi4** won
+    at ~1.65 ms/call. Forced 1D progcfgs (e.g. ``1d_c42_bw4`` at ~1.97 ms) regressed
+    ~17% vs ttnn auto — do not pin a program config by default.
+
+    Modes:
+      * ``auto_hifi4`` (default) — ttnn auto program selection, HiFi4, no fp32 dest-acc
+      * ``legacy`` / ``0`` — caller's ``_ckc`` (HiFi4 + fp32 dest-acc)
+      * ``auto_hifi2``, ``auto_hifi3_destacc``, … — other auto CKC variants
+      * ``1d_c56_bw2``, ``2d_2x8``, … — explicit progcfg from the sweep naming scheme
+    """
+    return os.environ.get("GEMMA4_DFLASH_FC_MODE", "auto_hifi4").lower()
+
+
+def _dflash_fc_ckc(mesh_device, mode: str):
+    import ttnn
+
+    if mode == "auto_hifi2":
+        fid, dest = ttnn.MathFidelity.HiFi2, False
+    elif mode == "auto_hifi3_destacc":
+        fid, dest = ttnn.MathFidelity.HiFi3, True
+    elif mode in ("auto_hifi4", "auto"):
+        fid, dest = ttnn.MathFidelity.HiFi4, False
+    else:
+        fid, dest = ttnn.MathFidelity.HiFi4, False
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fid,
+        math_approx_mode=False,
+        fp32_dest_acc_en=dest,
+        packer_l1_acc=True,
+    )
+
+
+def _dflash_fc_progcfg_from_mode(mesh_device, m: int, k: int, n: int, mode: str):
+    m_cfg = _roundup(int(m), TILE_SIZE)
+    grid = prefill_grid_default()
+
+    if mode.startswith("1d_c"):
+        # e.g. 1d_c56_bw2
+        body = mode[len("1d_c") :]
+        cores_s, _, bw_s = body.partition("_bw")
+        if not cores_s or not bw_s:
+            return None
+        return prefill_progcfg_1d(m_cfg, k, n, cores=int(cores_s), in0_block_w=int(bw_s), grid_size=grid)
+    if mode.startswith("2d_"):
+        # e.g. 2d_2x8
+        dims = mode[len("2d_") :].split("x", 1)
+        if len(dims) != 2:
+            return None
+        return prefill_progcfg(m_cfg, k, n, grid_size=(int(dims[0]), int(dims[1])))
+    return None
+
+
+def dflash_fc_linear_config(mesh_device, m: int, k: int, n: int):
+    """``(program_config, compute_kernel_config)`` for DFlash ``fc``, or ``(None, None)``.
+
+    Default ``auto_hifi4``: no forced program config (ttnn auto wins on WH T3K) with
+    HiFi4 and ``fp32_dest_acc_en=False``. Set ``GEMMA4_DFLASH_FC_MODE=legacy`` to
+    restore the pre-sweep behaviour (auto + HiFi4 + fp32 dest-acc via ``_ckc``).
+
+    Explicit progcfg modes (``1d_*``, ``2d_*``) are for experiments only — most lose
+    to auto on this shape. DRAM-width-sharded weights are Blackhole-only.
+    """
+    mode = dflash_fc_mode()
+    if mode in ("0", "off", "legacy", "auto_hifi4_destacc"):
+        return None, None
+    m = int(m)
+    if m <= 0 or k <= 0 or n <= 0:
+        return None, None
+
+    program_config = _dflash_fc_progcfg_from_mode(mesh_device, m, k, n, mode)
+    if program_config is not None:
+        return program_config, _dflash_fc_ckc(mesh_device, "auto_hifi4")
+    if mode.startswith("auto"):
+        return None, _dflash_fc_ckc(mesh_device, mode)
+    return None, None
+
+
 class DramShardedLinear:
     """A single DRAM-width-sharded weight served for both decode and prefill.
 
