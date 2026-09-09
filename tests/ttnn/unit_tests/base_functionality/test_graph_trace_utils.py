@@ -396,17 +396,18 @@ def test_extract_resource_usage_per_core_empty():
     assert usage.peak_total == 0, "Empty trace should have zero total usage"
 
 
-def test_metal2_dataflow_buffers_reach_resource_usage_per_core():
+def test_metal2_scratchpads_reach_resource_usage_per_core():
     """A Metal 2.0 op's L1 scratch must show up in the resource usage, under its own kind.
 
-    Ported ops allocate scratch as dataflow buffers and never call CreateCircularBuffer, so
-    peak_cb came out 0 for all of them and nothing else accounted for the bytes. #51674
+    Ported ops allocate scratch as dataflow buffers or scratchpads and never call
+    CreateCircularBuffer, so peak_cb came out 0 for all of them and nothing else accounted for
+    the bytes. #51674
     """
     with ttnn.manage_device(device_id=0) as device:
         input_tensor = ttnn.from_torch(
             torch.rand(1, 1, 64, 128, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
-            # Row major so repeat lands on the interleaved-RM factory, which builds two DFBs.
+            # Row major so repeat lands on the interleaved-RM factory, which builds two scratchpads.
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -414,30 +415,29 @@ def test_metal2_dataflow_buffers_reach_resource_usage_per_core():
 
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
         # The forced-native entry is load-bearing: ttnn.repeat routes this case to the codegen
-        # path, which uses circular buffers and reports a non-zero peak whether or not DFBs are
-        # recorded.
+        # path, which uses circular buffers and reports a non-zero peak whether or not the native
+        # buffers are recorded.
         ttnn._ttnn.operations.data_movement.repeat_force_native(
             input_tensor, [1, 1, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG
         )
         captured_graph = ttnn.graph.end_graph_capture()
 
-        # Each DFB is (2 * READ_ALIGNMENT) + page_size = 128 + 256 bytes, and neither is borrowed,
-        # so both are owned L1 that the peak math must count exactly once.
-        dfb_nodes = [node for node in captured_graph if node["node_type"] == "dataflow_buffer_allocate"]
-        assert [int(node["params"]["size"]) for node in dfb_nodes] == [384, 384]
-        assert all(int(node["params"]["borrows_memory"]) == 0 for node in dfb_nodes)
-        # A dataflow buffer is not a circular buffer, and must not be reported as one.
+        # Each scratchpad is (2 * READ_ALIGNMENT) + page_size = 128 + 256 bytes; both are owned,
+        # private L1 that the peak math must count exactly once. (These were self-loop dataflow
+        # buffers until the Quasar self-loop-DFB cleanup converted them to scratchpads.)
+        scratchpad_nodes = [node for node in captured_graph if node["node_type"] == "scratchpad_allocate"]
+        assert [int(node["params"]["size"]) for node in scratchpad_nodes] == [384, 384]
+        # A scratchpad is neither a dataflow buffer nor a circular buffer, and must not be reported as one.
+        assert [node for node in captured_graph if node["node_type"] == "dataflow_buffer_allocate"] == []
         assert [node for node in captured_graph if node["node_type"] == "circular_buffer_allocate"] == []
 
         usage = ttnn.graph.extract_resource_usage_per_core(captured_graph)
 
-        assert (
-            usage.peak_dataflow_buffer == 768
-        ), f"dataflow buffers did not reach the peak, got {usage.peak_dataflow_buffer}"
+        assert usage.peak_scratchpad == 768, f"scratchpads did not reach the peak, got {usage.peak_scratchpad}"
         assert usage.peak_cb == 0, f"a ported op has no circular buffers, got {usage.peak_cb}"
-        assert usage.peak_scratchpad == 0
+        assert usage.peak_dataflow_buffer == 0
         # peak_total is the number an L1 budget check has to use.
-        assert usage.peak_total == usage.peak_dataflow_buffer + usage.peak_l1
+        assert usage.peak_total == usage.peak_scratchpad + usage.peak_l1
 
 
 # Metal 2.0 program-scope L1 comes in three kinds and each is reported under its own node type.
