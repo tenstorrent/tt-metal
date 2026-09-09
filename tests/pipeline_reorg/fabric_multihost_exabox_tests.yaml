@@ -96,6 +96,146 @@
   team: scaleout
   sp_config: sc4
 
+- name: "Fabric express links 32x4 multicast source-inject APIs (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto"
+    UNIT_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${UNIT_BIN}" || { echo "ERROR: missing ${UNIT_BIN}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${UNIT_BIN}" \
+      --gtest_filter='FabricExpress2DTorusXYFixture.TestMeshMulticastSourceInjectApis'
+  skus:
+    bh_sc4:
+      timeout: 10
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  sp_config: sc4
+
+- name: "Fabric express links quad 8x4 torus sanity (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/express_links_quad_8x4_mesh_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter topology.TorusXY
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter name.MeshMulticastAllToAllIntra
+  skus:
+    bh_sc4:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  sp_config: sc4
+
+- name: "Fabric express links dual 16x4 Torus-X sanity (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/express_links_dual_16x4_mesh_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter topology.TorusX
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter name.MeshMulticastAllToAllIntra
+  skus:
+    bh_sc4:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  sp_config: sc4
+
+- name: "Fabric express links 8x4 plus 24x4 Torus-X sanity (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/express_links_8x4_24x4_mesh_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter topology.TorusX
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter name.MeshMulticastAllToAllIntra
+  skus:
+    bh_sc4:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  sp_config: sc4
+
 - name: "DC validation (quad) neighbor exchange"
   cmd: |
     TTRUN_DIR=/etc/ttop
