@@ -44,12 +44,23 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
+#ifdef ARCH_QUASAR
+    // Quasar's llk_math_eltwise_unary_datacopy_init takes no PackMode param; its trailing template
+    // args are bools (unpack_to_dest, is_int_fpu_en, tilize).
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*unpack_to_dest*/,
+          false /*is_int_fpu_en*/>(cbid)));
+#else
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
           PackMode::Default>(cbid)));
+#endif
 }
 
 /**
@@ -933,14 +944,21 @@ void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     DataflowBuffer dfb_in(in_dfb);
     DataflowBuffer dfb_out(out_dfb);
     copy_init(in_dfb);
+    // log_tile SFPU is not wired up on Quasar; log_block is only used on the (untested) attention-sink
+    // path, so guard the log ops out there. On Quasar this degrades log_block to a plain copy — revisit
+    // when attention-sink is brought up on Quasar.
+#ifndef ARCH_QUASAR
     MATH((log_tile_init()));
+#endif
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0 /*dst*/);
+#ifndef ARCH_QUASAR
         MATH((log_tile(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
