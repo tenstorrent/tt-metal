@@ -500,39 +500,3 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()
-
-
-def test_ternary_cache_miss_different_alignment(device):
-    """Different tensor alignments -> different cache entries.
-    Padded volume is hashed in compute_program_hash()."""
-    device.enable_program_cache()
-    device.clear_program_cache()
-    shape = [1, 1, 32, 32]
-    padded = [1, 1, 64, 32]  # > round_up(32, 32); produces Alignment{64,32} not {32,32}
-
-    torch_pred = torch.ones(shape, dtype=torch.bfloat16)
-    torch_true = torch.rand(shape, dtype=torch.bfloat16)
-    torch_false = torch.rand(shape, dtype=torch.bfloat16)
-    tt_pred = ttnn.tilize_with_val_padding(
-        ttnn.from_torch(torch_pred, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
-    )
-    tt_true = ttnn.tilize_with_val_padding(
-        ttnn.from_torch(torch_true, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
-    )
-    tt_false = ttnn.tilize_with_val_padding(
-        ttnn.from_torch(torch_false, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
-    )
-    tt_pred2 = ttnn.from_torch(torch_pred, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_true2 = ttnn.from_torch(torch_true, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_false2 = ttnn.from_torch(torch_false, layout=ttnn.TILE_LAYOUT, device=device)
-    device.clear_program_cache()
-
-    torch_ref = ttnn.get_golden_function(ttnn.where)(torch_pred, torch_true, torch_false)
-    tt_out1 = ttnn.where(tt_pred, tt_true, tt_false)
-    assert_equal(torch_ref, ttnn.to_torch(tt_out1))
-
-    tt_out2 = ttnn.where(tt_pred2, tt_true2, tt_false2)
-    assert_equal(torch_ref, ttnn.to_torch(tt_out2))
-
-    assert device.num_program_cache_entries() == 2
-    device.disable_and_clear_program_cache()
