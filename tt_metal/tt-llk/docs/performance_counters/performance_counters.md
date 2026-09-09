@@ -428,28 +428,6 @@ Unpacker1 Write Eff = SRCB_WRITE_ACTUAL / UNPACK1_BUSY_THREAD0 * 100
 
 ---
 
-### L1 Memory and NoC
-
-#### 28. Fidelity Stall Rate
-
-> **Dead counter:** `MATH_FIDELITY_STALL` is tied to zero in the RTL of both Wormhole and Blackhole (`fidelity_phases_ongoing` is a constant `1'b0`), so this metric always reads 0. It is kept here only to document the formula; the tracy tooling removes it.
-
-
-Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction).
-
-*Counter group: TDMA_UNPACK. Computed, exported as `fidelity_stall_pct`.*
-
-```
-Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **0%**: Pure LoFi (every math instruction completes in 1 HF cycle).
-- **>0%**: HiFi2 or HiFi4 active, multi-cycle math contributes to wall time.
-
-> **Known issue:** On HiFi variants this metric can exceed 100% because the formula's numerator counts every HF cycle of multi-HF instructions while the denominator counts only the issued instructions. Treat values >100% as "fidelity is the dominant cost" rather than a literal percentage.
-
-**Use case:** Detects whether fidelity is contributing to the cycle budget.
-
 ### Upstream formulas, not computed here
 
 These come from the upstream report and nothing in tt-llk evaluates them. The counters are in the
@@ -477,9 +455,7 @@ per-zone CSV, so they can be worked out by hand. Counter names are as they appea
 | 25 | L1 Backpressure | L1 | `L1 BP = (REQ - GRANT) / REQ * 100` | both |
 | 26 | Stall Cause Overlap Factor per Thread | INSTRN_THREAD | `Stall Overlap TN = sum(all WAITING_FOR_*_N) / THREAD_STALLS_N` | both |
 | 27 | Compute-to-Unpack Ratio | FPU + TDMA_UNPACK | `Compute-to-Unpack = MATH_COUNTER / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0) * 100` | both |
-| 29 | HiFi Fraction | TDMA_UNPACK | `HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) / (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100` | both |
-| 30 | Avg HF Cycles Per Instrn | TDMA_UNPACK | `Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)` | both |
-| 32 | MMIO / SFPU / THCON / MOVE Idle Wait | INSTRN_THREAD | `MMIO Idle Wait T0 = WAITING_FOR_MMIO_IDLE_0 / INSTRN_OUT_L * 100 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / INSTRN_OUT_L * 100 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / INSTRN_OUT_L * 100 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / INSTRN_OUT_L * 100` | both |
+| 32 | CFG / SFPU / THCON / MOVE Idle Wait | INSTRN_THREAD | `CFG Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / INSTRN_OUT_L * 100 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / INSTRN_OUT_L * 100 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / INSTRN_OUT_L * 100 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / INSTRN_OUT_L * 100` | both |
 | 33 | L1 TDMA Bundle Util | L1 (mux 0) | `L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L1_OUT_L * 100` | both |
 | 34 | NoC Ring 0/1 Outgoing/Incoming Util | L1 (Ring 0 on mux 0, Ring 1 on mux 1) | `NoC Ring 0 Outgoing Util = avg(L1_0_NOC_RING0_OUTGOING_0, L1_0_NOC_RING0_OUTGOING_1) / L1_OUT_L * 100 NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMING_1) / L1_OUT_L * 100` | both |
 | 35 | RISC Core L1 Util | L1 (mux 1) | `RISC Core L1 Util = L1_1_RISC_CORE / L1_OUT_L * 100` | Blackhole only |

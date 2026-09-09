@@ -499,7 +499,7 @@ SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ * 10
 
 ### Additional Idle Waits
 
-**21. MMIO/SFPU/THCON/MOVE Idle Wait**
+**21. CFG/SFPU/THCON/MOVE Idle Wait**
 
 Fraction of total cycles each thread spent waiting for specific hardware units.
 
@@ -509,14 +509,14 @@ Fraction of total cycles each thread spent waiting for specific hardware units.
 | **Counter group** | INSTRN |
 
 ```
-MMIO Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
+CFG Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / ref_cnt * 100
 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / ref_cnt * 100
 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 ```
 
 - **High value (>5%)**: Significant time spent waiting for this unit. MOVE Idle Wait at 2.8% for tilize is expected.
-- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and MMIO are typically ~0%.
+- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and CFG are typically ~0%.
 
 **Use case:** Absolute (not relative) measure of time lost to each hardware unit. Unlike the stall breakdown metrics which show percentage of stalls, these show percentage of total time.
 
@@ -1011,69 +1011,6 @@ Paired with `SrcA Write Actual Efficiency` to separate the two stall modes:
 - **Low value (~0%)**: No register pressure.
 
 **Use case:** Distinguishes source register overwrite stalls (math-consumer bottleneck) from port stalls (DMA arbitration).
-
----
-
-**45. Fidelity Stall Rate**
-
-Fraction of math-valid cycles stalled in a fidelity phase (multi-HF-cycle math instruction).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **0%**: LoFi math only (all instructions complete in 1 HF cycle).
-- **>0%**: HiFi math instructions are active. Each HiFi2 takes 2 cycles, HiFi4 takes 4 cycles.
-
-**Use case:** Detects whether a workload uses HiFi math; non-zero values indicate multi-cycle math instructions contributing to total execution time.
-
----
-
-**46. HiFi Fraction**
-
-Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 or HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
-                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
-```
-
-- **0%**: Pure LoFi.
-- **100%**: Pure HiFi.
-
-**Use case:** Quick check of fidelity mix in a workload.
-
----
-
-**47. Avg HF Cycles Per Instrn**
-
-Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
-```
-
-- **1.0**: All LoFi.
-- **2.0**: All HiFi2.
-- **4.0**: All HiFi4.
-- Between: Mixed workload.
-
-**Use case:** Single-number summary of fidelity impact on math execution.
 
 ---
 
