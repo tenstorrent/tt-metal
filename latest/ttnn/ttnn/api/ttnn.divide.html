@@ -393,36 +393,31 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.divide">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fast_and_approximate_mode:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">false</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rounding_mode:</span> <span class="pre">string</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">dtype</span> <span class="pre">of</span> <span class="pre">:attr:`input_tensor_a`</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.divide" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.divide" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<blockquote>
+<div>
 <p>Divides <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> by <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns a tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
 <div class="math notranslate nohighlight">
 \[\begin{split}\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, &amp; \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, &amp; \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, &amp; \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}\end{split}\]</div>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
-</ul>
+<dl class="simple">
+<dt>Args:</dt>
+<dd>
+<p>input_tensor_a (ttnn.Tensor): the input tensor.
+input_tensor_b (ttnn.Tensor or Number): the input tensor.</p>
 </dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc"><cite>true</cite> if input_tensor_b is non-zero for fast approximation, else <cite>false</cite> for accurate division (Only if the input tensor is not ComplexTensor). Defaults to <cite>false</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>rounding_mode</strong> (<em>string</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">can be <cite>None</cite>, <cite>floor</cite> and <cite>trunc</cite> (only if the input tensor is not ComplexTensor). Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">dtype of the output tensor. Integer division with <cite>rounding_mode=None</cite> only accepts <cite>None</cite> or <cite>ttnn.float32</cite>. Defaults to the dtype of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">preallocated output tensor. Defaults to <cite>None</cite>.</span></p></li>
-</ul>
+<dt>Keyword args:</dt>
+<dd>
+<p>memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to <cite>None</cite>.
+fast_and_approximate_mode (bool, optional): <cite>true</cite> if input_tensor_b is non-zero for fast approximation, else <cite>false</cite> for accurate division (Only if the input tensor is not ComplexTensor). Defaults to <cite>false</cite>.
+rounding_mode (string, optional): can be <cite>None</cite>, <cite>floor</cite> and <cite>trunc</cite> (only if the input tensor is not ComplexTensor). Defaults to <cite>None</cite>.
+dtype (ttnn.DataType, optional): dtype of the output tensor. Integer division with <cite>rounding_mode=None</cite> only accepts <cite>None</cite> or <cite>ttnn.float32</cite>. Defaults to the dtype of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, or FLOAT32 when an INT32 input is promoted by a floating-point scalar.
+output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to <cite>None</cite>.</p>
 </dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
+<dt>Returns:</dt>
+<dd>
+<p>ttnn.Tensor: the output tensor.</p>
 </dd>
 </dl>
 <p>Binary elementwise operations, C=op(A,B), support input tensors A and B in tile and row major layouts (unless dtype requires specific layout, e.g. BFLOAT8_B or BFLOAT4_B), in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are independent, and can have different tensor specs, with restrictions as in notes below.</p>
@@ -431,8 +426,9 @@
 <p>Performance considerations:
 Elementwise operations operate natively in tile format, tiled tensors are preferred as an input, and row-major tensors are tilized and untilized during the operation.
 L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.</p>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
+<dl>
+<dt>Note:</dt>
+<dd>
 <p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
@@ -451,10 +447,15 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 <p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
 <p>Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.</p>
 <p>UINT32 (range: [0, 4294967295]) is not a natively supported operand dtype. When one operand is float-family and the other is INT32 or UINT32, the integer operand is automatically typecast to the float operand’s dtype before device execution; output dtype follows the promoted float dtype.</p>
+</dd>
+</dl>
+<p>With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode <cite>None</cite> produces a FLOAT32 output and output datatype conversion is not supported, while <cite>floor</cite> and <cite>trunc</cite> produce an INT32 output.
+For these INT32 operands with rounding_mode <cite>floor</cite> or <cite>trunc</cite>, division by zero and INT32_MIN / -1 are undefined, regardless of <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code>.
+For floating-point division (including promoted INT32 inputs), when <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>True</cite>, operation assumes that <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> is not zero for fast approximation.
+When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>False</cite> (default), floating-point division properly handles division by zero (accurate mode).</p>
 </div>
-<p>With INT32 inputs, rounding_mode <cite>None</cite> produces a FLOAT32 output and output datatype conversion is not supported, while <cite>floor</cite> and <cite>trunc</cite> produce an INT32 output.
-When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>True</cite>, operation assumes that <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> is not zero for fast approximation.
-When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>False</cite> (default), operation properly handles division by zero (accurate mode).</p>
+</blockquote>
+<p>An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as <cite>2.0</cite>. The default output dtype is FLOAT32. Use an integer scalar (for example, <cite>2</cite> instead of <cite>2.0</cite>) to retain integer-scalar semantics.</p>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">

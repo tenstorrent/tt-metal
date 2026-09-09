@@ -355,7 +355,7 @@
 </dt>
 <dd>
 <p>DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.</p>
-<p>score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]</p>
+<p>score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]</p>
 <p>ReLU(q.kT) gated by the learned per-head weights and summed over ALL Hi
 index heads into one shared selection row [B, 1, Sq, T]. For MiniMax M3’s
 raw-dot, per-GQA-group indexer, use <code class="docutils literal notranslate"><span class="pre">indexer_score_msa</span></code> instead.</p>
@@ -366,8 +366,8 @@ raw-dot, per-GQA-group indexer, use <code class="docutils literal notranslate"><
 <ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>q</strong></span><span class="tt-api-param-desc">[B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>k</strong></span><span class="tt-api-param-desc">[B, 1, T, D] bf16 or bfp8_b tiled, single shared head</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>weights</strong></span><span class="tt-api-param-desc">[B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
-pre-folded)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>weights</strong></span><span class="tt-api-param-desc">[B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale
+pre-folded).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>chunk_start_idx</strong></span><span class="tt-api-param-desc">absolute global position of rank 0’s query row 0
 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
 visible to query s iff t &lt;= chunk_start + s). OMIT on a mesh -&gt;
