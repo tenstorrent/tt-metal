@@ -357,14 +357,28 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  # Bakes the source tree and this run's build output into one image the unit-test
-  # legs run in, so they need no artifact download and no recursive checkout. One
-  # bake serves all three tiers, since they share the one build-artifact above.
-  # PROFILE=full because the legs read /work/build; the dev base is the same image
-  # docker-image resolves to, so the image path and the fallback path agree.
+  # Bakes the source tree and this run's build output into one image the unit and
+  # e2e legs run in, so they need no artifact download and no recursive checkout.
+  # One bake serves all six of those jobs, since they share the one build-artifact
+  # above. PROFILE=full because the legs read /work/build, and /work/runtime for
+  # e2e; the dev base is the same image docker-image resolves to, so the image path
+  # and the fallback path agree.
+  #
+  # The if: is the disjunction of those six jobs' own conditions, so the bake is
+  # skipped when none of them will run. build-artifact alone is too weak a gate:
+  # has-any-tests also counts the sweep and vLLM legs, which take the artifact path,
+  # so a sweep-only dispatch would otherwise checkout, build and push an image that
+  # nothing pulls. Extend this when a new consumer is wired, or it will fall back to
+  # the artifact path for no reason.
   bake-env-dev-full:
-    needs: build-artifact
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    needs: [build-artifact, preflight]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
+     ((inputs.run-unit-tests && ((inputs.tier-1 && needs.preflight.outputs.has-t1-unit == 'true') ||
+                                 (inputs.tier-2 && needs.preflight.outputs.has-t2-unit == 'true') ||
+                                 (inputs.tier-3 && needs.preflight.outputs.has-t3-unit == 'true'))) ||
+      (inputs.run-e2e-tests  && ((inputs.tier-1 && needs.preflight.outputs.has-t1-e2e == 'true') ||
+                                 (inputs.tier-2 && needs.preflight.outputs.has-t2-e2e == 'true') ||
+                                 (inputs.tier-3 && needs.preflight.outputs.has-t3-e2e == 'true')))) }}
     uses: ./.github/workflows/build-prebuilt-tests-image.yaml
     permissions:
       contents: read
