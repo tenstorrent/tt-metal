@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.gemma4.tt.vision.vision_ccl import tp_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 
 
@@ -28,12 +29,15 @@ class Gemma4VisionMLP(LightweightModule):
         self.args = args
         self.dim = args.dim
         self.cluster_shape = args.cluster_shape
-        # We TP across cluster axis 1 (the row axis on T3K, i.e. all 8 devices).
-        self.tp = self.cluster_shape[1]
-        # For T3K (1, 8), `tt_all_reduce` ignores `cluster_axis` and falls
-        # straight into `reduce_scatter_minimal_async` over the non-1 axis,
-        # so any cluster_axis other than 1 (which is short-circuited) works.
-        self.ccl_cluster_axis = 0
+        # We TP across cluster axis 1 (all devices of the mesh).
+        self.tp = args.tp
+
+        if self.tp > 1:
+            col_mapper = args.mesh_config.column_parallel(self.mesh_device)
+            row_mapper = args.mesh_config.row_parallel(self.mesh_device)
+        else:
+            col_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            row_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
@@ -41,17 +45,20 @@ class Gemma4VisionMLP(LightweightModule):
             self.state_dict[f"{state_dict_prefix}.{name}.linear.weight"], -2, -1
         )
 
+        # The on-disk tensorbins hold the per-device shard, so the TP width is part
+        # of the cache identity.
+        tp_suffix = f"_tp{self.tp}" if self.tp > 1 else ""
         if args.dummy_weights or weight_cache_path is None:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
+            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{tp_suffix}"
 
         # Simplified tensor creation with DRAM memory config
-        as_weight_tensor = lambda name, dims, type: ttnn.as_tensor(
+        as_weight_tensor = lambda name, dims, mapper, type: ttnn.as_tensor(
             pad_hidden_dim(torch_weight(name[:]), dims[0]),
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
@@ -60,11 +67,15 @@ class Gemma4VisionMLP(LightweightModule):
         self.four_bit_mlp = args.optimizations.bfp4_mlp
         # ---- gate_proj and up_proj: column-sharded ----------------------------------------------------
         # Shape: [1, 1, dim, hidden_dim]; shard dim=-1 across cluster axis 1.
-        self.gate_proj = as_weight_tensor("w1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
-        self.up_proj = as_weight_tensor("w3", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
+        mlp_dtype = ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b
+        self.gate_proj = as_weight_tensor("w1", (-1, -2), col_mapper, mlp_dtype)
+        self.up_proj = as_weight_tensor("w3", (-1, -2), col_mapper, mlp_dtype)
         # ---- down_proj: row-sharded -------------------------------------------------------
         # Shape: [1, 1, hidden_dim, dim]; shard dim=-2 across cluster axis 1.
-        self.down_proj = as_weight_tensor("w2", (-2, -1), ttnn.bfloat8_b)
+        # ``args.hidden_dim`` is padded to a multiple of tile_size * tp, and the padded
+        # lanes are zero in both halves, so the per-device shards stay tile-aligned and
+        # contribute nothing to the sum.
+        self.down_proj = as_weight_tensor("w2", (-2, -1), row_mapper, ttnn.bfloat8_b)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
@@ -100,7 +111,7 @@ class Gemma4VisionMLP(LightweightModule):
         ttnn.deallocate(gate_out)
 
         # fc2: row-sharded matmul. Each device computes a partial sum of the
-        # full output dim. We fold the bias in *after* the all-reduce.
+        # full output dim.
         out = ttnn.linear(
             down_in,
             self.down_proj,
@@ -111,25 +122,10 @@ class Gemma4VisionMLP(LightweightModule):
         )
         ttnn.deallocate(down_in)
 
-        # # On T3K (1, 8) `tt_all_reduce(dim=3)` is implemented as a
-        # # reduce_scatter, so the result is fractured along dim=3 -- exactly
-        # # the block I/O contract that the LLM uses.
-        # ttnn.synchronize_device(self.mesh_device)
-        # out = tt_all_reduce(
-        #     out_partial,
-        #     self.mesh_device,
-        #     self.tt_ccl,
-        #     cluster_axis=self.ccl_cluster_axis,
-        #     dim=3,
-        #     sharded=False,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     dtype=self.args.ccl_dtype,
-        #     topology=self.args.ccl_topology(),
-        # )
-        # if out is not out_partial:
-        #     ttnn.deallocate(out_partial)
-
         original_shape = out.shape
-        return ttnn.reshape(
+        out = ttnn.reshape(
             out, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
+
+        # Sum the partial sums so the block output is replicated again.
+        return tp_all_reduce(out, self.args)

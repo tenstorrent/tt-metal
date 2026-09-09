@@ -103,54 +103,43 @@ class VisionTower(LightweightModule):
     def _replicate_mapper(self):
         return ttnn.ReplicateTensorToMesh(self.mesh_device) if self.is_mesh_device else None
 
-    def _dp_mappers(self):
-        """Mesh mappers for data-parallel (DP) mode: shard the batch dim across devices
-        (1 image/device when ``batch == num_devices``). Weights stay replicated; only the
-        input activations are sharded, so every downstream op (matmul vs replicated weights,
-        RMSNorm, pooler) runs per-device with no cross-device comms."""
-        if not self.is_mesh_device:
-            return self._replicate_mapper(), None, None
-        # pixel_values is unsqueezed to [1, batch, num_patches, in_dim] -> shard dim 1 (batch).
-        # position_ids [batch, num_patches, 2] and padding [batch, num_patches] -> shard dim 0.
-        return (
-            ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
-            ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-        )
+    def forward(self, pixel_values, pixel_position_ids, seq_len):
+        """Encode ONE image's patches to pooled soft tokens.
 
-    def forward(self, pixel_values, pixel_position_ids, seq_len, *, data_parallel: bool = False):
-        """Encode image patches to pooled soft tokens.
+        The tower is tensor-parallel across the whole mesh (see ``VisionAttention`` /
+        ``Gemma4VisionMLP``), so it always runs a single image and every device holds
+        the full activation. Callers with more than one image loop over users.
 
         Args:
-            pixel_values (torch.Tensor): Flattened patch pixels ``[batch, num_patches, 3*patch_size^2]``.
-            pixel_position_ids (torch.LongTensor): Patch (x, y) positions ``[batch, num_patches, 2]``
+            pixel_values (torch.Tensor): Flattened patch pixels ``[1, num_patches, 3*patch_size^2]``.
+            pixel_position_ids (torch.LongTensor): Patch (x, y) positions ``[1, num_patches, 2]``
                 (padding patches are ``(-1, -1)``).
             seq_len (int): Padded sequence length the encoder blocks run at (>= num_patches).
-            data_parallel (bool): If True, shard the batch dim across the mesh devices (DP),
-                one image per device when ``batch == num_devices``. Weights stay replicated.
-                Default False (replicate inputs across devices — the original single-image path).
 
         Returns:
-            pooled (ttnn.Tensor): ``[1, batch, output_length, hidden_size]`` scaled soft tokens
-                (sharded along the batch dim when ``data_parallel=True``).
-            mask (torch.BoolTensor): ``[batch, output_length]`` (True = valid token); use it to strip
+            pooled (ttnn.Tensor): ``[1, 1, output_length, hidden_size]`` scaled soft tokens,
+                replicated across the mesh.
+            mask (torch.BoolTensor): ``[1, output_length]`` (True = valid token); use it to strip
                 padded soft tokens (``pooled[mask]``), matching ``Gemma4VisionModel``.
         """
-        padding_positions = (pixel_position_ids == -1).all(dim=-1)  # [batch, num_patches]
+        batch = pixel_position_ids.shape[0]
+        if batch != 1:
+            raise ValueError(
+                f"VisionTower is tensor-parallel and runs batch=1 only (got batch={batch}). "
+                "Loop over users and call it once per image."
+            )
+        padding_positions = (pixel_position_ids == -1).all(dim=-1)  # [1, num_patches]
         num_patches = pixel_position_ids.shape[1]
         output_length = num_patches // (self.pooling_kernel_size**2)
 
-        if data_parallel:
-            pixel_mapper, pos_mapper, pad_mapper = self._dp_mappers()
-        else:
-            pixel_mapper = pos_mapper = pad_mapper = self._replicate_mapper()
+        replicate = self._replicate_mapper()
         pixel_values_tt = ttnn.from_torch(
-            pixel_values.unsqueeze(0),  # [1, batch, num_patches, in_dim]
+            pixel_values.unsqueeze(0),  # [1, 1, num_patches, in_dim]
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=pixel_mapper,
+            mesh_mapper=replicate,
         )
         position_ids_tt = ttnn.from_torch(
             pixel_position_ids.to(torch.int32),
@@ -158,7 +147,7 @@ class VisionTower(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=pos_mapper,
+            mesh_mapper=replicate,
         )
         padding_positions_tt = ttnn.from_torch(
             padding_positions.to(torch.int32),
@@ -166,7 +155,7 @@ class VisionTower(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=pad_mapper,
+            mesh_mapper=replicate,
         )
 
         # Patch embedding (projected patches + 2D positional embeddings).
@@ -191,7 +180,6 @@ class VisionTower(LightweightModule):
             pixel_position_ids=pixel_position_ids,
             padding_positions=padding_positions,
             output_length=output_length,
-            data_parallel=data_parallel,
         )
         ttnn.deallocate(encoder_output)
 

@@ -7,6 +7,8 @@ import math
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.qwen3_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -21,14 +23,26 @@ class ModelOptimizations:
 
 
 class VisionModelArgs(ModelArgs):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, mesh_config=None, ccl_manager=None, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # Tensor parallelism: the vision tower is sharded across every device of the
+        # mesh (attention by heads, MLP by intermediate dim), and each block ends in an
+        # all-reduce so activations stay replicated at the block boundaries. Batch is
+        # always 1 — callers loop over users.
+        self.tp = self.cluster_shape[1] if self.cluster_shape else 1
+        if self.tp > 1:
+            self.mesh_config = mesh_config or MeshConfig(self.mesh_device.shape, decode=ModeConfig(tp=self.tp))
+            self.ccl_manager = ccl_manager or CCLManager(self.mesh_device)
+        else:
+            self.mesh_config = None
+            self.ccl_manager = None
 
         # Core dimensions from HF config
         self.dim = self.hf_config.vision_config.hidden_size
         self.unpadded_hidden_dim = self.hf_config.vision_config.intermediate_size
         self.hidden_dim = nearest_multiple(  # pad to a tile multiple per device
-            self.unpadded_hidden_dim, self.tile_size * self.num_devices
+            self.unpadded_hidden_dim, self.tile_size * self.tp
         )
         if self.hidden_dim != self.unpadded_hidden_dim:
             logger.info(f"padding hidden dim from {self.unpadded_hidden_dim} to {self.hidden_dim}")
@@ -60,7 +74,8 @@ class VisionModelArgs(ModelArgs):
             fuse_batch=seq_len <= 1024,
         )
 
-        assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+        assert self.n_heads % self.tp == 0, f"n_heads ({self.n_heads}) must be divisible by TP ({self.tp})"
+        assert self.n_kv_heads % self.tp == 0, f"n_kv_heads ({self.n_kv_heads}) must be divisible by TP ({self.tp})"
 
     def prepare_residual_tensor_prefill(self, x_bsh):
         """
@@ -69,8 +84,10 @@ class VisionModelArgs(ModelArgs):
         B: batch (1)
         S: sequence len
         H: dim
+
+        Activations are replicated: the tower is tensor-parallel, so every device
+        needs the full hidden dim at each block boundary.
         """
-        print("x_bsh", x_bsh.shape)
         x_1BSH = x_bsh.unsqueeze(0)
 
         # input goes to DRAM
@@ -80,7 +97,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         return xs_1BSH
 

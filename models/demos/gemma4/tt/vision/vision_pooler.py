@@ -93,12 +93,8 @@ class VisionPooler(LightweightModule):
         weights_t = weights.transpose(1, 2).contiguous()  # [batch, length, seq]
         return weights_t, mask
 
-    def _to_device(self, torch_tensor, data_parallel: bool = False):
-        if data_parallel and self.is_mesh_device:
-            # weights_t is [1, batch, length, seq] -> shard dim 1 (batch); valid is [1, batch, seq, 1] -> shard dim 1.
-            mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=1)
-        else:
-            mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if self.is_mesh_device else None
+    def _to_device(self, torch_tensor):
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if self.is_mesh_device else None
         return ttnn.from_torch(
             torch_tensor,
             device=self.mesh_device,
@@ -108,24 +104,19 @@ class VisionPooler(LightweightModule):
             mesh_mapper=mapper,
         )
 
-    def forward(
-        self, hidden_states, pixel_position_ids, padding_positions, output_length, *, data_parallel: bool = False
-    ):
+    def forward(self, hidden_states, pixel_position_ids, padding_positions, output_length):
         """Pool encoder patch features to soft tokens and scale by ``sqrt(hidden_size)``.
 
         Args:
             hidden_states: ttnn.Tensor ``[1, batch, seq, hidden_size]`` encoder output
-                (sharded along the batch dim when ``data_parallel=True``), with the padding tokens
-                already stripped to the true patch count (``seq == pixel_position_ids.shape[1]``).
+                (replicated across the mesh), with the padding tokens already stripped to
+                the true patch count (``seq == pixel_position_ids.shape[1]``).
             pixel_position_ids: torch.LongTensor ``[batch, seq, 2]`` patch positions.
             padding_positions: torch.BoolTensor ``[batch, seq]`` (True = padding patch).
             output_length: int target number of soft tokens.
-            data_parallel (bool): If True, shard the host-built pooling matrix / validity mask
-                along the batch dim to match the sharded ``hidden_states``.
 
         Returns:
-            pooled: ttnn.Tensor ``[1, batch, output_length, hidden_size]`` scaled soft tokens
-                (sharded along batch when ``data_parallel=True``).
+            pooled: ttnn.Tensor ``[1, batch, output_length, hidden_size]`` scaled soft tokens.
             mask: torch.BoolTensor ``[batch, output_length]`` (True = valid token), for the
                 caller to strip padded soft tokens (``hidden_states[mask]``).
         """
@@ -138,7 +129,7 @@ class VisionPooler(LightweightModule):
         if seq_len != output_length:
             weights_t, mask = self._pooling_weights(pixel_position_ids, padding_positions, output_length)
             # [batch, length, seq] -> [1, batch, length, seq] to batch-matmul against hidden_states.
-            weights_tt = self._to_device(weights_t.unsqueeze(0), data_parallel=data_parallel)
+            weights_tt = self._to_device(weights_t.unsqueeze(0))
             pooled = ttnn.matmul(
                 weights_tt,
                 hidden_states,
@@ -150,7 +141,7 @@ class VisionPooler(LightweightModule):
             # No pooling: just zero out the padding patches (the reference's masked_fill).
             mask = padding_positions
             valid = torch.logical_not(padding_positions).to(torch.float32).unsqueeze(-1)  # [batch, seq, 1]
-            valid_tt = self._to_device(valid.unsqueeze(0), data_parallel=data_parallel)  # [1, batch, seq, 1]
+            valid_tt = self._to_device(valid.unsqueeze(0))  # [1, batch, seq, 1]
             pooled = ttnn.multiply(hidden_states, valid_tt)
             ttnn.deallocate(valid_tt)
 

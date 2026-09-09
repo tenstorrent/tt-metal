@@ -7,15 +7,15 @@ Tensor-parallel ("Megatron-style") variant of the qwen35_27b vision attention.
 
 Mirrors the LLM TP convention from `tt_transformers.tt.attention`:
 
-  in:  replicated x_11SH (the wrapping DistributedLayerNorm produced this)
+  in:  replicated x_11SH
   ──▶ column-sharded W_qkv (head-fractured) ──▶ per-device n_local_heads
   ──▶ SDPA → nlp_concat_heads
   ──▶ row-sharded W_o ──▶ partial sums
-  ──▶ tt_all_reduce(dim=3)  -> on T3K this is a reduce_scatter
-  out: fractured along dim=3 (each device owns dim/TP)
+  ──▶ all-reduce
+  out: replicated (full dim on every device)
 
-The fractured output then re-enters the next block's DistributedLayerNorm,
-which gathers it back to replicated.
+Keeping the block boundary replicated means the surrounding RMSNorms, residual
+adds, pooler and projector need no distributed variants.
 """
 
 import math
@@ -25,6 +25,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.vision.rms_norm import RMSNorm
+from models.demos.gemma4.tt.vision.vision_ccl import tp_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -158,7 +159,8 @@ class VisionAttention(LightweightModule):
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
+        # Tensor parallel: heads are fractured across every device of the mesh.
+        self.num_devices_per_group = configuration.tp
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
@@ -207,11 +209,25 @@ class VisionAttention(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
         )
 
+        # Column-parallel (head-fractured) for wqkv, row-parallel for wo. Replicated
+        # when the mesh is a single device.
+        self.mesh_config = configuration.mesh_config
+        if self.num_devices_per_group > 1:
+            col_mapper = self.mesh_config.column_parallel(self.mesh_device)
+            row_mapper = self.mesh_config.row_parallel(self.mesh_device)
+        else:
+            col_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            row_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        replicate_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
+        # The on-disk tensorbins hold the per-device shard, so the TP width is part
+        # of the cache identity.
+        tp_suffix = f"_tp{self.num_devices_per_group}" if self.num_devices_per_group > 1 else ""
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}{tp_suffix}")
 
         wq_str = f"{layer_name}.wq.linear"
         wk_str = f"{layer_name}.wk.linear"
@@ -261,11 +277,13 @@ class VisionAttention(LightweightModule):
                 ],
                 dim=-1,
             )
-            # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            # Prefill can use broadcasting on the bias add, so a [1, 1, 1, qkv_size]
+            # tensor is enough — and it lets the column mapper fracture it by head
+            # alongside wqkv.
             self.wqkv_bias_prefill = ttnn.as_tensor(
-                qkv_bias,
+                qkv_bias.reshape(1, 1, 1, -1),
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=col_mapper,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -316,13 +334,15 @@ class VisionAttention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
+        # qkv_cat is [1, 1, dim, tp * (q|k|v)_local]; column-sharding dim -1 hands each
+        # device exactly its own [wq_i | wk_i | wv_i] block.
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=col_mapper,
             cache_file_name=cache_name("wqkv"),
         )
 
@@ -384,12 +404,12 @@ class VisionAttention(LightweightModule):
             # note that torch weights are already transposed to have input in last dim
             pt_wo_t = self.state_dict[f"{wo_str}.weight"]
             # pt_wo_t.shape = [1280, 1280]
-            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
+            heads = pt_wo_t.reshape(-1, self.n_heads, self.head_dim)
             # heads.shape = [-1, 8, 80]
             heads = torch.nn.functional.pad(
                 heads, (0, self.padded_head_dim - self.head_dim)
             )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
+            pt_wo = heads.reshape(1, 1, -1, self.n_heads * self.padded_head_dim).transpose(-1, -2)
             # pt_wo.shape = [1, 1, 768, 2560]
 
         else:
@@ -399,23 +419,26 @@ class VisionAttention(LightweightModule):
         #     pt_wo.shape[-2] // configuration.num_devices, pt_wo.shape[-1]
         # )
 
+        # pt_wo is [1, 1, n_heads * padded_head_dim, dim]; row-sharding dim -2 gives each
+        # device the rows belonging to its own heads, so its matmul is a partial sum of
+        # the full output dim (summed by the all-reduce in forward_prefill).
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=row_mapper,
             cache_file_name=cache_name("wo"),
         )
         # self.wo.shape = [1, 1, 384, 2560] each device of N300 sharded on dim=2
 
         if f"{wo_str}.bias" in self.state_dict:
-            # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            # Replicated, and added *after* the all-reduce so it is counted once.
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=replicate_mapper,
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -430,7 +453,7 @@ class VisionAttention(LightweightModule):
         self.scale = self.head_dim / self.padded_head_dim
 
         dram_shard_grid_width = 8
-        target_device_shape = (1, 1)  # each 1x1 device runs a vision model
+        target_device_shape = (1, self.num_devices_per_group)  # qkv is head-fractured over TP
         self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -595,12 +618,17 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
+
+        # wo is row-parallel, so each device holds a partial sum: reduce to the full
+        # output before the (replicated) bias add.
+        output_11SH = tp_all_reduce(output_11SH, self.configuration)
+
+        # FIXME: surely ttnn.linear bias should work?
+        if self.wo_bias_prefill is not None:
+            output_11SH = output_11SH + self.wo_bias_prefill
 
         return output_11SH

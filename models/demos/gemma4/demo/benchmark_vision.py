@@ -130,35 +130,30 @@ def test_benchmark_vision(mesh_device, batch_size, reset_seeds):
     num_patches = image_position_ids.shape[1]
     seq_len = _vision_encoder_seq_len(num_patches)
 
-    # Data-parallel: the vision model is replicated across devices, so DP = sharding the
-    # batch dim of the activations (1 image/device). Process ``num_devices`` images at a
-    # time (4 on a 4-device mesh). For batch=1 (or a single device) fall back to the
-    # replicated single-image path.
+    # The tower is tensor-parallel across every device and runs one image at a time,
+    # so a batch is just a loop over users.
     is_mesh = hasattr(mesh_device, "shape")
     num_devices = mesh_device.get_num_devices() if is_mesh else 1
-    dp = num_devices > 1 and batch_size >= num_devices and batch_size % num_devices == 0
-    chunk_size = num_devices if dp else batch_size
-    num_chunks = batch_size // chunk_size
     # Replicate the single encoded image to the full batch.
     pixel_values_batch = pixel_values.repeat(batch_size, 1, 1) if batch_size > 1 else pixel_values
     image_position_ids_batch = image_position_ids.repeat(batch_size, 1, 1) if batch_size > 1 else image_position_ids
     logger.info(
         f"Image: num_patches={num_patches}, encoder seq_len={seq_len}, text_hidden={text_hidden_size}, "
-        f"batch={batch_size}, num_devices={num_devices}, dp={dp}, chunks={num_chunks}x{chunk_size}"
+        f"batch={batch_size}, num_devices={num_devices}, tp={vision_args.tp}"
     )
 
     def _sync():
         ttnn.synchronize_device(mesh_device)
 
-    def _run_chunk(offset):
-        """Run tower + embedder on one chunk of ``chunk_size`` images (DP-sharded when ``dp``).
+    def _run_image(index):
+        """Run tower + embedder on one image (TP across the whole mesh).
 
         Returns (tower_ms, embed_ms, pooled_shape, proj_shape) and deallocates intermediates.
         """
-        pv = pixel_values_batch[offset : offset + chunk_size]
-        pi = image_position_ids_batch[offset : offset + chunk_size]
+        pv = pixel_values_batch[index : index + 1]
+        pi = image_position_ids_batch[index : index + 1]
         t0 = time.perf_counter()
-        pooled_tt, _mask = vision_tower(pv, pi, seq_len, data_parallel=dp)
+        pooled_tt, _mask = vision_tower(pv, pi, seq_len)
         _sync()
         t1 = time.perf_counter()
         projected_tt = embed_vision(pooled_tt)
@@ -174,22 +169,21 @@ def test_benchmark_vision(mesh_device, batch_size, reset_seeds):
 
     # ── Warmup (compile both tower + embedder kernels) ────────────────────
     logger.info("Warming up (compile)...")
-    for c in range(num_chunks):
-        _run_chunk(c * chunk_size)
+    _run_image(0)
     logger.info("Warmup complete")
 
     # ── Timed loop ────────────────────────────────────────────────────────
-    # Each iteration processes the whole batch (all chunks). Per-iteration totals are
-    # the sum over chunks, so per-image latency = total_min / batch_size and aggregate
-    # throughput = batch_size / (total_min / 1000).
+    # Each iteration processes the whole batch (one image per user). Per-iteration
+    # totals are the sum over users, so per-image latency = total_min / batch_size and
+    # aggregate throughput = batch_size / (total_min / 1000).
     tower_times, embed_times, total_times = [], [], []
     last_pooled_shape = last_proj_shape = None
-    logger.info(f"Running {num_iters} timed iterations (batch={batch_size}, {num_chunks} chunk(s) of {chunk_size})...")
+    logger.info(f"Running {num_iters} timed iterations (batch={batch_size}, one image at a time)...")
     for _i in range(num_iters):
         iter_tower = 0.0
         iter_embed = 0.0
-        for c in range(num_chunks):
-            t_ms, e_ms, p_shape, pr_shape = _run_chunk(c * chunk_size)
+        for u in range(batch_size):
+            t_ms, e_ms, p_shape, pr_shape = _run_image(u)
             iter_tower += t_ms
             iter_embed += e_ms
             last_pooled_shape, last_proj_shape = p_shape, pr_shape
@@ -205,7 +199,7 @@ def test_benchmark_vision(mesh_device, batch_size, reset_seeds):
         return mean, mn
 
     logger.info("")
-    logger.info(f"=== Vision benchmark results (batch_size={batch_size}, dp={dp}, chunk={chunk_size}x{num_chunks}) ===")
+    logger.info(f"=== Vision benchmark results (batch_size={batch_size}, tp={vision_args.tp}) ===")
     _stats("vision_tower", tower_times)
     _stats("embed_vision", embed_times)
     total_mean, total_min = _stats("vision_tower+embed_vision", total_times)

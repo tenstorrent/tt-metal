@@ -64,11 +64,12 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     )
     torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
-    # MLP receives replicated input (DistributedLayerNorm all-gathers before handing off to MLP)
+    # MLP receives replicated input; gate/up are column-parallel and down is row-parallel,
+    # so the all-reduce inside the MLP leaves the full hidden dim on every device.
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -77,15 +78,11 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 
-    # Output is fractured along dim=3 (intermediate/TP axis); concat across TP devices to recover
-    # full hidden dim. Axis 0 of the mesh is always replicated so concat on dim=1 and slice [:1].
+    # Output is replicated after the all-reduce: concat the per-device copies on dim 1
+    # and keep the first.
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            dims=(1, 3),
-            mesh_shape=model_args.cluster_shape,
-        ),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
     )
 
     tt_output_torch = tt_output_torch[:, :1, :, :]

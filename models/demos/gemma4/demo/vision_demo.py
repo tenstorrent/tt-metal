@@ -131,10 +131,13 @@ def encode_multimodal(prompt, image, processor):
 def test_demo_vision(mesh_device, batch_size, reset_seeds, is_ci_env):
     """Gemma-4 multimodal (image + text) generation demo.
 
+    The vision tower is tensor-parallel across every device and always runs one image
+    at a time, so batching is a plain loop over users.
+
     batch=1: single-user prefill + decode (vision encoded inline).
-    batch=32: vision tower runs num_devices images at a time (data-parallel), then the
-    text model prefills each user one at a time (single-user loop), then a batched
-    decode loop. All 32 users share the same image+prompt (throughput demo).
+    batch=32: the vision tower encodes each user's image in turn, then the text model
+    prefills each user one at a time (single-user loop), then a batched decode loop.
+    All 32 users share the same image+prompt (throughput demo).
     """
     import math
 
@@ -268,7 +271,7 @@ def test_demo_vision(mesh_device, batch_size, reset_seeds, is_ci_env):
         )
         next_token = _host_sample(prefill_logits, temperature, top_p)  # [1,1]
     else:
-        # Vision: tower runs num_devices images at a time (DP) -> per-user host embeds.
+        # Vision: TP tower runs one image per user in turn -> per-user host embeds.
         pixel_values_batch = pixel_values.repeat(batch_size, 1, 1)
         image_position_ids_batch = image_position_ids.repeat(batch_size, 1, 1)
         per_user_embeds = generator.encode_vision_batch(pixel_values_batch, image_position_ids_batch)

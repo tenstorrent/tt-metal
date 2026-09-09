@@ -217,7 +217,9 @@ def _gemma4_has_vision_weights(state_dict) -> bool:
     return any(k.startswith("model.vision_tower.") for k in state_dict.keys())
 
 
-def _build_gemma4_vision(mesh_device, state_dict, model_path, text_hidden_size, vision_dtype):
+def _build_gemma4_vision(
+    mesh_device, state_dict, model_path, text_hidden_size, vision_dtype, mesh_config=None, ccl_manager=None
+):
     """Build the on-device vision tower + multimodal embedder for a Gemma-4
     multimodal checkpoint. Mirrors ``Gemma4Generator.from_pretrained(..., multimodal=True)``.
 
@@ -230,7 +232,16 @@ def _build_gemma4_vision(mesh_device, state_dict, model_path, text_hidden_size, 
         return None, None, None, None
     pad_token_id = getattr(getattr(hf_config, "text_config", hf_config), "pad_token_id", 0)
     os.environ.setdefault("HF_MODEL", model_path)
-    vision_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=1, max_seq_len=8192)
+    # Share the text model's mesh/CCL setup so the vision tower's TP all-reduces
+    # reuse the same semaphores and link/topology tuning.
+    vision_args = VisionModelArgs(
+        mesh_device,
+        dummy_weights=True,
+        max_batch_size=1,
+        max_seq_len=8192,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
+    )
     vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
     vision_tower = VisionTower(
         args=vision_args,
@@ -514,52 +525,33 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return ttnn.reshape(image_embeds_tt, (num_valid, text_hidden))
 
     def encode_vision_batch(self, pixel_values_batch: torch.Tensor, image_position_ids_batch: torch.Tensor):
-        """Run the vision tower + embedder for a batch of images, ``num_devices``
-        at a time (data-parallel), and return per-user valid projected soft tokens
-        as a list of HOST ``[num_valid_u, text_hidden]`` tensors (bf16), in user order.
+        """Run the vision tower + embedder for a batch of images, one image at a time,
+        and return per-user valid projected soft tokens as a list of HOST
+        ``[num_valid_u, text_hidden]`` tensors (bf16), in user order.
 
-        Mirrors ``Gemma4Generator.encode_vision_batch``.
+        The tower is tensor-parallel over the whole mesh, so one image already uses
+        every device. Mirrors ``Gemma4Generator.encode_vision_batch``.
         """
         if not self.is_multimodal:
             raise RuntimeError("encode_vision_batch requires a multimodal Gemma-4 checkpoint.")
         is_mesh = hasattr(self.mesh_device, "shape")
-        num_devices = self.mesh_device.get_num_devices() if is_mesh else 1
         batch_size = int(pixel_values_batch.shape[0])
-        dp = num_devices > 1 and batch_size >= num_devices and batch_size % num_devices == 0
-        chunk_size = num_devices if dp else batch_size
-        num_chunks = batch_size // chunk_size
-        num_patches = image_position_ids_batch.shape[1]
-        seq_len = _vision_encoder_seq_len(num_patches)
 
         per_user_embeds: list[torch.Tensor] = []
         _t0 = time.perf_counter()
-        for c in range(num_chunks):
-            off = c * chunk_size
-            pv = pixel_values_batch[off : off + chunk_size]
-            pi = image_position_ids_batch[off : off + chunk_size]
-            pooled_tt, mask = self.vision_tower(pv, pi, seq_len, data_parallel=dp)
+        for u in range(batch_size):
+            embeds_tt = self.encode_vision(pixel_values_batch[u : u + 1], image_position_ids_batch[u : u + 1])
             ttnn.synchronize_device(self.mesh_device)
-            projected_tt = self.embed_vision(pooled_tt)
-            ttnn.synchronize_device(self.mesh_device)
-            if hasattr(pooled_tt, "deallocate"):
-                pooled_tt.deallocate(True)
-            if dp:
-                projected_host = ttnn.to_torch(
-                    projected_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)
-                )
-            elif is_mesh:
-                projected_host = ttnn.to_torch(ttnn.get_device_tensors(projected_tt)[0])
+            if is_mesh:
+                user_embeds = ttnn.to_torch(ttnn.get_device_tensors(embeds_tt)[0])
             else:
-                projected_host = ttnn.to_torch(projected_tt)
-            if hasattr(projected_tt, "deallocate"):
-                projected_tt.deallocate(True)
-            for u in range(chunk_size):
-                valid_idx = torch.where(mask[u])[0]
-                user_embeds = projected_host[0, u][valid_idx]
-                per_user_embeds.append(user_embeds.contiguous().to(torch.bfloat16))
+                user_embeds = ttnn.to_torch(embeds_tt)
+            if hasattr(embeds_tt, "deallocate"):
+                embeds_tt.deallocate(True)
+            per_user_embeds.append(user_embeds.contiguous().to(torch.bfloat16))
         logger.info(
-            f"Vision batch encode: {batch_size} images in {num_chunks} chunk(s) of {chunk_size} "
-            f"(dp={dp}) in {(time.perf_counter() - _t0) * 1000.0:.1f} ms"
+            f"Vision batch encode: {batch_size} image(s), one per iteration (TP) "
+            f"in {(time.perf_counter() - _t0) * 1000.0:.1f} ms"
         )
         return per_user_embeds
 
@@ -1195,7 +1187,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         instance = cls(model, model_args, mesh_device)
         # Auto-enable multimodal when the checkpoint ships vision weights (mirrors
         # the demo's ``multimodal=True`` default). The vision tower + embedder are
-        # built once on the full mesh (DP-capable); text-only serving is unaffected.
+        # built once, tensor-parallel over the full mesh; text-only serving is
+        # unaffected.
         if _gemma4_has_vision_weights(state_dict):
             vision_dtype_name = os.environ.get("GEMMA4_VISION_DTYPE", "bfloat8_b")
             vision_dtype = getattr(ttnn, vision_dtype_name, ttnn.bfloat8_b)
@@ -1205,7 +1198,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 instance.embed_vision,
                 instance.image_token_id,
                 instance.pad_token_id,
-            ) = _build_gemma4_vision(mesh_device, state_dict, model_path, text_hidden_size, vision_dtype)
+            ) = _build_gemma4_vision(
+                mesh_device,
+                state_dict,
+                model_path,
+                text_hidden_size,
+                vision_dtype,
+                mesh_config=getattr(model[0], "mesh_config", None),
+                ccl_manager=getattr(model[0], "ccl_manager", None),
+            )
             instance.is_multimodal = instance.vision_tower is not None and instance.embed_vision is not None
             logger.info(
                 "Gemma4 vLLM: multimodal enabled (image_token_id={}, pad_token_id={}, vision_dtype={})",

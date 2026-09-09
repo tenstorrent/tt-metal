@@ -1354,7 +1354,16 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
 
             # VisionModelArgs reads HF_MODEL env for the checkpoint path (like ModelArgs).
             os.environ.setdefault("HF_MODEL", model_path)
-            vision_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=1, max_seq_len=8192)
+            # Share the text model's mesh/CCL setup so the vision tower's TP
+            # all-reduces reuse the same semaphores and link/topology tuning.
+            vision_args = VisionModelArgs(
+                mesh_device,
+                dummy_weights=True,
+                max_batch_size=1,
+                max_seq_len=8192,
+                mesh_config=model.mesh_config,
+                ccl_manager=model.ccl_manager,
+            )
             vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
             vision_tower = VisionTower(
                 args=vision_args,
@@ -1441,16 +1450,11 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         return ttnn.reshape(image_embeds_tt, (num_valid, text_hidden))
 
     def encode_vision_batch(self, pixel_values_batch: torch.Tensor, image_position_ids_batch: torch.Tensor):
-        """Run the vision tower + embedder for a batch of images, ``num_devices`` at a
-        time (data-parallel: 1 image/device), and return the per-user valid projected
-        soft tokens as a list of HOST tensors.
+        """Run the vision tower + embedder for a batch of images, one image at a time,
+        and return the per-user valid projected soft tokens as a list of HOST tensors.
 
-        The vision model is replicated across devices, so DP = sharding the batch dim of
-        the activations (``data_parallel=True`` on ``VisionTower.forward``). Each DP chunk
-        of ``num_devices`` images is processed concurrently; the sharded projected output
-        is gathered to host and the valid (non-padded) soft tokens are extracted per user
-        with a host-side gather (the small integer valid indices touch the host, matching
-        the single-user ``encode_vision``).
+        The tower is tensor-parallel across the whole mesh, so a single image already
+        uses every device; batching is a plain loop over users.
 
         Args:
             pixel_values_batch: ``[B, num_patches, in_dim]`` torch.
@@ -1458,55 +1462,30 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
 
         Returns:
             list of ``B`` host tensors, each ``[num_valid_u, text_hidden]`` (bf16), in user
-            order. ``num_valid_u`` is identical across users when every image has the same
-            patch layout (the batched-demo case).
+            order.
         """
         if not self.is_multimodal:
             raise RuntimeError("encode_vision_batch requires from_pretrained(..., multimodal=True).")
         is_mesh = hasattr(self.mesh_device, "shape")
-        num_devices = self.mesh_device.get_num_devices() if is_mesh else 1
         batch_size = int(pixel_values_batch.shape[0])
-        dp = num_devices > 1 and batch_size >= num_devices and batch_size % num_devices == 0
-        chunk_size = num_devices if dp else batch_size
-        num_chunks = batch_size // chunk_size
-        num_patches = image_position_ids_batch.shape[1]
-        seq_len = _vision_encoder_seq_len(num_patches)
 
         per_user_embeds: list[torch.Tensor] = []
         _t0 = time.perf_counter()
-        for c in range(num_chunks):
-            off = c * chunk_size
-            pv = pixel_values_batch[off : off + chunk_size]
-            pi = image_position_ids_batch[off : off + chunk_size]
-            pooled_tt, mask = self.vision_tower(pv, pi, seq_len, data_parallel=dp)
+        for u in range(batch_size):
+            # encode_vision returns the compact, valid-only soft tokens, replicated
+            # across the mesh; take one device's copy back to host.
+            embeds_tt = self.encode_vision(pixel_values_batch[u : u + 1], image_position_ids_batch[u : u + 1])
             ttnn.synchronize_device(self.mesh_device)
-            projected_tt = self.embed_vision(pooled_tt)  # [1, chunk, output_length, text_hidden] (sharded)
-            ttnn.synchronize_device(self.mesh_device)
-            if hasattr(pooled_tt, "deallocate"):
-                pooled_tt.deallocate(True)
-            # Gather the projected tensor to host -> [1, chunk, output_length, text_hidden].
-            # DP sharded it along the batch dim (dim 1) across the mesh, so concatenate the
-            # shards back along dim 1. When NOT DP the tensor is replicated (same on every
-            # device), so take one device's copy via get_device_tensors (mirrors the gemma4
-            # vision unit tests).
-            if dp:
-                projected_host = ttnn.to_torch(
-                    projected_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)
-                )
-            elif is_mesh:
-                projected_host = ttnn.to_torch(ttnn.get_device_tensors(projected_tt)[0])
+            if is_mesh:
+                user_embeds = ttnn.to_torch(ttnn.get_device_tensors(embeds_tt)[0])
             else:
-                projected_host = ttnn.to_torch(projected_tt)
-            if hasattr(projected_tt, "deallocate"):
-                projected_tt.deallocate(True)
-            # mask: [chunk, output_length] host (True = valid). Strip padded soft tokens per user.
-            for u in range(chunk_size):
-                valid_idx = torch.where(mask[u])[0]  # [num_valid_u]
-                user_embeds = projected_host[0, u][valid_idx]  # [num_valid_u, text_hidden]
-                per_user_embeds.append(user_embeds.contiguous().to(torch.bfloat16))
+                user_embeds = ttnn.to_torch(embeds_tt)
+            if hasattr(embeds_tt, "deallocate"):
+                embeds_tt.deallocate(True)
+            per_user_embeds.append(user_embeds.contiguous().to(torch.bfloat16))
         logger.info(
-            f"Vision batch encode: {batch_size} images in {num_chunks} chunk(s) of {chunk_size} "
-            f"(dp={dp}) in {(time.perf_counter() - _t0) * 1000.0:.1f} ms"
+            f"Vision batch encode: {batch_size} image(s), one per iteration (TP) "
+            f"in {(time.perf_counter() - _t0) * 1000.0:.1f} ms"
         )
         return per_user_embeds
 
