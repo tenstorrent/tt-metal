@@ -73,6 +73,7 @@ struct PoolCBSizes {
 
     // Clear value CB
     uint32_t clear_value_cb_size{};
+    uint32_t clear_value_cb_npages{1};  // one per reader thread on Quasar
 
     // Input CB
     uint32_t in_cb_pagesize{};

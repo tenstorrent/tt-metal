@@ -794,7 +794,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
     // clear value CB (one entry per reader thread: each lane fills and reads its own copy)
     dfbs.push_back(
-        local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, params.num_threads_per_cluster, params.data_format));
+        local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, cb_sizes.clear_value_cb_npages, params.data_format));
     // raw input shard CB (borrowed input). Raw views only supply a base pointer (kernels undo the
     // lane stagger with ptr - lane * entry_size), but striding validation still needs num_entries %
     // num_threads, so view the region as num_threads * k aligned-down entries. k > 1 only when the
@@ -804,6 +804,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         const uint32_t k = std::max(1u, tt::div_up(total_bytes, k_max_stride_bytes));
         const uint32_t num_entries = params.num_threads_per_cluster * k;
         const uint32_t entry_size = (total_bytes / num_entries) & ~15u;
+        TT_FATAL(
+            entry_size > 0, "raw view: {} bytes cannot split into {} 16B-aligned entries", total_bytes, num_entries);
         return std::pair<uint32_t, uint32_t>{entry_size, num_entries};
     };
     const uint32_t in_shard_total_bytes = in_nbytes_c * input.shard_spec().value().shape[0];

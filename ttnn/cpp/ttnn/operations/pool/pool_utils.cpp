@@ -141,7 +141,9 @@ FactoryParameters get_factory_parameters(
     // tail lanes. TILE output stays single-lane (deliberate gap): its 32-stick tilize accumulation
     // and DFB_FAST_TILIZE entry count are not lane-aware.
     const bool tiled_output = output_layout == Layout::TILE;
-    const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? 4 : 1;
+    // One SPMD thread per Tensix engine; a Quasar cluster has 4 NEOs.
+    constexpr uint32_t kQuasarNeosPerCluster = 4;
+    const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? kQuasarNeosPerCluster : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)
@@ -213,7 +215,7 @@ uint32_t PoolCBSizes::local_cb_total() const {
     if (has_second_scalar_cb) {
         total += scalar_cb_pagesize * scalar_cb_npages;
     }
-    total += clear_value_cb_size;
+    total += clear_value_cb_size * clear_value_cb_npages;
     total += in_cb_pagesize * in_cb_npages;
     if (has_split_reader) {
         total += in_cb_pagesize * in_cb_npages;
@@ -254,6 +256,7 @@ PoolCBSizes calculate_pool_cb_sizes(
 
     // Clear value CB (-inf for maxpool, 0 for avgpool)
     sizes.clear_value_cb_size = tt::tile_size(params.data_format);
+    sizes.clear_value_cb_npages = params.num_threads_per_cluster;
 
     // Input CB
     uint32_t in_cb_sz = 0;

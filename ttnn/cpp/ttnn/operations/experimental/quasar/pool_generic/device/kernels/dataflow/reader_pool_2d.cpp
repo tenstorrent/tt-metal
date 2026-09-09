@@ -307,6 +307,12 @@ void kernel_main() {
     // cursor; no push — compute's census binding never waits)
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+#ifdef ARCH_QUASAR
+        // CPU-store fill; clear_out_tiles later NoC-reads this tile from SRAM — write it back
+        // (same as the scalar init below).
+        flush_l2_cache_range(
+            static_cast<uintptr_t>(clear_value_cb.get_write_ptr()), static_cast<size_t>(TILE_HEIGHT * TILE_WIDTH) * 2);
+#endif
         // for average pool the boundary fill in the large-kernel loop covers it, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
             // Clear the WHOLE in_cb ring with the pool identity (-inf for max, 0 for avg — a zero
