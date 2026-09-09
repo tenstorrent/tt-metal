@@ -207,6 +207,17 @@ class Qwen36Generator(ReadinessGenerator):
         # QWEN36_PREFILL_NARROW=0 restores the full-width prefill. Kept as the
         # reference path the per-slot PCC test compares against, and as an
         # escape hatch that needs no rebuild.
+        if os.environ.get("QWEN36_PREFILL_LOG_K"):
+            # How many rows a prefill call actually carries. vLLM may batch
+            # several requests into one scheduler step, in which case the
+            # narrowing below does not apply and the call runs full width.
+            # Whether that happens decides whether evals benefit at all, and it
+            # is not visible in the server log, so it has to be counted here.
+            print(
+                f"PREFILL_K active={len(active_slots)} batch={batch} "
+                f"physical_len={physical_len} lens={[l for l in prompt_lens if l]}",
+                flush=True,
+            )
         narrow_enabled = os.environ.get("QWEN36_PREFILL_NARROW", "1") != "0"
         single_slot = active_slots[0] if (narrow_enabled and len(active_slots) == 1 and batch > 1) else None
         if single_slot is not None:

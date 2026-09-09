@@ -19,7 +19,13 @@ import torch
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import ADVERTISED_CONTEXT, _require_tensor, _scan_matmul
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import (
+    ADVERTISED_CONTEXT,
+    _prefill_scan_mode,
+    _require_tensor,
+    _scan_matmul,
+    _sequential_recurrence,
+)
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import (
     OptimizedDecoder,
     _decode_program,
@@ -1045,6 +1051,58 @@ class MultichipDecoder(OptimizedDecoder):
         beta = ttnn.typecast(ttnn.reshape(beta, (groups, sequence, 1, 1)), ttnn.bfloat16)
         decay = ttnn.typecast(ttnn.reshape(decay, (groups, sequence, 1, 1)), ttnn.bfloat16)
 
+        if _prefill_scan_mode() == "sequential":
+            # functional_decoder has used the work-efficient recurrence since
+            # the prefill work, but this TP4 override replaces the whole chunk
+            # body, so Hillis-Steele stayed live on multichip and the
+            # algorithmic win never reached the full model. Composition costs
+            # O(K^3) per step against a rank-1 O(K*V) update, and its
+            # log2(sequence) rounds of concat/matmul over a
+            # (groups, sequence, 128, 128) state are thousands of host
+            # dispatches -- a batch-32 chunk sat at ~292% CPU with the device
+            # idle and tripped the serving dispatch-progress watchdog.
+            #
+            # Masking must change form with the algorithm. Hillis-Steele masks
+            # the composed operator (transform towards identity, bias towards
+            # zero). The recurrence has no composed operator, so a masked step
+            # is made a no-op through its own coefficients instead: decay 1 and
+            # beta 0 give decayed == state and delta == 0, carrying the state
+            # unchanged. Outputs at masked positions are never read, because
+            # terminal rows are selected by logit_positions.
+            sequence_mask = getattr(self, "_sequence_mask", None)
+            if sequence_mask is not None:
+                scan_mask = ttnn.reshape(sequence_mask, (self.batch, 1, sequence, 1))
+                scan_mask = ttnn.repeat(scan_mask, ttnn.Shape([1, value_heads, 1, 1]))
+                scan_mask = ttnn.reshape(scan_mask, (groups, sequence, 1, 1))
+                ttnn.multiply(beta, scan_mask, output_tensor=beta)
+                inverted = ttnn.add(ttnn.multiply(scan_mask, -1.0), 1.0)
+                ttnn.multiply(decay, scan_mask, output_tensor=decay)
+                ttnn.add(decay, inverted, output_tensor=decay)
+                ttnn.deallocate(inverted)
+                ttnn.deallocate(scan_mask)
+            attended, final_state = _sequential_recurrence(
+                query,
+                key,
+                value,
+                beta,
+                decay,
+                initial_state=self.caches["recurrent"],
+                groups=groups,
+                sequence=sequence,
+                value_dim=value_dim,
+                batch=self.batch,
+                value_heads=value_heads,
+            )
+            ttnn.copy(
+                ttnn.typecast(final_state, self.policy.linear_recurrent_state_dtype),
+                self.caches["recurrent"],
+            )
+            ttnn.deallocate(final_state)
+            ttnn.deallocate(query)
+            return self._linear_attention_prefill_chunk_tail(
+                attended, z, sequence, value_heads, value_dim, value_width
+            )
+
         identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
         zero = ttnn.multiply(identity, 0.0)
         key_t = ttnn.transpose(key, -2, -1)
@@ -1090,7 +1148,22 @@ class MultichipDecoder(OptimizedDecoder):
         final_state = ttnn.reshape(states[:, -1:], (self.batch, value_heads, value_dim, value_dim))
         ttnn.copy(ttnn.typecast(final_state, self.policy.linear_recurrent_state_dtype), self.caches["recurrent"])
 
-        output = ttnn.reshape(_scan_matmul(query, states), (self.batch, value_heads, sequence, value_dim))
+        return self._linear_attention_prefill_chunk_tail(
+            _scan_matmul(query, states), z, sequence, value_heads, value_dim, value_width
+        )
+
+    def _linear_attention_prefill_chunk_tail(self, attended, z, sequence, value_heads, value_dim, value_width):
+        """Gated norm, z gate and row-parallel output projection.
+
+        Takes the attended result -- query applied to the per-step state --
+        rather than the states, because the two scan modes produce different
+        things: _sequential_recurrence already returns q.state per step, while
+        the Hillis-Steele composition returns the states and multiplies by
+        query itself. Passing states here instead fails as
+        "width of the first tensor must be equal to the height of the second
+        tensor. Mismatch: width=128 height=1".
+        """
+        output = ttnn.reshape(attended, (self.batch, value_heads, sequence, value_dim))
         output = ttnn.rms_norm(
             output, epsilon=self.eps, weight=self.weights["gated_norm"], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )

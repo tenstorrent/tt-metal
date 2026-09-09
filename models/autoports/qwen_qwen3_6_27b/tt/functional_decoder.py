@@ -233,7 +233,23 @@ def _scan_matmul(a, b, *, compute_kernel_config=None):
     k_tiles = a.padded_shape[-1] // ttnn.TILE_SIZE
     m_tiles = a.padded_shape[-2] // ttnn.TILE_SIZE
     n_tiles = b.padded_shape[-1] // ttnn.TILE_SIZE
-    if grid != "0" and a.layout == ttnn.TILE_LAYOUT and min(k_tiles, m_tiles, n_tiles) >= 1:
+    # Only drive the tuned program for the shape it was tuned on: the scan
+    # matmul, whose operands are full 128x128 tiles. The recurrence also issues
+    # degenerate matmuls -- k_t . decayed is (1,K).(K,V) and the rank-1 update
+    # is (K,1).(1,V) -- whose logical inner or outer extent is 1. Tile padding
+    # hides that: a logical width of 1 pads to 32 and reports one tile, so a
+    # >=1 tile test passes and MatmulMultiCoreReuse is handed in0_block_w=1
+    # with a batch (groups) that does not divide the core grid. That does not
+    # fail; it hangs. Observed on TP4 at groups=384: the host span at 133% CPU
+    # with step stuck at 22 of 32, inside this call at
+    # _sequential_recurrence -> update = _scan_matmul(k_t^T, delta).
+    # Requiring every LOGICAL extent to be at least a full tile keeps the
+    # measured 4.21x on the scan matmul and leaves the degenerate ones to
+    # ttnn's own selection.
+    tuned_shape = (
+        min(int(a.shape[-1]), int(a.shape[-2]), int(b.shape[-1])) >= ttnn.TILE_SIZE
+    )
+    if grid != "0" and a.layout == ttnn.TILE_LAYOUT and tuned_shape and min(k_tiles, m_tiles, n_tiles) >= 1:
         gx, gy = (int(v) for v in grid.split("x"))
         kwargs["program_config"] = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(gx, gy),
