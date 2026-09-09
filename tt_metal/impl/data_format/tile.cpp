@@ -42,6 +42,14 @@ std::array<uint32_t, 2> get_default_face_shape(std::array<uint32_t, 2> tile_shap
     return (*it)[1];
 }
 
+void validate_transpose_height(uint32_t tile_height, bool transpose_tile) {
+    if (transpose_tile) {
+        TT_FATAL(
+            tile_height == constants::FACE_HEIGHT || tile_height == constants::TILE_HEIGHT,
+            "Tile height must equal 16 or 32 in transpose mode");
+    }
+}
+
 Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) :
     tile_shape(tile_shape),
     face_shape(get_default_face_shape(tile_shape)),
@@ -52,11 +60,7 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) :
     narrow_tile(static_cast<uint32_t>(tile_shape[1] < constants::TILE_WIDTH)),
     transpose_within_face(transpose_tile),
     transpose_of_faces(transpose_tile) {
-    if (transpose_tile) {
-        TT_FATAL(
-            (this->tile_shape[0] == constants::FACE_HEIGHT || this->tile_shape[0] == constants::TILE_HEIGHT),
-            "Tile height must equal 16 or 32 in transpose mode");
-    }
+    validate_transpose_height(this->tile_shape[0], transpose_tile);
 }
 
 Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shape, bool transpose_tile) :
@@ -125,6 +129,8 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
         "num_faces ({}) exceeds the maximum supported num_faces ({})",
         num_faces,
         MAX_NUM_FACES);
+
+    validate_transpose_height(this->tile_shape[0], transpose_tile);
 }
 
 uint32_t Tile::get_tile_size(const DataFormat& format) const {
