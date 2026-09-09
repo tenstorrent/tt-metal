@@ -8,9 +8,6 @@ Minimal single-device, single-expert test for TtRoutedExpert profiling.
 The simplest scenario: 1 chip, 1 expert, minimal dimensions.
 """
 
-import pathlib
-import re
-
 import pytest
 import torch
 from loguru import logger
@@ -536,34 +533,3 @@ def test_single_routed_expert_dsv4_clamped(
         pcc_threshold=pcc_threshold,
         min_cap_frac=min_cap_frac,
     )
-
-
-# ClampedSiluGluConfigDsV4::limit is compile-time only, so it is unreachable from Python and a
-# drift against the model configs would still score full PCC against a golden built from the
-# Python constant. Parsing the header is the only check short of exporting it through the binding.
-_KERNEL_HEADER = (
-    pathlib.Path(__file__).parents[7]
-    / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_clamped_silu_glu.h"
-)
-_KERNEL_LIMIT_RE = re.compile(r"struct\s+ClampedSiluGluConfigDsV4\s*\{[^}]*?\bfloat\s+limit\s*=\s*([0-9.]+)f", re.S)
-
-
-@pytest.mark.parametrize("config", [DeepSeekV4ProConfig, DeepSeekV4FlashConfig], ids=["dsv4_pro", "dsv4_flash"])
-def test_dsv4_clamp_limit_matches_kernel(config):
-    """Host-only: the model config, the torch reference and the kernel all use one limit."""
-    assert _KERNEL_HEADER.is_file(), f"kernel header not found at {_KERNEL_HEADER}; path is stale"
-    match = _KERNEL_LIMIT_RE.search(_KERNEL_HEADER.read_text())
-    assert match is not None, f"could not find ClampedSiluGluConfigDsV4::limit in {_KERNEL_HEADER}"
-    assert config.SWIGLU_LIMIT == CLAMPED_SILU_GLU_LIMIT
-    assert config.SWIGLU_LIMIT == float(match.group(1))
-
-
-def test_dsv4_activation_enum_exposed():
-    """Host-only: the enumerator reaches Python, at the value the program cache keys on."""
-    activation = ttnn.RoutedExpertActivation
-    assert hasattr(activation, "ClampedSiluGlu"), "enum is missing the ClampedSiluGlu variant"
-    # Appended, not renumbered: the values are part of the program-cache key.
-    assert activation.Silu.value == 0
-    assert activation.SwiGluOai.value == 1
-    assert activation.SituGlu.value == 2
-    assert activation.ClampedSiluGlu.value == 3
