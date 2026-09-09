@@ -9,7 +9,10 @@ memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, split_fused_conv_state
+from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
+
+_apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 
 
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
