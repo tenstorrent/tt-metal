@@ -54,7 +54,9 @@ curl -fsSL -o "$TMPDIR/clangbuildanalyzer.tar.gz" \
 echo "CLANGBUILDANALYZER_SHA256=$($SHA_CMD "$TMPDIR/clangbuildanalyzer.tar.gz" | cut -d' ' -f1)"
 echo ""
 
-# include-what-you-use
+# include-what-you-use. The version is half of a pin: IWYU_LLVM_MAJOR in
+# Dockerfile.tools has to move with it (0.24 is the clang-20 release), and it
+# feeds the tool tag hash in compute-tool-tags.sh, so bump the two together.
 IWYU_VERSION="${IWYU_VERSION:-0.24}"
 echo "Downloading include-what-you-use ${IWYU_VERSION}..."
 curl -fsSL -o "$TMPDIR/iwyu.tar.gz" \
