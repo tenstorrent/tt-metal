@@ -16,6 +16,13 @@ on:
         required: false
         type: string
         default: "not perf and not nightly and not quasar"
+      budget-type:
+        required: false
+        type: string
+        default: pr_gate
+        description: >-
+          Which of llk's allowances this run spends. Reporting only: budgets are
+          enforced from the `budget_type` field
       sku-allowlist:
         required: false
         type: string

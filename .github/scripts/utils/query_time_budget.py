@@ -177,13 +177,42 @@ def cron_runs_per_week(cron):
 
 
 def _workflow_call(job):
-    """Return (impl_basename, tier_value) for a reusable-workflow job, else None."""
+    """Return (impl_basename, tier_value, budget_type) for a reusable-workflow job.
+
+    `budget_type` is the caller's `budget-type:` input, or None when it does not
+    pass one. It says which allowance this particular invocation spends, which the
+    tests yaml cannot express when one list is run by two pipelines.
+    """
     uses = job.get("uses")
     if not isinstance(uses, str) or ".github/workflows/" not in uses:
         return None
     impl = uses.split(".github/workflows/", 1)[1].split("@", 1)[0].strip()
-    tier = (job.get("with") or {}).get("tier")
-    return os.path.basename(impl), tier
+    with_ = job.get("with") or {}
+    return os.path.basename(impl), with_.get("tier"), with_.get("budget-type")
+
+
+def impl_budget_type_defaults(workflows_dir):
+    """{impl_basename: default `budget-type` input} for impls that declare one.
+
+    A caller that omits `budget-type` spends the impl's default, so the default is
+    part of the attribution (pr-gate omits it and gets llk-smoke-impl's pr_gate).
+    """
+    defaults = {}
+    for path in glob.glob(os.path.join(workflows_dir, "*.y*ml")):
+        try:
+            with open(path, "r") as f:
+                data = yaml.safe_load(f)
+        except (yaml.YAMLError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        triggers = data.get("on", data.get(True)) or {}
+        call = triggers.get("workflow_call") if isinstance(triggers, dict) else None
+        inputs = (call or {}).get("inputs") or {} if isinstance(call, dict) else {}
+        spec = inputs.get("budget-type")
+        if isinstance(spec, dict) and "default" in spec:
+            defaults[os.path.basename(path)] = spec["default"]
+    return defaults
 
 
 def build_workflow_index(workflows_dir):
@@ -229,13 +258,20 @@ def build_workflow_index(workflows_dir):
     return index
 
 
-def discover_scheduled_runs(workflow_index, test_file, tier):
+def discover_scheduled_runs(workflow_index, test_file, tier, budget_type=None, impl_defaults=None):
     """Map a test file to {scheduled_workflow_basename: runs_per_week}.
 
     Walks the reuse graph: a test file is run by the impl whose TESTS_YAML_PATH
     references it, and that impl is triggered by scheduled caller workflows. When
     a tier is queried, callers that pass a non-matching `tier:` input are skipped.
+
+    When the impl takes a `budget-type` input, a caller only counts towards the
+    queried budget_type if that is the allowance it spends (its own input, else the
+    impl's default). Without this a tests yaml that declares several budget_types
+    would credit every one of them with every scheduled consumer -- charging the PR
+    gate with the sanity cron, for instance, when the gate has no cron at all.
     """
+    impl_defaults = impl_defaults or {}
     runner_names = {w["name"] for w in workflow_index if test_file in w["tests_yaml"]}
     runs = {}
     for w in workflow_index:
@@ -246,11 +282,15 @@ def discover_scheduled_runs(workflow_index, test_file, tier):
         if w["name"] in runner_names:
             runs[w["name"]] = weekly
         # A scheduled workflow that calls the impl which runs the test file.
-        for impl, tier_val in w["calls"]:
+        for impl, tier_val, call_budget_type in w["calls"]:
             if impl not in runner_names:
                 continue
             if tier is not None and tier_val is not None and str(tier_val) != str(tier):
                 continue
+            if budget_type is not None and impl in impl_defaults:
+                spends = call_budget_type if call_budget_type is not None else impl_defaults[impl]
+                if str(spends) != str(budget_type):
+                    continue
             runs[w["name"]] = weekly
     return runs
 
@@ -303,10 +343,14 @@ def main():
 
     # --- Estimated weekly machine-hours (cron-scheduled runs only) ---
     workflow_index = build_workflow_index(args.workflows_dir)
+    impl_defaults = impl_budget_type_defaults(args.workflows_dir)
     contributing_files = sorted({fname for fname, _, _, _ in breakdown})
     runs_by_workflow = {}
     for fname in contributing_files:
-        for workflow, weekly in discover_scheduled_runs(workflow_index, fname, args.tier).items():
+        scheduled = discover_scheduled_runs(
+            workflow_index, fname, args.tier, budget_type=args.testtype, impl_defaults=impl_defaults
+        )
+        for workflow, weekly in scheduled.items():
             runs_by_workflow[workflow] = weekly
     total_runs = sum(runs_by_workflow.values())
 

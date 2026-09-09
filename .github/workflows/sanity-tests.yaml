@@ -706,6 +706,7 @@ jobs:
       # is a separate call about sanity's time budget, not a side effect of wiring it up.
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
       ref: ${{ needs.resolve-ref.outputs.sha }}
+      budget-type: sanity
 
   # LLK Quasar build check (compile-only, no hardware). Mirrors pr-gate's llk-build-quasar.
   llk-build-quasar:

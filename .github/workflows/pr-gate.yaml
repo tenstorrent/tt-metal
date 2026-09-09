@@ -242,8 +242,7 @@ jobs:
           fi
 
           existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            --jq '[.[] | select(.body | contains("<!-- time-budget-check")) | .id] | first // empty')
-          if [ -n "$existing" ]; then
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- time-budget-check"))) | .id] | first // empty')          if [ -n "$existing" ]; then
             gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
               -F "body=@$BODY_FILE" >/dev/null
             echo "Updated time-budget comment $existing on PR #$PR_NUMBER."
