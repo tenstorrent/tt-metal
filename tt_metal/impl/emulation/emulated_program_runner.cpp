@@ -2591,6 +2591,15 @@ static tt_emule::RankState& emule_rank_state() {
         }
         return s;
     }();
+    // `done` means this process has permanently left the emulated job, not that one dispatch
+    // completed. Peers must keep treating a rank as live while its host is between dispatches: it
+    // may enter another dispatch and deliver again. Construct this after rs so its destructor runs
+    // first and can publish normal process departure while the shared mapping is still valid.
+    static const struct RankDeparture {
+        tt_emule::RankState* state;
+        ~RankDeparture() { state->note_departed(); }
+    } rank_departure{&rs};
+    (void)rank_departure;
     return rs;
 }
 
@@ -4747,10 +4756,6 @@ void run_mesh_dispatch() {
             // A suspension disarms cleanup because the rank is not finished yet.
             if (armed) {
                 clear_suspended_run_state();
-                // A rank that finished stops delivering forever, just as a faulted one does. Without
-                // this a peer sits in PeerWait on a rank that has already left, and the fixed point it
-                // is waiting for can never be reached.
-                emule_rank_state().note_done();
             }
             if (std::uncaught_exceptions() > 0) {
                 emule_rank_state().note_faulted();
@@ -4799,7 +4804,6 @@ static void pump_device_locked() {
         auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
         if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
             clear_suspended_run_state();
-            emule_rank_state().note_done();
         } else {
             suspend_emule_run(oc);
         }
