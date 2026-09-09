@@ -197,12 +197,8 @@ The following metrics are automatically computed from raw counters. Each metric 
 *TDMA Stall Metrics*
 
 - **Data Hazard Stall Rate (%)**: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as ``(MATH_INSTRN_AVAILABLE - MATH_NOT_D2S_STALLED) / MATH_INSTRN_AVAILABLE``.
-- **SrcA Write Port Blocked Rate (%)**: Fraction of srcA DMA write attempts blocked by port unavailability (DMA mux contention).
-- **SrcB Write Port Blocked Rate (%)**: Same for srcB.
+- **SrcB Write Port Blocked Rate (%)**: Fraction of srcB DMA write attempts blocked by port unavailability (DMA mux contention).
 - **SrcA Write Overwrite Blocked Rate (%)**: Fraction of srcA write attempts blocked by overwrite protection — math hasn't consumed the previous value yet. High values indicate math-consumer bottleneck.
-- **SrcB Write Overwrite Blocked Rate (%)**: Same for srcB.
-- **Dest Read Backpressure (%)**: Cycles where destination register read was requested but not granted.
-- **Math Dest Write Port Stall Rate (%)**: Fraction of math-valid cycles stalled by destination register write port contention. Skipped when the underlying counter is 0 for an entire op (workload-dependent).
 - **Math Scoreboard Stall Rate (%)**: Cycles where math was stalled by FPU data hazard scoreboard.
 
 *Instruction Availability*

@@ -164,10 +164,8 @@ def compute_metrics(v: CounterView) -> dict:
     math_thread_stall = safe_div(stalls_1, instrn_cycles)
     pack_thread_stall = safe_div(stalls_2, instrn_cycles)
 
-    sem_wait_1 = v.count("INSTRN_THREAD", "WAITING_FOR_NONZERO_SEM_1")
-    sem_wait_2 = v.count("INSTRN_THREAD", "WAITING_FOR_NONZERO_SEM_2")
-    math_sem_wait = safe_div(sem_wait_1, instrn_cycles)
-    pack_sem_wait = safe_div(sem_wait_2, instrn_cycles)
+    math_sem_wait = _instrn_rate("WAITING_FOR_NONZERO_SEM_1")
+    pack_sem_wait = _instrn_rate("WAITING_FOR_NONZERO_SEM_2")
 
     srca_write = v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
     srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
@@ -230,7 +228,6 @@ def compute_metrics(v: CounterView) -> dict:
     packer0_util = safe_div(pb[0], pack_cycles) if v.has("PACKER_BUSY_0") else None
     packer1_util = safe_div(pb[1], pack_cycles) if v.has("PACKER_BUSY_1") else None
     packer2_util = safe_div(pb[2], pack_cycles) if v.has("PACKER_BUSY_2") else None
-    packer3_util = safe_div(pb[3], pack_cycles) if v.has("PACKER_BUSY_0") else None
     # Idle engines count as zero (100% imbalance), so gate on presence of all four, not on activity.
     _engines = ("PACKER_BUSY_0", "PACKER_BUSY_1", "PACKER_BUSY_2", "PACKER_BUSY")
     packer_imbalance = safe_div(max(pb) - min(pb), max(pb)) if all(v.has(n) for n in _engines) else None
@@ -284,11 +281,8 @@ def compute_metrics(v: CounterView) -> dict:
     unpack_instrn_avail_t0 = _instrn_rate("UNPACK_INSTRN_AVAILABLE_0")
     pack_instrn_avail_t2 = _instrn_rate("PACK_INSTRN_AVAILABLE_2")
 
-    srca_write_port_blocked = one_minus(safe_div(srca_write, srca_avail))
     srca_write_ovr_blocked = one_minus(safe_div(v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_OVR"), srca_avail))
-    srcb_write_ovr_blocked = one_minus(safe_div(srcb_write, srcb_avail))
     srcb_write_port_blocked = one_minus(safe_div(v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_PORT"), srcb_avail))
-    dest_read_backpressure = one_minus(safe_div(dest_granted, dest_read))
 
     risc_core_l1_util = (
         safe_div(v.count("L1", "L1_0_TDMA_BUNDLE_0_RISC"), l1_cycles) if v.has("L1_0_TDMA_BUNDLE_0_RISC") else None
@@ -474,7 +468,6 @@ def compute_metrics(v: CounterView) -> dict:
         "packer0_util_pct": pct(packer0_util),
         "packer1_util_pct": pct(packer1_util),
         "packer2_util_pct": pct(packer2_util),
-        "packer3_util_pct": pct(packer3_util),
         "packer_load_imbalance_pct": pct(packer_imbalance),
         "pack_dest_grant_eff_pct": pct(pack_dest_grant_eff),
         # Source-register write completion efficiency
@@ -505,12 +498,9 @@ def compute_metrics(v: CounterView) -> dict:
         "math_instrn_avail_t1_pct": pct(math_instrn_avail_t1),
         "unpack_instrn_avail_t0_pct": pct(unpack_instrn_avail_t0),
         "pack_instrn_avail_t2_pct": pct(pack_instrn_avail_t2),
-        # Write-blocked complements
-        "srca_write_port_blocked_pct": pct(srca_write_port_blocked),
+        # Write-blocked rates (the other blocking mode of each source; the first is 1 - its efficiency)
         "srca_write_ovr_blocked_pct": pct(srca_write_ovr_blocked),
-        "srcb_write_ovr_blocked_pct": pct(srcb_write_ovr_blocked),
         "srcb_write_port_blocked_pct": pct(srcb_write_port_blocked),
-        "dest_read_backpressure_pct": pct(dest_read_backpressure),
         # L1 per-port + grant efficiency
         "risc_core_l1_util_pct": pct(risc_core_l1_util),
         "l1_port1_util_pct": pct(l1_port1_util),
@@ -606,18 +596,14 @@ METRIC_LABELS = {
     "math_scoreboard_stall_pct": "Math Scoreboard Stall Rate",
     "srca_write_eff_pct": "SrcA Write Actual Efficiency",
     "srcb_write_eff_pct": "SrcB Write Actual Efficiency",
-    "srca_write_port_blocked_pct": "SrcA Write Port Blocked Rate",
     "srca_write_ovr_blocked_pct": "SrcA Write Overwrite Blocked Rate",
-    "srcb_write_ovr_blocked_pct": "SrcB Write Overwrite Blocked Rate",
     "srcb_write_port_blocked_pct": "SrcB Write Port Blocked Rate",
-    "dest_read_backpressure_pct": "Dest Read Backpressure",
     "thread0_ipc_pct": "T0 Instrn Issue Rate",
     "thread1_ipc_pct": "T1 Instrn Issue Rate",
     "thread2_ipc_pct": "T2 Instrn Issue Rate",
     "packer0_util_pct": "Packer Engine 0 Util",
     "packer1_util_pct": "Packer Engine 1 Util",
     "packer2_util_pct": "Packer Engine 2 Util",
-    "packer3_util_pct": "Packer Engine 3 Util",
     "packer_load_imbalance_pct": "Packer Load Imbalance",
     "l1_unpacker_util_pct": "L1 Unpacker Port Util",
     "l1_port1_util_pct": "L1 Port 1 Util",

@@ -64,8 +64,6 @@ def test_per_engine_packers_gate_on_wormhole_only_counters():
     assert out["packer0_util_pct"] is None
     assert out["packer1_util_pct"] is None
     assert out["packer2_util_pct"] is None
-    # Engine 3 is a WH-only signal too; BH's single PACKER_BUSY is reported as pack_utilization_pct.
-    assert out["packer3_util_pct"] is None
     assert out["pack_utilization_pct"] == 40.0
 
 
@@ -148,7 +146,14 @@ def test_scoreboard_stall_is_gated_and_clamped():
 def test_instrn_wait_rates_need_their_counter():
     # A capture without the WAITING_FOR_* counters (tt-2xx) must read None, not 0%.
     out = mc.compute_metrics(_View({"THREAD_STALLS_0": 100.0, "THREAD_INSTRUCTIONS_0": 900.0}))
-    for key in ("math_wait_srca_pct", "any_thread_stall_pct", "move_instrn_avail_t0_pct", "stall_overlap_t0_ratio"):
+    for key in (
+        "math_wait_srca_pct",
+        "math_sem_wait_pct",
+        "pack_sem_wait_pct",
+        "any_thread_stall_pct",
+        "move_instrn_avail_t0_pct",
+        "stall_overlap_t0_ratio",
+    ):
         assert out[key] is None, key
     assert out["unpack0_thread1_share_pct"] is None
     out = mc.compute_metrics(_View({"THREAD_STALLS_0": 100.0, "WAITING_FOR_SRCA_VALID": 50.0}, cycles=1000.0))
