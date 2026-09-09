@@ -189,7 +189,7 @@ def decode_forward(
                 # write — see paged_update_cache num_kv_heads kwarg. Mirrors
                 # split_qkv_heads_decode's local head count.
                 num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-                eff_bs = effective_block_size(k_cache, config.head_dim)
+                eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
                 batch = tt_k.shape[1]
                 if sequential_kv_write and batch > 1:
                     # Speculative VERIFY: the B candidates sit at consecutive
@@ -316,7 +316,7 @@ def decode_forward(
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
             paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
-                block_size=effective_block_size(k_cache, config.head_dim),
+                block_size=effective_block_size(k_cache, config.head_dim, num_local_kv_heads),
                 num_kv_heads=sdpa_num_local_kv_heads,
             ),
             **paged_modulo_kwargs,
@@ -715,7 +715,7 @@ def packed_decode_forward(
     elif not is_kv_shared:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         k_cache_w, v_cache_w = kv_cache
-        eff_bs = effective_block_size(k_cache_w, head_dim)
+        eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
         # Convert the prefill-style [1, nkv, B*P, hd] to decode layout
         # [1, B*P, nkv, hd] (DRAM — the full tensors stay resident across the
         # loop; only the per-p reshard occupies L1).
@@ -799,7 +799,7 @@ def packed_decode_forward(
     )
     _grid = sdpa_program_config.compute_with_storage_grid_size
     n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)
-    eff_bs_sdpa = effective_block_size(k_cache_use, head_dim)
+    eff_bs_sdpa = effective_block_size(k_cache_use, head_dim, nkv_local)
     tt_sdpa = _packed_verify_sdpa(
         q_packed,
         k_cache_use,

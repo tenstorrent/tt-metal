@@ -461,7 +461,7 @@ def _prefill_forward_single(
         k_cache, v_cache = kv_cache
         if page_table is not None:
             num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-            eff_bs = effective_block_size(k_cache, config.head_dim)
+            eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
             paged_modulo_kwargs = (
                 {"cache_position_modulo": config.cache_position_modulo}
                 if config.cache_position_modulo is not None
@@ -964,7 +964,7 @@ def prefill_forward(
         k_cache, v_cache = kv_cache
         if page_table is not None:
             num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-            eff_bs = effective_block_size(k_cache, config.head_dim)
+            eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
             paged_modulo_kwargs = (
                 {"cache_position_modulo": config.cache_position_modulo}
                 if config.cache_position_modulo is not None
