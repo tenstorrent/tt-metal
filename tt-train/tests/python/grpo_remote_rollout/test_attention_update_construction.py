@@ -22,6 +22,7 @@ OVERWRITE_VALUE = 0.0
 
 @pytest.fixture(scope="module")
 def completer():
+    # Use ClusterType to differentiate P100 from P150 which ttnn.get_arch_name() cannot distinguish
     if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
         pytest.skip("Currently not supported on P100; see https://github.com/tenstorrent/tt-metal/issues/54621")
     with open_completer(dummy_weights=False) as c:
