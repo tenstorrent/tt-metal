@@ -1105,12 +1105,13 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     Built around the threshold rather than a fixed span, so the clamp actually fires for a
     negative threshold. The range ends exercise the compare between far-apart operands.
     """
-    straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
-    # A decade either side, so the comparison is exercised well away from the boundary too.
-    spread = [float(threshold + d) for d in (-1000, -100, -10, 10, 100, 1000)]
-    # CustomStrategy clamps to info.min + 1, so ask for what is representable.
-    extremes = [float(-_INT32_MAX), float(_INT32_MAX)]
-    return StimuliSpec.custom(values=straddle + spread + extremes, seed=0)
+    # Straddling the boundary, then a decade either side of it. Offsets that leave the
+    # representable range are dropped rather than folded onto its ends, which is what the
+    # thresholds at the extremes would otherwise turn most of them into.
+    offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
+    candidates = [threshold + d for d in offsets] + [-_INT32_MAX, _INT32_MAX]
+    values = sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX})
+    return StimuliSpec.custom(values=[float(v) for v in values], seed=0)
 
 
 @parametrize(
@@ -1128,7 +1129,6 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     The negative half is the point, and the golden is an exact integer max, so a wrong
     threshold shows up as a wrong clamp value rather than a tolerance miss.
     """
-
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
     eltwise_unary_sfpu(
