@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from .packing import MINIMAX_H3_CANVAS_MULTIPLE, resolve_canvas_size
+from .packing import (
+    MINIMAX_H3_CANVAS_MULTIPLE,
+    MINIMAX_H3_FRAMES_PER_CHUNK,
+    MINIMAX_H3_LATENTS_PER_CHUNK,
+    resolve_canvas_size,
+)
 from .packing_ref2va import resolve_reference_image_size
 
 MINIMAX_H3_ASPECT_RATIOS = ((21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16))
@@ -22,6 +27,10 @@ MINIMAX_H3_DEFAULT_ASPECT_RATIO = (16, 9)
 
 MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
 MINIMAX_H3_DEFAULT_DURATION_S = 5
+
+# Not a request lever: the AdaLN modulation table is precomputed per step count, and every served
+# shape is warmed at this count.
+MINIMAX_H3_NUM_INFERENCE_STEPS = 50
 
 # Token-denominated text budget, enforced by the pipeline itself, not by any client. Sized so two
 # max-canvas keyframe vision blocks (2112 tokens) plus a full text budget exactly fill the prompt
@@ -36,6 +45,40 @@ MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE = "match"
 # hold; the top rung is the ref2va prompt arena cap. A presentation pads to the next rung that fits
 # and raises above the top.
 MINIMAX_H3_REF2VA_PRESENTATION_LADDER = (1024, 4096, 8192, 16384, 32768, 57344)
+
+
+def minimax_h3_parse_aspect_ratio(value: str) -> tuple[int, int]:
+    """`"16:9"` -> `(16, 9)`, restricted to the published set.
+
+    Rejects rather than rounds: a caller asking for 2:1 wants 2:1, and quietly serving 16:9 would be
+    a wrong answer dressed as a right one.
+    """
+    text = str(value).strip().replace("x", ":").replace("/", ":")
+    parts = text.split(":")
+    if len(parts) != 2 or not all(part.strip().isdigit() for part in parts):
+        raise ValueError(
+            f"aspect_ratio must look like 'W:H' (got {value!r}); supported: "
+            + ", ".join(f"{w}:{h}" for w, h in MINIMAX_H3_ASPECT_RATIOS)
+        )
+    pair = (int(parts[0]), int(parts[1]))
+    if pair not in MINIMAX_H3_ASPECT_RATIOS:
+        raise ValueError(
+            f"aspect_ratio {pair[0]}:{pair[1]} is not served; supported: "
+            + ", ".join(f"{w}:{h}" for w, h in MINIMAX_H3_ASPECT_RATIOS)
+        )
+    return pair
+
+
+def minimax_h3_frames_are_aligned(num_frames: int) -> bool:
+    """`num_frames` must be `17n + 5`: 124, 243, 362, ...
+
+    The modulus lives in `packing` (`FRAMES_PER_CHUNK` / `LATENTS_PER_CHUNK`), so this predicate
+    cannot drift from the VAE's chunking.
+    """
+    return (
+        num_frames >= MINIMAX_H3_LATENTS_PER_CHUNK
+        and num_frames % MINIMAX_H3_FRAMES_PER_CHUNK == MINIMAX_H3_LATENTS_PER_CHUNK
+    )
 
 
 def served_canvases() -> tuple[tuple[int, int], ...]:
