@@ -471,10 +471,7 @@ skip_routed_topk_on_sim = pytest.mark.skipif(
 
 skip_wide_topk_on_sim = pytest.mark.skipif(
     bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason=(
-        "128256-wide single-core topk costs ~23 min on ttsim and exercises no width-specific "
-        "code path"
-    ),
+    reason="128256-wide single-core topk costs ~23 min on ttsim and exercises no width-specific code path",
 )
 
 
@@ -614,6 +611,50 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     # test for equivalence
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
+
+
+# Keeps the UInt32 index datapath under the simulator now that test_large_2d_topk does not run
+# there. is_uint32_index_required() widens on "padded width > 65535" or "input is fp32"; the fp32
+# arm reaches the same index CB at two tiles instead of 2048.
+#
+# Do NOT rename this with a "test_2d_topk" prefix: ttsim-skip-list.yaml deselects that node id and
+# pytest matches --deselect with a plain nodeid.startswith(), so it would be dropped on ttsim.
+@pytest.mark.parametrize("dim2", [64])
+@pytest.mark.parametrize("k", [32])
+def test_topk_fp32_uint32_indices(device, dim2, k):
+    torch.manual_seed(2005)
+    shape = [1, dim2]
+
+    # fp32 rather than bfloat16: it is what forces the 32-bit index datapath at this width.
+    input = torch.randn(shape, dtype=torch.float32) * 0.9
+    pyt_topk_values, _ = torch.topk(input, k, dim=1, largest=True, sorted=True)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
+    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=1, largest=True, sorted=True)
+
+    assert list(ttnn_topk_values.shape) == [1, k]
+    assert list(ttnn_topk_indices.shape) == [1, k]
+    # The point of the test: 64 fits 16 bits, so only the fp32 arm can widen the index dtype.
+    assert ttnn_topk_indices.dtype == ttnn.uint32
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
+    # Indices are columns in [0, 64), so they are non-negative under any 32-bit torch dtype
+    # ttnn.to_torch picks; no uint16 sign fixup is needed here.
+    ttnn_torch_columns = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)
+
+    # Each returned index must name the column its value came from. Tie-safe: both sides are
+    # read from the same position, so this holds however the op breaks equal values.
+    assert torch.equal(torch.gather(input, 1, ttnn_torch_columns), ttnn_torch_values)
+
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,
