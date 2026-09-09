@@ -295,9 +295,13 @@ def _golden_function_point_to_point(
         raise ValueError("Point-to-point golden requires coordinate-keyed input shards")
     sender_coord = _canonical_mesh_coord(input_tensor.topology, sender_coord)
     receiver_coord = _canonical_mesh_coord(input_tensor.topology, receiver_coord)
+    input_shards = _ordered_distributed_shards(input_tensor)
+    if sender_coord not in input_shards:
+        sender_coord_key = tuple(int(value) for value in sender_coord)
+        raise ValueError(f"Point-to-point golden requires sender shard at coordinate {sender_coord_key}")
     return ttnn.DistributedGolden(
         topology=input_tensor.topology,
-        shards={receiver_coord: input_tensor.shards[sender_coord].clone()},
+        shards={receiver_coord: input_shards[sender_coord].clone()},
         compare_coords=frozenset({receiver_coord}),
     )
 

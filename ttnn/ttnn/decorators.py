@@ -246,15 +246,18 @@ def compare_tensors_using_pcc(
     else:
         matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
 
+    mesh_coord = getattr(output, "_ttnn_mesh_coord", None)
     comparison_record = {
         "tensor_id": int(output.tensor_id),
         "golden_tensor_id": int(golden_output.tensor_id),
+        "mesh_coord": mesh_coord,
         "matches": bool(matches),
         "desired_pcc": float(desired_pcc),
         "actual_pcc": float(actual_pcc),
     }
     if not matches:
-        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0 against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+        mesh_coord_message = f" at mesh coordinate {mesh_coord}" if mesh_coord is not None else ""
+        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0{mesh_coord_message} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
         if fail_on_bad_comparison:
             raise RuntimeError(error_message)
         logger.error(error_message)
@@ -498,7 +501,7 @@ def distributed_golden_for_comparison(tensor, golden_value=None):
     try:
         device_tensors = list(ttnn.get_device_tensors(tensor))
         topology = tensor.tensor_topology()
-    except Exception as error:
+    except (RuntimeError, TypeError) as error:
         raise ValueError("Distributed golden conversion requires a tensor with mesh topology") from error
 
     if not device_tensors:
@@ -611,6 +614,7 @@ def _distributed_comparison_pairs(golden, output):
             continue
         actual_shard = actual_shards_by_key[mesh_coord_key]
         actual_shard.tensor_id = output.tensor_id
+        actual_shard._ttnn_mesh_coord = mesh_coord_key
         pairs.append((expected_shards[mesh_coord], actual_shard))
     return pairs
 

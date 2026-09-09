@@ -24,6 +24,20 @@ def _compare_torch_tensors(golden, output, *, fail_on_bad_comparison=True):
     )
 
 
+class _FakeDistributedTensor:
+    def __init__(self, value=None, topology=None):
+        self.dtype = ttnn.bfloat16
+        self.value = value
+        self.topology = topology
+        self.tensor_id = None
+
+    def tensor_topology(self):
+        return self.topology
+
+    def device(self):
+        return None
+
+
 def test_ulp_comparison_policy_for_degenerate_output(expect_error):
     golden = torch.tensor([1.0], dtype=torch.bfloat16)
     one_ulp_away = torch.nextafter(golden, torch.tensor([2.0], dtype=torch.bfloat16))
@@ -171,35 +185,22 @@ def test_stored_global_golden_preserves_distributed_metadata():
 
 
 def test_distributed_comparison_selects_requested_device_shard(monkeypatch):
-    class FakeTensor:
-        def __init__(self, value=None, topology=None):
-            self.dtype = ttnn.bfloat16
-            self.value = value
-            self.topology = topology
-            self.tensor_id = None
-
-        def tensor_topology(self):
-            return self.topology
-
-        def device(self):
-            return None
-
     mesh_coords = (ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1))
     topology = ttnn.TensorTopologySnapshot(
         distribution_shape=(1, 2),
         placements=(ttnn.PlacementReplicate(), ttnn.PlacementReplicate()),
         mesh_coords=mesh_coords,
     )
-    runtime_output = FakeTensor(topology=topology)
+    runtime_output = _FakeDistributedTensor(topology=topology)
     runtime_output.tensor_id = 17
-    device_tensors = [FakeTensor(torch.tensor([0.0])), FakeTensor(torch.tensor([1.0]))]
+    device_tensors = [_FakeDistributedTensor(torch.tensor([0.0])), _FakeDistributedTensor(torch.tensor([1.0]))]
     golden_shard = torch.tensor([1.0])
     golden = ttnn.DistributedGolden(
         topology=topology,
         shards={mesh_coords[1]: golden_shard},
         compare_coords=frozenset({mesh_coords[1]}),
     )
-    monkeypatch.setattr(ttnn, "Tensor", FakeTensor)
+    monkeypatch.setattr(ttnn, "Tensor", _FakeDistributedTensor)
     monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: device_tensors)
     monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
 
@@ -207,8 +208,66 @@ def test_distributed_comparison_selects_requested_device_shard(monkeypatch):
 
     assert len(comparison_pairs) == 1
     selected_golden, selected_output = comparison_pairs[0]
+    assert selected_output._ttnn_mesh_coord == (0, 1)
     assert torch.equal(selected_golden, golden_shard)
     assert torch.equal(selected_output, device_tensors[1].value)
+
+
+def test_distributed_comparison_records_mesh_coordinate(monkeypatch, expect_error):
+    mesh_coords = (ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1))
+    topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(1, 2),
+        placements=(ttnn.PlacementReplicate(), ttnn.PlacementReplicate()),
+        mesh_coords=mesh_coords,
+    )
+    runtime_output = _FakeDistributedTensor(topology=topology)
+    runtime_output.tensor_id = 17
+    device_tensors = [_FakeDistributedTensor(torch.tensor([0.0])), _FakeDistributedTensor(torch.tensor([1.0]))]
+    golden = ttnn.DistributedGolden(
+        topology=topology,
+        shards={
+            mesh_coords[0]: torch.tensor([0.0]),
+            mesh_coords[1]: torch.tensor([2.0]),
+        },
+        compare_coords=frozenset(mesh_coords),
+    )
+    ttnn.decorators.set_tensor_id(golden, force=True)
+    monkeypatch.setattr(ttnn, "Tensor", _FakeDistributedTensor)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: device_tensors)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
+
+    comparison_records = ttnn.decorators.compare_tensors_using_pcc(
+        "ttnn.test_operation",
+        golden,
+        runtime_output,
+        desired_pcc=0.99,
+        level="locally",
+        fail_on_bad_comparison=False,
+    )
+
+    assert len(comparison_records) == 2
+    assert {record["tensor_id"] for record in comparison_records} == {runtime_output.tensor_id}
+    assert [record["mesh_coord"] for record in comparison_records] == [(0, 0), (0, 1)]
+    assert len({record["golden_tensor_id"] for record in comparison_records}) == 2
+    with expect_error(RuntimeError, r"mesh coordinate \(0, 1\)"):
+        ttnn.decorators.compare_tensors_using_pcc(
+            "ttnn.test_operation",
+            golden,
+            runtime_output,
+            desired_pcc=0.99,
+            level="locally",
+            fail_on_bad_comparison=True,
+        )
+
+
+def test_distributed_golden_conversion_does_not_mask_unexpected_errors(monkeypatch, expect_error):
+    def raise_unexpected_error(_):
+        raise AttributeError("unexpected discovery bug")
+
+    monkeypatch.setattr(ttnn, "get_device_tensors", raise_unexpected_error)
+
+    with expect_error(AttributeError, "unexpected discovery bug"):
+        ttnn.decorators.distributed_golden_for_comparison(object())
 
 
 def test_collective_golden_does_not_require_remote_shards():

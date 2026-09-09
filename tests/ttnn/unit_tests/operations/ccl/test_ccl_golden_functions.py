@@ -329,6 +329,21 @@ def test_point_to_point_golden_selects_nonzero_receiver_shard():
     assert output.compare_coords == frozenset({receiver_coord})
 
 
+def test_point_to_point_golden_requires_sender_shard(expect_error):
+    input_golden = _distributed_golden(
+        [torch.ones((1, 4), dtype=torch.bfloat16)],
+        shard_dims=(None, None),
+    )
+    golden_function = ttnn.get_golden_function(ttnn.point_to_point)
+
+    with expect_error(ValueError, r"requires sender shard at coordinate \(1, 0\)"):
+        golden_function(
+            input_golden,
+            sender_coord=(1, 0),
+            receiver_coord=(0, 0),
+        )
+
+
 @pytest.mark.parametrize("cluster_axis, expert_parallel_size", [(0, 2), (1, 4)])
 def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expert_parallel_size):
     routing_weights = torch.zeros((1, 32), dtype=torch.bfloat16)
