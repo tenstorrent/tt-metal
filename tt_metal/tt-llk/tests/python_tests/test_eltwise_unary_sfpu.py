@@ -1093,25 +1093,17 @@ def test_eltwise_unary_sfpu_int(
 
 _INT32_MAX = 2**31 - 1
 
-# relu_min's vInt branch is the last unreached path in that kernel and only a negative
-# threshold reaches it, so both signs are swept, the non-negative ones as the control.
-# The negative extreme sits one off the end of the range because -(2^31 - 1) is exactly the
-# bound CustomStrategy clamps stimuli to (_get_integer_bounds returns info.min + 1), which
-# would leave nothing below the threshold for the clamp to do. INT_MIN is absent for that
-# reason plus representation: Dst cannot hold -2^31, so it cannot be delivered as a stimulus
-# either.
+# Only a negative threshold reaches relu_min's vInt branch, so both signs are swept, the
+# non-negative ones as the control. The negative extreme stops short of INT_MIN, which is
+# neither representable in Dst nor reachable as a stimulus.
 _RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
 
 
 def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     """Values straddling *threshold*, plus both ends of int32.
 
-    Built around the threshold rather than a fixed span, because a positive-only spread
-    would sit entirely on the pass-through side of a negative threshold and the clamp would
-    never fire. Negatives are therefore required here, unlike _int_unary_stimuli_spec. The
-    range ends cover the compare between far-apart operands, which a set reaching only
-    threshold +/- 1000 cannot; they are pass-through cases under an exact golden, so they
-    cost nothing to assert.
+    Built around the threshold rather than a fixed span, so the clamp actually fires for a
+    negative threshold. The range ends exercise the compare between far-apart operands.
     """
     straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
     # A decade either side, so the comparison is exercised well away from the boundary too.
@@ -1136,10 +1128,7 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     The negative half is the point, and the golden is an exact integer max, so a wrong
     threshold shows up as a wrong clamp value rather than a tolerance miss.
     """
-    # No _skip_coverage_unsupported here, unlike the sweeps: this case is one Int32 format
-    # pair rather than a broad-profile matrix, and relu_min's kernels do build under coverage
-    # instrumentation on both arches -- the unroll pragma the exclusion list is about is in
-    # _calculate_lrelu_, a different op.
+
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
     eltwise_unary_sfpu(
