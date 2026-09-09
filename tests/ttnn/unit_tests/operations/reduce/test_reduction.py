@@ -469,12 +469,6 @@ skip_routed_topk_on_sim = pytest.mark.skipif(
 )
 
 
-skip_wide_topk_on_sim = pytest.mark.skipif(
-    bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason="128256-wide single-core topk costs ~23 min on ttsim and exercises no width-specific code path",
-)
-
-
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("largest", [True])
@@ -558,67 +552,8 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     )
 
 
-@pytest.mark.parametrize("dim1", [1])
-# 128256 (Llama-3 vocab) carries the UInt32 index / 32-bit-dest branch. 151936 (Qwen) takes the
-# same path and is 18% wider, and it is still covered by tests/.../reduce/test_topk.py.
-@pytest.mark.parametrize("dim2", [128256])
-@pytest.mark.parametrize("dim", [1])
-@pytest.mark.parametrize("k", [50])
-@pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@skip_wide_topk_on_sim
-def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
-    torch.manual_seed(2005)
-    shape = [dim1, dim2]
-    torch_dtype = torch.bfloat16
-
-    input = torch.randn(shape, dtype=torch_dtype) * 0.9
-
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
-
-    ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
-    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
-
-    desired_shape = [dim1, dim2]
-    desired_shape[dim] = k
-
-    assert list(ttnn_topk_values.shape) == desired_shape
-    assert list(ttnn_topk_indices.shape) == desired_shape
-
-    ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
-    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices)
-
-    # Add 2^16 to negative values
-    ttnn_torch_indices = ttnn_torch_indices.to(dtype=torch.int32)
-    ttnn_torch_indices = torch.where(ttnn_torch_indices < 0, ttnn_torch_indices + 65536, ttnn_torch_indices)
-
-    if dtype == ttnn.bfloat8_b:
-        pcc_values = 0.99
-    else:
-        pcc_values = 1.0
-
-    # Convert to int64 only for torch.gather which requires signed indices
-    ttnn_torch_gather_from_indices = torch.gather(
-        input, dim, ttnn_torch_indices.to(torch.int64)  # Convert to signed only for PyTorch API compatibility
-    )
-
-    cosine = torch.nn.CosineSimilarity(dim=dim)
-    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
-    assert (
-        ttnn_torch_cosine > 0.99
-    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
-    # test for equivalence
-    assert_numeric_metrics(
-        pyt_topk_values,
-        ttnn_torch_values,
-        pcc_threshold=0.9999,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-    )
-
-
+# Do not rename with a "test_2d_topk" prefix: ttsim-skip-list.yaml deselects that node id and
+# pytest --deselect matches on nodeid.startswith(), so it would be dropped on ttsim.
 @pytest.mark.parametrize("dim2", [64])
 @pytest.mark.parametrize("k", [32])
 def test_topk_fp32_uint32_indices(device, dim2, k):
