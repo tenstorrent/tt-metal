@@ -2,9 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Slice-specific writer. Identical to the eltwise/unary writer of the same name apart from how the
-// destination dataflow buffer is identified: this copy is bound by name, so the fusion
-// infrastructure can remap which buffer the writer drains.
+// Slice's private copy of the eltwise/unary writer of the same name. It is functionally identical to
+// the Metal 2.0 fork beside that original, writer_unary_interleaved_start_id_metal2.cpp: same
+// dfb::out and tensor::dst bindings, same named arguments, same OUT_SHARDED / BACKWARDS branches.
+// Nothing distinguishes the two, so this copy is a candidate for retirement in favour of binding
+// that fork, as the tensor-args slice factory already does.
+//
+// TODO(#52228): the issue tracks the consolidation of this kernel's duplicates.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
