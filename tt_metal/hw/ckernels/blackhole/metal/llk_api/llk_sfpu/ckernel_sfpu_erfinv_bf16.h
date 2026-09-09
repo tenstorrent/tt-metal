@@ -11,7 +11,7 @@
 namespace ckernel {
 namespace sfpu {
 
-// BF16 erfinv kernel (Blackhole): route family "log_square_factorized_odd"
+// BF16 erfinv kernel (Blackhole and Wormhole): route family "log_square_factorized_odd"
 // from ckernel_sfpu_bf16_poly_common.h,
 //
 //     t = ln(1 - x^2);   erfinv(x) ~= x * P3(|t|)   on |x| < 1

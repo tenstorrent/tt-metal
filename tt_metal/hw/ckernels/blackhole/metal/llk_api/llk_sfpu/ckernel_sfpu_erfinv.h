@@ -29,7 +29,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:
-    constexpr float TwoPiA = -4.330746750799873f;   // -2 / (pi * a)
+    constexpr float TwoPiA = -4.330746750799873f;  // -2 / (pi * a)
     constexpr float OneDivA = 6.802721088435375f;  // 1/a
 
     // tmp = -2 / (pi * a) - log(1 - x^2)/2
@@ -64,10 +64,14 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    log_init<false, false, false>();
+    if constexpr (is_fp32_dest_acc_en) {
+        // Winitzki `calculate_erfinv_body` hardcodes `calculate_log_body<false, false, false>`,
+        // so keep this log_init instantiation literally (do not forward dest-acc).
+        log_init<false, false, false>();
+    }
 }
 
 }  // namespace sfpu

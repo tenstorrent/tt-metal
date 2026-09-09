@@ -15,14 +15,15 @@ tiled tensor and checks, per tenstorrent/tt-metal#49435:
     threshold, certified ULP rounded up) — the previous kernel measured
     255.2 max pure ULP on this sweep, the replacement is
     certified at 0.8324;
-  * special values, matching the silicon-certified contract: x = +/-1 -> signed Inf; |x| > 1, +/-Inf and NaN -> +Inf
-  * zeros and DAZ'd subnormal inputs produce exact zeros.
+  * special values, matching the silicon-certified contract: x = +/-1 -> signed Inf;
+    |x| > 1, +/-Inf and NaN -> +Inf on both architectures
+  * zeros and DAZ'd subnormal inputs produce exact +0 (sign bit clear).
 
 Hardware model per tech_reports/Handling_Special_Value/special_values.md:
 DAZ on input, post-round FTZ on output, and the format conversion pipeline
-maps NaN payloads onto infinities and +/-0 onto +0. Blackhole canonicalizes
-NaN payloads to +Inf; Wormhole preserves the sign of negative NaN inputs.
-The previous kernels also never produced NaN here.
+maps NaN payloads onto infinities and +/-0 onto +0. The BF16 kernel seeds a
+positive quiet NaN for out-of-domain lanes, so both Blackhole and Wormhole
+read back +Inf there. The previous kernels also never produced NaN here.
 
 Set TT_EXPORT_ULP_DUMP=<path.npz> to additionally dump the raw per-encoding
 device outputs (used to render the accuracy figure in the PR / tech report).
@@ -92,21 +93,17 @@ def test_erfinv_bf16_exhaustive_ulp(device):
     inf_lanes = np.isinf(golden)
     finite_lanes = ~(nan_lanes | inf_lanes)
 
-    # Out-of-domain, NaN and +/-Inf inputs become infinities. Wormhole
-    # preserves the sign of negative NaN inputs; Blackhole canonicalizes all
-    # of these lanes to +Inf. The poles x = +/-1 keep their sign on both.
-    expected_nonfinite = np.full(nan_lanes.sum(), np.inf)
-    if is_wormhole_b0():
-        nonfinite_inputs = x64[nan_lanes]
-        negative_nan = np.isnan(nonfinite_inputs) & np.signbit(nonfinite_inputs)
-        expected_nonfinite[negative_nan] = -np.inf
+    # Out-of-domain, NaN and +/-Inf inputs become +Inf on both architectures.
+    # The poles x = +/-1 keep their sign.
     assert np.array_equal(
-        out[nan_lanes], expected_nonfinite
-    ), "out-of-domain / NaN inputs must follow the architecture's infinity-sign contract"
+        out[nan_lanes], np.full(nan_lanes.sum(), np.inf)
+    ), "out-of-domain / NaN inputs must produce +Inf"
     assert np.array_equal(out[inf_lanes], golden[inf_lanes]), "pole inputs must produce signed Inf"
 
     zero_golden = finite_lanes & (golden == 0.0)
-    assert (out[zero_golden] == 0.0).all(), "zero results must be exactly zero"
+    zero_out = out[zero_golden]
+    assert (zero_out == 0.0).all(), "zero results must be exactly zero"
+    assert (~np.signbit(zero_out)).all(), "zero results must be +0 (sign bit clear)"
 
     # Pure ULP over the finite domain, measured at the BF16-rounded golden.
     # The numerator flush mirrors the tester: when the rounded golden flushed

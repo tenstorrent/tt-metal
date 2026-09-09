@@ -11,13 +11,14 @@
 namespace ckernel {
 namespace sfpu {
 
-// Wormhole BF16 erfinv kernel:
+// Wormhole BF16 erfinv kernel: same route family and coefficient table as
+// Blackhole (`ckernel_sfpu_bf16_poly_common.h`).
 //
 //     t = ln(1 - x^2);   erfinv(x) ~= x * P3(|t|)   on |x| < 1
 //
-// The coefficient table and anchored single-rounding reduction are shared
-// with the Blackhole implementation. Both architecture paths are covered by
-// the exhaustive BF16 accuracy test.
+// Specials: x = +/-1 -> +/-Inf; |x| > 1 / +/-Inf / NaN -> +Inf; zeros /
+// BF16 subnormals -> +0. Both architecture paths are covered by
+// tests/ttnn/unit_tests/operations/eltwise/test_erfinv_bf16_exhaustive.py.
 //
 // This path serves the BF16 destination-register case only; fp32 dest
 // (is_fp32_dest_acc_en) keeps the pre-existing Wormhole implementation.
