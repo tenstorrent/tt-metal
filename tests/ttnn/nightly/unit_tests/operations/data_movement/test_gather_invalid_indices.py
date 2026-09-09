@@ -45,15 +45,18 @@ def _checked_gather(device, entry, x, index, dim, index_dtype, factory, cache_hi
         and "GatherCodegenProgramFactory" in node.get("params", {}).get("program_factory_type", "")
     ]
     assert len(factories) == 1, f"Expected one codegen gather, got {factories}"
-    assert factories[0]["program_factory_type"].endswith(f"GatherCodegenProgramFactory{factory}")
+    assert factories[0]["program_factory_type"].endswith(f"GatherCodegenProgramFactory{factory}"), factories[0]
     assert factories[0]["program_cache_hit"] is cache_hit, factories[0]
     actual = ttnn.to_torch(out)
     valid = index < x.shape[dim]
     # Replacing invalid indices is ONLY for the CPU oracle, never the device input.
     expected = torch.gather(x, dim, index.masked_fill(~valid, 0))
-    assert actual.shape == expected.shape
-    assert valid.any()
-    assert torch.equal(actual[valid], expected[valid])
+    assert actual.shape == expected.shape, f"Expected {expected.shape}, got {actual.shape}"
+    assert valid.any(), "Regression fixture must contain valid indices"
+    assert torch.equal(actual[valid], expected[valid]), (
+        f"{factory}: valid BF16 positions differ for input {tuple(x.shape)}, "
+        f"index {tuple(index.shape)}, dim={dim}, dtype={index_dtype}, cache_hit={cache_hit}"
+    )
     # Keep allocations alive across all dispatches so the next call cannot reuse
     # their addresses and accidentally pass a stale cached-buffer binding.
     return xt, it, out
@@ -107,7 +110,7 @@ def test_gather_invalid_indices_streaming_control(device, index_dtype):
     index_bytes = _TILE_BYTES if index_dtype == ttnn.uint16 else 2 * _TILE_BYTES
     wt_input = (budget - index_bytes - _TILE_BYTES) // _TILE_BYTES
     width = wt_input * 32
-    assert width < 65535
+    assert width < 65535, f"L1 budget {budget} produces width {width}, outside this UINT16 control fixture"
     invalid_values = [width, width + 31, 65535]
     if index_dtype == ttnn.uint32:
         invalid_values += [0x800000, 0x40000000, 0xFFFFFFFF]
