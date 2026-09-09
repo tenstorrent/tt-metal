@@ -10,6 +10,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "perf.h"
 #include "profiler.h"
@@ -106,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -125,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -177,7 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 #ifndef EN_DEST_REUSE
@@ -188,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 #ifdef EN_DEST_REUSE
         const std::uint32_t tiles_in_block          = params.OUTPUT_NUM_TILES_IN_BLOCK;
         const std::uint32_t num_tiles_accumulations = params.INPUT_NUM_TILES_IN_BLOCK / tiles_in_block;
@@ -333,7 +334,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
@@ -344,7 +345,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
         }

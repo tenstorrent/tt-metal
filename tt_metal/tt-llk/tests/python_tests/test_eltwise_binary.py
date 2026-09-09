@@ -146,6 +146,13 @@ def get_eltwise_binary_acc_to_dest(input_dimensions, tile_dimensions):
     return [False, True] if tile_count >= 2 and tile_count % 2 == 0 else [False]
 
 
+def get_eltwise_binary_perf_acc_to_dest(input_dimensions, tile_dimensions):
+    """Exclude the BH narrow-row accumulation shape that faults under perf loops."""
+    if tuple(tile_dimensions) == (1, 32) and input_dimensions[0] == 1:
+        return [False]
+    return get_eltwise_binary_acc_to_dest(input_dimensions, tile_dimensions)
+
+
 def _accumulated_output_dimensions(
     input_dimensions, tile_dimensions, num_tiles_per_accumulation
 ):
@@ -759,6 +766,9 @@ DEST_REUSE_TILE_DIMENSIONS = [
     [16, 32],
     [8, 32],
 ]
+# Keep the established, numerically stable reuse depth. Deep folds accumulate
+# 16-bit Dest rounding error even when the packed output format is Float32.
+MAX_DEST_REUSE_ACCUMULATIONS = 4
 
 
 def get_dest_reuse_perf_tile_dimensions():
@@ -818,7 +828,12 @@ def get_dest_reuse_output_dimensions(
         output_tiles = (output_dimensions[0] // tile_rows) * (
             output_dimensions[1] // tile_cols
         )
-        if output_tiles < input_tiles and input_tiles % output_tiles == 0:
+        accumulations = input_tiles // output_tiles
+        if (
+            output_tiles < input_tiles
+            and input_tiles % output_tiles == 0
+            and accumulations <= MAX_DEST_REUSE_ACCUMULATIONS
+        ):
             # This also validates the per-block destination capacity.
             get_num_blocks_and_num_tiles_in_block(
                 dest_sync,
