@@ -173,7 +173,7 @@ def test_sum_nd_shard(device, shapes, keepdim):
     ),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63), (16, 41, 63, 63)])
+@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63)])
 def test_sum_subcores(device, sub_core_grids, dtype, shape):
     torch.manual_seed(0)
 

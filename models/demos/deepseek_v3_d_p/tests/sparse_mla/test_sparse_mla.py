@@ -293,6 +293,7 @@ def run_sparse_mla_accuracy_case(
     )
 
     logger.info(f"[{variant.name}] sparse MLA accuracy: running TT inference")
+    # Sparse has no single-shot path: one chunk, spanning the whole sequence, at offset 0.
     tt_output, hidden_states, _, shard_dims = run_mla_inference(
         config=config,
         weights=weights,
@@ -304,12 +305,15 @@ def run_sparse_mla_accuracy_case(
         is_balanced=False,
         topology=topology,
         tt_kvpe_cache=tt_kvpe_cache,
+        is_chunked=True,
+        active_seq_len=seq_len,
+        actual_start=0,
     )
 
     cache_dir = cpu_ref_cache_dir(variant)
     logger.info(f"[{variant.name}] sparse MLA accuracy: running CPU reference")
-    # accuracy runs the indexer's natural single-shot path (no block-cyclic index_kv_cache to read
-    # back), so the index-cache reference is unused here — chunked/rotated cover the block-cyclic cache.
+    # ref_index (the indexer key-cache truth) is dropped: one full-sequence chunk fills a single
+    # block-cyclic slab, so chunked/rotated are where that cache is asserted (SPARSE_INDEX_PCC).
     ref_output, ref_kvpe, _ = run_cpu_reference(
         config, weights, hidden_states, seq_len, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
@@ -364,6 +368,7 @@ def run_sparse_mla_determinism_case(
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
         )
+        # Sparse has no single-shot path: one chunk, spanning the whole sequence, at offset 0.
         tt_output, _, _, shard_dims = run_mla_inference(
             config=config,
             weights=dict(weights),
@@ -375,6 +380,9 @@ def run_sparse_mla_determinism_case(
             is_balanced=False,
             topology=topology,
             tt_kvpe_cache=tt_kvpe_cache,
+            is_chunked=True,
+            active_seq_len=seq_len,
+            actual_start=0,
         )
         logger.debug(f"[{variant.name}] sparse MLA determinism run {run_idx + 1}: collecting TT output")
         current = ttnn.to_torch(
@@ -614,7 +622,7 @@ def run_sparse_mla_pad_overflow_case(
     # NOT global position actual_start + j -- feeding natural order only happens to work when every start
     # is slab-aligned (what test_sparse_mla_chunked does). Every start here is drifted, so gather the
     # chunk in rotated chip-major order and scatter the output back by the same map, exactly as
-    # test_sparse_mla_rotated does.
+    # test_sparse_mla_rotated_chunked does.
     sp = mesh_device.shape[0]
     chunk_local = chunk // sp
     hid = hidden[0]  # [seq, hidden]
@@ -933,7 +941,7 @@ def run_sparse_mla_rotated_case(
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_rotated(
+def test_sparse_mla_rotated_chunked(
     mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, tp_shard_kv
 ):
     run_sparse_mla_rotated_case(
@@ -949,35 +957,8 @@ def test_sparse_mla_rotated(
     )
 
 
-# None of these tests cover the chunked+non_balanced case, which is the only path production
-# runs — so they are all CI-skipped (still runnable locally).
-def _ci_unsupported_param_combos_sparse_mla_accuracy(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
-def _ci_unsupported_param_combos_sparse_mla_indexer_reuse(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
-def _ci_unsupported_param_combos_sparse_mla_determinism(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
 # One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
 # both sparsity regimes; scaled FP8 is restricted to the real-pruning sequence to avoid redundant CI work.
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_accuracy)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params, cache_format",
     SPARSE_ACCURACY_CASES,
@@ -985,7 +966,7 @@ def _ci_unsupported_param_combos_sparse_mla_determinism(**params):
 )
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_accuracy(
+def test_sparse_mla_accuracy_chunked(
     mesh_device,
     seq_len,
     device_params,
@@ -1022,7 +1003,6 @@ def test_sparse_mla_accuracy(
 SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_indexer_reuse)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_REUSE_CASES,
@@ -1030,7 +1010,7 @@ SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 )
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_indexer_reuse(
+def test_sparse_mla_indexer_reuse_chunked(
     mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
     """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
@@ -1054,6 +1034,7 @@ def test_sparse_mla_indexer_reuse(
             num_kvpe_cache_layers=1,
         )
 
+    # Sparse has no single-shot path: one chunk, spanning the whole sequence, at offset 0.
     common = dict(
         config=config,
         weights=weights,
@@ -1064,6 +1045,9 @@ def test_sparse_mla_indexer_reuse(
         tp_axis=tp_axis,
         is_balanced=False,
         topology=topology,
+        is_chunked=True,
+        active_seq_len=seq_len,
+        actual_start=0,
     )
     # A: compute the indexer, capture its top-k selection + output.
     out_a, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
@@ -1081,7 +1065,6 @@ def test_sparse_mla_indexer_reuse(
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_determinism)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_ANCHOR_CASES,
@@ -1090,7 +1073,7 @@ def test_sparse_mla_indexer_reuse(
 @pytest.mark.parametrize("n_runs", [3], ids=["x3"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_determinism(
+def test_sparse_mla_determinism_chunked(
     mesh_device, seq_len, n_runs, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
     topology = per_axis_topology(device_params["fabric_config"])
@@ -1150,7 +1133,7 @@ SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id
 )
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_pad_overflow(
+def test_sparse_mla_pad_overflow_chunked(
     mesh_device,
     seq_len,
     chunk,
@@ -1180,7 +1163,7 @@ SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_1" in c.id]
 @pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_kv_only(
+def test_sparse_mla_kv_only_chunked(
     mesh_device, seq_len, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
     run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo)
