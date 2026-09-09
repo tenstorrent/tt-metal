@@ -901,6 +901,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_uint16_clear_value_tiles_high_bits();
 
     static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
     static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
     static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
     static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
@@ -1134,6 +1135,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     topk_uint16_clear_value_tiles_high_bits();
 
     static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
     static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
     static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
     static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
@@ -1290,6 +1292,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     topk_uint16_clear_value_tiles_high_bits();
 
     static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
     static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
     static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
     static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
