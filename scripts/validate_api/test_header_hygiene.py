@@ -95,6 +95,38 @@ class HeaderHygieneTests(unittest.TestCase):
         self.header("tt-metalium/a.hpp", '#pragma once\n#include "local.hpp"\n')
         self.assertEqual(self.errors(), [])
 
+    def test_missing_quoted_relative_includes_still_enforce_boundaries(self):
+        cases = (
+            ("tt-metalium/a.hpp", "../internal/private.hpp", "internal"),
+            ("tt-metalium/a.hpp", "experimental/feature.hpp", "experimental"),
+            ("tt-metalium/experimental/a.hpp", "../../internal/private.hpp", "internal"),
+        )
+        for source, include, target_tier in cases:
+            with self.subTest(source=source, include=include):
+                path = self.header(source, f'#pragma once\n#include "{include}"\n')
+                errors = self.errors()
+                self.assertEqual(len(errors), 1)
+                self.assertIn(f"must not include {target_tier}", errors[0])
+                path.unlink()
+
+    def test_quoted_api_root_includes_enforce_boundaries_with_or_without_target(self):
+        cases = (
+            ("tt-metalium/a.hpp", "internal/private.hpp", "internal"),
+            ("tt-metalium/a.hpp", "tt-metalium/experimental/feature.hpp", "experimental"),
+            ("tt-metalium/experimental/a.hpp", "internal/private.hpp", "internal"),
+        )
+        for source, include, target_tier in cases:
+            for exists in (False, True):
+                with self.subTest(source=source, include=include, exists=exists):
+                    path = self.header(source, f'#pragma once\n#include "{include}"\n')
+                    target = self.header(include) if exists else None
+                    errors = self.errors()
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn(f"must not include {target_tier}", errors[0])
+                    path.unlink()
+                    if target is not None:
+                        target.unlink()
+
     def test_symlink_does_not_hide_internal_target(self):
         self.header("internal/private.hpp")
         self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias.hpp>\n")

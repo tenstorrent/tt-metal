@@ -49,8 +49,11 @@ branch is checked, regardless of the current host architecture. The existing
 `validate_includes.py` still checks include spelling and dependency allowlists.
 
 **Coverage limit:** this first checker does not invoke the C++ preprocessor or
-walk a transitive include graph. It recognizes API-root includes and existing
-quoted relative includes. It cannot classify custom compiler include roots or
+walk a transitive include graph. It recognizes API-root and quoted relative
+includes even when the target is absent. Existing targets take precedence in
+include-search order; otherwise quoted paths are source-relative, except the
+canonical `tt-metalium/` and `internal/` API-root spellings.
+It cannot classify custom compiler include roots or
 dependencies hidden in external/helper headers. It does not prove source or
 binary compatibility. Compiler-based analysis is follow-up work.
 

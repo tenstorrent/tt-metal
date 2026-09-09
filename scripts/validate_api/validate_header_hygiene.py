@@ -76,9 +76,11 @@ def include_target(api_root: Path, source: Path, name: str, quoted: bool) -> str
     candidates = [api_root / name]
     if quoted:
         candidates.insert(0, source.parent / name)
-    # Prefer an existing relative header, as the preprocessor would. A missing
-    # canonical API include still has a tier; compilation checks its existence.
-    target = next((p for p in candidates if p.is_file()), api_root / name)
+    # Prefer existing headers in include-search order. If none exists, retain
+    # the source-relative meaning of quoted paths, except canonical API-root
+    # spellings such as "internal/foo.hpp". Compilation checks existence.
+    fallback = api_root / name if name.startswith(("tt-metalium/", "internal/")) else candidates[0]
+    target = next((p for p in candidates if p.is_file()), fallback)
     try:
         return target.resolve().relative_to(api_root.resolve()).as_posix()
     except ValueError:
