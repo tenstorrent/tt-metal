@@ -764,7 +764,7 @@ ttnn::Tensor ttnn::reshape(
         reshape_map_mode,
         sub_core_grid,
         skip_padding_fill,
-        ReshapeRouteMode::kAuto);
+        ttnn::operations::data_movement::ReshapeRouteMode::kAuto);
 }
 
 ttnn::Tensor ttnn::operations::data_movement::detail::reshape_force_native(
