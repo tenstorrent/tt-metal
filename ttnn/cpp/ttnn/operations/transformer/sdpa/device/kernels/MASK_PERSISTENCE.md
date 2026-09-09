@@ -68,14 +68,50 @@ sees long runs of chunks with the same signature.
 ## Why the first version saved nothing (worth remembering)
 
 The first cut persisted only chunks whose bricks are all unclamped and whose gather origin is
-canonical. On device it skipped 72% of production chunks -- and attention did not move (8131 ms).
-The counters showed why: whole cores own an edge row (T-edge, and the ghost T-overhang), generated
-all 336 tiles of every work item, and set the op's pace while the interior cores idled. A per-core
-optimisation shows no end-to-end gain unless it reaches the slowest cores. Two other traps on the
-way: `gather_is_canonical` can never pass for a multi-brick chunk (its extent test assumes a
-single-brick gather; the origin-only `gather_origin_at_span_low` was split out for that), and the
-unit tests' blocks were just over the original 384-tile budget, so the persistence path was not
-being exercised by the tests that were meant to cover it.
+canonical. On device it skipped 72% of production chunks -- and attention did not move (8131 ms
+against 8055 ms before). That is not a contradiction; it is how the work is laid out.
+
+**How work is distributed.** The stage-5 op has ~20,400 chunks per shard per block over ~130 cores,
+handed out as contiguous ranges of 160-180 consecutive chunk indices. Chunk indices run row-major
+over (T, H, W) with W fastest, so a core's range is a few consecutive W rows inside ONE T slice.
+Whether a core's chunks are interior or edge is decided almost entirely by which T slice it holds.
+
+**The edge slices are whole cores.** With a window reaching 5 sites and 2-site bricks in T, the
+first and last 3 T-bricks clamp, so 4 of the 20 T-chunks are edge chunks: 20% of the chunks, but
+concentrated on cores that own nothing else. The per-core counters (DPRINT build) showed it:
+
+| core-instances (of 122,860) | items | skipped | generated |
+|---:|---:|---:|---:|
+| ~57,000 | 161-179 | all but 1 | 0 |
+| ~23,500 | 161-179 | 0 | all |
+| the rest | mixed | mostly | some |
+
+**Why the total did not move.** An op finishes when its last core finishes. Before the change every
+core generated 336 tiles per work item, so all cores were equally loaded. After it the interior
+cores dropped to almost no mask work and idled, while the edge cores still generated 336 tiles per
+work item exactly as before. The slowest core was unchanged, so the op was unchanged: skipping 72%
+of the work removed 0% of the critical path. The probes agree -- `DIFFVAE_NA_TABLE_ALWAYS=1`, which
+only changes edge bricks (table DMA instead of `fill_mask_tile`), took attention to 4563 ms
+without touching an interior chunk, and the memset probe's 3230 ms is the floor once every core,
+edge included, does only cheap writes.
+
+**The T-overhang, the same lesson once more.** The signature version's first run landed at 5404 ms,
+not the floor. The counters showed 2.5% of cores still generating every item: the cores owning the
+LAST T slice. The volume is 39 T-bricks and the chunk is 2, so the 20th chunk's second brick lies
+beyond the volume -- a ghost brick -- and the signature refused to persist any chunk containing one.
+A tiny fraction of chunks, again concentrated on whole cores, again the critical path. Folding a
+ghost flag into the signature (the ghost brick's rows are generated open, and its keys lie inside
+the resident tensor because the planner clamps the gather) put those cores in skip mode too and
+gave the final 3377 ms.
+
+The general point: a fraction-of-work-saved number means nothing for a parallel op unless the
+saving reaches the slowest cores. Count per core (`TT_METAL_DPRINT_CORES=all` and the reader's
+counters), not in aggregate.
+
+Two other traps on the way: `gather_is_canonical` can never pass for a multi-brick chunk (its
+extent test assumes a single-brick gather; the origin-only `gather_origin_at_span_low` was split
+out for that), and the unit tests' blocks were just over the original 384-tile budget, so the
+persistence path was not being exercised by the tests meant to cover it.
 
 ## Tests
 
