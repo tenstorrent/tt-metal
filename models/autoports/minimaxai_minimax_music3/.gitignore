@@ -1,0 +1,2 @@
+# Large run-time dumps (wav/pt/csv, Tracy CSVs, watcher logs) live here and are never committed.
+generated/

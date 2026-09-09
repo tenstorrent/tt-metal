@@ -1,0 +1,106 @@
+{
+  "full_prefill_golden_prompt": {
+    "argmax_hf": [
+      152931,
+      152931
+    ],
+    "argmax_tt": [
+      152931,
+      152931
+    ],
+    "bar": 0.99,
+    "hidden_pcc": 0.9990024907463882,
+    "logits_pcc": 0.998579832344655,
+    "seq_len": 104,
+    "wall_seconds_first_call": 0.1521012783050537
+  },
+  "layer0_decode": {
+    "bar": 0.995,
+    "pcc": 0.9999197903708043,
+    "position": 104
+  },
+  "layer0_prefill_user0": {
+    "bar": 0.995,
+    "pcc": 0.9998450217365966,
+    "seq_len": 104
+  },
+  "layer0_prefill_user1": {
+    "bar": 0.995,
+    "pcc": 0.999895532688663,
+    "seq_len": 104
+  },
+  "prefill_len_1_runs": {
+    "decode_position": 1,
+    "seq_len": 1,
+    "wall_seconds": 0.15467023849487305
+  },
+  "prefill_len_333_runs": {
+    "decode_position": 333,
+    "seq_len": 333,
+    "wall_seconds": 5.1418561935424805
+  },
+  "prefill_len_5000_runs": {
+    "decode_position": 5000,
+    "seq_len": 5000,
+    "wall_seconds": 8.05870509147644
+  },
+  "teacher_forced_decode": {
+    "bar": 0.99,
+    "decode_stats": {
+      "input_refreshes": 8,
+      "position_refreshes": 0,
+      "trace_captures": 1,
+      "trace_replays": 8
+    },
+    "steps": [
+      {
+        "hidden_pcc": 0.9991035935029994,
+        "logits_pcc": 0.9990855432941548,
+        "position": 104,
+        "step": 0
+      },
+      {
+        "hidden_pcc": 0.9984748023878083,
+        "logits_pcc": 0.996589953792611,
+        "position": 105,
+        "step": 1
+      },
+      {
+        "hidden_pcc": 0.9990029024537009,
+        "logits_pcc": 0.9924442374653211,
+        "position": 106,
+        "step": 2
+      },
+      {
+        "hidden_pcc": 0.9993115362213842,
+        "logits_pcc": 0.9987672253038692,
+        "position": 107,
+        "step": 3
+      },
+      {
+        "hidden_pcc": 0.9994180848704749,
+        "logits_pcc": 0.9992144029621995,
+        "position": 108,
+        "step": 4
+      },
+      {
+        "hidden_pcc": 0.9994935350503635,
+        "logits_pcc": 0.9993828732163567,
+        "position": 109,
+        "step": 5
+      },
+      {
+        "hidden_pcc": 0.9996328011832273,
+        "logits_pcc": 0.9993998702692986,
+        "position": 110,
+        "step": 6
+      },
+      {
+        "hidden_pcc": 0.9995557842491891,
+        "logits_pcc": 0.9985857606139269,
+        "position": 111,
+        "step": 7
+      }
+    ]
+  }
+}
