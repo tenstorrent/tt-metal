@@ -28,7 +28,14 @@ def test_what_the_builder_would_see():
 def _run(tmp_path, *, with_plugin: bool, force_all: str | None, preset: str | None = None):
     t = tmp_path / "test_victim.py"
     t.write_text(_VICTIM)
-    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=", "-s", "-q", str(t)]
+    # Without an explicit --rootdir, pytest computes one as the common ancestor of cwd (_REPO) and
+    # the given test path (t, under pytest's own tmp_path fixture -- always somewhere under /tmp).
+    # _REPO and tmp_path are unrelated locations that can both happen to sit directly under /tmp
+    # (e.g. _REPO staged there by the tool's own preflight isolation), making their nearest common
+    # ancestor /tmp itself -- which pytest then scans, tripping over whatever unrelated file
+    # (another user's session, a broken symlink) happens to be sitting in a shared /tmp. Pinning
+    # --rootdir to tmp_path (already an ancestor of t) sidesteps that computation entirely.
+    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=", "--rootdir", str(tmp_path), "-s", "-q", str(t)]
     if with_plugin:
         cmd += ["-p", _PLUGIN]
     env = {k: v for k, v in __import__("os").environ.items() if k != "TT_PERF_LAYERS"}
@@ -81,7 +88,21 @@ def _run_custom(tmp_path, *, depth_vars: str | None):
 
     t = tmp_path / "test_victim_custom.py"
     t.write_text(_VICTIM_CUSTOM)
-    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=", "-s", "-q", "-p", _PLUGIN, str(t)]
+    # See _run's comment: pins rootdir so pytest never computes /tmp as the common ancestor.
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-o",
+        "addopts=",
+        "--rootdir",
+        str(tmp_path),
+        "-s",
+        "-q",
+        "-p",
+        _PLUGIN,
+        str(t),
+    ]
     env = {k: v for k, v in _os.environ.items() if k not in ("TT_PERF_LAYERS", "MAX_LAYERS")}
     env["PYTHONPATH"] = str(_REPO)
     env["PERF_MCP_FORCE_ALL_LAYERS"] = "1"
