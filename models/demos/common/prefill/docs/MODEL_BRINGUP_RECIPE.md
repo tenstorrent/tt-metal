@@ -21,11 +21,12 @@ kernels, decode.
 **One file: the prefill spec** (`models/demos/common/prefill/specs/prefill_spec_template.json`).
 
 *What this model is, and what it is graded against.* It carries only what the HF config and the
-checkpoint cannot tell you: target hardware, TP/SP split, chunk size and sequence length, user
-count, data formats, the two PCC thresholds (`acceptance.pcc_target`, `acceptance.pcc_lower_bound`,
-§4), golden trace location. Anything readable from `config.json` — dims, layer count, attention
-family, rope parameters, vocab, norm eps, expert counts, checkpoint quantization — is **not** in the
-spec; read it from the config and assert it (see D1).
+checkpoint cannot tell you: target hardware, TP/SP split, the two prefill shapes
+(`shapes.max_seq_len`, `shapes.chunk_size`, §5.1), user count, data formats, the two PCC thresholds
+(`acceptance.pcc_target`, `acceptance.pcc_lower_bound`, §4), golden trace location. Anything
+readable from `config.json` — dims, layer count, attention family, rope parameters, vocab, norm eps,
+expert counts, checkpoint quantization — is **not** in the spec; read it from the config and assert
+it (see D1).
 
 The **spec is binding**. Every value in it must be respected exactly, at every stage; no convention
 in this document overrides it. Where an existing implementation in the repo conflicts with the spec,
@@ -178,7 +179,9 @@ Three properties worth knowing before you rely on one:
   trace is strictly downstream of step 0 — synthetic weights give a synthetic trace, and a PCC
   against it proves only that two random-valued pipelines agree.
 * **It is per (model, prompt, ISL, depth)**, not per model. A different sequence length or layer
-  count needs a different trace. That is why the dirs are named for prompt and token count.
+  count needs a different trace. That is why the dirs are named for prompt and token count. The ISL
+  must also fit the spec's `max_seq_len` (§5.1): a trace longer than the cache capacity cannot be
+  replayed, so pick or generate one that fits before P1.
 * **Do not confuse it with a ttnn trace.** `use_trace` / `trace_region_size` capture the per-chunk
   forward as a device command buffer for replay — a perf mechanism with no goldens in it.
 
@@ -369,6 +372,29 @@ Fixed — copy verbatim:
 | Allocation | zeroed, `ReplicateTensorToMesh` (content diverges on first write) |
 | Write op | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache(slot_idx, layer_idx, ...)` |
 | Bank count | `get_num_dram_banks(mesh_device)` from `common/prefill/runners/migration.py` |
+
+`max_seq_len` and `chunk_size` come from the spec's `shapes` block (§1); the layout does not decide
+them, it is sized by them. `max_seq_len` is the per-user cache **capacity** in tokens — the context
+the model is brought up to, not the prompt length — and it sizes the whole table:
+`num_caches × num_users × num_layers × max_seq_len × head_dim` elements of `cache_dtype`, split `sp`
+ways along the sequence. `chunk_size` is the block-cyclic addressing period of that table and the
+number of tokens one `prefill_chunk` call processes. Both must be multiples of `TILE_SIZE * sp`; a
+misaligned value corrupts addresses silently rather than failing. The golden trace's ISL must fit
+inside `max_seq_len` (§4).
+
+**For the initial bring-up, set `max_seq_len = 10240` and `chunk_size = 5120`** — a 10k prefill in
+two 5k chunks. The length is set by the **golden trace, not by the model's context**: the trace is a
+full CPU forward of the real model at that ISL (§4), it has to be generated once per model, and its
+cost grows with the sequence — so a 50k trace is the bottleneck of the whole bring-up while a 10k one
+is affordable. 10240 is the shortest shape that still exercises everything P2 grades: chunk 1 attends
+chunk 0 out of the cache, with no pad tail. It aligns at `sp = 8` (10240 = 40 × 256) and every
+smaller `sp`, 5120 is the engine's default chunk (`prefill_runner.py` reads `PREFILL_CHUNK_SIZE`,
+default `5 * 1024`), and it matches the shared store's `longbook_10240` convention (§4). Put both
+values in the spec and make sure they reach the runtime — `PREFILL_MAX_SEQ_LEN` /
+`PREFILL_CHUNK_SIZE`, which the runner copies to `hf_config.max_seq_len`. The runner's own default is
+**eleven** chunks (56320), so an unexported spec value silently runs a different shape than the one
+being graded. Longer contexts, up to the model's max, are a follow-on measurement once a longer trace
+exists — not a bring-up target.
 
 Varies per model — the only things to change:
 
