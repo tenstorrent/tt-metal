@@ -3,6 +3,16 @@ include(sources.cmake)
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
+# In-process gimsatul (parallel SAT) integration for the topology solver. When ON
+# (default) the vendored solver is linked as a static lib and driven via gim_shim;
+# when OFF the solver skips the lib path (TT_FABRIC_NO_GIMSATUL).
+option(TT_METAL_FABRIC_GIMSATUL "Link the vendored gimsatul SAT solver in-process" ON)
+if(TT_METAL_FABRIC_GIMSATUL)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/gimsatul ${CMAKE_CURRENT_BINARY_DIR}/gimsatul)
+else()
+    target_compile_definitions(fabric PRIVATE TT_FABRIC_NO_GIMSATUL=1)
+endif()
+
 # emule: append_fabric_connection_rt_args records each worker's fwd/bwd connection->neighbor for the
 # software-emulation teleport's 1D dst resolution (the firmware connection table emule skips). The define
 # is PRIVATE on the tt_metal target, which doesn't reach this OBJECT lib, so set it here too.
@@ -85,6 +95,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
         cadical::cadical
+        $<$<BOOL:${TT_METAL_FABRIC_GIMSATUL}>:gimsatul>
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)

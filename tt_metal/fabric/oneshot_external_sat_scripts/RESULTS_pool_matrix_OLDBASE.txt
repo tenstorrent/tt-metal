@@ -1,0 +1,31 @@
+=== pool matrix start 2026-09-08T23:03:50Z ===
+A  64     s0   n1   | wall=53s    sols=1    rc=0    ok
+B  64     s0   n1   | wall=55s    sols=1    rc=0    ok
+D  64     s0   n1   | wall=98s    sols=1    rc=0    ok
+B  96     s0   n1   | wall=105s   sols=1    rc=0    ok
+B  128    s0   n1   | wall=312s   sols=1    rc=0    ok
+B  144    s0   n1   | wall=198s   sols=1    rc=0    ok
+B  96     s7   n1   | wall=66s    sols=1    rc=0    ok
+B  128    s7   n1   | wall=147s   sols=1    rc=0    ok
+B  144    s7   n1   | wall=385s   sols=1    rc=0    ok
+B  96     s42  n1   | wall=191s   sols=1    rc=0    ok
+B  128    s42  n1   | wall=902s   sols=0
+0  rc=124  TIMEOUT
+B  144    s42  n1   | wall=190s   sols=1    rc=0    ok
+B  96     s0   n5   | wall=534s   sols=5    rc=0    ok
+B  128    s0   n5   | wall=1202s  sols=3    rc=124  TIMEOUT
+B  96     s7   n5   | wall=611s   sols=5    rc=0    ok
+B  128    s7   n5   | wall=1202s  sols=4    rc=124  TIMEOUT
+B  96     s42  n5   | wall=439s   sols=5    rc=0    ok
+B  128    s42  n5   | wall=1202s  sols=3    rc=124  TIMEOUT
+B  144    s0   n5   | wall=415s   sols=1    rc=0    ok
+A  96     s0   n1   | wall=228s   sols=1    rc=0    ok
+A  128    s0   n1   | wall=120s   sols=1    rc=0    ok
+A  144    s0   n1   | wall=170s   sols=1    rc=0    ok
+D  96     s0   n1   | wall=872s   sols=1    rc=0    ok
+D  128    s0   n1   | wall=902s   sols=0
+0  rc=124  TIMEOUT
+D  144    s0   n1   | wall=902s   sols=0
+0  rc=124  TIMEOUT
+A  96     s0   n5   | wall=762s   sols=5    rc=0    ok
+A  128    s0   n5   | wall=1202s  sols=1    rc=124  TIMEOUT

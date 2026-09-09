@@ -1,0 +1,108 @@
+=== pool matrix start 2026-09-09T03:29:39Z ===
+A  64     s0   n1   | wall=12s    sols=1    rc=0    ok
+B  64     s0   n1   | wall=12s    sols=1    rc=0    ok
+D  64     s0   n1   | wall=158s   sols=1    rc=0    ok
+B  96     s0   n1   | wall=83s    sols=1    rc=0    ok
+B  128    s0   n1   | wall=353s   sols=1    rc=0    ok
+B  144    s0   n1   | wall=206s   sols=1    rc=0    ok
+B  96     s7   n1   | wall=29s    sols=1    rc=0    ok
+B  128    s7   n1   | wall=173s   sols=1    rc=0    ok
+B  144    s7   n1   | wall=314s   sols=1    rc=0    ok
+B  96     s42  n1   | wall=67s    sols=1    rc=0    ok
+B  128    s42  n1   | wall=278s   sols=1    rc=0    ok
+B  144    s42  n1   | wall=415s   sols=1    rc=0    ok
+B  96     s0   n5   | wall=174s   sols=5    rc=0    ok
+B  128    s0   n5   | wall=837s   sols=5    rc=0    ok
+B  96     s7   n5   | wall=290s   sols=5    rc=0    ok
+B  128    s7   n5   | wall=1202s  sols=4    rc=124  TIMEOUT
+B  96     s42  n5   | wall=327s   sols=5    rc=0    ok
+B  128    s42  n5   | wall=1202s  sols=3    rc=124  TIMEOUT
+B  144    s0   n5   | wall=252s   sols=1    rc=0    ok
+A  96     s0   n1   | wall=94s    sols=1    rc=0    ok
+A  128    s0   n1   | wall=269s   sols=1    rc=0    ok
+A  144    s0   n1   | wall=230s   sols=1    rc=0    ok
+D  96     s0   n1   | wall=697s   sols=1    rc=0    ok
+D  128    s0   n1   | wall=902s   sols=0
+0  rc=124  TIMEOUT
+D  144    s0   n1   | wall=505s   sols=1    rc=0    ok
+A  96     s0   n5   | wall=395s   sols=5    rc=0    ok
+A  128    s0   n5   | wall=1202s  sols=2    rc=124  TIMEOUT
+D  96     s0   n5   | wall=1202s  sols=2    rc=124  TIMEOUT
+D  128    s0   n5   | wall=1203s  sols=0
+0  rc=124  TIMEOUT
+A  144    s0   n5   | wall=132s   sols=1    rc=0    ok
+D  144    s0   n5   | wall=1202s  sols=0
+0  rc=124  TIMEOUT
+=== extension phase start 2026-09-09T07:29:56Z (seed 13 + n10) ===
+B  96     s13  n1   | wall=47s    sols=1    rc=0    ok
+B  128    s13  n1   | wall=270s   sols=1    rc=0    ok
+B  144    s13  n1   | wall=165s   sols=1    rc=0    ok
+B  96     s13  n5   | wall=348s   sols=5    rc=0    ok
+B  128    s13  n5   | wall=1202s  sols=3    rc=124  TIMEOUT
+B  96     s0   n10  | wall=493s   sols=10   rc=0    ok
+B  128    s0   n10  | wall=2402s  sols=3    rc=124  TIMEOUT
+B  96     s7   n10  | wall=1334s  sols=10   rc=0    ok
+B  128    s7   n10  | wall=2403s  sols=4    rc=124  TIMEOUT
+A  96     s0   n10  | wall=1159s  sols=10   rc=0    ok
+A  128    s0   n10  | wall=2402s  sols=7    rc=124  TIMEOUT
+D  96     s0   n10  | wall=958s   sols=10   rc=0    ok
+D  128    s0   n10  | wall=2402s  sols=0
+0  rc=124  TIMEOUT
+=== extension phase done 2026-09-09T11:49:42Z ===
+=== pool matrix done 2026-09-09T11:49:42Z ===
+=== full 3-mode seed sweep start 2026-09-09T11:50:07Z ===
+A  96     s7   n5   | wall=210s   sols=5    rc=0    ok
+A  128    s7   n5   | wall=1202s  sols=2    rc=124  TIMEOUT
+A  96     s42  n5   | wall=173s   sols=5    rc=0    ok
+A  128    s42  n5   | wall=1202s  sols=1    rc=124  TIMEOUT
+D  96     s7   n5   | wall=1202s  sols=2    rc=124  TIMEOUT
+D  128    s7   n5   | wall=1202s  sols=0
+0  rc=124  TIMEOUT
+D  96     s42  n5   | wall=945s   sols=5    rc=0    ok
+D  128    s42  n5   | wall=1202s  sols=0
+0  rc=124  TIMEOUT
+A  96     s7   n1   | wall=46s    sols=1    rc=0    ok
+A  128    s7   n1   | wall=628s   sols=1    rc=0    ok
+A  144    s7   n1   | wall=167s   sols=1    rc=0    ok
+A  96     s42  n1   | wall=37s    sols=1    rc=0    ok
+A  128    s42  n1   | wall=141s   sols=1    rc=0    ok
+A  144    s42  n1   | wall=639s   sols=1    rc=0    ok
+D  96     s7   n1   | wall=327s   sols=1    rc=0    ok
+D  128    s7   n1   | wall=144s   sols=1    rc=0    ok
+D  144    s7   n1   | wall=900s   sols=0
+0  rc=124  TIMEOUT
+D  96     s42  n1   | wall=660s   sols=1    rc=0    ok
+D  128    s42  n1   | wall=902s   sols=0
+0  rc=124  TIMEOUT
+D  144    s42  n1   | wall=902s   sols=0
+0  rc=124  TIMEOUT
+=== full 3-mode seed sweep done 2026-09-09T15:23:59Z ===
+=== small-size multi-solution sweep start 2026-09-09T15:24:17Z (64/80/112, all modes, all seeds) ===
+B  64     s0   n5   | wall=47s    sols=5    rc=0    ok
+A  64     s0   n5   | wall=53s    sols=5    rc=0    ok
+D  64     s0   n5   | wall=187s   sols=5    rc=0    ok
+B  64     s7   n5   | wall=29s    sols=5    rc=0    ok
+A  64     s7   n5   | wall=53s    sols=5    rc=0    ok
+D  64     s7   n5   | wall=265s   sols=5    rc=0    ok
+B  64     s42  n5   | wall=49s    sols=5    rc=0    ok
+A  64     s42  n5   | wall=29s    sols=5    rc=0    ok
+D  64     s42  n5   | wall=236s   sols=5    rc=0    ok
+B  80     s0   n5   | wall=116s   sols=5    rc=0    ok
+A  80     s0   n5   | wall=137s   sols=5    rc=0    ok
+D  80     s0   n5   | wall=641s   sols=5    rc=0    ok
+B  80     s7   n5   | wall=165s   sols=5    rc=0    ok
+A  80     s7   n5   | wall=177s   sols=5    rc=0    ok
+D  80     s7   n5   | wall=497s   sols=5    rc=0    ok
+B  80     s42  n5   | wall=202s   sols=5    rc=0    ok
+A  80     s42  n5   | wall=107s   sols=5    rc=0    ok
+D  80     s42  n5   | wall=1048s  sols=5    rc=0    ok
+B  112    s0   n5   | wall=1202s  sols=2    rc=124  TIMEOUT
+A  112    s0   n5   | wall=737s   sols=5    rc=0    ok
+D  112    s0   n5   | wall=1202s  sols=0
+0  rc=124  TIMEOUT
+B  112    s7   n5   | wall=944s   sols=5    rc=0    ok
+A  112    s7   n5   | wall=730s   sols=5    rc=0    ok
+D  112    s7   n5   | wall=1202s  sols=0
+0  rc=124  TIMEOUT
+B  112    s42  n5   | wall=1108s  sols=5    rc=0    ok
+A  112    s42  n5   | wall=357s   sols=3    rc=137  ok

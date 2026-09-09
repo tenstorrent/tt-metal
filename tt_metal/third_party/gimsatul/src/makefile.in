@@ -1,0 +1,28 @@
+CC=@CC@
+CFLAGS=@CFLAGS@
+
+DEP=$(filter-out config.h,$(wildcard *.h))
+SRC=$(sort $(wildcard *.c))
+OBJ=$(SRC:.c=.o)
+
+%.o: %.c $(DEP) makefile
+	$(CC) $(CFLAGS) -c $<
+
+all: gimsatul
+gimsatul: $(OBJ) makefile
+	$(CC) $(CFLAGS) -o $@ $(OBJ) -lm -pthread
+
+build.o: config.h
+config.h: VERSION makefile
+	./mkconfig.sh > $@
+
+clean:
+	rm -f makefile config.h *.o gimsatul *~ cnf/*.err cnf/*.log *.[ch].gc* gmon.out
+format:
+	clang-format -i *.[ch]
+test: all
+	cnf/test.sh
+docker: clean
+	docker build -t gimsatul .
+
+.PHONY: all clean docker indent test

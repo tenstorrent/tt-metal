@@ -23,6 +23,10 @@
 
 #include "fabric_host_utils.hpp"  // humanize()
 
+#ifndef TT_FABRIC_NO_GIMSATUL
+#include "gim_shim.h"  // in-process gimsatul C API (vendored static lib)
+#endif
+
 namespace tt::tt_fabric::detail {
 
 namespace {
@@ -480,14 +484,21 @@ bool TopologySatSolver::write_dimacs(const std::string& path) {
 
 int TopologySatSolver::gimsatul_solve(int threads, const std::vector<int>& assumption_units, std::size_t run_cap_k) {
     have_gimsatul_model_ = false;
-    const char* bin = std::getenv("TT_TOPO_SAT_GIMSATUL_BIN");
-    if (bin == nullptr || bin[0] == '\0' || !dump_record_) {
-        return 0;  // no binary / no tape -> unknown; caller falls back to native solve
+#ifdef TT_FABRIC_NO_GIMSATUL
+    // Built without the in-process gimsatul library: no lib path available.
+    (void)threads;
+    (void)assumption_units;
+    (void)run_cap_k;
+    return 0;  // unknown -> caller falls back to native solve
+#else
+    if (!dump_record_) {
+        return 0;  // no clause tape recorded -> unknown; caller falls back to native solve
     }
     const auto t0 = std::chrono::steady_clock::now();
     // Distilled pool injection (TT_TOPO_SAT_POOL=1): append pool entries valid under this run's host cap
     // (min(permanent cap tag, run_cap_k)), shortest-first, capped at TT_TOPO_SAT_POOL_MAX_CLAUSES. Harvest the
     // driver's root-fixed units first so anything proven since the last native solve rides along too.
+    // NOTE: this pool-collection logic is UNCHANGED from the subprocess integration.
     std::vector<std::vector<int>> pool_clauses;
     std::size_t pool_total = 0;
     int run_cap = impl_->pool_cap_tag;
@@ -502,82 +513,86 @@ int TopologySatSolver::gimsatul_solve(int threads, const std::vector<int>& assum
         pool_total = dp.size();
         pool_clauses = dp.collect(run_cap, max_cl, next_var_ < 0 ? 0 : next_var_);
     }
-    const std::string base = std::string("/tmp/tt_gimsatul_") + std::to_string(static_cast<long>(::getpid()));
-    const std::string cnf = base + ".cnf";
-    const std::string out = base + ".out";
-    // Write the faithful CNF (recorded tape: base encode + occupancy/cap clauses + blocking clauses) + the
-    // assumption units (gimsatul has no assume()) + the distilled pool clauses.
-    FILE* f = std::fopen(cnf.c_str(), "w");
-    if (f == nullptr) {
-        return 0;
+
+    const int nvars = next_var_ < 0 ? 0 : next_var_;
+
+    // In-process solve: build the ruler directly through the gim_shim C API (no DIMACS file, no subprocess).
+    gim_solver* gs = gim_new(nvars, threads);
+    if (gs == nullptr) {
+        return 0;  // allocation failure -> unknown; caller falls back to native solve
     }
-    std::fprintf(
-        f, "p cnf %d %zu\n", next_var_ < 0 ? 0 : next_var_, num_clauses_ + assumption_units.size() + pool_clauses.size());
+
+    // (a) the recorded clause tape: dump_tape_ is a flat stream of 0-terminated clauses.
+    std::vector<int> clause;
+    clause.reserve(16);
     for (const int lit : dump_tape_) {
         if (lit == 0) {
-            std::fputs("0\n", f);
+            if (!clause.empty()) {
+                gim_add_clause(gs, clause.data(), static_cast<int>(clause.size()));
+                clause.clear();
+            }
         } else {
-            std::fprintf(f, "%d ", lit);
+            clause.push_back(lit);
         }
     }
+    if (!clause.empty()) {  // defensive: tolerate an unterminated trailing clause
+        gim_add_clause(gs, clause.data(), static_cast<int>(clause.size()));
+    }
+    // (b) assumption units (gimsatul has no assume()) fed as unit clauses.
     for (const int u : assumption_units) {
-        std::fprintf(f, "%d 0\n", u);
+        const int lit = u;
+        gim_add_clause(gs, &lit, 1);
     }
+    // (c) the distilled pool clauses.
     for (const auto& cl : pool_clauses) {
-        for (const int lit : cl) {
-            std::fprintf(f, "%d ", lit);
-        }
-        std::fputs("0\n", f);
-    }
-    std::fclose(f);
-
-    const std::string cmd =
-        std::string(bin) + " " + cnf + " --threads=" + std::to_string(threads) + " > " + out + " 2>/dev/null";
-    (void)std::system(cmd.c_str());
-
-    FILE* r = std::fopen(out.c_str(), "r");
-    if (r == nullptr) {
-        std::remove(cnf.c_str());
-        return 0;
-    }
-    int status = 0;
-    gimsatul_model_.assign(static_cast<size_t>(next_var_ < 0 ? 0 : next_var_) + 1, 0);
-    static thread_local std::vector<char> buf(1 << 16);
-    while (std::fgets(buf.data(), static_cast<int>(buf.size()), r) != nullptr) {
-        const char* line = buf.data();
-        if (line[0] == 's') {
-            if (std::strstr(line, "UNSATISFIABLE") != nullptr) {
-                status = kUnsat;
-            } else if (std::strstr(line, "SATISFIABLE") != nullptr) {
-                status = kSat;
-            }
-        } else if (line[0] == 'v') {
-            const char* p = line + 1;
-            char* end = nullptr;
-            for (long v = std::strtol(p, &end, 10); p != end; v = std::strtol(p, &end, 10)) {
-                p = end;
-                if (v == 0) {
-                    break;
-                }
-                const long a = v < 0 ? -v : v;
-                if (a >= 1 && a < static_cast<long>(gimsatul_model_.size())) {
-                    gimsatul_model_[static_cast<size_t>(a)] = (v < 0) ? -1 : 1;
-                }
-            }
+        if (!cl.empty()) {
+            gim_add_clause(gs, cl.data(), static_cast<int>(cl.size()));
         }
     }
-    std::fclose(r);
-    std::remove(cnf.c_str());
-    std::remove(out.c_str());
+
+    // Optional debugging tee: still write the exact CNF fed to gimsatul when TT_TOPO_SAT_GIMSATUL_DUMP=path is set.
+    if (const char* dumpp = std::getenv("TT_TOPO_SAT_GIMSATUL_DUMP"); dumpp != nullptr && dumpp[0] != '\0') {
+        if (FILE* f = std::fopen(dumpp, "w"); f != nullptr) {
+            std::fprintf(
+                f, "p cnf %d %zu\n", nvars, num_clauses_ + assumption_units.size() + pool_clauses.size());
+            for (const int lit : dump_tape_) {
+                if (lit == 0) {
+                    std::fputs("0\n", f);
+                } else {
+                    std::fprintf(f, "%d ", lit);
+                }
+            }
+            for (const int u : assumption_units) {
+                std::fprintf(f, "%d 0\n", u);
+            }
+            for (const auto& cl : pool_clauses) {
+                for (const int lit : cl) {
+                    std::fprintf(f, "%d ", lit);
+                }
+                std::fputs("0\n", f);
+            }
+            std::fclose(f);
+        }
+    }
+
+    const int status = gim_solve(gs);
+    gimsatul_model_.assign(static_cast<size_t>(nvars) + 1, 0);
     if (status == kSat) {
+        for (int v = 1; v <= nvars; ++v) {
+            const int r = gim_val(gs, v);  // +v true, -v false
+            gimsatul_model_[static_cast<size_t>(v)] = (r < 0) ? -1 : 1;
+        }
         have_gimsatul_model_ = true;
     }
-    // Always-on path marker: proves the gimsatul delegation ran and how many pool clauses each dump carried.
+    gim_free(gs);
+
+    // Always-on path marker: proves the IN-PROCESS gimsatul lib ran (not a subprocess) and how many pool clauses
+    // each solve carried.
     log_info(
         tt::LogFabric,
-        "[topo-sat] gimsatul solve: {} vars, {} clauses, {} assumption unit(s), {} pool clauses injected (pool={}, "
-        "run_cap={}), threads={} -> {} in {:.1f} ms",
-        next_var_ < 0 ? 0 : next_var_,
+        "[topo-sat] gimsatul in-process solve: {} vars, {} clauses, {} assumption unit(s), {} pool clauses injected "
+        "(pool={}, run_cap={}), threads={} -> {} in {:.1f} ms",
+        nvars,
         num_clauses_,
         assumption_units.size(),
         pool_clauses.size(),
@@ -589,6 +604,7 @@ int TopologySatSolver::gimsatul_solve(int threads, const std::vector<int>& assum
                               : "unknown",
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     return status;
+#endif
 }
 
 void TopologySatSolver::note_permanent_cap(std::size_t cap) {
