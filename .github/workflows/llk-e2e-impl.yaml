@@ -38,6 +38,7 @@ jobs:
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
+      coverage-archs: ${{ steps.build-matrix.outputs.coverage-archs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_e2e_tests.yaml
     steps:
@@ -66,12 +67,15 @@ jobs:
           case "$ARCHITECTURE" in
             all)
               ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+              echo 'coverage-archs=["wormhole","blackhole"]' >> "$GITHUB_OUTPUT"
               ;;
             wormhole)
               ENABLED_SKUS="wh_n150_civ2"
+              echo 'coverage-archs=["wormhole"]' >> "$GITHUB_OUTPUT"
               ;;
             blackhole)
               ENABLED_SKUS="bh_p150b_civ2"
+              echo 'coverage-archs=["blackhole"]' >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::Unsupported architecture '$ARCHITECTURE'"
@@ -165,11 +169,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
-    needs: [llk-e2e-exec, build-images]
-    if: ${{ inputs.coverage == true && (inputs.architecture == 'all' || inputs.architecture == matrix.chip-arch) }}
+    needs: [llk-e2e-exec, build-images, load-test-matrix]
+    if: ${{ inputs.coverage == true }}
     strategy:
       matrix:
-        chip-arch: [wormhole, blackhole]
+        chip-arch: ${{ fromJSON(needs.load-test-matrix.outputs.coverage-archs) }}
     permissions:
       contents: read
     steps:
