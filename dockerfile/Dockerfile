@@ -201,6 +201,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# The LLVM packages install versioned names only. CodeChecker resolves the
+# unversioned ones, and consults ClangSA.analyzer_binary() even when only
+# clang-tidy runs, where a None crashes compilation-database parsing. Three
+# workflows each fixed that up themselves before running it; do it once here.
+# Nothing in the build picks a compiler by bare name: build_metal.sh passes an
+# explicit path, CMakePresets pins clang-tidy-20, and CMake's own default probe
+# looks for cc/c++.
+RUN for tool in clang clang++ clang-tidy; do \
+        update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
+    done && \
+    clang --version && clang-tidy --version
+
 #############################################################
 # CI Build image
 #############################################################
