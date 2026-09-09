@@ -107,6 +107,11 @@ inline void _relu_max_(T threshold)
     _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
 }
 
+// Dst holds int32 in whatever encoding the caller put there, and ttnn's is two's complement,
+// which is what the compares below assume. Named rather than left to sfpi's default, because
+// that default is per-arch -- I32 here, SM32 (converting) on Wormhole.
+inline constexpr sfpi::DataLayout INT_DEST_LAYOUT = sfpi::DataLayout::I32;
+
 // Sign of an integer threshold. It is uniform across lanes, so it picks which of the integer
 // forms below runs from outside the loop.
 enum class ThresholdSign
@@ -134,7 +139,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
         {
             for (int d = 0; d < iterations; d++)
             {
-                sfpi::vInt a = sfpi::dst_reg[0];
+                sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
                 // a >= 0 > threshold keeps a, so only the negative lanes can lose, and there
                 // both operands are negative.
                 v_if (a < 0)
@@ -146,7 +151,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
                     v_endif;
                 }
                 v_endif;
-                sfpi::dst_reg[0] = a;
+                sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
                 sfpi::dst_reg++;
             }
         }
@@ -155,13 +160,13 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
             // The sign test is the whole compare, which is the form relu_tile_int32 takes.
             for (int d = 0; d < iterations; d++)
             {
-                sfpi::vInt a = sfpi::dst_reg[0];
+                sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
                 v_if (a < 0)
                 {
                     a = threshold;
                 }
                 v_endif;
-                sfpi::dst_reg[0] = a;
+                sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
                 sfpi::dst_reg++;
             }
         }
@@ -169,7 +174,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
         {
             for (int d = 0; d < iterations; d++)
             {
-                sfpi::vInt a = sfpi::dst_reg[0];
+                sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
                 // Lifting the negative lanes to a positive threshold first is the whole answer
                 // for them, and it leaves only non-negative operands to the compare.
                 v_if (a < 0)
@@ -182,7 +187,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
                     a = threshold;
                 }
                 v_endif;
-                sfpi::dst_reg[0] = a;
+                sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
                 sfpi::dst_reg++;
             }
         }
