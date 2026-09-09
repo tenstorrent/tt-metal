@@ -571,8 +571,48 @@ class Qwen36Generator(ReadinessGenerator):
                     "recapture with a host page table or omit page_table for unchanged ownership"
                 )
             self.refresh_page_table(page_table)
+        _prof = os.environ.get("QWEN36_DECODE_PROFILE")
+        if _prof:
+            import time as _time
+
+            _p0 = _time.perf_counter()
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
+        if _prof:
+            # Fence between the two traces so model device time and sampler
+            # device time are attributed separately. The model-only traced
+            # decode measures 0.628 ms at batch 32; the step costs ~238 ms, and
+            # the sampler reduces [batch, vocab] = [32, 248320] per token.
+            ttnn.synchronize_device(self.mesh_device)
+            _p1 = _time.perf_counter()
         self.sampling.sample(self._trace_logits, enable_trace=True, tt_out_tok=self._trace_token)
+        if _prof:
+            _p2 = _time.perf_counter()
+            # Both calls above only enqueue. Fence to separate host enqueue cost
+            # from real device time: if the device work is ~0.6 ms as the
+            # model-only traced decode measures, the per-token cost lives
+            # outside this function; if it is ~240 ms, this trace (model plus
+            # on-device sampling over the full vocab) is the cost.
+            ttnn.synchronize_device(self.mesh_device)
+            _p3 = _time.perf_counter()
+            n = self.trace_counters["replays"] + 1
+            acc = getattr(self, "_step_prof", None)
+            if acc is None:
+                acc = self._step_prof = {"model_device": 0.0, "sample_enq": 0.0, "sampler_device": 0.0}
+            acc["model_device"] += (_p1 - _p0) * 1000.0
+            acc["sample_enq"] += (_p2 - _p1) * 1000.0
+            acc["sampler_device"] += (_p3 - _p2) * 1000.0
+            print(
+                f"STEP_PROF n={n} model_device={(_p1 - _p0) * 1000:.2f} "
+                f"sample_enq={(_p2 - _p1) * 1000:.2f} sampler_device={(_p3 - _p2) * 1000:.2f} "
+                f"total={(_p3 - _p0) * 1000:.2f}",
+                flush=True,
+            )
+            if n % 16 == 0:
+                print(
+                    "STEP_PROF_MEAN over %d: %s"
+                    % (n, " ".join(f"{k}={v / n:.2f}" for k, v in acc.items())),
+                    flush=True,
+                )
         self.trace_counters["replays"] += 1
         if not readback:
             return self._trace_token

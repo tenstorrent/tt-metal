@@ -11,6 +11,7 @@ reads logits in the performance path.
 
 from __future__ import annotations
 
+import os
 import math
 from dataclasses import fields, replace
 from pathlib import Path
@@ -367,6 +368,11 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
                 active_mask=start_pos.reshape(-1)[: gen.model.batch] >= 0,
             )
             return host_logits.unsqueeze(1)
+        _prof = os.environ.get("QWEN36_DECODE_PROFILE")
+        if _prof:
+            import time as _time
+
+            _t = [("entry", _time.perf_counter())]
         sampling_key = self._sampling_key(sampling_params)
         sampling_changed = sampling_key != self._sampling_contract_key
         gen.sampling.apply_decode_state(
@@ -376,6 +382,8 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             prompt_tokens=prompt_tokens,
             output_tokens=output_tokens,
         )
+        if _prof:
+            _t.append(("apply_decode_state", _time.perf_counter()))
         self._sampling_contract_key = sampling_key
         start_values = start_pos.reshape(-1)[: gen.model.batch].tolist()
         active_seed_slots = [slot for slot, pos in enumerate(start_values) if int(pos) >= 0]
@@ -389,7 +397,24 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         if active_seed_slots:
             gen.sampling.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
             gen.sampling.seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_values)
+        if _prof:
+            _t.append(("seed_align+remap", _time.perf_counter()))
         page_changed = self._last_page_table is None or not torch.equal(page_table, self._last_page_table)
+        if os.environ.get("QWEN36_DECODE_LOG_SETUP"):
+            # Counts trace setup against decode steps. setup_token_out_decode
+            # performs capture, so if it fires every token the traced path is
+            # being rebuilt per step and decode cost is capture, not compute.
+            self._decode_steps = getattr(self, "_decode_steps", 0) + 1
+            will_setup = bool(reset_batch or not self._decode_ready or page_changed or remap_changed)
+            if will_setup:
+                self._decode_setups = getattr(self, "_decode_setups", 0) + 1
+            print(
+                f"DECODE_STEP n={self._decode_steps} setup={will_setup} "
+                f"setups={getattr(self, '_decode_setups', 0)} "
+                f"reset_batch={bool(reset_batch)} not_ready={not self._decode_ready} "
+                f"page_changed={bool(page_changed)} remap_present={bool(remap_changed)}",
+                flush=True,
+            )
         if reset_batch or not self._decode_ready or page_changed or remap_changed:
             gen.setup_token_out_decode(
                 tokens.reshape(-1)[: gen.model.batch],
@@ -404,10 +429,59 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         # Trace setup performs sampler warm/capture executions.  Write the
         # request's intended per-token device seeds afterwards so capture-side
         # RNG consumption cannot perturb the first real replay.
+        if _prof:
+            _t.append(("setup_check", _time.perf_counter()))
         gen.sampling.seed_manager.get_new_values(active_seed_slots)
+        if _prof:
+            _t.append(("seed_new_values", _time.perf_counter()))
         tt_out = gen.token_out_decode_step(readback=False)
+        if _prof:
+            _t.append(("token_out_decode_step", _time.perf_counter()))
         if read_from_device:
-            return self.process_decode_output_host(self.read_decode_output(tt_out), is_tokens=True)
+            _host = self.read_decode_output(tt_out)
+            if _prof:
+                _t.append(("read_decode_output", _time.perf_counter()))
+            _out = self.process_decode_output_host(_host, is_tokens=True)
+            if _prof:
+                _t.append(("process_output_host", _time.perf_counter()))
+                self._prof_n = getattr(self, "_prof_n", 0) + 1
+                acc = getattr(self, "_prof_acc", None)
+                if acc is None:
+                    acc = self._prof_acc = {}
+                parts = []
+                for (_, t0), (name, t1) in zip(_t, _t[1:]):
+                    ms = (t1 - t0) * 1000.0
+                    acc[name] = acc.get(name, 0.0) + ms
+                    parts.append(f"{name}={ms:.1f}")
+                total = (_t[-1][1] - _t[0][1]) * 1000.0
+                acc["TOTAL"] = acc.get("TOTAL", 0.0) + total
+                print(f"DECODE_PROF step={self._prof_n} total={total:.1f} " + " ".join(parts), flush=True)
+                if self._prof_n % 16 == 0:
+                    n = self._prof_n
+                    mean = " ".join(f"{k}={v / n:.1f}" for k, v in acc.items())
+                    print(f"DECODE_PROF_MEAN over {n} steps (ms): {mean}", flush=True)
+            return _out
+        if _prof:
+            # Serving takes this branch: logits stay on device and the plugin
+            # reads them asynchronously, so the inline readback above never
+            # runs and must not be blamed for the per-token cost.
+            _t.append(("return_device", _time.perf_counter()))
+            self._prof_n = getattr(self, "_prof_n", 0) + 1
+            acc = getattr(self, "_prof_acc", None)
+            if acc is None:
+                acc = self._prof_acc = {}
+            parts = []
+            for (_, t0), (name, t1) in zip(_t, _t[1:]):
+                ms = (t1 - t0) * 1000.0
+                acc[name] = acc.get(name, 0.0) + ms
+                parts.append(f"{name}={ms:.1f}")
+            total = (_t[-1][1] - _t[0][1]) * 1000.0
+            acc["TOTAL"] = acc.get("TOTAL", 0.0) + total
+            print(f"DECODE_PROF_DEV step={self._prof_n} total={total:.1f} " + " ".join(parts), flush=True)
+            if self._prof_n % 16 == 0:
+                n = self._prof_n
+                mean = " ".join(f"{k}={v / n:.1f}" for k, v in acc.items())
+                print(f"DECODE_PROF_MEAN over {n} steps (ms): {mean}", flush=True)
         return tt_out
 
     def read_decode_output(self, tt_out, async_read=False):
