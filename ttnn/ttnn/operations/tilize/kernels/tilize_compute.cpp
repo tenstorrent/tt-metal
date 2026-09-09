@@ -101,8 +101,10 @@ void kernel_main() {
     // the reader kernel) and the trailing `rows_writer` in cb_input_rows_split
     // (produced by the writer kernel). Tilizing them back to back in that order
     // reproduces exactly the block's tile-row order, so nothing downstream
-    // changes. The host guarantees every block is at least two tile-rows tall,
-    // so both sub-blocks are non-empty.
+    // changes. A block whose own extent rounds `rows_split` to zero (possible
+    // on a ragged row split) simply arrives whole in cb_input_rows: the reader,
+    // the writer and this kernel all derive the split point from that block's
+    // own extent, so they agree without a handshake.
     constexpr uint32_t split_reader_rows = get_compile_time_arg_val(10);
     constexpr uint32_t cb_input_rows_split = get_compile_time_arg_val(11);
     constexpr uint32_t split_writer_share_pct = get_compile_time_arg_val(12);
@@ -146,8 +148,8 @@ void kernel_main() {
         const uint32_t block_row_extent = row_end - row_start;
 
         // The block's row extent, split between the two input CBs when the
-        // reader is split. `rows_split` is >= 1 for every block because the host
-        // only turns the split on when the SMALLEST block is two tile-rows tall.
+        // reader is split — derived from THIS block's extent, identically in
+        // all three kernels, so a ragged row split needs no extra argument.
         uint32_t rows_split = 0;
         if constexpr (split_reader_rows > 0) {
             rows_split = (block_row_extent * split_writer_share_pct) / 100;

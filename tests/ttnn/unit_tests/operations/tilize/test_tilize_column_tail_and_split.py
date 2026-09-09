@@ -128,6 +128,38 @@ def test_split_reader_knob_off_is_identical(device, monkeypatch):
     assert plan.split_reader == 0
 
 
+def test_split_reader_off_on_native_sharded_output(device):
+    """The gate's HANG leg. `cb_input_rows_split`'s only producer is the WRITER
+    kernel, and a natively sharded output emits no writer kernel at all — the
+    packer has already written the shard. With the split left on there, compute
+    would wait forever on a CB nothing pushes to. Found by the static analyzer;
+    this test is the regression pin."""
+    grid = device.compute_with_storage_grid_size()
+    shape = (1, 1, 16384, 32)
+    torch.manual_seed(3)
+    torch_input = torch.randn(shape, dtype=torch.float32).bfloat16()
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out_mem = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_output = tilize(tt_input, memory_config=out_mem)
+    plan = pd.derive_plan(tt_input, tt_output, low_l1=False, grid=grid)
+    # The shape is exactly the split's target geometry — 64 B sticks, 8-tile-row
+    # blocks — so only the `output_native` leg of the gate can turn it off.
+    assert plan.output_native and plan.block_row_bytes <= pd.SPLIT_READER_MAX_ROW_BYTES
+    assert plan.split_reader == 0
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input)
+
+
 def test_split_reader_off_where_it_cannot_apply(device):
     """The gate's structural legs: a one-tile-row block cannot be split, and a
     padded block is a different reader block operation the writer does not run."""

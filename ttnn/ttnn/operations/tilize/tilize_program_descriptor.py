@@ -542,6 +542,7 @@ def _split_reader_rows(
     is_retile: bool,
     pad_active: bool,
     input_native: bool,
+    output_native: bool,
     input_pages_per_row: int,
     in_page_bytes: int,
     out_page_bytes: int,
@@ -563,15 +564,23 @@ def _split_reader_rows(
       * only the plain stick path — the padded, retile, native-shard and
         sub-row-paged legs are different block operations, and duplicating one
         of them into the writer would be a second implementation, not a knob;
-      * every block at least two tile-rows tall, so the split point (a runtime
-        `(extent * pct) / 100`) always leaves both halves non-empty and the
-        writer's half is bounded by `floor(max_extent * pct / 100)`;
+      * a NON-native output, because the producer of `cb_input_rows_split` IS
+        the writer kernel — and a natively sharded output emits no writer kernel
+        at all (the packer has already written the shard), so the split would
+        leave compute waiting forever on a CB with no producer. That leg is a
+        HANG, not a slowdown;
+      * the TALLEST block at least two tile-rows tall, so the writer's half is
+        bounded by `floor(max_extent * pct / 100)` and the split CB can be sized
+        from it. A SHORTER block in the same plan may still round its own share
+        to zero, which all three kernels handle identically (the writer skips its
+        read, compute skips its second sub-block, the reader takes the whole
+        block) — the split point is derived from each block's own extent;
       * a read transaction small enough to be ISSUE-dominated (see the constant);
       * the extra CB fits the same L1 budget the column extent was solved against.
     """
     if SPLIT_READER_MAX_ROW_BYTES <= 0 or num_blocks_total == 0:
         return 0
-    if is_retile or pad_active or input_native or input_pages_per_row > 1:
+    if is_retile or pad_active or input_native or output_native or input_pages_per_row > 1:
         return 0
     if block_row_bytes > SPLIT_READER_MAX_ROW_BYTES:
         return 0
@@ -1364,6 +1373,7 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         is_retile=is_retile,
         pad_active=pad_active,
         input_native=input_native,
+        output_native=output_native,
         input_pages_per_row=input_pages_per_row,
         in_page_bytes=in_page_bytes,
         out_page_bytes=out_page_bytes,
@@ -1399,6 +1409,7 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
                 is_retile=is_retile,
                 pad_active=pad_active,
                 input_native=input_native,
+                output_native=output_native,
                 input_pages_per_row=input_pages_per_row,
                 in_page_bytes=in_page_bytes,
                 out_page_bytes=out_page_bytes,
