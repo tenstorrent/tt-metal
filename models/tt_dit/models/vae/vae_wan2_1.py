@@ -134,7 +134,7 @@ class WanAttentionBlock(Module):
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
-            k_chunk_size=256,
+            k_chunk_size=128,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -1224,6 +1224,7 @@ class WanDupUp3D(Module):
     def forward(self, x_BTHWC: ttnn.Tensor, first_chunk: bool = False) -> ttnn.Tensor:
         B, T, H, W, C = x_BTHWC.shape
         ft, fs, oc = self.factor_t, self.factor_s, self.out_channels
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)  # avoid 32x32 tile-pad blowup on small factor dims
         if self.repeats != 1:
             x_nc1 = ttnn.reshape(x_BTHWC, (B * T * H * W, C, 1))
             x_ncr = ttnn.concat([x_nc1] * self.repeats, dim=2)

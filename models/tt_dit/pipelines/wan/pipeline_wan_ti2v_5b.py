@@ -66,6 +66,10 @@ class WanTI2V5BPipeline(WanPipeline):
             "model_type": "ti2v",
             "checkpoint_name": _5B_CHECKPOINT,
             "boundary_ratio": None,
+            # 4x8 BH preset defaults vae_t_chunk_size=None (full-T), which OOMs DRAM
+            # for long clips (e.g. 121f needs a ~14GB VAE activation). Chunk the temporal
+            # VAE decode (feat_cache carries causal-conv state across chunks).
+            "vae_t_chunk_size": 7,
             # NOTE: TI2V-5B uses per-token (expanded) timesteps for true image
             # conditioning, but the tt _step path only plumbs a scalar timestep and
             # this base pipeline runs T2V with an all-ones mask (per-token == scalar).

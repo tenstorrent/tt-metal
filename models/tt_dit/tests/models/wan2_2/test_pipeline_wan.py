@@ -228,3 +228,115 @@ def test_pipeline_inference(
             frames = run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, frames)
             check_output_with_vbench(prompt, i)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, topology, device_params",
+    [
+        [(4, 8), (4, 8), 1, 0, 2, ttnn.Topology.Ring, ring_params_req_exact_devices],
+    ],
+    ids=["bh_4x8_ring"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_inference_generate(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, topology):
+    """Traced, timed, CLIP-gated Wan2.2-14B (A14B) T2V run on a single BH Galaxy (4x8).
+
+    Env knobs (defaults target the customer point: 480p / 81f / 20 steps)::
+
+        WAN14B_HEIGHT=480 WAN14B_WIDTH=832 WAN14B_FRAMES=81 WAN14B_STEPS=20 \
+        WAN14B_TRACED=1 WAN14B_REPEAT=2 \
+          pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+            -k "inference_generate and bh_4x8_ring" -sv
+    """
+    import time
+
+    if not ttnn.device.is_blackhole():
+        pytest.skip("BH Galaxy only")
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    is_fsdp = False
+
+    height = int(os.environ.get("WAN14B_HEIGHT", 480))
+    width = int(os.environ.get("WAN14B_WIDTH", 832))
+    num_frames = int(os.environ.get("WAN14B_FRAMES", 81))
+    num_inference_steps = int(os.environ.get("WAN14B_STEPS", 20))
+    traced = os.environ.get("WAN14B_TRACED", "1") == "1"
+    repeat = int(os.environ.get("WAN14B_REPEAT", "2" if traced else "1"))
+    seed = int(os.environ.get("WAN14B_SEED", 42))
+    prompt = os.environ.get(
+        "WAN14B_PROMPT",
+        "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+    )
+
+    h_factor = tuple(mesh_device.shape)[tp_axis]
+    w_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
+    vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
+    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+
+    pipeline = WanPipeline(
+        device=mesh_device,
+        config=WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            num_links=num_links,
+            dynamic_load=False,
+            topology=topology,
+            is_fsdp=is_fsdp,
+            checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            height=height,
+            width=width,
+            num_frames=num_frames,
+        ),
+    )
+
+    logger.info(f"Wan2.2-14B generate: {height}x{width}, {num_frames}f, {num_inference_steps} steps, traced={traced}")
+
+    frames = None
+    for it in range(repeat):
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            frames = pipeline(
+                prompts=[prompt],
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                guidance_scale=4.0,
+                guidance_scale_2=3.0,
+                output_type="uint8",
+                traced=traced,
+                on_event=log_event_section,
+            )
+        dt = time.perf_counter() - t0
+        tag = ("cold_capture" if it == 0 else "warm_traced") if traced else "eager"
+        logger.info(
+            f"E2E_14B [{tag}] iter={it}: {dt:.2f}s "
+            f"({num_frames}f / {num_inference_steps} steps, {height}x{width}) -> "
+            f"{dt / max(num_inference_steps, 1) * 1000:.0f} ms/step incl. encode+decode"
+        )
+
+    frames = frames[0]
+    if int(ttnn.distributed_context_get_rank()) == 0:
+        f8 = np.asarray(frames).astype(np.uint8)
+        out = f"/home/ttuser/wan14b_t2v_{width}x{height}_{num_frames}f.mp4"
+        try:
+            from models.tt_dit.utils.video import export_to_video
+
+            export_to_video(f8, out, fps=16)
+            logger.info(f"Saved video to: {out}")
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"mp4 export failed: {e!r}")
+        try:
+            idxs = np.linspace(0, f8.shape[0] - 1, min(8, f8.shape[0]), dtype=int)
+            enc = CLIPEncoder()
+            scores = [enc.get_clip_score(prompt, Image.fromarray(f8[i])).item() * 100.0 for i in idxs]
+            logger.info(
+                f"CLIP_14B scores: mean={sum(scores) / len(scores):.2f} " f"min={min(scores):.2f} max={max(scores):.2f}"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"CLIP failed: {e!r}")
+
+    assert frames.shape[0] > 0, "no frames generated"

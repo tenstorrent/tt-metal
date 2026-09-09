@@ -651,7 +651,13 @@ def get_conv3d_config(
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
         else:
-            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
+            # Cap C_in_block so the weight CB (C_in_block*C_out_block*kernel_vol*2B) fits L1.
+            # Blocking the input-channel reduction is mathematically identical; full-Cin OOMs
+            # at wide 3x3x3 convs (e.g. 1024->512). 256 divides all power-of-2 widths here.
+            capped_cin = min(in_channels, 256)
+            while in_channels % capped_cin != 0:
+                capped_cin //= 2
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = capped_cin, 32, 1, 1, 1
             logger.warning(
                 f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
