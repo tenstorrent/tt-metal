@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -57,6 +58,71 @@ _PRODUCTION_CASES = (
     _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76542),
     _ProductionCase("sp4-tp2", 48, 2, 128, 128, 66513),
 )
+
+
+def _affine_exclusive_scan_ops(
+    a: torch.Tensor | ttnn.Tensor,
+    b: torch.Tensor | ttnn.Tensor,
+    initial_state: torch.Tensor | ttnn.Tensor,
+    output: torch.Tensor | ttnn.Tensor,
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    tensors = (a, b, initial_state, output)
+    if any(len(tensor.shape) != 3 for tensor in tensors):
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("affine exclusive-scan tensor shapes must be positive")
+
+    batch_heads, key_dim, value_dim = initial_state.shape
+    if a.shape[0] % batch_heads:
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    groups_per_head = a.shape[0] // batch_heads
+    if (
+        a.shape != (batch_heads * groups_per_head, key_dim, key_dim)
+        or b.shape != (a.shape[0], key_dim, value_dim)
+        or output.shape != b.shape
+    ):
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+
+    transitions = batch_heads * (groups_per_head - 1)
+    return (
+        perf_model.FpuOps(
+            matrix_flops=transitions * 2 * key_dim**2 * value_dim,
+            add_ops=transitions * key_dim * value_dim,
+        ),
+        perf_model.SfpuOps(),
+    )
+
+
+def _affine_exclusive_scan_performance(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+    output: ttnn.Tensor,
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _affine_exclusive_scan_ops(a, b, initial_state, output)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(a, b, initial_state),
+        outputs=(output,),
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_affine_exclusive_scan_work_golden() -> None:
+    fpu, sfpu = _affine_exclusive_scan_ops(
+        torch.empty((2, 2, 2)),
+        torch.empty((2, 2, 1)),
+        torch.empty((1, 2, 1)),
+        torch.empty((2, 2, 1)),
+    )
+
+    assert fpu == perf_model.FpuOps(matrix_flops=8, add_ops=2)
+    assert sfpu == perf_model.SfpuOps()
 
 
 def _host_inputs(
@@ -431,9 +497,20 @@ def test_affine_exclusive_scan_production_performance(device: ttnn.Device, case:
     )
     assert output.dtype == ttnn.float32
     assert_accurate(expected, ttnn.to_torch(output), name=f"{case.case_id} production output", pcc_threshold=0.999)
+    performance = _affine_exclusive_scan_performance(
+        *device_inputs,
+        output,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+    )
     logger.info(
-        f"affine exclusive scan {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"affine exclusive scan {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     if case.expected_duration_ns is not None:
         lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)

@@ -239,6 +239,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx,
     std::optional<uint32_t> tokens_per_frame,
     std::optional<uint32_t> num_frames_padded,
     std::vector<uint32_t> sparse_frame_mask) {
@@ -281,10 +285,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl,
         std::nullopt,  // latent_v_head_dim
         attention_sink,
-        std::nullopt,  // slot_id
-        std::nullopt,  // kv_actual_isl_tensor
-        1,             // kv_cache_num_layers
-        0,             // kv_cache_layer_idx
+        slot_id,
+        kv_actual_isl_tensor,
+        // Resolve to (1, 0) when unset so the readers compute slot = slot_id[0], the
+        // pre-existing behaviour for callers that pass no layer packing.
+        kv_cache_num_layers.value_or(1),
+        kv_cache_layer_idx.value_or(0),
         sliding_window_size,
         tokens_per_frame,
         num_frames_padded,
@@ -305,7 +311,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,

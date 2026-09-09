@@ -40,8 +40,11 @@ class GLM52Adapter(MLAPrefillAdapter):
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
 
     # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
-    l1_small_size = 1152
+    # 1216, not GLM-5.1's 1152: the tp_sharded fallback gather (used wherever the snake ring
+    # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
+    l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
+    supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
@@ -76,6 +79,9 @@ class GLM52Adapter(MLAPrefillAdapter):
             init_mla_kv_cache,
         )
 
+        # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
+        # tp_axis as the write op and the migration table.
+        kv_tp_axis = params.tp_axis if params.tp_shard_kv else None
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
             hf_config=hf_config,
@@ -85,6 +91,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
+            tp_axis=kv_tp_axis,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
         num_index_layers = full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers) - first_full
@@ -97,6 +104,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=num_index_layers,
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
+            tp_axis=kv_tp_axis,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 

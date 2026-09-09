@@ -56,6 +56,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram.cpp
     test_global_circular_buffers.cpp
     test_cross_node_dfb.cpp
+    test_prefetcher_pipe.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
@@ -63,6 +64,7 @@ set(UNIT_TESTS_API_SOURCES
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp
     test_noc.cpp
+    test_pinned_memory.cpp
     test_blaze_named_args_hashing.cpp
     test_blaze_named_runtime_args.cpp
     test_runtime_args.cpp
