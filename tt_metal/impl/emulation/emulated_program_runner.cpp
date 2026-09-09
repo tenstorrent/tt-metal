@@ -3868,8 +3868,8 @@ static void ensure_peer_wait_driver();
 static bool emule_run_suspended() { return g_emule_host_wait || g_emule_peer_wait; }
 
 // A PeerWait is itself reason to pump: the scheduler already concluded a peer may still deliver, and
-// a cross-process delivery cannot wake this process's scheduler by itself. The peer trigger is gated
-// on there being no host-fed waiter, so this can never be a run waiting on host input.
+// a cross-process delivery cannot wake this process's scheduler by itself. A HostWait with a live
+// peer-fed poller also needs autonomous progress while its host is inside a distributed barrier.
 static bool emule_run_needs_peer_pump();
 
 static bool emule_run_has_peer_fed_waiter() {

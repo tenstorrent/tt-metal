@@ -244,21 +244,6 @@ struct FiberSchedulerImpl {
         return false;
     }
     bool any_waiting_on_host() const { return any_fresh_socket_poll_waiter() || any_parked_is_socket_wait(); }
-    // A sticky tag is too weak to prove HostWait, but its presence must prevent a destructive
-    // peer-only deadlock classification while the host can still feed that fiber.
-    bool any_tagged_host_socket_poll_waiter() const {
-        if (socket_poll_waiters_ == 0) {
-            return false;
-        }
-        for (const auto& up : all_) {
-            const Fiber* f = up.get();
-            if (f->socket_poll_waiting.load(std::memory_order_relaxed) &&
-                f->poll_is_host_fed.load(std::memory_order_relaxed) && f->state != FiberState::Done) {
-                return true;
-            }
-        }
-        return false;
-    }
     // The peer-fed twin of any_fresh_socket_poll_waiter: a d2d socket poll whose publisher is another
     // RANK. Such a fiber is Ready and spinning, never parked, so quiescence is never reached and the
     // tier-2 watchdog would report a livelock for a run that is merely waiting on another process.
@@ -470,15 +455,13 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     cv_.notify_all();
                     break;
                 }
-                // A peer-fed spinner cannot reach quiescence. Classify it only after every sibling
-                // stops running; a false probe is global deadlock, while true suspends for delivery.
-                if (persistent_ && !any_parked_is_socket_wait() && !any_tagged_host_socket_poll_waiter() &&
-                    running_ == 0 && any_fresh_peer_socket_poll_waiter()) {
-                    if (peer_progress_probe()) {
-                        peer_wait_ = true;
-                    } else {
-                        deadlock_ = true;
-                    }
+                // A peer-fed spinner cannot reach quiescence. A false probe is not terminal here: a
+                // shared fixed-point snapshot says every rank is parked at this scheduling boundary,
+                // not that another local release cannot let a sender publish. Keep releasing work until
+                // a peer-capable snapshot is observed or the normal watchdog proves no progress.
+                if (persistent_ && !any_waiting_on_host() && any_fresh_peer_socket_poll_waiter() &&
+                    peer_progress_probe()) {
+                    peer_wait_ = true;
                     abort_flag_ = true;
                     cv_.notify_all();
                     break;
