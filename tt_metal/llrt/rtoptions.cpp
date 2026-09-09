@@ -6,6 +6,7 @@
 #include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -127,10 +128,17 @@ enum class EnvVarID {
     // ========================================
     // PROFILING & PERFORMANCE
     // ========================================
-    TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
-    TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
-    TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
-    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER,              // Enable the legacy device profiler
+    TT_METAL_STREAMING_PROFILER,           // Enable the streaming device profiler (excludes TT_METAL_DEVICE_PROFILER)
+    TT_METAL_STREAMING_PROFILER_TRACY,     // Enable Tracy output for the streaming profiler
+    TT_METAL_STREAMING_PROFILER_DRAM_MB,   // Streaming profiler per-relay GDDR spool ring, MiB
+    TT_METAL_STREAMING_PROFILER_FIFO_MB,   // Streaming profiler host FIFO per D2H socket, MiB
+    TT_METAL_STREAMING_PROFILER_OPS_CSV,   // Streaming profiler ops CSV path
+    TT_METAL_STREAMING_PROFILER_ZONE_CSV,  // Streaming profiler zone CSV path
+    TT_METAL_STREAMING_PROFILER_NRELAYS,   // Streaming profiler DRISC relay count (0 = auto)
+    TT_METAL_DEVICE_PROFILER_DISPATCH,     // Enable dispatch core profiling
+    TT_METAL_PROFILER_SYNC,                // Enable synchronous profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,   // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
@@ -283,6 +291,18 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
 // Helper function to check if environment variable value is "1" (enabled)
 bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
 
+// Parses a whole-string unsigned decimal env var value; anything else is a configuration error.
+uint32_t parse_env_u32(const char* name, const char* value) {
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    TT_FATAL(
+        end != value && *end == '\0' && parsed <= std::numeric_limits<uint32_t>::max(),
+        "{} must be an unsigned integer, got '{}'",
+        name,
+        value);
+    return static_cast<uint32_t>(parsed);
+}
+
 std::string trim_copy(const std::string& input) {
     auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char ch) { return std::isspace(ch); });
     if (first == input.end()) {
@@ -386,6 +406,17 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+    // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
+    // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
+    // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
+    // device is opened or any kernel is compiled.
+    TT_FATAL(
+        !(get_profiler_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_DEVICE_PROFILER and TT_METAL_STREAMING_PROFILER are mutually exclusive: set exactly one of "
+        "them (DRAM profiler vs streaming profiler).");
+    TT_FATAL(
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
+        "Cannot enable both debug printing and the streaming profiler");
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -928,6 +959,94 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_STREAMING_PROFILER
+        // Boots the streaming device-zone profiler (resident DRISC relays + host receiver) at MeshDevice
+        // bring-up and compiles kernels with the streaming producer (-DPROFILE_STREAMING). This is a
+        // SEPARATE mode from TT_METAL_DEVICE_PROFILER (the legacy DRAM profiler): it does NOT set
+        // profiler_enabled, so nothing of the DRAM profiler (DRAM buffers, per-op dump, dispatch/NoC-event
+        // options) is active, and the two may not be enabled together (TT_FATAL below). The real-time
+        // profiler is disabled while this is on (it reads the same L1 rings). The Tracy sink is NOT
+        // implied: opt in with TT_METAL_STREAMING_PROFILER_TRACY=1; without it, records go only to
+        // registered callbacks (RegisterCallback / the TT_METAL_STREAMING_PROFILER_*_CSV writers).
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER:
+#if !defined(TRACY_ENABLE)
+            TT_FATAL(false, "TT_METAL_STREAMING_PROFILER requires a Tracy-enabled build of tt-metal.");
+#else
+            if (is_env_enabled(value)) {
+                this->streaming_profiler_enabled = true;
+            }
+#endif
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_TRACY
+        // Attaches the Tracy sink to the streaming profiler. Off by default: the primary consumers are the
+        // registered callbacks (RegisterCallback / the CSV writers), and Tracy is one more, expensive, consumer.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_TRACY=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_TRACY:
+            this->streaming_profiler_tracy_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_NRELAYS
+        // Forces the number of DRISC relays, one per DRAM view. 0 leaves it to bring-up, which takes
+        // min(the profiler's relay cap, the part's DRAM views); a forced value above the view count is
+        // clamped there.
+        // Default: 0 (auto)
+        // Usage: export TT_METAL_STREAMING_PROFILER_NRELAYS=4
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_NRELAYS: {
+            const uint32_t n = parse_env_u32("TT_METAL_STREAMING_PROFILER_NRELAYS", value);
+            TT_FATAL(n >= 1 && n <= 8, "TT_METAL_STREAMING_PROFILER_NRELAYS='{}' is not an integer in [1, 8]", value);
+            this->streaming_profiler_num_relays = n;
+            break;
+        }
+
+        // TT_METAL_STREAMING_PROFILER_DRAM_MB
+        // Per-relay GDDR spool ring, in MiB. Non-zero makes each relay DMA frames into a ring in its own
+        // DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never
+        // touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep
+        // interval. 0 selects direct push. Capped at 4095: a larger ring overflows the relay kernel's
+        // 32-bit ring arithmetic (a bank is 4 GiB anyway).
+        // Default: 128
+        // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
+            this->streaming_profiler_spool_mb =
+                std::min<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_DRAM_MB", value), 4095);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_FIFO_MB
+        // Host FIFO per D2H socket, in MiB: the device DMA-writes it and the consumers decode it in place, so it
+        // is the capture's whole elastic buffer. Readers may lag by all but a 64 MiB runway (a quarter of a
+        // smaller FIFO); at ~9.8 wire bytes per zone the default holds ~25 M zones per stream. A power of two,
+        // since the ring indexes it; at most 2048 (the socket's byte size and the device's credit arithmetic are
+        // 32-bit).
+        // Default: 256
+        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {
+            const uint32_t mb =
+                std::clamp<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_FIFO_MB", value), 1, 2048);
+            TT_FATAL(std::has_single_bit(mb), "TT_METAL_STREAMING_PROFILER_FIFO_MB='{}' is not a power of two", value);
+            this->streaming_profiler_fifo_mb = mb;
+            break;
+        }
+
+        // TT_METAL_STREAMING_PROFILER_OPS_CSV
+        // Path for the per-op CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_OPS_CSV=/tmp/ops.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_OPS_CSV:
+            this->streaming_profiler_ops_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_ZONE_CSV
+        // Path for the per-zone CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_ZONE_CSV=/tmp/zones.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_ZONE_CSV:
+            this->streaming_profiler_zone_csv_path = std::string(value);
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH
