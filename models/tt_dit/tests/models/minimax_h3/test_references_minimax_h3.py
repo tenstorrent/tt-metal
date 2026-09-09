@@ -195,23 +195,29 @@ def test_a_derived_duration_outside_the_models_range_is_rejected(seconds, expect
 
 
 @pytest.mark.parametrize("seconds", [DURATION, 5.0, 8.0, 15.0])
-def test_pad_waveform_to_hop_reproduces_the_reference_latent_count(seconds):
+def test_pad_waveform_to_max_duration_is_one_fixed_shape(seconds):
     waveform = _waveform(seconds)
-    padded = R.pad_waveform_to_hop(waveform)
+    padded = R.pad_waveform_to_max_duration(waveform)
 
-    assert padded.shape[-1] % R.MINIMAX_H3_AUDIO_HOP == 0
-    assert padded.shape[-1] - waveform.shape[-1] < R.MINIMAX_H3_AUDIO_HOP
+    assert padded.shape[-1] == R.MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS * R.MINIMAX_H3_AUDIO_HOP
     assert torch.equal(padded[:, : waveform.shape[-1]], waveform), "padding must not disturb the samples"
     assert (padded[:, waveform.shape[-1] :] == 0).all(), "the pad is zeros, as F.pad's default is"
-    assert padded.shape[-1] // R.MINIMAX_H3_AUDIO_HOP == int(np.ceil(waveform.shape[-1] / R.MINIMAX_H3_AUDIO_HOP))
+
+
+def test_max_reference_audio_latents_covers_the_longest_soundtrack():
+    """604 hops: 15 s of frames aligns up to 362 (15.083 s), and the encoder count is a CEIL --
+    a flat 15 s (600 hops) would leave the top-end request longer than the pad target."""
+    assert R.MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS == 604
+    longest = R.align_num_frames(round(R.MINIMAX_H3_MAX_DURATION * R.MINIMAX_H3_FPS)) / R.MINIMAX_H3_FPS
+    assert int(np.ceil(longest * AUDIO_RATE / R.MINIMAX_H3_AUDIO_HOP)) == 604
 
 
 def test_production_soundtrack_is_not_a_whole_number_of_hops():
-    """The case that makes the padding load-bearing rather than defensive."""
+    """The case that makes the trim count a ceil rather than an exact division."""
     samples = int(DURATION * AUDIO_RATE)
     assert samples == 165333
     assert samples % R.MINIMAX_H3_AUDIO_HOP != 0
-    assert R.pad_waveform_to_hop(_waveform(DURATION)).shape[-1] // R.MINIMAX_H3_AUDIO_HOP == 207
+    assert int(np.ceil(samples / R.MINIMAX_H3_AUDIO_HOP)) == 207
 
 
 def test_span_matches_both_reference_summation_orders():
