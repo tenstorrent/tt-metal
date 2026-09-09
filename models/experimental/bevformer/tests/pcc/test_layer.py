@@ -10,6 +10,9 @@ from models.experimental.bevformer.config.encoder_config import get_preset_confi
 from models.experimental.bevformer.tests.layer_common import build_layer_fixture
 from models.experimental.bevformer.tests.test_utils import check_with_pcc, check_with_tolerances
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 32 * 1024})
+
 
 @pytest.mark.parametrize(
     "config_name, bev_size, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
@@ -20,7 +23,6 @@ from models.experimental.bevformer.tests.test_utils import check_with_pcc, check
         ("carla_tiny", (100, 100), 1, 0.995, 0.05, 0.8, 0.5),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_bevformer_layer_forward(
     device,
