@@ -64,8 +64,9 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
-// On Quasar, accesses to L1 semaphores must bypass the L1 D$ via the uncached alias so that
-// updates from other RISCs/cores are visible. No-op on BH/WH.
+// On Quasar, an L1 word shared with another agent must use the uncached alias, on both the writing and
+// the reading side: NoC writes and atomics do not snoop the DM caches, and the NIU reads TL1 directly.
+// No-op on BH/WH.
 constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
     return addr + MEM_L1_UNCACHED_BASE;
@@ -338,11 +339,8 @@ template <
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
-
-        // Ensure last sem_inc has landed
-        noc_async_atomic_barrier();
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
@@ -359,8 +357,8 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -719,9 +717,31 @@ constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
 // NOTE: CAREFUL USING THIS FUNCTION
 // It is call "careful_copy" because you need to be careful...
 // It copies beyond count by up to 5 elements make sure src and dst addresses are safe
-template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded>
+// first_line_invalidated says the caller already invalidated the line holding l1_ptr, so this skips it. Set it
+// only when the source cannot have wrapped away from the command header whose invalidate covers that line.
+template <
+    uint32_t l1_to_local_cache_copy_chunk,
+    uint32_t l1_cache_elements_rounded,
+    bool invalidate_source = false,
+    bool first_line_invalidated = false>
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    if constexpr (invalidate_source) {
+        // The source arrived over the NoC, which does not snoop, so a cached copy left over from an earlier
+        // ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
+        uintptr_t start = reinterpret_cast<uintptr_t>(l1_ptr);
+        uint32_t size = sizeof(uint32_t) * (count + l1_to_local_cache_copy_chunk - 1);
+        if constexpr (first_line_invalidated) {
+            // Shrink by what is skipped, not just advance: keeping the size would push the range one line
+            // past the array and hand back the line just saved. A short array can skip past its own end.
+            const uint32_t skipped = round_up_pow2(start, L2_CACHE_LINE_SIZE) - start;
+            start += skipped;
+            size = skipped < size ? size - skipped : 0;
+        }
+        invalidate_l2_cache_range(start, size);
+    }
+#endif
     uint32_t n = 0;
     ASSERT(l1_to_local_cache_copy_chunk == 6);
     ASSERT(count <= l1_cache_elements_rounded);
@@ -748,10 +768,15 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
     volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
     uintptr_t dispatch_telemetry_base) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
     ASSERT(num_sub_devices <= max_num_worker_sems);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_sub_devices * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
 
     static uint32_t local_sub_device_worker_counts_update = 0;
 
