@@ -327,6 +327,69 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&&) noexcept = defa
 
 uint32_t RealtimeProfilerManager::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }
 
+void RealtimeProfilerManager::log_device_diagnostics(const char* where) const {
+    // RtProfilerRingBuffer header, read in one shot: words 0-3 = write_index, read_index, terminate,
+    // ring_full_wait_count; words 4-15 = RtProfilerNcriscDebug (stage, socket_config_addr, pcie_xy_enc,
+    // fifo_addr_lo, loop_iteration, push_count, config_buffer_addr_field_l1_ptr, config_buffer_addr_raw,
+    // ring_buffer_addr_literal, socket_reserve_pages_enter_count, socket_reserve_pages_exit_count,
+    // push_write_barrier_exit_count). The heartbeats are populated because cq_realtime_profiler_push.cpp
+    // builds with RT_PROFILER_NCRISC_DEBUG.
+    constexpr uint32_t kHeaderWords = offsetof(RtProfilerRingBuffer, data) / sizeof(uint32_t);
+    static_assert(kHeaderWords == 16, "RtProfilerRingBuffer header layout changed; update the field indices below");
+    for (const auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> hdr(kHeaderWords, 0);
+        try {
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                dev_state.device,
+                dev_state.realtime_profiler_core,
+                dev_state.core_l1.ring_buffer,
+                kHeaderWords * sizeof(uint32_t),
+                hdr,
+                CoreType::WORKER);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal, "[RT-DIAG {}] device {} ring header read failed: {}", where, dev_state.chip_id, e.what());
+            continue;
+        }
+        uint32_t pages_available_now = 0;
+        try {
+            if (dev_state.socket) {
+                pages_available_now = dev_state.socket->pages_available();
+            }
+        } catch (...) {
+        }
+        log_warning(
+            tt::LogMetal,
+            "[RT-DIAG {}] device {}: write_index={} read_index={} terminate={} ring_full_wait={} | ncrisc stage={} "
+            "loop_iter={} push_count={} reserve_enter={} reserve_exit={} barrier_exit={} cfg_raw=0x{:x} fifo_lo=0x{:x} "
+            "| host published_records={} batches={} peak_fifo_pages={} fifo_cap_pages={} pages_available_now={} "
+            "fifo_reached_capacity={}",
+            where,
+            dev_state.chip_id,
+            hdr[0],
+            hdr[1],
+            hdr[2],
+            hdr[3],
+            hdr[4],
+            hdr[8],
+            hdr[9],
+            hdr[13],
+            hdr[14],
+            hdr[15],
+            hdr[11],
+            hdr[7],
+            num_published_records_.load(std::memory_order_relaxed),
+            num_published_batches_.load(std::memory_order_relaxed),
+            peak_fifo_pages_.load(std::memory_order_relaxed),
+            host_fifo_capacity_pages(),
+            pages_available_now,
+            dev_state.fifo_reached_capacity);
+    }
+}
+
 uint32_t RealtimeProfilerManager::ring_full_wait_count() const {
     uint32_t peak = 0;
     for (const auto& dev_state : devices_) {

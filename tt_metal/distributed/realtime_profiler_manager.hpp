@@ -70,6 +70,10 @@ public:
     uint64_t num_published_records() const { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
     uint32_t ring_full_wait_count() const;  // reads device L1
+    // Logs, at warn level, the per-device RT-profiler ring header (write/read index, terminate,
+    // ring_full_wait_count, NCRISC debug heartbeats) plus the host-side counters. Meant for test
+    // failure paths, where a few extra L1 reads are irrelevant and the state is otherwise lost.
+    void log_device_diagnostics(const char* where) const;
     size_t num_active_devices() const { return devices_.size(); }
 
 private:

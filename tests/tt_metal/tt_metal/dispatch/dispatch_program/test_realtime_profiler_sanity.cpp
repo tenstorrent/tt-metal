@@ -18,6 +18,7 @@
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
 // IsProgramRealtimeProfilerActive().
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -41,6 +42,9 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <distributed/mesh_device_impl.hpp>
+#include <distributed/realtime_profiler_manager.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -62,6 +66,55 @@ constexpr double kMaxDurationNs = 1'000'000'000.0;
 // Per-program marker embedded in the kernel source so the source-correlation
 // assertion can verify each record carries the correct source.
 constexpr const char* kSourceMarkerPrefix = "rt_profiler_marker_";
+
+// On a failure path only: print everything a CI log needs to diagnose missing RT profiler records --
+// what arrived (per record), what was dropped, the manager's host counters, and the device-side ring
+// header / NCRISC heartbeats via RealtimeProfilerManager::log_device_diagnostics(). Warn level so it
+// survives merge-gate's TT_LOGGER_LEVEL=warn. mgr is null once the mesh has been closed.
+void dump_rt_diag(
+    const char* where,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::vector<ProgramRealtimeRecord>& records,
+    uint64_t dropped) {
+    std::set<uint64_t> ids;
+    for (const auto& rec : records) {
+        ids.insert(rec.runtime_id);
+    }
+    std::string id_list;
+    for (auto id : ids) {
+        id_list += std::to_string(id) + " ";
+    }
+    const auto* mgr = mesh_device ? mesh_device->impl().get_realtime_profiler() : nullptr;
+    log_warning(
+        tt::LogTest,
+        "[RT-DIAG {}] records={} dropped={} distinct_runtime_ids=[{}] active={} mgr_alive={} published_records={} "
+        "batches={} peak_fifo_pages={} fifo_cap_pages={}",
+        where,
+        records.size(),
+        dropped,
+        id_list,
+        IsProgramRealtimeProfilerActive(),
+        mgr != nullptr,
+        mgr ? mgr->num_published_records() : 0,
+        mgr ? mgr->num_published_batches() : 0,
+        mgr ? mgr->peak_fifo_pages() : 0,
+        mgr ? mgr->host_fifo_capacity_pages() : 0);
+    for (const auto& rec : records) {
+        log_warning(
+            tt::LogTest,
+            "[RT-DIAG {}] rec runtime_id={} chip={} start={} end={} freq={} nsrc={}",
+            where,
+            rec.runtime_id,
+            rec.chip_id,
+            rec.start_timestamp,
+            rec.end_timestamp,
+            rec.frequency,
+            rec.kernel_sources.size());
+    }
+    if (mgr) {
+        mgr->log_device_diagnostics(where);
+    }
+}
 
 // Inlined kernel source: 200 × 200 = 40K unrolled NOPs. Used for both data
 // movement (BRISC/NCRISC) and compute (TRISC) RISCs. We inline rather than
@@ -165,7 +218,10 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
 
     UnregisterProgramRealtimeProfilerCallback(handle);
 
-    ASSERT_GE(records.size(), kNumPrograms)
+    if (records.size() < kNumPrograms || dropped != 0) {
+        dump_rt_diag("FiveProgramsBackToBack", mesh_device, records, dropped);
+    }
+    EXPECT_GE(records.size(), kNumPrograms)
         << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << records.size();
     EXPECT_EQ(dropped, 0u);
 
@@ -242,6 +298,9 @@ TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
             observed_runtime_ids.insert(rec.runtime_id);
         }
     }
+    if (observed_runtime_ids.size() != kNumPrograms) {
+        dump_rt_diag("CloseDrainsRegisteredCallback", mesh_device, records, 0);
+    }
     EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
         << "Mesh close should drain records for callbacks still registered at shutdown";
 }
@@ -289,6 +348,9 @@ TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
         }
     }
     EXPECT_GT(throwing_invocations, 0u) << "throwing callback should have been invoked";
+    if (observed_runtime_ids.size() != kNumPrograms) {
+        dump_rt_diag("ThrowingCallbackIsIsolated", mesh_device, records, 0);
+    }
     EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
         << "sibling callback must receive every record despite the other callback throwing";
 }
@@ -336,6 +398,10 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
         }
     }
 
+    if (!last_record_seen) {
+        std::lock_guard<std::mutex> lk(records_mu);
+        dump_rt_diag("LastProgramRecordDeliveredOnFinish", mesh_device, records, 0);
+    }
     EXPECT_TRUE(last_record_seen) << "The final program's RT profiler record (runtime_id=" << last_runtime_id
                                   << ") was not delivered; ensure that the finish-time RT-profiler flush is emitted";
 
@@ -403,6 +469,11 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     mesh_device->release_mesh_trace(trace_id);
 
     const std::string expected_marker = kSourceMarkerPrefix + std::to_string(kTraceRuntimeId);
+    if (std::none_of(records.begin(), records.end(), [](const ProgramRealtimeRecord& rec) {
+            return rec.runtime_id == kTraceRuntimeId;
+        })) {
+        dump_rt_diag("TraceReplayResolvesKernelSources", mesh_device, records, 0);
+    }
     uint32_t trace_records = 0;
     for (const auto& rec : records) {
         if (rec.runtime_id != kTraceRuntimeId) {

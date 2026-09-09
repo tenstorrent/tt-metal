@@ -16,7 +16,8 @@
 #include "api/socket_api.h"
 #include "hostdev/realtime_profiler_msgs.h"
 // Uncomment to compile in ncrisc_debug L1 heartbeats (RT_PROF_NCRISC_DBG_* in realtime_profiler_ring_buffer.hpp):
-// #define RT_PROFILER_NCRISC_DEBUG
+#define RT_PROFILER_NCRISC_DEBUG  // populates RtProfilerNcriscDebug for
+                                  // RealtimeProfilerManager::log_device_diagnostics()
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "api/debug/dprint.h"
 
