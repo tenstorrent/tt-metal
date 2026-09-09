@@ -468,6 +468,11 @@ void kernel_main() {
                 logical_lt);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
+            // This path's single chunked slab param drives BOTH the Q mapping (which strides by the Q
+            // slab) and the K mapping (which strides by the cache region), so it can only serve a cache
+            // sharded exactly like Q. The program factory refuses kv_stripe_split > 1 whenever this path
+            // is selected, which makes the two equal; pass the Q slab, since that is what the param
+            // means. (No static_assert: this branch is still instantiated when streaming is chosen.)
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
@@ -480,7 +485,7 @@ void kernel_main() {
                 scale_fp32,
                 needs_lightweight_mask,
                 chunked_enabled,
-                kv_region_Nt,
+                q_local_padded_Nt,
                 chunk_size_t>(
                 qk_in0_block_w,
                 qk_subblock_w,

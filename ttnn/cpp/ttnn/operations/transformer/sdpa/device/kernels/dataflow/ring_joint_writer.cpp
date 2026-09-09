@@ -699,7 +699,8 @@ void kernel_main() {
                 const uint32_t q_chunk = decoded_q.q_chunk;
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile =
+                    get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 if (!single_q_chunk) {
                     CircularBuffer cb_sig(cb_signal);
@@ -840,7 +841,8 @@ void kernel_main() {
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile =
+                    get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
                 // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
@@ -951,7 +953,8 @@ void kernel_main() {
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile =
+                    get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 // Only truly causal case appear in the iteration with local KV
                 // Other iterations will just skip the computation with subsequent KV chunks

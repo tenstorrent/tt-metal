@@ -6047,17 +6047,6 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     ids=["torus_xy", "fabric_2d"],
 )
 @pytest.mark.parametrize("cache_chunks", [8], ids=["depth8"])
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "TP-striped ring_mla is numerically wrong: output PCC 0.9666 vs 0.994, and lane-mates -- which "
-        "run the same Q rows against the same gathered KV and should differ only by ring accumulation "
-        "order -- diverge by up to 0.956 PCC / 17.7 ATOL. The lane dependence points at per-device "
-        "geometry rather than a global mis-mapping. Verified correct for this case by hand: "
-        "kv_region_Nt=2t, split=4, q_ring_size=8, q_start_tile=448+8s, local tile -> c*64 + ring_id*2 + o. "
-        "The op DOES run the striped path end to end, so this pins accuracy, not plumbing."
-    ),
-)
 def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
     """A TP-deduped KV cache: striped over every device while Q stays sharded over SP alone.
 

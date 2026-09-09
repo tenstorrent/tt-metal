@@ -65,6 +65,11 @@ struct TileSegment {
 
 struct RingJointRuntimePlan {
     uint32_t logical_nt = 0;
+    // Global chunk width in tiles: ring_size cache regions, which is q_ring_size Q slabs. The kernels
+    // take this as chunk_size_t and re-derive kv_region_Nt / kv_stripe_split / q_ring_size from it, so
+    // it must come from the derivation rather than be recomputed as q_local_padded_Nt * ring_size --
+    // that formula assumes the cache is sharded exactly like Q and collapses the split back to 1.
+    uint32_t q_chunk_group_tile_count = 0;
     KVPadQMapping kv_pad_q_mapping;
     RingWorkPlan ring_work_plan;
     bool kernel_chunked = false;
@@ -522,6 +527,7 @@ RingJointRuntimePlan build_runtime_plan(
 
     RingJointRuntimePlan plan;
     plan.logical_nt = derivation.logical_nt;
+    plan.q_chunk_group_tile_count = derivation.q_chunk_group_tile_count;
     const uint32_t kv_actual_tile_count =
         args.kv_actual_isl.has_value() ? args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT : 0;
     if (args.kv_actual_isl.has_value()) {
@@ -1103,11 +1109,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
-    // The region is q_local_padded_Nt tiles (Q is exactly one such region per call). The
-    // group size below is that Q-sized region across all devices.
+    // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk. The region
+    // is kv_region_Nt tiles, which equals Q's slab only while the cache is sharded exactly like Q; a
+    // TP-striped cache makes it kv_stripe_split times narrower. The group size below is that region
+    // across all devices, i.e. the global chunk -- the same width either way, since q_ring_size Q slabs
+    // and ring_size cache regions span it equally. The kernels re-derive the whole striping geometry
+    // from this value, so it must come from the derivation and not be recomputed from the Q slab.
     // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
-    const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
+    const uint32_t q_chunk_group_tile_count = runtime_plan.q_chunk_group_tile_count;
+    // The kernels recover the cache region as chunk_size_t / ring_size and the split as the Q slab over
+    // that, so a width that is not a whole number of regions truncates silently into a wrong geometry.
+    TT_FATAL(
+        q_chunk_group_tile_count > 0 && q_chunk_group_tile_count % ring_size == 0,
+        "Global chunk width of {} tiles must be a positive multiple of ring_size {}; the kernels derive "
+        "the cache region as chunk_size_t / ring_size",
+        q_chunk_group_tile_count,
+        ring_size);
     // kernel_chunked drives the chunked-prefill math in the kernels and the host ring-work planner.
     // Cross runs the non-causal full-prefill path on chunked-shaped tensors, so it is excluded; the
     // kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics (chunked
@@ -1362,6 +1379,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TT_FATAL(
         use_streaming_compute || !v_shares_k_buffer,
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
+    // A TP-striped cache needs the Q slab and the cache region kept apart: the Q mapping indexes by the
+    // Q rank and strides by the slab, the K mapping by the transport rank and strides by the region.
+    // sdpa_ring_v2 takes both. The legacy fp32 path (sdpa_ring/sdpa_inner_loop) carries a single
+    // chunked_q_local_padded_Nt that drives both, so it cannot express the split -- refuse rather than
+    // silently mis-position one of the two.
+    TT_FATAL(
+        args.kv_stripe_split == 1 || use_streaming_compute,
+        "A TP-striped KV cache (kv_stripe_split={}) requires the streaming compute path (set "
+        "fp32_dest_acc_en=false): the legacy fp32 path strides the K mapping by the Q slab",
+        args.kv_stripe_split);
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",

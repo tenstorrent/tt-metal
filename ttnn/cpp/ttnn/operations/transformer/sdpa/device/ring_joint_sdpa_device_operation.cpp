@@ -648,6 +648,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_q,
         N_local_kv);
 
+    // The sliding path derives Q's absolute start as logical_nt - ring_size * q_slab + ring_index *
+    // q_slab, and builds its halo layout with the Q slab as the cache region. Both read ring_size as
+    // the Q rank count and conflate the slab with the region, which is exactly what striping separates.
+    TT_FATAL(
+        args.kv_stripe_split == 1 || !args.has_sliding_window(),
+        "kv_stripe_split={} is not supported with a sliding window: the sliding Q mapping and halo "
+        "layout index by the transport rank and stride by the Q slab, not the Q rank and cache region",
+        args.kv_stripe_split);
+
     TT_FATAL(
         !is_chunked || args.is_causal || args.is_cross,
         "Chunked-shaped prefill (N_local_q < N_local_kv) must be causal (incremental prefill) or cross "

@@ -2739,8 +2739,9 @@ void sdpa_ring_v2(
             }();
 
             // Chunked-prefill straddle. Background: each device's K cache holds the per-chunk
-            // K region for every chunk back-to-back, q_local_padded_Nt tiles per region. When
-            // k_chunk_size does not divide q_local_padded_Nt, a single K-chunk can begin in
+            // K region for every chunk back-to-back, kv_rank_stride_Nt tiles per region (the Q
+            // slab only when the cache is sharded exactly like Q; narrower once TP-striped). When
+            // k_chunk_size does not divide that region, a single K-chunk can begin in
             // one region (chunk j) and end in the next (chunk j+1). Because adjacent regions
             // map to *non-adjacent* global K positions (jumping by chunk_size_t between them),
             // the global K coord is no longer contiguous across the K-chunk's columns. We
@@ -2748,19 +2749,19 @@ void sdpa_ring_v2(
             //   - straddle_col: column index at which the jump happens (= tiles remaining in
             //     region j from this K-chunk's start)
             //   - straddle_jump: the global-K increment at that boundary
-            //     (= chunk_size_t - q_local_padded_Nt, i.e. the gap between region j's end and
+            //     (= chunk_size_t - kv_rank_stride_Nt, i.e. the gap between region j's end and
             //     region j+1's start in global K).
             // When straddle_col > 0 the stamp evaluates the diagonal per column instead of
             // per row, applying the jump for columns >= straddle_col.
             uint32_t step_straddle_col = 0;
             uint32_t step_straddle_jump = 0;
             if constexpr (chunked_enabled) {
-                if (q_local_padded_Nt > 0) {
+                if (kv_rank_stride_Nt > 0) {
                     const uint32_t local_start = source_k_chunk * Sk_chunk_t;
-                    const uint32_t slab_end_local = (local_start / q_local_padded_Nt + 1) * q_local_padded_Nt;
+                    const uint32_t slab_end_local = (local_start / kv_rank_stride_Nt + 1) * kv_rank_stride_Nt;
                     if (local_start + Sk_chunk_t > slab_end_local) {
                         step_straddle_col = slab_end_local - local_start;
-                        step_straddle_jump = chunk_size_t - q_local_padded_Nt;
+                        step_straddle_jump = chunk_size_t - kv_rank_stride_Nt;
                     }
                 }
             }
