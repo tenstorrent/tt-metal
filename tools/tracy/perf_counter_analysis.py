@@ -27,8 +27,8 @@ COUNTER_TYPE_NAMES = {
     6: "MATH_FIDELITY_STALL",
     7: "MATH_INSTRN_STARTED",
     8: "MATH_INSTRN_AVAILABLE",
-    9: "SRCB_WRITE_AVAILABLE",
-    10: "SRCA_WRITE_AVAILABLE",
+    9: "SRCB_WRITE_REQ",
+    10: "SRCA_WRITE_REQ",
     11: "UNPACK0_BUSY_THREAD0",
     12: "UNPACK1_BUSY_THREAD0",
     13: "UNPACK0_BUSY_THREAD1",
@@ -38,7 +38,7 @@ COUNTER_TYPE_NAMES = {
     16: "MATH_INSTRN_HF_2_CYCLE",
     17: "MATH_INSTRN_HF_4_CYCLE",
     # TDMA_PACK Group
-    18: "PACKER_DEST_READ_AVAILABLE",
+    18: "PACKER0_DEST_READ_REQ",
     19: "PACKER_BUSY",
     20: "MATH_NOT_SCOREBOARD_STALLED",
     # INSTRN_THREAD Group (req)
@@ -145,10 +145,10 @@ COUNTER_TYPE_NAMES = {
     114: "SRCA_WRITE_NOT_BLOCKED_OVR",
     115: "SRCA_WRITE_NOT_BLOCKED_PORT",
     116: "SRCB_WRITE_NOT_BLOCKED_PORT",
-    117: "SRCA_WRITE_THREAD0",
-    118: "SRCB_WRITE_THREAD0",
-    119: "SRCA_WRITE_THREAD1",
-    120: "SRCB_WRITE_THREAD1",
+    117: "SRCA_WRITE_TID_EVEN",
+    118: "SRCB_WRITE_TID_EVEN",
+    119: "SRCA_WRITE_TID_ODD",
+    120: "SRCB_WRITE_TID_ODD",
     # TDMA_PACK additional req counters (WH only)
     121: "PACKER_DEST_READ_1",
     122: "PACKER_DEST_READ_2",
@@ -167,33 +167,33 @@ COUNTER_TYPE_NAMES = {
     132: "L1_4_EXT_PACKER_6",
     133: "L1_4_EXT_PACKER_7",
     134: "L1_4_TAG_SEARCH_PACKER_1",
-    135: "L1_4_EXT_UNPACKER_8",
-    136: "L1_4_EXT_UNPACKER_9",
-    137: "L1_4_EXT_UNPACKER_10",
-    138: "L1_4_EXT_UNPACKER_11",
-    139: "L1_4_EXT_UNPACKER_12",
+    135: "L1_4_UNPACKER0_EXT_IF_1",
+    136: "L1_4_UNPACKER0_EXT_IF_2",
+    137: "L1_4_UNPACKER0_EXT_IF_3",
+    138: "L1_4_UNPACKER0_EXT_IF_4",
+    139: "L1_4_UNPACKER0_EXT_IF_5",
     # L1 Bank 4 grant counters
     140: "L1_4_EXT_PACKER_6_GRANT",
     141: "L1_4_EXT_PACKER_7_GRANT",
     142: "L1_4_TAG_SEARCH_PACKER_1_GRANT",
-    143: "L1_4_EXT_UNPACKER_8_GRANT",
-    144: "L1_4_EXT_UNPACKER_9_GRANT",
-    145: "L1_4_EXT_UNPACKER_10_GRANT",
-    146: "L1_4_EXT_UNPACKER_11_GRANT",
-    147: "L1_4_EXT_UNPACKER_12_GRANT",
+    143: "L1_4_UNPACKER0_EXT_IF_1_GRANT",
+    144: "L1_4_UNPACKER0_EXT_IF_2_GRANT",
+    145: "L1_4_UNPACKER0_EXT_IF_3_GRANT",
+    146: "L1_4_UNPACKER0_EXT_IF_4_GRANT",
+    147: "L1_4_UNPACKER0_EXT_IF_5_GRANT",
     # L1 Bank 2 (BH only, mux position 2): ext unpackers 4-7 (16-19), ring 0 ports 2-3 (20-23)
-    148: "L1_2_EXT_UNPACKER_4",
-    149: "L1_2_EXT_UNPACKER_5",
-    150: "L1_2_EXT_UNPACKER_6",
-    151: "L1_2_EXT_UNPACKER_7",
+    148: "L1_2_UNPACKER1_EXT_IF_4",
+    149: "L1_2_UNPACKER1_EXT_IF_5",
+    150: "L1_2_UNPACKER1_EXT_IF_6",
+    151: "L1_2_UNPACKER1_EXT_IF_7",
     152: "L1_2_NOC_RING0_OUTGOING_2",
     153: "L1_2_NOC_RING0_OUTGOING_3",
     154: "L1_2_NOC_RING0_INCOMING_2",
     155: "L1_2_NOC_RING0_INCOMING_3",
-    156: "L1_2_EXT_UNPACKER_4_GRANT",
-    157: "L1_2_EXT_UNPACKER_5_GRANT",
-    158: "L1_2_EXT_UNPACKER_6_GRANT",
-    159: "L1_2_EXT_UNPACKER_7_GRANT",
+    156: "L1_2_UNPACKER1_EXT_IF_4_GRANT",
+    157: "L1_2_UNPACKER1_EXT_IF_5_GRANT",
+    158: "L1_2_UNPACKER1_EXT_IF_6_GRANT",
+    159: "L1_2_UNPACKER1_EXT_IF_7_GRANT",
     160: "L1_2_NOC_RING0_OUTGOING_2_GRANT",
     161: "L1_2_NOC_RING0_OUTGOING_3_GRANT",
     162: "L1_2_NOC_RING0_INCOMING_2_GRANT",
@@ -217,11 +217,20 @@ COUNTER_TYPE_NAMES = {
     179: "L1_3_EXT_PACKER_5_GRANT",
     # Cycles any thread is stalled (OR across threads).
     180: "ANY_THREAD_STALL",
-    # L1 Bank 5 (BH only, mux position 5): ext unpacker read interfaces 13-14 (ports 40-41)
-    181: "L1_5_EXT_UNPACKER_13",
-    182: "L1_5_EXT_UNPACKER_14",
-    183: "L1_5_EXT_UNPACKER_13_GRANT",
-    184: "L1_5_EXT_UNPACKER_14_GRANT",
+    181: "L1_5_UNPACKER0_EXT_IF_6",
+    182: "L1_5_UNPACKER0_EXT_IF_7",
+    183: "L1_5_UNPACKER0_EXT_IF_6_GRANT",
+    184: "L1_5_UNPACKER0_EXT_IF_7_GRANT",
+    185: "L1_0_UNPACKER_1_ECC",
+    186: "L1_1_PACKER_IF_0",
+    187: "L1_1_UNPACKER1_EXT_IF_1",
+    188: "L1_1_UNPACKER1_EXT_IF_2",
+    189: "L1_1_UNPACKER1_EXT_IF_3",
+    190: "L1_0_UNPACKER_1_ECC_GRANT",
+    191: "L1_1_PACKER_IF_0_GRANT",
+    192: "L1_1_UNPACKER1_EXT_IF_1_GRANT",
+    193: "L1_1_UNPACKER1_EXT_IF_2_GRANT",
+    194: "L1_1_UNPACKER1_EXT_IF_3_GRANT",
 }
 
 
@@ -954,9 +963,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     srcb_write = get_counter_series("SRCB_WRITE_NOT_BLOCKED_PORT")
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
-    srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
-    srcb_write_avail = get_counter_series("SRCB_WRITE_AVAILABLE")
-    packer_dest_read = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+    srca_write_avail = get_counter_series("SRCA_WRITE_REQ")
+    srcb_write_avail = get_counter_series("SRCB_WRITE_REQ")
+    packer_dest_read = get_counter_series("PACKER0_DEST_READ_REQ")
     packer_busy = get_counter_series("PACKER_BUSY")
     math_instrn_started = get_counter_series("MATH_INSTRN_STARTED")
     math_instrn_available = get_counter_series("MATH_INSTRN_AVAILABLE")
@@ -1121,22 +1130,22 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_0_NOC_RING0_INCOMING_1_GRANT",
         )
 
-    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_PORT"):
+    if has_counter("SRCA_WRITE_REQ") and has_counter("SRCA_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcA Write Port Blocked Rate"] = compute_complement_metric(
-            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_AVAILABLE"
+            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_REQ"
         )
-    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
+    if has_counter("SRCA_WRITE_REQ") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
         per_op_stats["SrcA Write Overwrite Blocked Rate"] = compute_complement_metric(
-            "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_AVAILABLE"
+            "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_REQ"
         )
-    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_OVR"):
+    if has_counter("SRCB_WRITE_REQ") and has_counter("SRCB_WRITE_NOT_BLOCKED_OVR"):
         per_op_stats["SrcB Write Overwrite Blocked Rate"] = compute_complement_metric(
-            "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_REQ"
         )
 
     dest_grant_name = "DEST_READ_GRANTED_0"
-    if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
-        req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+    if has_counter("PACKER0_DEST_READ_REQ") and has_counter(dest_grant_name):
+        req = get_counter_series("PACKER0_DEST_READ_REQ")
         grant = get_counter_series(dest_grant_name)
         ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
@@ -1220,17 +1229,17 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if has_counter("PACK_INSTRN_AVAILABLE_2"):
         per_op_stats["PACK Instrn Avail Rate T2"] = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
 
-    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
+    if has_counter("SRCB_WRITE_REQ") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
-            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ"
         )
-    if has_counter("SRCA_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCA_WRITE_AVAILABLE"):
+    if has_counter("SRCA_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCA_WRITE_REQ"):
         per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric(
-            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_AVAILABLE"
+            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_REQ"
         )
-    if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_AVAILABLE"):
+    if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_REQ"):
         per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric(
-            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ"
         )
 
     # === Packer engine granularity ===

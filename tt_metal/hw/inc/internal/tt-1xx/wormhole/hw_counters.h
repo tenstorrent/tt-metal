@@ -21,8 +21,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::MATH_FIDELITY_STALL, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
-     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
-     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
+     {PerfCounterType::SRCB_WRITE_REQ, 5},
+     {PerfCounterType::SRCA_WRITE_REQ, 6},
      {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
@@ -34,15 +34,15 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_PORT, 262},
-     {PerfCounterType::SRCA_WRITE_THREAD0, 263},
-     {PerfCounterType::SRCB_WRITE_THREAD0, 264},
-     {PerfCounterType::SRCA_WRITE_THREAD1, 265},
-     {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
+     {PerfCounterType::SRCA_WRITE_TID_EVEN, 263},
+     {PerfCounterType::SRCB_WRITE_TID_EVEN, 264},
+     {PerfCounterType::SRCA_WRITE_TID_ODD, 265},
+     {PerfCounterType::SRCB_WRITE_TID_ODD, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 22;
 
 // PACK_COUNT=4 on WH.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
-    {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
+    {{PerfCounterType::PACKER0_DEST_READ_REQ, 11},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
      {PerfCounterType::PACKER_DEST_READ_3, 14},

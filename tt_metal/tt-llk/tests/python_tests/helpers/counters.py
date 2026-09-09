@@ -129,8 +129,6 @@ def _load_counter_names(arch: ChipArchitecture) -> dict:
     return banks
 
 
-# These L1 group names are unverified and several are known wrong: they label mux indices, not
-# confirmed client functions.
 COUNTER_NAMES = _load_counter_names(get_chip_architecture())
 
 

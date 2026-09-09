@@ -156,8 +156,8 @@ Measures how often the packer has valid destination data available when it's bus
 | **Counter group** | PACK |
 
 ```
-Primary:  Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
-Fallback: Packer Efficiency = DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE * 100
+Primary:  Packer Efficiency = PACKER0_DEST_READ_REQ / PACKER_BUSY * 100
+Fallback: Packer Efficiency = DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ * 100
 ```
 
 The primary formula applies whenever `PACKER_BUSY > 0` (any op where the packer runs). For ops that never trigger the packer (e.g. pure SFPU ops like relu/sqrt), `PACKER_BUSY = 0` and the formula falls back to the dest-read grant rate — fraction of dest-read requests that were granted.
@@ -203,12 +203,12 @@ Measures backpressure from math stage to unpackers.
 | **Counter group** | UNPACK |
 
 ```
-Unpacker-to-Math Data Flow = avg(SRCA_WRITE_AVAILABLE, SRCB_WRITE_AVAILABLE) /
+Unpacker-to-Math Data Flow = avg(SRCA_WRITE_REQ, SRCB_WRITE_REQ) /
                              avg(UNPACK0_BUSY_THREAD0, UNPACK1_BUSY_THREAD0) * 100
 ```
 
 - **High value (>80%)**: Unpackers can write to source registers when busy. Good data flow.
-- **Low value (<30%)**: Unpackers are busy but source register buffers are full. Math is not consuming data fast enough.
+- **Low value (<30%)**: Unpackers are busy but rarely request a source register write. Math is not consuming data fast enough.
 
 **Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **Unpacker Write Efficiency** (#42) to distinguish backpressure from other stall types.
 
@@ -386,8 +386,8 @@ Fraction of srcA DMA write attempts blocked by overwrite protection (data not ye
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                     SRCA_WRITE_AVAILABLE * 100
+SrcA Write Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                     SRCA_WRITE_REQ * 100
 ```
 
 On WH, `SRCA_WRITE_NOT_BLOCKED_OVR` (counter_sel 261) directly measures srcA DMA writes not blocked by overwrite. On BH, counter_sel 260 is used (verified empirically).
@@ -409,8 +409,8 @@ Fraction of srcB DMA write attempts blocked by port unavailability.
 | **Counter group** | UNPACK |
 
 ```
-SrcB Write Port Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) /
-                          SRCB_WRITE_AVAILABLE * 100
+SrcB Write Port Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) /
+                          SRCB_WRITE_REQ * 100
 ```
 
 On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DMA writes not blocked by the write port. On BH, counter_sel 262 is used (verified empirically).
@@ -432,8 +432,8 @@ Fraction of packer destination register reads that were blocked.
 | **Counter group** | PACK |
 
 ```
-Dest Read Backpressure = (PACKER_DEST_READ_AVAILABLE - DEST_READ_GRANTED_0) /
-                         PACKER_DEST_READ_AVAILABLE * 100
+Dest Read Backpressure = (PACKER0_DEST_READ_REQ - DEST_READ_GRANTED_0) /
+                         PACKER0_DEST_READ_REQ * 100
 ```
 
 - **High value (>20%)**: Packer can't read destination register (math still writing).
@@ -529,7 +529,7 @@ Fraction of srcA write attempts that actually succeeded.
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_AVAILABLE * 100
+SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ * 100
 ```
 
 - **High value (100%)**: Every srcA write attempt succeeds. No write port blocking.
@@ -566,9 +566,9 @@ MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 
 ---
 
-**22. L1 TDMA Packer Port Util**
+**22. L1 Packer Port 8 Util**
 
-TDMA packer 2 L1 port utilization (port 8).
+Packer L1 port utilization on port 8: `L1_1_TDMA_PACKER_2` on Wormhole, `L1_1_PACKER_IF_0` (the packer's L1 interface 0) on Blackhole.
 
 | | |
 |---|---|
@@ -576,13 +576,14 @@ TDMA packer 2 L1 port utilization (port 8).
 | **Counter group** | L1_1 |
 
 ```
-L1 TDMA Packer Port Util = L1_1_TDMA_PACKER_2 / ref_cnt * 100
+L1 Packer Port 8 Util = L1_1_TDMA_PACKER_2 / ref_cnt * 100   # Wormhole
+L1 Packer Port 8 Util = L1_1_PACKER_IF_0 / ref_cnt * 100     # Blackhole
 ```
 
-- **High value (>10%)**: RISC core is actively accessing L1. Indicates firmware memory overhead.
-- **Low value (~0%)**: Minimal RISC L1 traffic.
+- **High value (>10%)**: the packer writes L1 through this port for a large share of the window.
+- **Low value (~0%)**: little packer traffic on port 8.
 
-**Use case:** Measures firmware memory access overhead on BH. Requires L1_1 group enabled.
+**Use case:** Packer output pressure on L1. Requires the L1_1 group.
 
 ---
 
@@ -599,7 +600,7 @@ Fraction of cycles each L1 port had a transaction attempt.
 
 ```
 L1 Unpacker Port Util = L1_0_UNPACKER_0 / ref_cnt * 100
-L1 Packer Port Util = L1_0_PORT1 / ref_cnt * 100   # Wormhole only; Blackhole's port 1 is unpacker 1 and folds into L1 Unpacker Port Util
+L1 Packer Port Util = L1_0_UNPACKER_1_ECC_PACK1 / ref_cnt * 100   # Wormhole only; Blackhole's port 1 (L1_0_UNPACKER_1_ECC) carries unpacker 1 and the ECC scrubber, no packer
 ```
 
 - **High value (>20%)**: Port is heavily used. Matmul shows 15% on unpacker.
@@ -960,7 +961,7 @@ Fraction of srcB write attempts that were not blocked by port contention.
 | **Counter group** | UNPACK |
 
 ```
-SrcB Write Actual Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE * 100
+SrcB Write Actual Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ * 100
 ```
 
 Mirrors **SrcA Write Actual Efficiency** (#20); both measure "fraction of writes not blocked by the DMA write port" for their respective source registers.
@@ -1042,10 +1043,10 @@ Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previo
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                               SRCA_WRITE_AVAILABLE * 100
-SrcB Write Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_OVR) /
-                               SRCB_WRITE_AVAILABLE * 100
+SrcA Write Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                               SRCA_WRITE_REQ * 100
+SrcB Write Overwrite Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_OVR) /
+                               SRCB_WRITE_REQ * 100
 ```
 
 Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:

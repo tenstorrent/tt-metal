@@ -20,8 +20,8 @@ enum PerfCounterType : std::uint16_t {
     MATH_FIDELITY_STALL,
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
-    SRCB_WRITE_AVAILABLE,
-    SRCA_WRITE_AVAILABLE,
+    SRCB_WRITE_REQ,
+    SRCA_WRITE_REQ,
     UNPACK0_BUSY_THREAD0,
     UNPACK1_BUSY_THREAD0,
     UNPACK0_BUSY_THREAD1,
@@ -30,7 +30,7 @@ enum PerfCounterType : std::uint16_t {
     MATH_INSTRN_HF_2_CYCLE,
     MATH_INSTRN_HF_4_CYCLE,
     // TDMA_PACK Group
-    PACKER_DEST_READ_AVAILABLE,
+    PACKER0_DEST_READ_REQ,
     PACKER_BUSY,
     MATH_NOT_SCOREBOARD_STALLED,
     // INSTRN_THREAD Group
@@ -91,7 +91,7 @@ enum PerfCounterType : std::uint16_t {
     WAITING_FOR_SFPU_IDLE_2,
     // L1 Bank 0 (mux=0, ports 0-7)
     L1_0_UNPACKER_0,
-    L1_0_UNPACKER_1_ECC_PACK1,  // port 1 on both arches
+    L1_0_UNPACKER_1_ECC_PACK1,  // Wormhole port 1; Blackhole uses L1_0_UNPACKER_1_ECC
     L1_0_TDMA_BUNDLE_0_RISC,
     L1_0_TDMA_BUNDLE_1_TRISC,
     L1_0_NOC_RING0_OUTGOING_0,
@@ -99,17 +99,16 @@ enum PerfCounterType : std::uint16_t {
     L1_0_NOC_RING0_INCOMING_0,
     L1_0_NOC_RING0_INCOMING_1,
     // L1 Bank 1 (mux=1, ports 8-15)
-    L1_1_TDMA_PACKER_2,  // port 8 on both arches
-    L1_1_EXT_UNPACKER_1,
+    L1_1_TDMA_PACKER_2,  // Wormhole port 8; Blackhole uses L1_1_PACKER_IF_0
+    L1_1_EXT_UNPACKER_1,  // Wormhole ports 9-11; Blackhole uses L1_1_UNPACKER1_EXT_IF_1-3
     L1_1_EXT_UNPACKER_2,
     L1_1_EXT_UNPACKER_3,
     L1_1_NOC_RING1_OUTGOING_0,
     L1_1_NOC_RING1_OUTGOING_1,
     L1_1_NOC_RING1_INCOMING_0,
     L1_1_NOC_RING1_INCOMING_1,
-    // BH-specific L1 ports (port 1 and port 8 differ from WH)
-    L1_0_UNIFIED_PACKER,  // Blackhole's port 1 is UNPACKER_1_ECC_PACK1; kept so the ordinals below do not shift
-    L1_1_RISC_CORE,       // Blackhole's port 8 is TDMA_PACKER_2; kept so the ordinals below do not shift
+    L1_0_UNIFIED_PACKER,  // retired, kept so the ordinals below do not shift
+    L1_1_RISC_CORE,       // retired, kept so the ordinals below do not shift
     // L1 grant counters (reqif_ready)
     L1_0_UNPACKER_0_GRANT,
     L1_0_PORT1_GRANT,
@@ -135,10 +134,10 @@ enum PerfCounterType : std::uint16_t {
     SRCA_WRITE_NOT_BLOCKED_OVR,
     SRCA_WRITE_NOT_BLOCKED_PORT,
     SRCB_WRITE_NOT_BLOCKED_PORT,
-    SRCA_WRITE_THREAD0,
-    SRCB_WRITE_THREAD0,
-    SRCA_WRITE_THREAD1,
-    SRCB_WRITE_THREAD1,
+    SRCA_WRITE_TID_EVEN,
+    SRCB_WRITE_TID_EVEN,
+    SRCA_WRITE_TID_ODD,
+    SRCB_WRITE_TID_ODD,
     // TDMA_PACK additional req counters (WH only)
     PACKER_DEST_READ_1,
     PACKER_DEST_READ_2,
@@ -151,38 +150,38 @@ enum PerfCounterType : std::uint16_t {
     DEST_READ_GRANTED_2,
     DEST_READ_GRANTED_3,
     MATH_NOT_STALLED_DEST_WR_PORT,
-    // L1 Bank 4 (BH only, mux=4, ports 32-39: extended packers 6-7, tag search, extended unpacker read
-    // interfaces 8-12). The tapeout RTL (ws-tensix BH_A0_RC6) wires ports 35-41 to the unpacker read
-    // interfaces 8-14; a 2022 snapshot had them tied off, which is why these used to be MISC_PORT_3-7.
+    // L1 Bank 4 (BH only, mux=4, ports 32-39): extended packers 6-7, tag search, unpacker 0's extended read
+    // interfaces 1-5 (ports 35-39).
     L1_4_EXT_PACKER_6,
     L1_4_EXT_PACKER_7,
     L1_4_TAG_SEARCH_PACKER_1,
-    L1_4_EXT_UNPACKER_8,
-    L1_4_EXT_UNPACKER_9,
-    L1_4_EXT_UNPACKER_10,
-    L1_4_EXT_UNPACKER_11,
-    L1_4_EXT_UNPACKER_12,
+    L1_4_UNPACKER0_EXT_IF_1,
+    L1_4_UNPACKER0_EXT_IF_2,
+    L1_4_UNPACKER0_EXT_IF_3,
+    L1_4_UNPACKER0_EXT_IF_4,
+    L1_4_UNPACKER0_EXT_IF_5,
     L1_4_EXT_PACKER_6_GRANT,
     L1_4_EXT_PACKER_7_GRANT,
     L1_4_TAG_SEARCH_PACKER_1_GRANT,
-    L1_4_EXT_UNPACKER_8_GRANT,
-    L1_4_EXT_UNPACKER_9_GRANT,
-    L1_4_EXT_UNPACKER_10_GRANT,
-    L1_4_EXT_UNPACKER_11_GRANT,
-    L1_4_EXT_UNPACKER_12_GRANT,
-    // L1 Bank 2 (BH only, mux=2, ports 16-23: extended unpackers 4-7 and NOC ring 0 ports 2-3)
-    L1_2_EXT_UNPACKER_4,
-    L1_2_EXT_UNPACKER_5,
-    L1_2_EXT_UNPACKER_6,
-    L1_2_EXT_UNPACKER_7,
+    L1_4_UNPACKER0_EXT_IF_1_GRANT,
+    L1_4_UNPACKER0_EXT_IF_2_GRANT,
+    L1_4_UNPACKER0_EXT_IF_3_GRANT,
+    L1_4_UNPACKER0_EXT_IF_4_GRANT,
+    L1_4_UNPACKER0_EXT_IF_5_GRANT,
+    // L1 Bank 2 (BH only, mux=2, ports 16-23): unpacker 1's extended read interfaces 4-7 (also used by the
+    // packer L1-to-L1 read) and NOC ring 0 ports 2-3.
+    L1_2_UNPACKER1_EXT_IF_4,
+    L1_2_UNPACKER1_EXT_IF_5,
+    L1_2_UNPACKER1_EXT_IF_6,
+    L1_2_UNPACKER1_EXT_IF_7,
     L1_2_NOC_RING0_OUTGOING_2,
     L1_2_NOC_RING0_OUTGOING_3,
     L1_2_NOC_RING0_INCOMING_2,
     L1_2_NOC_RING0_INCOMING_3,
-    L1_2_EXT_UNPACKER_4_GRANT,
-    L1_2_EXT_UNPACKER_5_GRANT,
-    L1_2_EXT_UNPACKER_6_GRANT,
-    L1_2_EXT_UNPACKER_7_GRANT,
+    L1_2_UNPACKER1_EXT_IF_4_GRANT,
+    L1_2_UNPACKER1_EXT_IF_5_GRANT,
+    L1_2_UNPACKER1_EXT_IF_6_GRANT,
+    L1_2_UNPACKER1_EXT_IF_7_GRANT,
     L1_2_NOC_RING0_OUTGOING_2_GRANT,
     L1_2_NOC_RING0_OUTGOING_3_GRANT,
     L1_2_NOC_RING0_INCOMING_2_GRANT,
@@ -205,15 +204,26 @@ enum PerfCounterType : std::uint16_t {
     L1_3_EXT_PACKER_4_GRANT,
     L1_3_EXT_PACKER_5_GRANT,
     ANY_THREAD_STALL,
-    // L1 Bank 5 (BH only, mux=5, ports 40-41: extended unpacker read interfaces 13-14). The mux decode wires
-    // only slots 0 and 1 at this position; slots 2-7 are forced to zero. Appended here so no ordinal above moves.
-    L1_5_EXT_UNPACKER_13,
-    L1_5_EXT_UNPACKER_14,
-    L1_5_EXT_UNPACKER_13_GRANT,
-    L1_5_EXT_UNPACKER_14_GRANT,
-    // counter_type is a uint32_t:8 bitfield — keep all values below 256.
+    // L1 Bank 5 (BH only, mux=5, ports 40-41): unpacker 0's extended read interfaces 6-7; slots 2-7 read 0.
+    L1_5_UNPACKER0_EXT_IF_6,
+    L1_5_UNPACKER0_EXT_IF_7,
+    L1_5_UNPACKER0_EXT_IF_6_GRANT,
+    L1_5_UNPACKER0_EXT_IF_7_GRANT,
+    // Blackhole ports whose client differs from Wormhole (tapeout RTL): port 1 has no packer, port 8 is the
+    // packer's L1 interface 0, ports 9-11 are unpacker 1's extended read interfaces (also the packer L1-to-L1 read).
+    L1_0_UNPACKER_1_ECC,
+    L1_1_PACKER_IF_0,
+    L1_1_UNPACKER1_EXT_IF_1,
+    L1_1_UNPACKER1_EXT_IF_2,
+    L1_1_UNPACKER1_EXT_IF_3,
+    L1_0_UNPACKER_1_ECC_GRANT,
+    L1_1_PACKER_IF_0_GRANT,
+    L1_1_UNPACKER1_EXT_IF_1_GRANT,
+    L1_1_UNPACKER1_EXT_IF_2_GRANT,
+    L1_1_UNPACKER1_EXT_IF_3_GRANT,
+    // counter_type is an 8-bit field on tt-1xx; keep every value below 256.
 };
-static_assert(L1_5_EXT_UNPACKER_14_GRANT <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(L1_1_UNPACKER1_EXT_IF_3_GRANT <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 
 union PerfCounter {
     struct {
