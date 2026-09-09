@@ -603,7 +603,9 @@
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
+    export TT_METAL_DISABLE_REALTIME_PROFILER=1
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
     export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k

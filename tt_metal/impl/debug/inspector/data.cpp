@@ -657,6 +657,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
 
     // Profiler
     RT(profiler_enabled);
+    RT(realtime_profiler_disabled);
     RT(profiler_do_dispatch_cores);
     RT(profiler_sync_enabled);
     RT(profiler_trace_only);

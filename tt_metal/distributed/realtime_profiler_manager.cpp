@@ -124,6 +124,12 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
+    if (metal.rtoptions().get_realtime_profiler_disabled()) {
+        log_debug(
+            tt::LogMetal, "Real-time profiler disabled on device {} by TT_METAL_DISABLE_REALTIME_PROFILER.", device_id);
+        return {};
+    }
+
     // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
         log_debug(

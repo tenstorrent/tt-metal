@@ -128,6 +128,7 @@ enum class EnvVarID {
     // PROFILING & PERFORMANCE
     // ========================================
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
+    TT_METAL_DISABLE_REALTIME_PROFILER,            // Disable real-time program profiling
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -928,6 +929,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_DISABLE_REALTIME_PROFILER
+        // Disables real-time program profiling and its host/device data-streaming machinery.
+        // Default: false (real-time profiler enabled when supported)
+        // Usage: export TT_METAL_DISABLE_REALTIME_PROFILER=1
+        case EnvVarID::TT_METAL_DISABLE_REALTIME_PROFILER:
+            this->realtime_profiler_disabled = is_env_enabled(value);
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH
