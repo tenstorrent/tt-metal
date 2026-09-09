@@ -52,6 +52,14 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
                 or SituGlu (tanh-capped, Kimi K3; Blackhole only).
+            num_row_groups (int, optional): 0 (default) = legacy full-grid program.
+                > 0 selects the grouped program factory: the grid is split into this
+                many row groups that run experts concurrently (experts balanced onto
+                groups device-side by token count) and every core streams its own
+                weight slice from DRAM. Tuning knobs (0 = auto): grid_rows (8),
+                grid_cols (11), per_core_m_max (4), weight_cb_depth (2),
+                col_strided (0/1 bank-strided columns), down_split (1: writer reads
+                down weights on NoC 1), lpt_fixed_cost_tiles (32).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -74,7 +82,15 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("activation") = RoutedExpertActivation::Silu,
         nb::arg("gate_biases") = nb::none(),
         nb::arg("up_biases") = nb::none(),
-        nb::arg("down_biases") = nb::none());
+        nb::arg("down_biases") = nb::none(),
+        nb::arg("num_row_groups") = 0,
+        nb::arg("grid_rows") = 0,
+        nb::arg("grid_cols") = 0,
+        nb::arg("per_core_m_max") = 0,
+        nb::arg("weight_cb_depth") = 0,
+        nb::arg("col_strided") = 0,
+        nb::arg("down_split") = 1,
+        nb::arg("lpt_fixed_cost_tiles") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

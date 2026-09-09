@@ -64,7 +64,17 @@ ttnn::Tensor unified_routed_expert_moe(
     RoutedExpertActivation activation = RoutedExpertActivation::Silu,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt);
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
+    // Grouped program factory knobs (see UnifiedRoutedExpertFfnParams). num_row_groups
+    // == 0 (default) keeps the legacy full-grid program byte-identical.
+    uint32_t num_row_groups = 0,
+    uint32_t grid_rows = 0,
+    uint32_t grid_cols = 0,
+    uint32_t per_core_m_max = 0,
+    uint32_t weight_cb_depth = 0,
+    uint32_t col_strided = 0,
+    uint32_t down_split = 1,
+    uint32_t lpt_fixed_cost_tiles = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

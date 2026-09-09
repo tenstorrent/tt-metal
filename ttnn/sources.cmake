@@ -85,6 +85,7 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_grouped_program_factory.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -257,4 +258,13 @@ set(TTNNCPP_API_HEADERS
     cpp/ttnn/operations/cb_utils.hpp
     cpp/ttnn/operations/math.hpp
     cpp/ttnn/operations/trace.hpp
+)
+
+# The grouped expert-FFN factory shares file-scope constant names with the legacy factory it was
+# derived from; keep it out of the unity batch so the two translation units stay separate.
+set_source_files_properties(
+    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_grouped_program_factory.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
 )

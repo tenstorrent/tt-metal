@@ -1,0 +1,15 @@
+== stress3 (post act-loopback fix) Sun Sep  6 04:36:04 UTC 2026
+stress kimi_e24 bf8 rc=0 ok=14 0 pccfail
+stress kimi_u bf8 rc=0 ok=14 0 pccfail
+stress m3_u4 bf8 rc=0 ok=14 0 pccfail
+stress kimi_zipf bf8 rc=0 ok=14 0 pccfail
+stress m3_u16 bf4 rc=0 ok=14 0 pccfail
+stress kimi_giant bf4 rc=0 ok=14 0 pccfail
+== ab Sun Sep  6 04:41:03 UTC 2026
+ab rc=0 rows=154
+== pytest grouped Sun Sep  6 04:49:19 UTC 2026
+pytest grouped (x_rm x {G10r10,G5r10,G8r8,G4r8} x bf4/bf8 x 9 distributions): 72 passed, 0 failed
+pytest grouped x_tile (5 geometries x bf4/bf8 x 9 distributions) + special cases: 92 passed; 3 failed before the last fixes (cache-hit test wrote past its regions = test bug; count-clamp = token count not clamped with the tile count) -> re-run after fixes: 5/5 special cases pass (cache-hit G10r10/G4r8, count clamp, all-empty, legacy path)
+== pytest legacy Sun Sep  6 05:26:11 UTC 2026
+pytest legacy regression (test_single_routed_expert, test_routed_expert_bias, test_swigluoai_routed_expert): 155 passed, 0 failed
+== done Sun Sep  6 05:31:01 UTC 2026

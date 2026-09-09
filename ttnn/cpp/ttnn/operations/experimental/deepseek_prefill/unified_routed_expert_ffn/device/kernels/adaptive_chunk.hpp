@@ -125,14 +125,19 @@ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
 // tail chunk, the smallest DIVISOR of per_core_M_max whose *kGridY covers the
 // tail tiles (so the tail does the least M-work while its block still tiles
 // evenly into the CBs).
-inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk) {
-    const uint32_t per_core_M_max = max_chunk / kGridY;
+//
+// `grid_y` is the number of M-row cores a chunk spans: kGridY (8) on the legacy
+// full-grid path, or the per-group row count R on the grouped path (where a
+// chunk spans per_core_M_max * R tile-rows). Reader, compute and writer must
+// pass the same value.
+inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk, uint32_t grid_y = kGridY) {
+    const uint32_t per_core_M_max = max_chunk / grid_y;
     const uint32_t num_full = count_tiles / max_chunk;
     if (c < num_full) {
         return per_core_M_max;
     }
     const uint32_t tail = count_tiles - num_full * max_chunk;  // > 0 for the tail chunk
-    uint32_t need = (tail + kGridY - 1) / kGridY;              // min rows/core to cover the tail
+    uint32_t need = (tail + grid_y - 1) / grid_y;              // min rows/core to cover the tail
     if (need < 1) {
         need = 1;
     }
