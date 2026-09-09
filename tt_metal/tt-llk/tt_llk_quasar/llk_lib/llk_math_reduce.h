@@ -71,7 +71,9 @@ inline void _reduce_row_transpose_fpu_()
     _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
     _reduce_row_transpose_alu_cfg_enter_();
 
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+    // MATH drains the preceding math instructions so their source-bank release has landed before
+    // SRCB_VLD tests the bank that MOVD2B will write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
 
     // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
     TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, 0);
