@@ -209,7 +209,7 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 60
+      timeout: 33
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
