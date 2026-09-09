@@ -26,6 +26,20 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
+@dataclass(frozen=True)
+class KDASequenceParallel:
+    """A sequence-parallel axis together with the transport its collectives run on.
+
+    A sequence-parallel recurrence needs all three; a single-partition recurrence needs
+    none. Keeping them in one value means a caller cannot name an axis without a
+    transport, or pick a topology for an axis that was never split.
+    """
+
+    axis: int
+    topology: ttnn.Topology
+    tt_ccl: TT_CCL
+
+
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
     grid = device.compute_with_storage_grid_size()
     capacity = grid.x * grid.y
@@ -220,17 +234,17 @@ def _distributed_affine_prefix(
     transform_b: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     *,
-    sequence_parallel_axis: int,
-    topology: ttnn.Topology,
-    tt_ccl: TT_CCL,
+    sequence_parallel: KDASequenceParallel,
     compute_config: ttnn.DeviceComputeKernelConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose SP partition affine summaries and return entry/final carries."""
     shape = tuple(transform_a.shape)
 
+    axis = sequence_parallel.axis
+    tt_ccl = sequence_parallel.tt_ccl
     mesh_device = transform_a.device()
     mesh_shape = tuple(mesh_device.shape)
-    sp_size = mesh_shape[sequence_parallel_axis]
+    sp_size = mesh_shape[axis]
     batch_heads, key_dim = shape[0], shape[1]
     value_dim = transform_b.shape[-1]
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
@@ -245,11 +259,11 @@ def _distributed_affine_prefix(
     gathered = ttnn.experimental.all_gather_async(
         packed,
         dim=0,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(sequence_parallel_axis),
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(sequence_parallel_axis),
-        num_links=tt_ccl.get_num_links(sequence_parallel_axis),
-        cluster_axis=sequence_parallel_axis,
-        topology=topology,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(axis),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(axis),
+        num_links=tt_ccl.get_num_links(axis),
+        cluster_axis=axis,
+        topology=sequence_parallel.topology,
         memory_config=output_memory,
     )
 
@@ -294,7 +308,7 @@ def _distributed_affine_prefix(
     entry_state = ttnn.mesh_partition(
         replicated_entries,
         dim=0,
-        cluster_axis=sequence_parallel_axis,
+        cluster_axis=axis,
         memory_config=output_memory,
     )
     final_state = ttnn.to_memory_config(carry, output_memory)
@@ -327,9 +341,7 @@ def _scan_grouped_chunks(
     geometry: _RecurrenceGeometry,
     *,
     summary_group_chunks: int,
-    sequence_parallel_axis: int | None,
-    topology: ttnn.Topology,
-    tt_ccl: TT_CCL | None,
+    sequence_parallel: KDASequenceParallel | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
     group_chunks = _effective_summary_group_chunks(geometry.num_chunks, summary_group_chunks)
@@ -346,8 +358,7 @@ def _scan_grouped_chunks(
 
     prefix_initial_state = initial_state
     prefix_memory_config = KDA_LOCAL_PREFIX_MEMORY_CONFIG
-    if sequence_parallel_axis is not None:
-        assert tt_ccl is not None
+    if sequence_parallel is not None:
         partition_a, partition_b = ttnn.experimental.kda.reduce_affine_transforms(
             summary_a,
             summary_b,
@@ -359,9 +370,7 @@ def _scan_grouped_chunks(
             partition_a,
             partition_b,
             initial_state,
-            sequence_parallel_axis=sequence_parallel_axis,
-            topology=topology,
-            tt_ccl=tt_ccl,
+            sequence_parallel=sequence_parallel,
             compute_config=compute_config.affine_prefix,
         )
         prefix_memory_config = KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG
@@ -380,7 +389,7 @@ def _scan_grouped_chunks(
         (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim),
     )
 
-    if sequence_parallel_axis is not None:
+    if sequence_parallel is not None:
         return _ScanResult(output=output, final_state=distributed_final_state)
     return _ScanResult(
         output=output,
@@ -396,12 +405,8 @@ class KDARecurrence:
         device: ttnn.Device | ttnn.MeshDevice,
         program_config: KDARecurrenceProgramConfig,
         *,
-        sequence_parallel_axis: int | None,
-        topology: ttnn.Topology,
-        tt_ccl: TT_CCL | None,
+        sequence_parallel: KDASequenceParallel | None,
     ) -> None:
-        if sequence_parallel_axis is not None and tt_ccl is None:
-            raise ValueError("tt_ccl is required for sequence-parallel KDA recurrence")
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -427,10 +432,8 @@ class KDARecurrence:
             scan=scan,
         )
         self._summary_group_chunks = program_config.summary_group_chunks
-        self._sequence_parallel_axis = sequence_parallel_axis
-        self._topology = topology
-        self._tt_ccl = tt_ccl
-        self._use_grouped_scan = sequence_parallel_axis is not None or program_config.local_scan_strategy == "grouped"
+        self._sequence_parallel = sequence_parallel
+        self._use_grouped_scan = sequence_parallel is not None or program_config.local_scan_strategy == "grouped"
 
     def __call__(
         self,
@@ -464,9 +467,7 @@ class KDARecurrence:
                 state,
                 geometry,
                 summary_group_chunks=self._summary_group_chunks,
-                sequence_parallel_axis=self._sequence_parallel_axis,
-                topology=self._topology,
-                tt_ccl=self._tt_ccl,
+                sequence_parallel=self._sequence_parallel,
                 compute_config=self._compute_config,
             )
         else:

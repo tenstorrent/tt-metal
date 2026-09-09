@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence, KDASequenceParallel
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -161,9 +161,15 @@ class ttKDA:
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
-            sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
-            topology=self.sp_ccl_topology,
-            tt_ccl=self.tt_ccl,
+            sequence_parallel=(
+                KDASequenceParallel(
+                    axis=self.sequence_parallel_axis,
+                    topology=self.sp_ccl_topology,
+                    tt_ccl=self.tt_ccl,
+                )
+                if self.sequence_parallel_size > 1
+                else None
+            ),
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
