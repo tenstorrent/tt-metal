@@ -54,14 +54,6 @@ AdjacencyGraph<NodeId>::AdjacencyGraph(const typename AdjacencyGraph<NodeId>::Ad
 }
 
 template <typename NodeId>
-AdjacencyGraph<NodeId>::AdjacencyGraph(typename AdjacencyGraph<NodeId>::AdjacencyMap&& adjacency_map) : adj_map_(std::move(adjacency_map)) {
-    nodes_cache_.reserve(adj_map_.size());
-    for (const auto& [node, neighbors] : adj_map_) {
-        nodes_cache_.push_back(node);
-    }
-}
-
-template <typename NodeId>
 const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_nodes() const {
     return nodes_cache_;
 }
@@ -392,12 +384,20 @@ void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::merge(const MappingConstraints& other) {
-    const bool this_has_same_rank = !same_rank_target_groups_.empty() || !same_rank_global_groups_.empty();
-    const bool other_has_same_rank =
-        !other.same_rank_target_groups_.empty() || !other.same_rank_global_groups_.empty();
-    if (this_has_same_rank && other_has_same_rank &&
-        (same_rank_target_groups_ != other.same_rank_target_groups_ ||
-         same_rank_global_groups_ != other.same_rank_global_groups_)) {
+    // The target and global partitions are independent, and group order is only a label: compare each as a
+    // sorted list of its non-empty groups, and reject only when both sides define a different partition of the
+    // same domain.
+    const auto normalized = [](const auto& groups) {
+        auto out = groups;
+        out.erase(std::remove_if(out.begin(), out.end(), [](const auto& g) { return g.empty(); }), out.end());
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    const auto partitions_conflict = [&](const auto& mine, const auto& theirs) {
+        return !mine.empty() && !theirs.empty() && normalized(mine) != normalized(theirs);
+    };
+    if (partitions_conflict(same_rank_target_groups_, other.same_rank_target_groups_) ||
+        partitions_conflict(same_rank_global_groups_, other.same_rank_global_groups_)) {
         const std::string message =
             "MappingConstraints::merge: both sides define same-rank groups and the partitions differ; "
             "the solver binds one partition, so there is no merged form";
@@ -452,8 +452,10 @@ bool MappingConstraints<TargetNode, GlobalNode>::merge(const MappingConstraints&
         }
     }
 
-    if (other_has_same_rank) {
+    if (same_rank_target_groups_.empty()) {
         merged.same_rank_target_groups_ = other.same_rank_target_groups_;
+    }
+    if (same_rank_global_groups_.empty()) {
         merged.same_rank_global_groups_ = other.same_rank_global_groups_;
     }
 
@@ -1029,10 +1031,20 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         return false;
     }
 
+    // Each unit of weight is stored as one listing of the pair, and the SAT counter over those listings is
+    // O(total_weight * min_count), so bound the total instead of letting one large weight allocate unbounded.
+    static constexpr size_t kMaxCardinalityTotalWeight = size_t{1} << 20;
     size_t total_weight = 0;
     for (const auto& [mapping_pair, weight] : pair_weights) {
         if (weight == 0) {
             log_info(tt::LogFabric, "Cardinality constraint pair weights must be at least 1");
+            return false;
+        }
+        if (weight > kMaxCardinalityTotalWeight - total_weight) {
+            log_info(
+                tt::LogFabric,
+                "Cardinality constraint total pair weight exceeds the supported maximum ({})",
+                kMaxCardinalityTotalWeight);
             return false;
         }
         total_weight += weight;
@@ -1046,19 +1058,71 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         return false;
     }
 
+    // Validate compatibility with existing required constraints
     CardinalityPairWeights valid_weights;
+    std::vector<std::pair<TargetNode, GlobalNode>> invalid_pairs;
     size_t valid_weight = 0;
 
     for (const auto& [mapping_pair, weight] : pair_weights) {
         const auto& [target_node, global_node] = mapping_pair;
+        // Check if this pair is compatible with existing required constraints
         if (is_valid_mapping(target_node, global_node)) {
             valid_weights.emplace(mapping_pair, weight);
             valid_weight += weight;
+        } else {
+            invalid_pairs.push_back(mapping_pair);
         }
     }
 
+    // Check if we have enough valid weight to satisfy min_count
     if (valid_weight < min_count) {
+        std::ostringstream oss;
+        oss << "Cardinality constraint incompatible with existing required constraints.\n";
+        oss << "  Required: at least " << min_count << " (weighted) pair(s) must be satisfied\n";
+        oss << "  Valid weight (compatible with required constraints): " << valid_weight << "\n";
+        oss << "  Invalid pairs (conflict with required constraints): " << invalid_pairs.size() << "\n";
+
+        if (!invalid_pairs.empty()) {
+            oss << "  Invalid pairs:\n";
+            for (const auto& [target, global] : invalid_pairs) {
+                auto valid_it = valid_mappings_.find(target);
+                if (valid_it != valid_mappings_.end() && !valid_it->second.empty()) {
+                    std::string valid_list;
+                    bool first = true;
+                    for (const auto& valid_global : valid_it->second) {
+                        if (!first) {
+                            valid_list += ", ";
+                        }
+                        first = false;
+                        valid_list += fmt::format("{}", valid_global);
+                    }
+                    oss << fmt::format("    - ({}, {}): {} is not in valid mappings for {} (valid: {})\n",
+                        fmt::format("{}", target), fmt::format("{}", global),
+                        fmt::format("{}", global), fmt::format("{}", target), valid_list);
+                } else if (valid_it != valid_mappings_.end()) {
+                    oss << fmt::format("    - ({}, {}): {} has no valid mappings (overconstrained)\n",
+                        fmt::format("{}", target), fmt::format("{}", global), fmt::format("{}", target));
+                } else {
+                    oss << fmt::format("    - ({}, {}): {} has required constraints that exclude {}\n",
+                        fmt::format("{}", target), fmt::format("{}", global),
+                        fmt::format("{}", target), fmt::format("{}", global));
+                }
+            }
+        }
+
+        log_info(tt::LogFabric, "{}", oss.str());
         return false;
+    }
+
+    // Informational: some pairs were filtered but the constraint is still satisfiable (not an error).
+    if (!invalid_pairs.empty()) {
+        log_debug(
+            tt::LogFabric,
+            "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
+            "but constraint is still satisfiable with {} remaining valid weight (min_count: {})",
+            invalid_pairs.size(),
+            valid_weight,
+            min_count);
     }
 
     CardinalityConstraintEntry entry;
@@ -1117,15 +1181,46 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraint
     }
 
     // Check each cardinality constraint has enough valid listings
-    for (const auto& entry : cardinality_constraints_) {
+    for (size_t i = 0; i < cardinality_constraints_.size(); ++i) {
+        const auto& entry = cardinality_constraints_[i];
+
         size_t valid_weight = 0;
+        std::set<std::pair<TargetNode, GlobalNode>> invalid_pairs;
+
         for (const auto& mapping_pair : entry.mapping_pairs) {
             const auto& [target_node, global_node] = mapping_pair;
             if (is_valid_mapping(target_node, global_node)) {
                 valid_weight += 1;
+            } else {
+                invalid_pairs.insert(mapping_pair);
             }
         }
+
         if (valid_weight < entry.min_count) {
+            std::ostringstream oss;
+            oss << "Cardinality constraint " << (i + 1) << " is unsatisfiable with current required constraints.\n";
+            oss << "  Required: at least " << entry.min_count << " (weighted) pair(s) must be satisfied\n";
+            oss << "  Valid weight (compatible with required constraints): " << valid_weight << "\n";
+            oss << "  Invalid pairs: " << invalid_pairs.size() << "\n";
+
+            if (!invalid_pairs.empty()) {
+                oss << "  Invalid pairs:\n";
+                for (const auto& [target, global] : invalid_pairs) {
+                    auto valid_it = valid_mappings_.find(target);
+                    if (valid_it != valid_mappings_.end() && !valid_it->second.empty()) {
+                        oss << fmt::format("    - ({}, {}): {} is not in valid mappings for {}\n",
+                            fmt::format("{}", target), fmt::format("{}", global),
+                            fmt::format("{}", global), fmt::format("{}", target));
+                    } else {
+                        oss << fmt::format("    - ({}, {}): {} has no valid mappings\n",
+                            fmt::format("{}", target), fmt::format("{}", global),
+                            fmt::format("{}", target));
+                    }
+                }
+            }
+
+            // Log info message instead of throwing
+            log_info(tt::LogFabric, "{}", oss.str());
             return false;
         }
     }
@@ -1133,91 +1228,26 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraint
     return true;
 }
 
-// RELAXED: sit on the highest-degree global nodes (neighbor-list size, including parallel links).
-// Written into the caller's MappingConstraints (unioned with any preferred already set).
-// Highest-degree preferred is a seating bias when there is slack. On an exact cover
-// (n_global <= n_target) every global may be required; preferring a strict subset only
-// scrambles DFS candidate order (e.g. a Hamiltonian path on a filled mesh).
-template <typename TargetNode, typename GlobalNode>
-void add_relaxed_highest_degree_preferred_constraints(
-    const AdjacencyGraph<TargetNode>& target_graph,
-    const AdjacencyGraph<GlobalNode>& global_graph,
-    MappingConstraints<TargetNode, GlobalNode>& constraints) {
-    if (global_graph.get_nodes().size() <= target_graph.get_nodes().size()) {
-        return;
-    }
-    std::size_t best_weight = 0;
-    for (const GlobalNode& node : global_graph.get_nodes()) {
-        best_weight = std::max(best_weight, global_graph.get_neighbors(node).size());
-    }
-    if (best_weight == 0) {
-        return;
-    }
-    std::set<GlobalNode> preferred_nodes;
-    for (const GlobalNode& node : global_graph.get_nodes()) {
-        if (global_graph.get_neighbors(node).size() == best_weight) {
-            preferred_nodes.insert(node);
-        }
-    }
-    if (preferred_nodes.empty()) {
-        return;
-    }
-    // Insert (union), do not intersect: RELAXED adds this bias on top of caller preferred.
-    for (const TargetNode& node : target_graph.get_nodes()) {
-        for (const GlobalNode& global_node : preferred_nodes) {
-            constraints.add_preferred_constraint(node, global_node);
-        }
-    }
-}
-
 // solve_topology_mapping template implementation
 template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
-    MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine) {
-    using namespace tt::tt_fabric::detail;
-
-    auto start_time = std::chrono::steady_clock::now();
-    auto results = solve_topology_mapping_n<TargetNode, GlobalNode>(
+    constraints.set_quiet_mode(quiet_mode);
+    TopologyMappingEnumerationSession<TargetNode, GlobalNode> session;
+    return session.next(
         target_graph,
         global_graph,
         constraints,
-        /*max_solutions=*/1,
+        /*excluded_mappings=*/{},
         connection_validation_mode,
         quiet_mode,
         solver_engine,
         /*unique_shapes=*/false);
-    if (!results.empty()) {
-        return std::move(results.front());
-    }
-
-    constraints.set_quiet_mode(quiet_mode);
-    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
-    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
-    TopologySearchState state;
-    state.mapping.assign(graph_data.n_target, -1);
-    state.used.assign(graph_data.n_global, false);
-    if (graph_data.n_global < graph_data.n_target) {
-        state.error_message = fmt::format(
-            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has "
-            "{} nodes",
-            graph_data.n_target,
-            graph_data.n_global);
-    } else {
-        state.error_message = fmt::format(
-            "Failed to find mapping: target graph with {} nodes cannot be embedded in global graph with {} nodes",
-            graph_data.n_target,
-            graph_data.n_global);
-    }
-    auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-        state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
-    result.stats.elapsed_time =
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_time);
-    return result;
 }
 
 // ============================================================================
@@ -1228,81 +1258,38 @@ template <typename TargetNode, typename GlobalNode>
 std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
-    MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     size_t max_solutions,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes) {
-    using namespace tt::tt_fabric::detail;
-
     if (max_solutions == 0 || max_solutions > kTopologyMappingEnumerateSolutionsHardCap) {
         max_solutions = kTopologyMappingEnumerateSolutionsHardCap;
     }
 
     constraints.set_quiet_mode(quiet_mode);
 
-    if (connection_validation_mode == ConnectionValidationMode::RELAXED) {
-        add_relaxed_highest_degree_preferred_constraints(target_graph, global_graph, constraints);
-    }
-
-    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
-    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
-
-    std::vector<std::vector<int>> raw_mappings;
-    raw_mappings.reserve(max_solutions);
-
-    const bool use_sat_engine =
-        topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global);
-
-    auto enum_start = std::chrono::steady_clock::now();
-    TopologySearchState engine_state;
-
-    // CaDiCaL: one solver, encode hard constraints once, append blocking clauses after each model, repeated solve().
-    // configure_for_blocking_clause_enumeration() enables ILB/trail reuse tuned for this AllSAT-style loop.
-    if (use_sat_engine) {
-        SatSearchEngine<TargetNode, GlobalNode> sat_engine;
-        sat_engine.search_n(
-            graph_data,
-            constraint_data,
-            connection_validation_mode,
-            max_solutions,
-            raw_mappings,
-            quiet_mode,
-            unique_shapes,
-            {});
-        engine_state = sat_engine.get_state();
-    } else {
-        DFSSearchEngine<TargetNode, GlobalNode> dfs_engine;
-        dfs_engine.search_n(
-            graph_data,
-            constraint_data,
-            connection_validation_mode,
-            max_solutions,
-            raw_mappings,
-            quiet_mode,
-            unique_shapes,
-            {});
-        engine_state = dfs_engine.get_state();
-    }
-    const auto enum_elapsed =
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - enum_start);
-
+    TopologyMappingEnumerationSession<TargetNode, GlobalNode> session;
     std::vector<MappingResult<TargetNode, GlobalNode>> results;
-    results.reserve(raw_mappings.size());
+    results.reserve(max_solutions);
+    std::vector<std::map<TargetNode, GlobalNode>> excluded;
+    excluded.reserve(max_solutions);
 
-    for (const auto& raw_mapping : raw_mappings) {
-        TopologySearchState result_state = engine_state;
-        result_state.mapping = raw_mapping;
-        result_state.used.assign(graph_data.n_global, false);
-        for (int gi : raw_mapping) {
-            if (gi >= 0 && static_cast<size_t>(gi) < result_state.used.size()) {
-                result_state.used[static_cast<size_t>(gi)] = true;
-            }
+    for (size_t i = 0; i < max_solutions; ++i) {
+        auto result = session.next(
+            target_graph,
+            global_graph,
+            constraints,
+            excluded,
+            connection_validation_mode,
+            quiet_mode,
+            solver_engine,
+            unique_shapes);
+        if (!result.success) {
+            break;
         }
-        auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-            raw_mapping, graph_data, constraint_data, result_state, connection_validation_mode, quiet_mode);
-        result.stats.elapsed_time = enum_elapsed;
+        excluded.push_back(result.target_to_global);
         results.push_back(std::move(result));
     }
 
@@ -1317,7 +1304,7 @@ template <typename TargetNode, typename GlobalNode>
 std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
-    MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
@@ -1358,10 +1345,10 @@ void TopologyMappingEnumerationSession<TargetNode, GlobalNode>::reset() noexcept
     snap_global_ = {};
     engine_ = TopologyMappingSolverEngine::Auto;
     mode_ = ConnectionValidationMode::RELAXED;
+    // Drop the engine before graph/constraint snapshots; DFS holds pointers into them.
+    search_engine_.reset();
     graph_data_.reset();
     constraint_data_.reset();
-    sat_session_.reset();
-    sat_enc_ = {};
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -1371,7 +1358,7 @@ template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::next(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
-    MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
@@ -1393,15 +1380,12 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
     };
     constraints.set_quiet_mode(quiet_mode);
 
-    if (connection_validation_mode == ConnectionValidationMode::RELAXED) {
-        add_relaxed_highest_degree_preferred_constraints(target_graph, global_graph, constraints);
-    }
-
     const bool context_match =
         ready_ && snap_target_.get_adjacency_map() == target_graph.get_adjacency_map() &&
         snap_global_.get_adjacency_map() == global_graph.get_adjacency_map() && engine_ == solver_engine &&
         mode_ == connection_validation_mode && unique_shapes_ == unique_shapes;
 
+    bool need_start = false;
     if (!context_match) {
         reset();
         snap_target_ = target_graph;
@@ -1413,36 +1397,12 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         graph_data_.emplace(target_graph, global_graph);
         constraint_data_.emplace(constraints, *graph_data_);
         use_sat_ = topology_mapping_should_use_sat_engine(solver_engine, graph_data_->n_target, graph_data_->n_global);
-
-        if (graph_data_->n_target == 0) {
-            TopologySearchState st;
-            st.mapping.clear();
-            st.used.assign(graph_data_->n_global, false);
-            ready_ = true;
-            return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
-                {}, *graph_data_, *constraint_data_, st, connection_validation_mode, quiet_mode));
-        }
-
-        if (use_sat_) {
-            sat_session_ = detail::topology_sat_session_create_and_encode(
-                TopologySatGraphView(*graph_data_),
-                TopologySatConstraintView(*constraint_data_),
-                sat_enc_,
-                connection_validation_mode);
-            if (!sat_session_) {
-                MappingResult<TargetNode, GlobalNode> failure;
-                failure.success = false;
-                failure.error_message = "TopologyMappingEnumerationSession: SAT hard encode failed";
-                ready_ = true;
-                return failure;
-            }
-            ++sat_hard_constraint_encode_calls_;
-            sat_exclusions_encoded_ = 0;
-        }
         ready_ = true;
+        search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
+        need_start = true;
     } else {
         quiet_ = quiet_mode;
-        constraint_data_.emplace(constraints, *graph_data_);
+        // Engine start() already snapshotted constraints; do not replace constraint_data_ while live.
     }
 
     auto to_index_mapping = [&](const std::map<TargetNode, GlobalNode>& node_map) -> std::vector<int> {
@@ -1457,164 +1417,58 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         return idx_map;
     };
 
-    auto mappings_equal = [](const std::vector<int>& a, const std::vector<int>& b) -> bool {
-        if (a.size() != b.size()) {
-            return false;
-        }
-        return a == b;
-    };
-
     std::vector<std::vector<int>> excluded_idx;
     excluded_idx.reserve(excluded_mappings.size());
     for (const auto& em : excluded_mappings) {
         excluded_idx.push_back(to_index_mapping(em));
     }
 
-    std::set<std::vector<int>> excluded_shape_keys;
-    if (unique_shapes) {
-        for (const auto& row : excluded_idx) {
-            excluded_shape_keys.insert(topology_mapping_shape_key(row));
-        }
-    }
-
-    if (use_sat_) {
-        if (excluded_idx.size() < sat_exclusions_encoded_) {
-            sat_session_ = detail::topology_sat_session_create_and_encode(
-                TopologySatGraphView(*graph_data_),
-                TopologySatConstraintView(*constraint_data_),
-                sat_enc_,
-                connection_validation_mode);
-            if (!sat_session_) {
-                MappingResult<TargetNode, GlobalNode> failure;
-                failure.success = false;
-                failure.error_message = "TopologyMappingEnumerationSession: SAT re-encode failed";
-                return failure;
-            }
-            ++sat_hard_constraint_encode_calls_;
-            sat_exclusions_encoded_ = 0;
-        }
-        while (sat_exclusions_encoded_ < excluded_idx.size()) {
-            if (!detail::topology_sat_session_add_blocking_clause(
-                    sat_session_.get(), sat_enc_, excluded_idx[sat_exclusions_encoded_], unique_shapes)) {
-                MappingResult<TargetNode, GlobalNode> failure;
-                failure.success = false;
-                failure.error_message =
-                    "TopologyMappingEnumerationSession: failed to append blocking clause for excluded mapping";
-                return failure;
-            }
-            ++sat_exclusions_encoded_;
-        }
-
-        ++sat_solve_calls_;
-        std::vector<int> raw;
-        if (!detail::topology_sat_session_solve_and_decode(sat_session_.get(), sat_enc_, raw)) {
-            MappingResult<TargetNode, GlobalNode> failure;
-            failure.success = false;
-            failure.error_message =
-                "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
-            return failure;
-        }
-        for (const auto& excl : excluded_idx) {
-            if (mappings_equal(raw, excl)) {
-                MappingResult<TargetNode, GlobalNode> failure;
-                failure.success = false;
-                failure.error_message =
-                    "TopologyMappingEnumerationSession: SAT returned an excluded model (blocking mismatch)";
-                return failure;
-            }
-        }
-        if (unique_shapes && excluded_shape_keys.count(topology_mapping_shape_key(raw)) != 0) {
-            MappingResult<TargetNode, GlobalNode> failure;
-            failure.success = false;
-            failure.error_message =
-                "TopologyMappingEnumerationSession: SAT returned excluded shape (blocking mismatch)";
-            return failure;
-        }
-        TopologySearchState dummy_state;
-        dummy_state.mapping = raw;
-        dummy_state.used.assign(graph_data_->n_global, false);
-        dummy_state.used_sat = true;
-        dummy_state.sat_solve_calls = sat_solve_calls_;
-        dummy_state.sat_hard_constraint_encode_calls = sat_hard_constraint_encode_calls_;
-        for (int gi : raw) {
-            if (gi >= 0 && static_cast<size_t>(gi) < dummy_state.used.size()) {
-                dummy_state.used[static_cast<size_t>(gi)] = true;
-            }
-        }
-        return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
-            raw, *graph_data_, *constraint_data_, dummy_state, connection_validation_mode, quiet_mode));
-    }
-
-    std::vector<std::vector<int>> initial_forbidden_shape_keys;
-    if (unique_shapes) {
-        initial_forbidden_shape_keys.assign(excluded_shape_keys.begin(), excluded_shape_keys.end());
-    }
-    DFSSearchEngine<TargetNode, GlobalNode> dfs_engine;
-    // First solution uses memoized search() (same path as single-solve DFS). search_n disables
-    // failed-state memoization so it can enumerate, and can hit DFS_CALL_LIMIT before finding even
-    // one mapping on large RELAXED instances with highest-degree preferred injected.
-    if (excluded_idx.empty()) {
-        if (dfs_engine.search(*graph_data_, *constraint_data_, connection_validation_mode, quiet_mode)) {
-            TopologySearchState result_state = dfs_engine.get_state();
-            return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
-                result_state.mapping,
+    auto& engine = *search_engine_;
+    // start() on a new engine, or again on the same engine if the caller shortened
+    // excluded_mappings (blocking clauses cannot be removed).
+    if (need_start || excluded_idx.size() < sat_exclusions_encoded_) {
+        if (!engine.start(
                 *graph_data_,
                 *constraint_data_,
-                result_state,
                 connection_validation_mode,
-                quiet_mode));
+                unique_shapes,
+                {},
+                quiet_mode)) {
+            MappingResult<TargetNode, GlobalNode> failure;
+            failure.success = false;
+            failure.error_message = engine.get_state().error_message.empty()
+                                        ? "TopologyMappingEnumerationSession: engine start failed"
+                                        : engine.get_state().error_message;
+            return stamp_elapsed(std::move(failure));
         }
-        return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
-            dfs_engine.get_state().mapping,
-            *graph_data_,
-            *constraint_data_,
-            dfs_engine.get_state(),
-            connection_validation_mode,
-            quiet_mode));
+        sat_hard_constraint_encode_calls_ += engine.get_state().sat_hard_constraint_encode_calls;
+        sat_exclusions_encoded_ = 0;
     }
-    const size_t need = excluded_mappings.size() + 1;
-    std::vector<std::vector<int>> raw_mappings;
-    dfs_engine.search_n(
-        *graph_data_,
-        *constraint_data_,
-        connection_validation_mode,
-        need,
-        raw_mappings,
-        quiet_mode,
-        unique_shapes,
-        initial_forbidden_shape_keys);
-
-    for (const auto& raw : raw_mappings) {
-        bool is_excluded = false;
-        for (const auto& excl : excluded_idx) {
-            if (mappings_equal(raw, excl)) {
-                is_excluded = true;
-                break;
-            }
+    while (sat_exclusions_encoded_ < excluded_idx.size()) {
+        if (!engine.block(excluded_idx[sat_exclusions_encoded_])) {
+            MappingResult<TargetNode, GlobalNode> failure;
+            failure.success = false;
+            failure.error_message =
+                "TopologyMappingEnumerationSession: failed to append blocking clause for excluded mapping";
+            return stamp_elapsed(std::move(failure));
         }
-        if (!is_excluded && unique_shapes &&
-            excluded_shape_keys.count(topology_mapping_shape_key(raw)) != 0) {
-            is_excluded = true;
-        }
-        if (!is_excluded) {
-            TopologySearchState result_state = dfs_engine.get_state();
-            result_state.mapping = raw;
-            result_state.used.assign(graph_data_->n_global, false);
-            for (int gi : raw) {
-                if (gi >= 0 && static_cast<size_t>(gi) < result_state.used.size()) {
-                    result_state.used[static_cast<size_t>(gi)] = true;
-                }
-            }
-            return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
-                raw, *graph_data_, *constraint_data_, result_state, connection_validation_mode, quiet_mode));
-        }
+        ++sat_exclusions_encoded_;
     }
 
-    MappingResult<TargetNode, GlobalNode> failure;
-    failure.success = false;
-    failure.error_message =
-        "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
-    return stamp_elapsed(std::move(failure));
+    std::vector<int> raw;
+    if (!engine.next(raw)) {
+        MappingResult<TargetNode, GlobalNode> failure;
+        failure.success = false;
+        failure.error_message =
+            "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
+        return stamp_elapsed(std::move(failure));
+    }
+    sat_solve_calls_ = engine.get_state().sat_solve_calls;
+    TopologySearchState dummy_state = engine.get_state();
+    dummy_state.sat_solve_calls = sat_solve_calls_;
+    dummy_state.sat_hard_constraint_encode_calls = sat_hard_constraint_encode_calls_;
+    return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
+        raw, *graph_data_, *constraint_data_, dummy_state, connection_validation_mode, quiet_mode));
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2964,7 +2818,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 }
 
 template <typename TargetNode, typename GlobalNode>
-bool DFSSearchEngine<TargetNode, GlobalNode>::search(
+bool DFSSearchEngine<TargetNode, GlobalNode>::find_first_mapping(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     ConnectionValidationMode validation_mode,
@@ -3192,11 +3046,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
 }
 
 // ============================================================================
-// DFSSearchEngine::search_n — enumerate up to max_solutions complete mappings
+// DFSSearchEngine::enumerate_mappings — enumerate up to max_solutions complete mappings
 // ============================================================================
 
 template <typename TargetNode, typename GlobalNode>
-bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
+bool DFSSearchEngine<TargetNode, GlobalNode>::enumerate_mappings(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     ConnectionValidationMode validation_mode,
@@ -3215,17 +3069,6 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
     all_mappings_out.clear();
 
     if (graph_data.n_global < graph_data.n_target) {
-        std::string error_msg = fmt::format(
-            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has "
-            "{} nodes",
-            graph_data.n_target,
-            graph_data.n_global);
-        if (quiet_mode) {
-            log_debug(tt::LogFabric, "{}", error_msg);
-        } else {
-            log_error(tt::LogFabric, "{}", error_msg);
-        }
-        state_.error_message = error_msg;
         return false;
     }
 
@@ -3362,9 +3205,38 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
 
         const size_t target_idx = selection.target_idx;
 
+        // Hard host-group cap (max_same_rank_groups_used): the enumeration must occupy at most k distinct
+        // same-rank global groups (host partitions), the same in-search constraint dfs_recursive applies for the
+        // single solve and the SAT backend applies via its at-most-k clause. Enforcing it here (not only as a
+        // post-hoc filter in the caller) keeps all three engines' enumeration in lockstep and makes the caller's
+        // post-hoc cap check redundant. Built once per node from the current partial mapping; empty when inactive.
+        const size_t host_group_cap = constraint_data.max_same_rank_groups_used;
+        const auto& global_to_host = constraint_data.global_to_same_rank_group;
+        const bool host_cap_active = host_group_cap > 0 && !global_to_host.empty();
+        std::set<int> occupied_host_groups;
+        if (host_cap_active) {
+            for (int g : state_.mapping) {
+                if (g >= 0 && static_cast<size_t>(g) < global_to_host.size()) {
+                    const int grp = global_to_host[static_cast<size_t>(g)];
+                    if (grp >= 0) {
+                        occupied_host_groups.insert(grp);
+                    }
+                }
+            }
+        }
+
         for (size_t global_idx : selection.candidates) {
             if (all_mappings_out.size() >= max_solutions) {
                 return;
+            }
+
+            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
+            if (host_cap_active && global_idx < global_to_host.size()) {
+                const int grp = global_to_host[global_idx];
+                if (grp >= 0 && !occupied_host_groups.contains(grp) &&
+                    occupied_host_groups.size() >= host_group_cap) {
+                    continue;  // would exceed at-most-k occupied host groups
+                }
             }
 
             if (!ConsistencyChecker::check_local_consistency(
@@ -3403,6 +3275,243 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
 
     dfs_enum(dfs_enum, 0);
     return !all_mappings_out.empty();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::mapping_is_excluded(const std::vector<int>& mapping) const {
+    for (const auto& blocked : blocked_mappings_) {
+        if (blocked == mapping) {
+            return true;
+        }
+    }
+    for (const auto& yielded : yielded_mappings_) {
+        if (yielded == mapping) {
+            return true;
+        }
+    }
+    if (!unique_shapes_) {
+        return false;
+    }
+    const auto key = topology_mapping_shape_key(mapping);
+    for (const auto& forbidden : initial_forbidden_shape_keys_) {
+        if (forbidden == key) {
+            return true;
+        }
+    }
+    for (const auto& blocked : blocked_mappings_) {
+        if (topology_mapping_shape_key(blocked) == key) {
+            return true;
+        }
+    }
+    for (const auto& yielded : yielded_mappings_) {
+        if (topology_mapping_shape_key(yielded) == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void DFSSearchEngine<TargetNode, GlobalNode>::install_mapping(const std::vector<int>& mapping) {
+    state_.mapping = mapping;
+    if (graph_data_ == nullptr) {
+        return;
+    }
+    if (state_.used.size() != graph_data_->n_global) {
+        state_.used.assign(graph_data_->n_global, false);
+    } else {
+        std::fill(state_.used.begin(), state_.used.end(), false);
+    }
+    for (int gi : mapping) {
+        if (gi >= 0 && static_cast<size_t>(gi) < state_.used.size()) {
+            state_.used[static_cast<size_t>(gi)] = true;
+        }
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::start(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+    bool quiet_mode) {
+    quiet_mode_ = quiet_mode;
+    graph_data_ = &graph_data;
+    constraint_data_ = &constraint_data;
+    validation_mode_ = validation_mode;
+    unique_shapes_ = unique_shapes;
+    started_ = false;
+    empty_mapping_yielded_ = false;
+    initial_forbidden_shape_keys_ = initial_forbidden_shape_keys;
+    blocked_mappings_.clear();
+    yielded_mappings_.clear();
+
+    state_ = TopologySearchState{};
+    state_.mapping.assign(graph_data.n_target, -1);
+    state_.used.assign(graph_data.n_global, false);
+
+    if (graph_data.n_global < graph_data.n_target) {
+        std::string error_msg = fmt::format(
+            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has "
+            "{} nodes",
+            graph_data.n_target,
+            graph_data.n_global);
+        if (quiet_mode_) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
+        state_.error_message = std::move(error_msg);
+        return false;
+    }
+
+    started_ = true;
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::block(const std::vector<int>& mapping) {
+    if (!started_) {
+        return false;
+    }
+    blocked_mappings_.push_back(mapping);
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::next(std::vector<int>& mapping_out) {
+    mapping_out.clear();
+    if (!started_ || graph_data_ == nullptr || constraint_data_ == nullptr) {
+        return false;
+    }
+
+    const auto& graph_data = *graph_data_;
+    const auto& constraint_data = *constraint_data_;
+
+    if (graph_data.n_target == 0) {
+        if (empty_mapping_yielded_ || mapping_is_excluded({})) {
+            return false;
+        }
+        empty_mapping_yielded_ = true;
+        yielded_mappings_.push_back({});
+        install_mapping({});
+        mapping_out = {};
+        return true;
+    }
+
+    // First mapping with no exclusions: one-shot DFS (pinnings + memoization).
+    if (yielded_mappings_.empty() && blocked_mappings_.empty() && !unique_shapes_ &&
+        initial_forbidden_shape_keys_.empty()) {
+        if (!find_first_mapping(graph_data, constraint_data, validation_mode_, quiet_mode_)) {
+            return false;
+        }
+        mapping_out = state_.mapping;
+        yielded_mappings_.push_back(mapping_out);
+        return true;
+    }
+
+    std::vector<std::vector<int>> forbidden = initial_forbidden_shape_keys_;
+    if (unique_shapes_) {
+        for (const auto& blocked : blocked_mappings_) {
+            forbidden.push_back(topology_mapping_shape_key(blocked));
+        }
+        for (const auto& yielded : yielded_mappings_) {
+            forbidden.push_back(topology_mapping_shape_key(yielded));
+        }
+    }
+
+    size_t skip = yielded_mappings_.size();
+    for (const auto& blocked : blocked_mappings_) {
+        bool already = false;
+        for (const auto& yielded : yielded_mappings_) {
+            if (yielded == blocked) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) {
+            ++skip;
+        }
+    }
+    const size_t need = unique_shapes_ ? size_t{1} : (skip + 1);
+
+    std::vector<std::vector<int>> found;
+    if (!enumerate_mappings(
+            graph_data,
+            constraint_data,
+            validation_mode_,
+            need,
+            found,
+            quiet_mode_,
+            unique_shapes_,
+            forbidden)) {
+        return false;
+    }
+
+    for (const auto& mapping : found) {
+        if (mapping_is_excluded(mapping)) {
+            continue;
+        }
+        yielded_mappings_.push_back(mapping);
+        install_mapping(mapping);
+        mapping_out = mapping;
+        return true;
+    }
+    return false;
+}
+
+template <typename TargetNode, typename GlobalNode>
+struct TopologyDfsSession {
+    DFSSearchEngine<TargetNode, GlobalNode> engine;
+};
+
+template <typename TargetNode, typename GlobalNode>
+void topology_dfs_session_destroy(TopologyDfsSession<TargetNode, GlobalNode>* p) noexcept {
+    delete p;
+}
+
+template <typename TargetNode, typename GlobalNode>
+std::unique_ptr<TopologyDfsSession<TargetNode, GlobalNode>, TopologyDfsSessionDeleter<TargetNode, GlobalNode>>
+topology_dfs_session_create_and_encode(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+    bool quiet_mode) {
+    auto session = std::unique_ptr<
+        TopologyDfsSession<TargetNode, GlobalNode>,
+        TopologyDfsSessionDeleter<TargetNode, GlobalNode>>(new TopologyDfsSession<TargetNode, GlobalNode>{});
+    if (!session->engine.start(
+            graph_data,
+            constraint_data,
+            validation_mode,
+            unique_shapes,
+            initial_forbidden_shape_keys,
+            quiet_mode)) {
+        return nullptr;
+    }
+    return session;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool topology_dfs_session_add_blocking_clause(
+    TopologyDfsSession<TargetNode, GlobalNode>* session, const std::vector<int>& raw_mapping) {
+    if (session == nullptr) {
+        return false;
+    }
+    return session->engine.block(raw_mapping);
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool topology_dfs_session_next(TopologyDfsSession<TargetNode, GlobalNode>* session, std::vector<int>& raw_out) {
+    if (session == nullptr) {
+        raw_out.clear();
+        return false;
+    }
+    return session->engine.next(raw_out);
 }
 
 // ============================================================================
@@ -3886,25 +3995,152 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 }
 
 template <typename TargetNode, typename GlobalNode>
-bool SatSearchEngine<TargetNode, GlobalNode>::search(
+bool SatSearchEngine<TargetNode, GlobalNode>::fail(std::string message) {
+    if (quiet_mode_) {
+        log_debug(tt::LogFabric, "{}", message);
+    } else {
+        log_error(tt::LogFabric, "{}", message);
+    }
+    state_.error_message = std::move(message);
+    return false;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void SatSearchEngine<TargetNode, GlobalNode>::install_mapping(const std::vector<int>& mapping) {
+    state_.mapping = mapping;
+    if (state_.used.size() != n_global_) {
+        state_.used.assign(n_global_, false);
+    } else {
+        std::fill(state_.used.begin(), state_.used.end(), false);
+    }
+    for (int gi : mapping) {
+        if (gi >= 0 && static_cast<size_t>(gi) < state_.used.size()) {
+            state_.used[static_cast<size_t>(gi)] = true;
+        }
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::start(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+    bool quiet_mode) {
+    quiet_mode_ = quiet_mode;
+    started_ = false;
+    empty_problem_ = false;
+    empty_mapping_yielded_ = false;
+    empty_blocked_ = false;
+    session_.reset();
+    enc_ = {};
+    n_target_ = graph_data.n_target;
+    n_global_ = graph_data.n_global;
+    max_same_rank_groups_used_ = constraint_data.max_same_rank_groups_used;
+
+    state_ = TopologySearchState{};
+    state_.used_sat = true;
+    state_.mapping.assign(n_target_, -1);
+    state_.used.assign(n_global_, false);
+
+    if (n_global_ < n_target_) {
+        return fail(fmt::format(
+            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has "
+            "{} nodes",
+            n_target_,
+            n_global_));
+    }
+
+    if (n_target_ == 0) {
+        empty_problem_ = true;
+        started_ = true;
+        return true;
+    }
+
+    session_ = topology_sat_session_create_and_encode(
+        TopologySatGraphView(graph_data),
+        TopologySatConstraintView(constraint_data),
+        enc_,
+        validation_mode,
+        unique_shapes,
+        initial_forbidden_shape_keys);
+    if (!session_) {
+        if (!enc_.trivial_reason.empty()) {
+            return fail(enc_.trivial_reason);
+        }
+        if (max_same_rank_groups_used_ > 0) {
+            return fail(fmt::format(
+                "Topology SAT: could not satisfy the hard at-most-{}-host-group cap for {} target(s)",
+                max_same_rank_groups_used_,
+                n_target_));
+        }
+        return fail("Topology SAT: encoding failed (trivial UNSAT)");
+    }
+    state_.sat_hard_constraint_encode_calls = 1;
+    started_ = true;
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::next(std::vector<int>& mapping_out) {
+    mapping_out.clear();
+    if (!started_) {
+        return false;
+    }
+    if (empty_problem_) {
+        if (empty_mapping_yielded_ || empty_blocked_) {
+            return false;
+        }
+        empty_mapping_yielded_ = true;
+        install_mapping({});
+        mapping_out = {};
+        return true;
+    }
+    if (!session_) {
+        return false;
+    }
+    std::vector<int> current;
+    if (!topology_sat_session_next(session_.get(), enc_, current)) {
+        state_.sat_solve_calls = topology_sat_session_solve_calls(session_.get());
+        return false;
+    }
+    install_mapping(current);
+    state_.sat_solve_calls = topology_sat_session_solve_calls(session_.get());
+    mapping_out = std::move(current);
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::block(const std::vector<int>& mapping) {
+    if (!started_) {
+        return false;
+    }
+    if (empty_problem_) {
+        empty_blocked_ = true;
+        return true;
+    }
+    if (!session_) {
+        return false;
+    }
+    return topology_sat_session_add_blocking_clause(session_.get(), enc_, mapping);
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologySearchEngine<TargetNode, GlobalNode>::search(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     ConnectionValidationMode validation_mode,
     bool quiet_mode) {
-    std::vector<std::vector<int>> mappings;
-    return search_n(
-        graph_data,
-        constraint_data,
-        validation_mode,
-        /*max_solutions=*/1,
-        mappings,
-        quiet_mode,
-        /*unique_shapes=*/false,
-        {});
+    if (!start(graph_data, constraint_data, validation_mode, /*unique_shapes=*/false, {}, quiet_mode)) {
+        return false;
+    }
+    std::vector<int> mapping;
+    return next(mapping);
 }
 
 template <typename TargetNode, typename GlobalNode>
-bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
+bool TopologySearchEngine<TargetNode, GlobalNode>::search_n(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     ConnectionValidationMode validation_mode,
@@ -3913,19 +4149,32 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
     bool quiet_mode,
     bool unique_shapes,
     const std::vector<std::vector<int>>& initial_forbidden_shape_keys) {
-    quiet_mode_ = quiet_mode;
-    return topology_sat_search_n(
-        TopologySatGraphView(graph_data),
-        TopologySatConstraintView(constraint_data),
-        validation_mode,
-        max_solutions,
-        all_mappings_out,
-        quiet_mode,
-        unique_shapes,
-        initial_forbidden_shape_keys,
-        state_);
+    if (!start(
+            graph_data,
+            constraint_data,
+            validation_mode,
+            unique_shapes,
+            initial_forbidden_shape_keys,
+            quiet_mode)) {
+        return false;
+    }
+    all_mappings_out.clear();
+    std::vector<int> mapping;
+    while (all_mappings_out.size() < max_solutions && next(mapping)) {
+        all_mappings_out.push_back(std::move(mapping));
+    }
+    return !all_mappings_out.empty();
+}
+
+template <typename TargetNode, typename GlobalNode>
+std::unique_ptr<TopologySearchEngine<TargetNode, GlobalNode>> make_topology_search_engine(bool use_sat) {
+    if (use_sat) {
+        return std::make_unique<SatSearchEngine<TargetNode, GlobalNode>>();
+    }
+    return std::make_unique<DFSSearchEngine<TargetNode, GlobalNode>>();
 }
 
 }  // namespace tt::tt_fabric::detail
+
 
 #endif  // TOPOLOGY_SOLVER_TPP

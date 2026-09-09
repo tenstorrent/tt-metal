@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -26,18 +25,24 @@
 namespace tt::tt_fabric::detail {
 
 // Full definition of the opaque session type forward-declared in topology_solver.hpp.
-// Conflict budget for solving under a HARD host-group cap. An intractable at-most-K cap is abandoned after this
-// many conflicts (a few seconds) rather than churning unbounded; the caller then relaxes the cap. Shared by the
-// single-shot solve (topology_sat_search) and the enumeration session so both bail identically. Tractable caps
-// finish well within it and return the identical model, so golden mappings are unchanged.
+// Conflict budget for solving under a HARD host-group cap.
 static constexpr int kHostCapConflictBudget = 300'000;
 
 struct TopologySatSession {
     TopologySatSolver solver;
-    // Set when a hard host-group cap is encoded: solves are conflict-limited to kHostCapConflictBudget so an
-    // intractable cap is abandoned (like the single-shot path) instead of hanging in CaDiCaL for minutes.
+    // Set when a HARD host-group cap is encoded: capped solves are conflict-limited to kHostCapConflictBudget so an
+    // intractable cap is abandoned instead of hanging in CaDiCaL. The caller (mapper) then drops the cap and
+    // restarts the session.
     bool cap_active = false;
     size_t solve_calls = 0;
+    int symmetry_lit = 0;  // 0 = no hint; assumed each solve() and retracted after
+    // Preferred at-least-k is optional: asserting clauses carry ¬preferred_lit, then preferred_lit is assumed
+    // per solve. Host-group occupancy is never optional here -- a HARD cap is CNF, and relaxing it is the
+    // mapper's restart, not a solver stage.
+    int preferred_lit = 0;
+    std::vector<std::vector<int>> stages;
+    size_t stage = 0;
+    bool unique_shapes = false;
 };
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
@@ -49,6 +54,210 @@ bool are_globals_adjacent(const TopologySatGraphView& graph_data, size_t global_
     }
     const auto& adj = graph_data.global_adj_idx[global_i];
     return std::binary_search(adj.begin(), adj.end(), global_j);
+}
+
+bool topology_sat_check_edge_feasibility(
+    const TopologySatGraphView& graph_data, const std::vector<int>& mapping, size_t target_idx, size_t global_idx) {
+    for (size_t tn : graph_data.target_adj_idx[target_idx]) {
+        if (mapping[tn] < 0) {
+            continue;
+        }
+        const size_t gg = static_cast<size_t>(mapping[tn]);
+        if (!are_globals_adjacent(graph_data, global_idx, gg)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ── Preferred-Hit Bound Helpers ───────────────────────────────────────────────
+
+size_t topology_sat_preferred_upper_bound(
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    const std::vector<bool>& used_global,
+    size_t ti_start,
+    size_t n_target) {
+    size_t out = 0;
+    for (size_t u = ti_start; u < n_target; ++u) {
+        if (u >= constraint_data.preferred_global_indices.size()) {
+            continue;
+        }
+        const auto& pref = constraint_data.preferred_global_indices[u];
+        if (pref.empty()) {
+            continue;
+        }
+        bool can = false;
+        for (size_t g : enc.allowed_global_idx[u]) {
+            if (g >= used_global.size() || used_global[g]) {
+                continue;
+            }
+            if (std::binary_search(pref.begin(), pref.end(), g)) {
+                can = true;
+                break;
+            }
+        }
+        if (can) {
+            ++out;
+        }
+    }
+    return out;
+}
+
+// Lower bound on maximum simultaneously satisfiable preferred targets, using the same per-target allowed globals as
+// the SAT encoding.  Explores partial assignments with edge checks + injective constraint; pruning uses a simple
+// upper bound on remaining preferred-capable targets.  When max_nodes is huge (n_target <= kExactLbMaxTargets), this
+// becomes an exhaustive search -> exact optimum for small instances; otherwise it stops after max_nodes expansions and
+// returns the best complete mapping found (still a safe lower bound for at-least-k).
+size_t topology_sat_preferred_exact_lower_bound(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    size_t max_nodes) {
+    const size_t nt = graph_data.n_target;
+    std::vector<int> mapping(nt, -1);
+    std::vector<bool> used(graph_data.n_global, false);
+    size_t best = 0;
+    size_t explored = 0;
+
+    const auto dfs = [&](auto&& self, size_t ti, size_t pref_so_far) -> void {
+        if (explored >= max_nodes) {
+            return;
+        }
+        ++explored;
+        if (pref_so_far + topology_sat_preferred_upper_bound(constraint_data, enc, used, ti, nt) <= best) {
+            return;
+        }
+        if (ti == nt) {
+            best = std::max(best, pref_so_far);
+            return;
+        }
+
+        struct Cand {
+            size_t g;
+            bool is_pref;
+        };
+        std::vector<Cand> cands;
+        cands.reserve(enc.allowed_global_idx[ti].size());
+        for (size_t g : enc.allowed_global_idx[ti]) {
+            if (g >= used.size() || used[g]) {
+                continue;
+            }
+            bool is_pref = false;
+            if (ti < constraint_data.preferred_global_indices.size()) {
+                const auto& pv = constraint_data.preferred_global_indices[ti];
+                is_pref = !pv.empty() && std::binary_search(pv.begin(), pv.end(), g);
+            }
+            cands.push_back({g, is_pref});
+        }
+        std::stable_partition(cands.begin(), cands.end(), [](const Cand& c) { return c.is_pref; });
+
+        for (const Cand& cand : cands) {
+            const size_t g = cand.g;
+            if (!topology_sat_check_edge_feasibility(graph_data, mapping, ti, g)) {
+                continue;
+            }
+            mapping[ti] = static_cast<int>(g);
+            used[g] = true;
+            self(self, ti + 1, pref_so_far + (cand.is_pref ? 1u : 0u));
+            used[g] = false;
+            mapping[ti] = -1;
+        }
+    };
+
+    dfs(dfs, 0, 0);
+    return best;
+}
+
+size_t topology_sat_preferred_greedy_lower_bound(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc) {
+    const size_t nt = graph_data.n_target;
+    std::vector<std::vector<size_t>> orders;
+    orders.reserve(40);
+    {
+        std::vector<size_t> id(nt);
+        std::iota(id.begin(), id.end(), 0);
+        orders.push_back(std::move(id));
+    }
+    {
+        std::vector<size_t> rev(nt);
+        for (size_t i = 0; i < nt; ++i) {
+            rev[i] = nt - 1 - i;
+        }
+        orders.push_back(std::move(rev));
+    }
+    {
+        std::vector<size_t> inter;
+        inter.reserve(nt);
+        for (size_t i = 0; i < nt; i += 2) {
+            inter.push_back(i);
+        }
+        for (size_t i = 1; i < nt; i += 2) {
+            inter.push_back(i);
+        }
+        orders.push_back(std::move(inter));
+    }
+    // Cyclic rotations (helps ring / path-like target orders); skip r==0 (same as identity).
+    const size_t nrot = std::min(nt, size_t(32));
+    for (size_t r = 1; r < nrot; ++r) {
+        std::vector<size_t> ord;
+        ord.reserve(nt);
+        for (size_t i = 0; i < nt; ++i) {
+            ord.push_back((r + i) % nt);
+        }
+        orders.push_back(std::move(ord));
+    }
+
+    size_t best = 0;
+    for (const auto& ord : orders) {
+        std::vector<int> mapping(nt, -1);
+        std::vector<bool> used(graph_data.n_global, false);
+        size_t pref_so_far = 0;
+        bool ok = true;
+        for (size_t ti : ord) {
+            struct Cand {
+                size_t g;
+                bool is_pref;
+            };
+            std::vector<Cand> cands;
+            cands.reserve(enc.allowed_global_idx[ti].size());
+            for (size_t g : enc.allowed_global_idx[ti]) {
+                if (g >= used.size() || used[g]) {
+                    continue;
+                }
+                bool is_pref = false;
+                if (ti < constraint_data.preferred_global_indices.size()) {
+                    const auto& pv = constraint_data.preferred_global_indices[ti];
+                    is_pref = !pv.empty() && std::binary_search(pv.begin(), pv.end(), g);
+                }
+                cands.push_back({g, is_pref});
+            }
+            std::stable_partition(cands.begin(), cands.end(), [](const Cand& c) { return c.is_pref; });
+            bool placed = false;
+            for (const Cand& cand : cands) {
+                if (!topology_sat_check_edge_feasibility(graph_data, mapping, ti, cand.g)) {
+                    continue;
+                }
+                mapping[ti] = static_cast<int>(cand.g);
+                used[cand.g] = true;
+                if (cand.is_pref) {
+                    ++pref_so_far;
+                }
+                placed = true;
+                break;
+            }
+            if (!placed) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            best = std::max(best, pref_so_far);
+        }
+    }
+    return best;
 }
 
 // Returns false if the clause would be empty (no literal can be true to map outside shape_set).
@@ -95,7 +304,7 @@ void topology_sat_add_shape_clause_or_unsat(
     solver.add(0);
 }
 
-// Exclude one complete assignment (or its image-set shape when unique_shapes) — same logic as topology_sat_search_n.
+// Exclude one complete assignment (or its image-set shape when unique_shapes).
 bool topology_sat_add_blocking_clause_for_mapping_impl(
     TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes) {
     if (unique_shapes) {
@@ -202,7 +411,10 @@ void topology_sat_emit_combinations_indices(size_t n, size_t r, EmitCombination&
 
 // Sequential counter encoding for at-least-k: O(m*k) clauses + O(m*k) auxiliary variables.
 // c[i][j] represents "at least j+1 of lits[0..i] are true"; assert c[m-1][k-1].
-inline void topology_sat_add_at_least_k_counter(TopologySatSolver& solver, const std::vector<int>& lits, size_t k) {
+// If extra_lit != 0 it is added only to the final assertion, so extra_lit => at-least-k without making the
+// cardinality hard (used for the optional preferred objective).
+inline void topology_sat_add_at_least_k_counter(
+    TopologySatSolver& solver, const std::vector<int>& lits, size_t k, int extra_lit = 0) {
     const size_t m = lits.size();
     std::vector<std::vector<int>> c(m);
     for (size_t i = 0; i < m; ++i) {
@@ -262,6 +474,9 @@ inline void topology_sat_add_at_least_k_counter(TopologySatSolver& solver, const
             }
         }
     }
+    if (extra_lit != 0) {
+        solver.add(extra_lit);
+    }
     solver.add(c[m - 1][k - 1]);
     solver.add(0);
 }
@@ -273,7 +488,8 @@ inline bool topology_sat_add_at_least_k_literals(
     const std::vector<int>& lits,
     size_t k,
     size_t max_combination_clauses,
-    std::string* trivial_reason) {
+    std::string* trivial_reason,
+    int extra_lit = 0) {
     const size_t m = lits.size();
     if (k == 0) {
         return true;
@@ -287,6 +503,9 @@ inline bool topology_sat_add_at_least_k_literals(
     }
     if (k == m) {
         for (int lit : lits) {
+            if (extra_lit != 0) {
+                solver.add(extra_lit);
+            }
             solver.add(lit);
             solver.add(0);
         }
@@ -294,10 +513,13 @@ inline bool topology_sat_add_at_least_k_literals(
     }
     const size_t clause_width = m - k + 1;
     if (topology_sat_combinations_exceed_limit(m, clause_width, max_combination_clauses)) {
-        topology_sat_add_at_least_k_counter(solver, lits, k);
+        topology_sat_add_at_least_k_counter(solver, lits, k, extra_lit);
         return true;
     }
     topology_sat_emit_combinations_indices(m, clause_width, [&](const std::vector<size_t>& comb) {
+        if (extra_lit != 0) {
+            solver.add(extra_lit);
+        }
         for (size_t idx : comb) {
             solver.add(lits[idx]);
         }
@@ -867,8 +1089,10 @@ void topology_sat_encode_same_rank_groups(
     }
 }
 
-// Step 8: Cardinality constraints -- at-least-k over pair listings. Repeats in `pairs` are weight:
-// push the assign literal once per listing and reuse at-least-k (unweighted is one listing each).
+// Step 8: Cardinality constraints -- at-least-k over specified (target, global) pairs.
+// Each fulfilled pair contributes its weight (default 1). Encode by repeating the assign
+// literal `weight` times into the existing at-least-k helper (same encoding as unweighted
+// when every weight is 1). Do not unique the expanded slots: that would drop the weight.
 bool topology_sat_encode_cardinality_constraints(
     TopologySatSolver& solver, const TopologySatConstraintView& constraint_data, TopologySatHardEncoding& enc) {
     static constexpr size_t kMaxCardinalityCombClauses = 500000;
@@ -989,6 +1213,245 @@ bool topology_sat_encode_hard_constraints(
     return topology_sat_encode_cardinality_constraints(solver, constraint_data, enc);
 }
 
+// ── Soft / Objective Encoding ─────────────────────────────────────────────────
+
+// topology_sat_append_preferred_hit_indicators
+//
+// For each target t that has at least one preferred global reachable in its domain,
+// introduce a Tseitin indicator variable p_t and add the bidirectional equivalence:
+//
+//     p_t  <=>  (x_{t,g_{p1}} v x_{t,g_{p2}} v ... v x_{t,g_{pk}})
+//
+// where g_{p1..pk} are the globals in domain[t] intersect preferred_globals[t].
+//
+// Tseitin encoding: two clause groups enforce the equivalence without introducing
+// exponential blowup:
+//   Forward  (p -> OR):  not p  v  x_{t,g_{p1}}  v  ...  v  x_{t,g_{pk}}
+//   Backward (x -> p):  for each pi:  not x_{t,g_{pi}}  v  p
+//
+// The resulting p_t literals are collected into pref_hit_literals_out and later
+// fed into topology_sat_add_at_least_k_literals to force the solver toward the
+// maximum simultaneously achievable preferred-hit count.
+void topology_sat_append_preferred_hit_indicators(
+    TopologySatSolver& solver,
+    const TopologySatHardEncoding& enc,
+    const TopologySatConstraintView& constraint_data,
+    std::vector<int>& pref_hit_literals_out) {
+    pref_hit_literals_out.clear();
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        if (t >= constraint_data.preferred_global_indices.size()) {
+            continue;
+        }
+        const auto& preferred_globals = constraint_data.preferred_global_indices[t];
+        if (preferred_globals.empty()) {
+            continue;
+        }
+
+        // Collect assign literals for this target that correspond to preferred globals.
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& row_lits = enc.assign_lit[t];
+        std::vector<int> row_pref_lits;
+        row_pref_lits.reserve(globs.size());
+        for (size_t k = 0; k < globs.size(); ++k) {
+            if (std::binary_search(preferred_globals.begin(), preferred_globals.end(), globs[k])) {
+                row_pref_lits.push_back(row_lits[k]);
+            }
+        }
+        if (row_pref_lits.empty()) {
+            continue;
+        }
+
+        // Introduce indicator p and encode p <=> OR(row_pref_lits) via two clause groups.
+        const int p = solver.declare_one_more_variable();
+
+        // Forward: not p v x_{t,g_{p1}} v ... v x_{t,g_{pk}}
+        solver.add(-p);
+        for (int lit : row_pref_lits) {
+            solver.add(lit);
+        }
+        solver.add(0);
+
+        // Backward: for each pi, not x_{t,g_{pi}} v p
+        for (int lit : row_pref_lits) {
+            solver.add(p);
+            solver.add(-lit);
+            solver.add(0);
+        }
+
+        pref_hit_literals_out.push_back(p);
+    }
+}
+
+// indicator <=> OR_p (a_p & b_p)  (Tseitin on pairwise AND of two positive assign literals).
+inline bool topology_sat_define_indicator_as_or_of_pairwise_and(
+    TopologySatSolver& solver, int indicator, const std::vector<std::pair<int, int>>& pair_lits) {
+    if (pair_lits.empty()) {
+        solver.add(-indicator);
+        solver.add(0);
+        return true;
+    }
+    std::vector<int> y_vars;
+    y_vars.reserve(pair_lits.size());
+    for (const auto& ab : pair_lits) {
+        const int a = ab.first;
+        const int b = ab.second;
+        const int y = solver.declare_one_more_variable();
+        y_vars.push_back(y);
+        solver.add(-y);
+        solver.add(a);
+        solver.add(0);
+        solver.add(-y);
+        solver.add(b);
+        solver.add(0);
+        solver.add(-a);
+        solver.add(-b);
+        solver.add(y);
+        solver.add(0);
+    }
+    solver.add(-indicator);
+    for (int y : y_vars) {
+        solver.add(y);
+    }
+    solver.add(0);
+    for (int y : y_vars) {
+        solver.add(-y);
+        solver.add(indicator);
+        solver.add(0);
+    }
+    return true;
+}
+
+// Upper bound on how many relaxed-channel threshold literals would be created (one per (edge, k) level). Cheap
+// O(edges) count so we can skip building the auxiliary channel CNF when the k-descent pass would be too expensive.
+size_t topology_sat_relaxed_channel_threshold_literal_count_upper_bound(const TopologySatGraphView& graph_data) {
+    static constexpr size_t kMaxKPerEdge = 24;
+    size_t cnt = 0;
+    const size_t nt = graph_data.n_target;
+    for (size_t t1 = 0; t1 < nt; ++t1) {
+        for (size_t t2 : graph_data.target_adj_idx[t1]) {
+            if (t2 <= t1) {
+                continue;
+            }
+            size_t required = 1;
+            if (t1 < graph_data.target_conn_count.size()) {
+                const auto& tc = graph_data.target_conn_count[t1];
+                const auto itc = tc.find(t2);
+                if (itc != tc.end()) {
+                    required = std::max(required, itc->second);
+                }
+            }
+            if (t2 < graph_data.target_conn_count.size()) {
+                const auto& tc2 = graph_data.target_conn_count[t2];
+                const auto itc2 = tc2.find(t1);
+                if (itc2 != tc2.end()) {
+                    required = std::max(required, itc2->second);
+                }
+            }
+            cnt += std::min(required, kMaxKPerEdge);
+        }
+    }
+    return cnt;
+}
+
+// RELAXED: for each undirected target edge (t1,t2) and each k in 1..min(R,kMaxK), add literal I_{e,k} true iff the
+// chosen globals for t1,t2 use an adjacent host edge with parallel link count >= k. Maximizing sum_{e,k} I_{e,k}
+// equals maximizing sum_e min(R_e, actual_e) (same objective shape DFS uses for channel_match_score ordering).
+bool topology_sat_append_relaxed_channel_threshold_literals(
+    TopologySatSolver& solver,
+    const TopologySatHardEncoding& enc,
+    const TopologySatGraphView& graph_data,
+    std::vector<int>& channel_threshold_literals_out,
+    std::string* fail_reason) {
+    channel_threshold_literals_out.clear();
+    static constexpr size_t kMaxKPerEdge = 24;
+    static constexpr size_t kMaxPairsPerIndicator = 512;
+    static constexpr size_t kMaxTotalIndicators = 2048;
+
+    const size_t nt = enc.assign_lit.size();
+
+    for (size_t t1 = 0; t1 < nt; ++t1) {
+        for (size_t t2 : graph_data.target_adj_idx[t1]) {
+            if (t2 <= t1) {
+                continue;
+            }
+            size_t required = 1;
+            if (t1 < graph_data.target_conn_count.size()) {
+                const auto& tc = graph_data.target_conn_count[t1];
+                const auto itc = tc.find(t2);
+                if (itc != tc.end()) {
+                    required = std::max(required, itc->second);
+                }
+            }
+            if (t2 < graph_data.target_conn_count.size()) {
+                const auto& tc2 = graph_data.target_conn_count[t2];
+                const auto itc2 = tc2.find(t1);
+                if (itc2 != tc2.end()) {
+                    required = std::max(required, itc2->second);
+                }
+            }
+            const auto& gidx1 = enc.allowed_global_idx[t1];
+            const auto& lit1 = enc.assign_lit[t1];
+            const auto& gidx2 = enc.allowed_global_idx[t2];
+            const auto& lit2 = enc.assign_lit[t2];
+            const size_t k_hi = std::min(required, kMaxKPerEdge);
+            for (size_t k = 1; k <= k_hi; ++k) {
+                std::vector<std::pair<int, int>> pair_lits;
+                pair_lits.reserve(std::min(gidx1.size() * gidx2.size(), kMaxPairsPerIndicator + 1));
+                for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
+                    const size_t glob1 = gidx1[i1];
+                    for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
+                        const size_t glob2 = gidx2[i2];
+                        if (glob1 == glob2) {
+                            continue;
+                        }
+                        if (!are_globals_adjacent(graph_data, glob1, glob2)) {
+                            continue;
+                        }
+                        size_t actual_channels = 0;
+                        if (glob1 < graph_data.global_conn_count.size()) {
+                            const auto& gc = graph_data.global_conn_count[glob1];
+                            const auto itg = gc.find(glob2);
+                            if (itg != gc.end()) {
+                                actual_channels = itg->second;
+                            }
+                        }
+                        if (actual_channels < k) {
+                            continue;
+                        }
+                        pair_lits.emplace_back(lit1[i1], lit2[i2]);
+                        if (pair_lits.size() > kMaxPairsPerIndicator) {
+                            if (fail_reason != nullptr) {
+                                *fail_reason = fmt::format(
+                                    "topology_sat: relaxed channel indicator for edge ({},{}) level {} exceeds {} "
+                                    "feasible assign pairs",
+                                    t1,
+                                    t2,
+                                    k,
+                                    kMaxPairsPerIndicator);
+                            }
+                            return false;
+                        }
+                    }
+                }
+                const int ind = solver.declare_one_more_variable();
+                if (!topology_sat_define_indicator_as_or_of_pairwise_and(solver, ind, pair_lits)) {
+                    return false;
+                }
+                channel_threshold_literals_out.push_back(ind);
+                if (channel_threshold_literals_out.size() > kMaxTotalIndicators) {
+                    if (fail_reason != nullptr) {
+                        *fail_reason = fmt::format(
+                            "topology_sat: relaxed channel threshold literals exceeded {}", kMaxTotalIndicators);
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 bool topology_sat_decode_hard_solution(
     TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out) {
     if (enc.trivial_unsat) {
@@ -1019,127 +1482,22 @@ bool topology_sat_decode_hard_solution(
     return true;
 }
 
-bool topology_sat_search(
-    const TopologySatGraphView& graph_data,
-    const TopologySatConstraintView& constraint_data,
-    ConnectionValidationMode validation_mode,
-    bool quiet_mode,
-    TopologySearchState& state) {
-    std::vector<std::vector<int>> mappings;
-    return topology_sat_search_n(
-        graph_data,
-        constraint_data,
-        validation_mode,
-        /*max_solutions=*/1,
-        mappings,
-        quiet_mode,
-        /*unique_shapes=*/false,
-        /*initial_forbidden_shape_keys=*/{},
-        state);
-}
-
-// ── topology_sat_search_n — enumerate up to max_solutions with blocking clauses ─────────────────
-
-// Encode the HARD host-group cap into an enumeration solver so EVERY enumerated model occupies at most
-// max_same_rank_groups_used distinct same-rank global groups. Enforced here (not just filtered by the caller)
-// because the enumeration otherwise streams spread-out placements first and the capped ones may never appear within
-// the caller's max_solutions window. Always uses the general at-most-k counter (no all-or-nothing full-packing
-// tightening) so every valid capped placement stays enumerable. No-op when no cap is set.
-inline bool topology_sat_encode_host_group_cap_for_enumeration(
-    TopologySatSolver& solver, const TopologySatConstraintView& constraint_data, const TopologySatHardEncoding& enc) {
-    if (constraint_data.max_same_rank_groups_used == 0) {
-        return true;
+// Value-symmetry-breaking hint for equal-size (bijection) instances. Embedding a logical graph into an equal-size
+// physical graph (e.g. a ring -> a Hamiltonian cycle) has large value symmetry -- any automorphism of the
+// physical graph maps one solution to another -- which makes generic CDCL re-derive the same conflicts under each
+// symmetric image and thrash. Fixing one target to one candidate collapses that symmetry. We return the literal
+// to *assume* (not assert): assumptions are retracted after each solve(), so the caller re-solves without it if it
+// proves the instance UNSAT. That makes this sound for any instance with no graph-shape detection -- the only
+// precondition is a bijection, where this symmetry (and the resulting hardness) actually arises. Returns 0 when no
+// hint applies.
+int topology_sat_symmetry_assumption_lit(const TopologySatGraphView& graph_data, const TopologySatHardEncoding& enc) {
+    if (graph_data.n_target != graph_data.n_global) {
+        return 0;
     }
-    return topology_sat_encode_at_most_k_groups(
-        solver, constraint_data, enc, constraint_data.max_same_rank_groups_used, /*full_packing=*/false);
-}
-
-bool topology_sat_search_n(
-    const TopologySatGraphView& graph_data,
-    const TopologySatConstraintView& constraint_data,
-    ConnectionValidationMode validation_mode,
-    size_t max_solutions,
-    std::vector<std::vector<int>>& all_mappings_out,
-    bool quiet_mode,
-    bool unique_shapes,
-    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
-    TopologySearchState& state) {
-    state = TopologySearchState{};
-    state.used_sat = true;
-    state.mapping.assign(graph_data.n_target, -1);
-    state.used.assign(graph_data.n_global, false);
-    all_mappings_out.clear();
-
-    if (max_solutions == 0) {
-        return false;
+    if (enc.assign_lit.empty() || enc.assign_lit[0].empty()) {
+        return 0;
     }
-
-    if (graph_data.n_target == 0) {
-        all_mappings_out.push_back({});
-        return true;
-    }
-
-    if (graph_data.n_global < graph_data.n_target) {
-        return false;
-    }
-
-    // Enumerate through the lazy-session bridge so the upfront (eager) enumeration and the streaming session share
-    // ONE encode + solve path -- same hard-cap conflict budget, same encoding -- instead of duplicating the loop.
-    TopologySatHardEncoding enc;
-    auto session = topology_sat_session_create_and_encode(graph_data, constraint_data, enc, validation_mode);
-    if (!session) {
-        return false;  // hard constraints or hard host-group cap trivially unencodable -> no solutions
-    }
-    state.sat_hard_constraint_encode_calls = 1;
-
-    for (const auto& shape_key : initial_forbidden_shape_keys) {
-        std::vector<int> forbid_clause;
-        topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
-        topology_sat_add_shape_clause_or_unsat(session->solver, enc, forbid_clause);
-    }
-
-    using enum_clock = std::chrono::steady_clock;
-    constexpr auto kEnumProgressLogInterval = std::chrono::seconds(5);
-    // Eligible for an immediate first progress line, then at most once per kEnumProgressLogInterval.
-    auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
-
-    while (all_mappings_out.size() < max_solutions) {
-        std::vector<int> current_mapping;
-        if (!topology_sat_session_solve_and_decode(session.get(), enc, current_mapping)) {
-            break;  // conflict-budget exhausted on a hard cap, genuine UNSAT, or decode failure
-        }
-        all_mappings_out.push_back(std::move(current_mapping));
-
-        if (!quiet_mode) {
-            const auto now = enum_clock::now();
-            const bool reached_cap = all_mappings_out.size() >= max_solutions;
-            if (reached_cap || now - last_enum_progress_log >= kEnumProgressLogInterval) {
-                log_info(
-                    tt::LogFabric,
-                    "topology_sat_search_n: found {} / {} solution(s) so far",
-                    all_mappings_out.size(),
-                    max_solutions);
-                last_enum_progress_log = now;
-            }
-        }
-
-        if (!topology_sat_session_add_blocking_clause(session.get(), enc, all_mappings_out.back(), unique_shapes)) {
-            break;
-        }
-    }
-
-    if (!all_mappings_out.empty()) {
-        state.mapping = all_mappings_out.back();
-        std::fill(state.used.begin(), state.used.end(), false);
-        for (int gi : state.mapping) {
-            if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
-                state.used[static_cast<size_t>(gi)] = true;
-            }
-        }
-    }
-    state.sat_solve_calls = session->solve_calls;
-
-    return !all_mappings_out.empty();
+    return enc.assign_lit[0][0];
 }
 
 // ── Session bridge functions (public API — declared in topology_solver.hpp) ────
@@ -1150,10 +1508,9 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode) {
-    // Capacity precheck (same as the single-shot solve): if the K largest host groups can't even sum to n_target,
-    // no capped placement can exist -- report "no session" so the caller relaxes the cap, instead of encoding and
-    // solving an unsatisfiable at-most-K.
+    ConnectionValidationMode validation_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys) {
     if (constraint_data.max_same_rank_groups_used > 0 &&
         !topology_sat_max_groups_cap_capacity_feasible(
             constraint_data, graph_data.n_target, constraint_data.max_same_rank_groups_used)) {
@@ -1161,37 +1518,154 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     }
     auto session = std::unique_ptr<TopologySatSession, TopologySatSessionDeleter>(new TopologySatSession{});
     session->solver.configure_for_blocking_clause_enumeration();
+    session->unique_shapes = unique_shapes;
     enc = {};
     if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
         return nullptr;
     }
-    if (!topology_sat_encode_host_group_cap_for_enumeration(session->solver, constraint_data, enc)) {
-        return nullptr;  // hard host-group cap is trivially unencodable -> no capped solutions
+
+    // HARD host-group cap: at-most-k occupancy in CNF. Infeasible caps fail the session; the mapper restarts
+    // without the cap. Do not encode a guarded/optional cap here.
+    if (constraint_data.max_same_rank_groups_used > 0) {
+        size_t num_host_groups = 0;
+        size_t max_group_capacity = 0;
+        size_t min_group_capacity = SIZE_MAX;
+        for (const auto& grp : constraint_data.same_rank_groups) {
+            if (!grp.empty()) {
+                ++num_host_groups;
+                max_group_capacity = std::max(max_group_capacity, grp.size());
+                min_group_capacity = std::min(min_group_capacity, grp.size());
+            }
+        }
+        if (num_host_groups >= 1 && max_group_capacity > 0) {
+            const size_t K = constraint_data.max_same_rank_groups_used;
+            const bool uniform_capacity = (min_group_capacity == max_group_capacity);
+            const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
+            if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K)) {
+                return nullptr;
+            }
+            if (!topology_sat_encode_at_most_k_groups(session->solver, constraint_data, enc, K, full_packing)) {
+                return nullptr;
+            }
+            session->cap_active = true;
+        }
     }
-    session->cap_active = (constraint_data.max_same_rank_groups_used > 0);
+
+    // Preferred at-least-k (when preferred mappings exist) and RELAXED channel-threshold literals.
+    // The preferred objective is a ranking of solutions, so it is skipped for unique_shapes enumeration: that
+    // mode asks for every distinct image set (e.g. PGD placement candidates), and ranking would only reorder
+    // them while making the first placements depend on the preference rather than on the topology.
+    std::vector<int> pref_hit_literals;
+    if (!unique_shapes) {
+        topology_sat_append_preferred_hit_indicators(session->solver, enc, constraint_data, pref_hit_literals);
+    }
+    if (!pref_hit_literals.empty()) {
+        static constexpr size_t kExactPreferredLbMaxTargets = 10;
+        static constexpr size_t kMidPreferredLbMaxTargets = 20;
+        static constexpr size_t kPreferredLbDfsBudgetSmall = 80'000'000;
+        static constexpr size_t kPreferredLbDfsBudgetMid = 400'000;
+        const size_t nt = graph_data.n_target;
+        size_t k_lb = 0;
+        if (nt <= kExactPreferredLbMaxTargets) {
+            k_lb =
+                topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, kPreferredLbDfsBudgetSmall);
+        } else if (nt <= kMidPreferredLbMaxTargets) {
+            k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, kPreferredLbDfsBudgetMid);
+        } else {
+            k_lb = topology_sat_preferred_greedy_lower_bound(graph_data, constraint_data, enc);
+            if (k_lb == 0) {
+                k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, 600'000);
+            }
+        }
+        if (k_lb > 0) {
+            const size_t k_use = std::min(k_lb, pref_hit_literals.size());
+            static constexpr size_t kPrefCardinalityCombClauses = 500000;
+            std::string card_reason;
+            // Optional: extra_lit = ¬preferred_lit on the asserting clauses, then assume preferred_lit first.
+            // Enumeration can continue past preferred models without a solver-wrapper clause guard.
+            const int preferred_lit = session->solver.declare_one_more_variable();
+            const bool encoded = topology_sat_add_at_least_k_literals(
+                session->solver,
+                pref_hit_literals,
+                k_use,
+                kPrefCardinalityCombClauses,
+                &card_reason,
+                /*extra_lit=*/-preferred_lit);
+            if (encoded) {
+                session->preferred_lit = preferred_lit;
+            } else {
+                session->solver.add(-preferred_lit);
+                session->solver.add(0);
+            }
+        }
+    }
+    if (validation_mode == ConnectionValidationMode::RELAXED) {
+        static constexpr size_t kMaxRelaxedChannelLiteralsSingleSolve = 256;
+        const size_t ch_mc_ub = topology_sat_relaxed_channel_threshold_literal_count_upper_bound(graph_data);
+        if (ch_mc_ub <= kMaxRelaxedChannelLiteralsSingleSolve) {
+            std::vector<int> ch_lits;
+            std::string ch_reason;
+            (void)topology_sat_append_relaxed_channel_threshold_literals(
+                session->solver, enc, graph_data, ch_lits, &ch_reason);
+        }
+    }
+
+    session->symmetry_lit = topology_sat_symmetry_assumption_lit(graph_data, enc);
+    const int pref = session->preferred_lit;
+    if (pref != 0) {
+        session->stages = {{pref}, {}};
+    } else {
+        session->stages = {{}};
+    }
+    for (const auto& shape_key : initial_forbidden_shape_keys) {
+        std::vector<int> forbid_clause;
+        topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
+        topology_sat_add_shape_clause_or_unsat(session->solver, enc, forbid_clause);
+    }
     return session;
 }
 
 bool topology_sat_session_add_blocking_clause(
-    TopologySatSession* session,
-    TopologySatHardEncoding& enc,
-    const std::vector<int>& raw_mapping,
-    bool unique_shapes) {
-    return topology_sat_add_blocking_clause_for_mapping(session->solver, enc, raw_mapping, unique_shapes);
+    TopologySatSession* session, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping) {
+    return topology_sat_add_blocking_clause_for_mapping(session->solver, enc, raw_mapping, session->unique_shapes);
 }
 
 bool topology_sat_session_solve_and_decode(
     TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    // Under a HARD cap, conflict-limit the solve so an intractable at-most-K cap is abandoned (returns "not found")
-    // rather than churning unbounded in CaDiCaL -- mirroring the single-shot topology_sat_search. The caller then
-    // relaxes the cap. Uncapped solves stay unlimited so genuine exhaustion is never misreported.
-    ++session->solve_calls;
-    const int status =
-        session->cap_active ? session->solver.solve_limited(kHostCapConflictBudget) : session->solver.solve();
-    if (status != TopologySatSolver::kSat) {
+    // Assumptions are retracted by CaDiCaL after each solve(), so each attempt re-assumes what it needs. Stages are
+    // consumed in order and a failed stage is never revisited (see TopologySatSession::stages).
+    for (; session->stage < session->stages.size(); ++session->stage) {
+        const auto& optional_lits = session->stages[session->stage];
+        auto solve_once = [&](bool with_symmetry_hint) -> bool {
+            if (with_symmetry_hint) {
+                session->solver.assume(session->symmetry_lit);
+            }
+            for (int lit : optional_lits) {
+                session->solver.assume(lit);
+            }
+            ++session->solve_calls;
+            const int status =
+                session->cap_active ? session->solver.solve_limited(kHostCapConflictBudget) : session->solver.solve();
+            return status == TopologySatSolver::kSat;
+        };
+        if ((session->symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||
+            solve_once(/*with_symmetry_hint=*/false)) {
+            return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
+        }
+    }
+    return false;
+}
+
+bool topology_sat_session_next(TopologySatSession* session, TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
+    if (!topology_sat_session_solve_and_decode(session, enc, raw_out)) {
         return false;
     }
-    return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
+    (void)topology_sat_session_add_blocking_clause(session, enc, raw_out);
+    return true;
+}
+
+size_t topology_sat_session_solve_calls(const TopologySatSession* session) noexcept {
+    return session == nullptr ? 0 : session->solve_calls;
 }
 
 }  // namespace tt::tt_fabric::detail

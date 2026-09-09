@@ -2617,22 +2617,16 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         log_warning(
             tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
     } else {
-        // 2. TRY A HARD CAP: fit the mapping within the minimum number of hosts,
-        //    k_min = ceil(chips used by the MGD / chips per host), rounded up to the next whole host. Count CHIPS
-        //    (ASICs), not meshes: meshes-per-host is lumpy (one host can own several small meshes while another owns a
-        //    single large one), but the per-host chip capacity is uniform, so the chip-based division is exact. The
-        //    solver picks WHICH k_min hosts -- never pinned to a specific, possibly-unroutable cover.
+        // 2. HARD CAP: fit the mapping within k_min = ceil(chips used / chips per host) hosts. The solver
+        //    encodes this as a hard at-most-k occupancy constraint (not an optional/guarded clause). If that
+        //    solve is infeasible, MultiMeshSolutionEnumerator::next() drops the cap and restarts the session.
         std::size_t chips_per_host = 0;
         for (const auto& [hostname, asics] : config.hostname_to_asics) {
             chips_per_host = std::max(chips_per_host, asics.size());
         }
         if (total_chips_used > 0 && chips_per_host > 0) {
             const std::size_t k_min = (total_chips_used + chips_per_host - 1) / chips_per_host;
-            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);  // HARD: fit within k_min hosts
-
-            // 3. SOFT fallback: if that hard cap is infeasible for this graph's connectivity, the solver reduces to
-            //    merely MINIMIZING the number of host groups used (best-effort) instead of failing the mapping.
-            inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT
+            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);
 
             log_debug(
                 tt::LogFabric,
@@ -3635,47 +3629,26 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
     while (true) {
-        // Inter-mesh solve. The FIRST solve (emitted_ == 0) -- for single-solve AND the first solution of an
-        // enumeration -- uses the single-shot solve_topology_mapping, which runs the full capped ladder (capacity
-        // precheck -> full-packing fast path -> general fallback -> conflict budget) so a tight minimal-host cap is
-        // FOUND by unit propagation instead of falsely downgraded; excluded_ is empty on the first solve and the
-        // forbidden-pair constraint drives any intra-completion retry. Subsequent solves (emitted_ > 0, enumeration
-        // only) use the streaming session's GENERAL encoding so every partial-fill placement stays enumerable; their
-        // exhaustion is a genuine "no more solutions" (the emitted_ == 0 downgrade guard below no longer fires). A
-        // failed FIRST solve means the cap is genuinely infeasible -> the relax/downgrade below.
-        MappingResult<MeshId, MeshId> placement = emitted_ == 0 ? ::tt::tt_fabric::solve_topology_mapping(
-                                                                      mesh_logical_graph,
-                                                                      mesh_physical_graph,
-                                                                      inter_mesh_constraints_,
-                                                                      inter_mesh_validation_mode_,
-                                                                      /*quiet_mode=*/true)
-                                                                : session_.next(
-                                                                      mesh_logical_graph,
-                                                                      mesh_physical_graph,
-                                                                      inter_mesh_constraints_,
-                                                                      excluded_,
-                                                                      inter_mesh_validation_mode_,
-                                                                      /*quiet_mode=*/true,
-                                                                      TopologyMappingSolverEngine::Auto,
-                                                                      unique_shapes_);
+        // One incremental session for the first solve and every later one. A failed first solve with a hard
+        // host-group cap means the cap is infeasible for this instance -> drop the cap and restart the session
+        // (same as main's incremental enumerator). Later exhaustion with emitted_ > 0 is genuine "no more
+        // capped solutions" and must not start emitting over-cap placements.
+        MappingResult<MeshId, MeshId> placement = session_.next(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints_,
+            excluded_,
+            inter_mesh_validation_mode_,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes_);
         if (!placement.success) {
-            // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is best-effort --
-            // if the capped encoding is UNSAT drop the hard cap (the SOFT minimize bias stays on) and re-encode a
-            // fresh session, so an infeasible cap never turns a solvable enumeration into "no solutions"
-            // (split-host meshes partition hosts into more same-rank groups than the chip-count k_min allows).
-            //
-            // Relax ONLY when NO capped solution has been emitted (emitted_ == 0). Once the enumeration has
-            // returned even one cap-compliant placement, the cap is feasible for this instance, so genuine
-            // exhaustion means "no more capped solutions" -- NOT license to start emitting over-cap placements.
-            // Relaxing here after emitted_ > 0 would mix cap-compliant and over-cap solutions in one enumeration
-            // and diverge from map_multi_mesh_to_physical_n (which pulls from this same next()). Keeping the cap
-            // and reporting exhaustion matches the single-solve precedent and the batch path.
             if (!host_cap_relaxed_ && emitted_ == 0 && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
                 log_warning(
                     tt::LogFabric,
                     "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
-                    "capped solutions ({}); DOWNGRADING to an uncapped solve (soft minimize stays on) -- returned "
-                    "placements may occupy more than k host groups",
+                    "capped solutions ({}); restarting the session without the cap -- returned placements may occupy "
+                    "more than k host groups",
                     inter_mesh_constraints_.max_same_rank_groups_used(),
                     placement.error_message);
                 inter_mesh_constraints_.set_max_same_rank_groups_used(0);
