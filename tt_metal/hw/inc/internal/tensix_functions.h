@@ -8,10 +8,6 @@
 #include "tensix_types.h"
 #include "internal/vptr_uint.h"
 
-#ifndef CPU_JAWBRIDGE
-#include <stdarg.h>
-#endif
-
 /**
  * Notify compiler that any memory address could have been written by external processes or could be read by external
  * process.
