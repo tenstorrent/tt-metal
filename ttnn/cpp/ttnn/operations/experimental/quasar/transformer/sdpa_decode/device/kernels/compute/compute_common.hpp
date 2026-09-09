@@ -330,10 +330,16 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     reconfig_data_format(in0_dfb, in1_dfb);
     sub_bcast_cols_init(in0_dfb, in1_dfb);
 
+#ifndef ARCH_QUASAR
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+#endif
+    // Quasar's exp only supports the default scale (1.0) and CLAMP_NEGATIVE=true (see the
+    // ARCH_QUASAR branch below, which applies scale_fp32 via a separate multiply before an
+    // unscaled exp). CLAMP_NEGATIVE matches the WH packer-ReLU-zeroes-negatives intent, so the
+    // ReLU config below stays shared for both archs (it's a no-op once inputs are already clamped).
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     dfb_in0.wait_front(rows * cols);
@@ -353,12 +359,31 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+#ifdef ARCH_QUASAR
+            // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32 is
+            // applied via a separate multiply pass across all tiles in this dst block, then an
+            // unscaled exp pass. sub_tiles_bcast_cols is an FPU op (separate pipeline, no state to
+            // reissue); mul and exp are both SFPU op families, so each family's _init is issued once,
+            // immediately before its own loop over j, rather than interleaved per-tile.
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                mul_unary_tile(j, scale_fp32);
+            }
+            exp_tile_init<true /* approx */>();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                exp_tile<true /* approx */, false /* scale_en */>(j);
+            }
+#else
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
+#endif
             tile_regs_commit();
 
             if constexpr (write_result_inplace) {
@@ -703,27 +728,31 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     // Postcondition: in0_dfb and in1_dfb has num_tiles produced
 
     sub_init(in0_dfb, in1_dfb);
-#ifdef ARCH_QUASAR
-    // No fused exp_tile_first_column on Quasar. Fold scale_fp32 (already fp32-encoded) into the
-    // generic exp init template arg -- same approach already used by
-    // sub_exp_block_bcast_cols_inplace above -- and run a full-tile exp; only column 0 is
-    // consumed downstream, so this is numerically safe.
-    exp_tile_init<EXP_APPROX_MODE, scale_fp32>();
-#else
+#ifndef ARCH_QUASAR
     exp_tile_init<EXP_APPROX_MODE>();
-    // Convert scale_fp32 to bf16 scale
-    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 #endif
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
+
+#ifndef ARCH_QUASAR
+    // Convert scale_fp32 to bf16 scale
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
         sub_tiles(in0_dfb, in1_dfb, i, i, 0);
 #ifdef ARCH_QUASAR
-        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(0);  // full-tile exp((a-b)*scale)
+        // No fused exp_tile_first_column on Quasar, and Quasar's exp only supports scale=1.0 (see
+        // exp_init's static_assert), so scale_fp32 (already fp32-encoded) is applied via a separate
+        // multiply before an unscaled exp. Full-tile exp is numerically safe; only column 0 is
+        // consumed downstream.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, scale_fp32);
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(0);
 #else
         MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));  // WH/BH fused fast path
 #endif
@@ -811,7 +840,12 @@ void correction_block(
         sub_binary_tile_init();
         sub_binary_tile(dst_reg_0, dst_reg_2, dst_reg_0);  // dst_reg_0 = prev_max - cur_max
         sub_binary_tile(dst_reg_1, dst_reg_2, dst_reg_1);  // dst_reg_1 = worker_max - cur_max
-        exp_tile_init<EXP_APPROX_MODE, scale_fp32>();
+        // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32
+        // (already fp32-encoded) is applied via a separate multiply before an unscaled exp.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_reg_0, scale_fp32);  // dst_reg_0 = (prev_max - cur_max) * scale
+        mul_unary_tile(dst_reg_1, scale_fp32);  // dst_reg_1 = (worker_max - cur_max) * scale
+        exp_tile_init<EXP_APPROX_MODE>();
         exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_0);  // dst_reg_0 = exp_prev
         exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_1);  // dst_reg_1 = exp_worker
         mul_binary_tile_init();
