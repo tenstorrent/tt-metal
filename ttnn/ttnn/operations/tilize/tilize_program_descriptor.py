@@ -55,13 +55,41 @@ CB_OUTPUT_TILES = 1  # compute -> writer: whole output tile pages
 TILE_WIDTH = 32
 # Output tile-page writes to keep in flight behind one write barrier. Sets
 # `write_rows_per_barrier`, which is inert (== 1) once the block is >= this wide.
-WRITE_BATCH_MIN_TILES = 8
+# MEASURED, not assumed: op_design.md's "Write batch depth" lamp asked whether 8
+# sits past the knee, and on `[1,1,16384,32]` (C == 1, so this constant IS the
+# whole knob) it does. Median device kernel ns over 3 fresh-cache runs at 64/64
+# cores: wb=1 24430 (the one-write-per-barrier trap), wb=2 22519, wb=4 20723,
+# wb=8 22568, wb=16 22403. 4 is the plateau — 1.18x over the trap and 1.09x over
+# 8 — which is where the `double_buffer` catalog entry put it. Inert on every
+# block already >= 4 wide (the perf-focus shape's bw=8 gives wrpb=1 either way),
+# and it costs LESS L1 than 8. See
+# tests/.../tilize/test_tilize_lever_write_batch.py for the harness.
+WRITE_BATCH_MIN_TILES = 4
 # can_use_fast_tilize requires block_width_tiles < 256 (tilize_helpers.inl:77).
 FAST_TILIZE_WIDTH_CAP = 255
 # low_l1=True cap on the column extent. A host constant, independent of EVERY
 # tensor dimension — that independence is the low_l1 contract, structurally.
 LOW_L1_WIDTH_CAP = 4
 # cb_input_rows depth, in tile-rows of the block (reader/compute overlap).
+# MEASURED and KEPT AT ITS DEFAULT, with the flat result recorded rather than
+# hidden: op_design.md's "Overlap (input depth)" lamp asked for {2,3,4} on the
+# two wide-block shapes, and the answer is that the knob does not move either of
+# them. Device kernel ns, 2 fresh-cache runs each, all at 64/64 cores:
+#   [1,1,32,32768]  (bw=16, 1 KiB reads)  d1 25358/25582  d2 25863/24653
+#                                         d3 27056/25478  d4 26285/25509
+#   [1,1,2048,2048] (bw=64, 4 KiB reads)  d1 91377/95444  d2 92394/91515
+#                                         d3 92520/93470  d4 93191/93780
+# Depth 1 being flat too is the informative part: it says the READS are the wall
+# on these shapes, so the overlap slot is not what is missing. `[1,1,2048,2048]`
+# moves 16 MiB in ~91.5 us = ~183 GB/s, ~64% of this part's peak on a
+# simultaneous read+write stream — near the practical DRAM roofline, which no CB
+# depth can move. So 2 is kept: it is the smallest value that overlaps at all,
+# it is byte-identical in output, and it costs the least L1 of the values that do
+# (d3 would cost 640 KB on square_large vs 512 KB). It stays a LIVE knob, not an
+# inlined constant, because what would have to change for depth > 2 to pay is a
+# shape where reads are not the wall — the fp32 refinement (which drops off the
+# fast-tilize path, making compute the expensive stage) is the obvious candidate.
+# Harness: tests/.../tilize/test_tilize_lever_input_depth.py.
 INPUT_DEPTH_ROWS = 2
 # cb_output_tiles depth, in WRITE BATCHES (one batch = write_rows_per_barrier
 # tile-rows). Depth 2 buys the writer a full batch in flight while compute

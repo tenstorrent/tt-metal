@@ -1,0 +1,1 @@
+{"event":"phase0_complete","acceptance":"17/17","op_tests":"53/53 both modes","golden":"11 passed / 0 failed / 0 xpassed / 682 xfail / 2394 skip","cores_reached":"64/64 on every geometry with >=64 tiles","perf_focus_ns":13900,"perf_focus_cores":64,"transposed_ns":21000,"transposed_cores":64,"ts":"2026-09-09T15:16:48+00:00"}
