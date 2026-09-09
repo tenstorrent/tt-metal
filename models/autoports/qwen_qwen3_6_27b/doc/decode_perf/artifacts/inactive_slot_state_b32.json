@@ -1,0 +1,17 @@
+{
+  "batch": 32,
+  "num_layers": 8,
+  "active_slots": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "state_mask_mode": "gate",
+  "fused_kda_decode_layers": "6/6",
+  "inactive_slots_checked": 28,
+  "inactive_state_moved": 0,
+  "active_state_moved": 192,
+  "first_inactive_violations": [],
+  "status": "INACTIVE_LINEAR_STATE_EXACT"
+}

@@ -40,6 +40,33 @@ TARGET_TP = 4
 TARGET_FABRIC = ttnn.FabricConfig.FABRIC_1D_RING
 TARGET_TOPOLOGY = ttnn.Topology.Ring
 
+_DECODE_STATE_MASK_ENV = "QWEN36_DECODE_STATE_MASK"
+
+
+def _decode_state_mask_mode() -> str:
+    """How gated-delta decode keeps an inactive slot's recurrent state.
+
+    ``gate`` (default) sets that row's ``decay`` to 1 and ``beta`` to 0, which
+    makes the recurrence the exact identity, and costs two ops on a single tile.
+    ``blend`` restores the original form, which computes the new state for every
+    row and then selects per row -- two broadcast multiplies and an add over the
+    full ``[batch, heads, 128, 128]`` state.
+
+    Measured at the served shape (batch 32, TP4, real weights): 0.28 ms per
+    linear-attention layer, 13.5 ms of the step across 48 of them.  ``gate`` is
+    numerically inert on active rows (``beta * 1`` and ``where(1, decay, 1)`` are
+    exact) and preserves an inactive row's state bit for bit, which
+    ``tests/inactive_slot_state_b32.py`` asserts at the served batch.  See
+    ``doc/decode_perf``.
+
+    The per-layer harnesses pass no active mask, so none of them ever ran the
+    blend: every per-layer number in ``doc/`` is 0.38 ms/layer cheaper than the
+    graph the server executes.
+    """
+    import os
+
+    return os.environ.get(_DECODE_STATE_MASK_ENV, "gate")
+
 
 def _validate_contract(hf_config, layer_idx: int, mesh_device, batch: int, max_context: int, page_size: int):
     if not isinstance(mesh_device, ttnn.MeshDevice):
@@ -830,9 +857,9 @@ class MultichipDecoder(OptimizedDecoder):
         key = self._l2_norm(key)
 
         beta = ttnn.sigmoid(beta)
-        decay = ttnn.multiply(self.weights["a"], ttnn.softplus(ttnn.add(decay, self.weights["dt_bias"])))
-        beta = ttnn.reshape(beta, (self.batch, value_heads, 1, 1))
-        decay = ttnn.exp(ttnn.reshape(decay, (self.batch, value_heads, 1, 1)))
+        # exp before the [batch, heads, 1, 1] reshape: identical elementwise
+        # result on one tile instead of 384 of them.
+        decay = ttnn.exp(ttnn.multiply(self.weights["a"], ttnn.softplus(ttnn.add(decay, self.weights["dt_bias"]))))
 
         state_dtype = self.policy.linear_recurrent_state_dtype
         recurrent_state = self.caches["recurrent"]
@@ -840,13 +867,32 @@ class MultichipDecoder(OptimizedDecoder):
             recurrent_state = ttnn.typecast(recurrent_state, ttnn.bfloat16)
             decay = ttnn.typecast(decay, ttnn.bfloat16)
             beta = ttnn.typecast(beta, ttnn.bfloat16)
+        gate_state = active_mask is not None and _decode_state_mask_mode() == "gate"
+        if gate_state:
+            # An inactive fixed slot must leave its recurrent state untouched.
+            # Blending the new state against the old (below) does that with two
+            # broadcast multiplies and an add over the whole
+            # [batch, heads, 128, 128] state, plus a ttnn.reshape of the mask
+            # that the device profile puts at 213 us because a ROW_MAJOR reshape
+            # moving the last dimension is real data movement.  ``decay = 1`` and
+            # ``beta = 0`` make the recurrence the exact identity for that row
+            # instead: delta is zero, so the rank-1 update is zero and the decay
+            # multiply is by one.  Both are still [1, 1, batch, heads] here, so
+            # this is two ops on a single tile.  Inactive rows still produce
+            # (discarded) outputs, as they did before -- only the stored state is
+            # contractual.
+            keep = ttnn.to_layout(ttnn.reshape(active_mask, (1, 1, self.batch, 1)), ttnn.TILE_LAYOUT)
+            beta = ttnn.multiply(beta, keep)
+            decay = ttnn.where(keep, decay, 1.0)
+        beta = ttnn.reshape(beta, (self.batch, value_heads, 1, 1))
+        decay = ttnn.reshape(decay, (self.batch, value_heads, 1, 1))
         recurrent = ttnn.multiply(recurrent_state, decay)
         memory_value = self._linear_recurrent_matmul(key, recurrent)
         delta = ttnn.multiply(ttnn.subtract(value, memory_value), beta)
         update = ttnn.multiply(ttnn.transpose(key, -2, -1), delta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         recurrent = ttnn.add(recurrent, update)
         output = self._linear_recurrent_matmul(query, recurrent)
-        if active_mask is not None:
+        if active_mask is not None and not gate_state:
             state_mask = ttnn.reshape(active_mask, (self.batch, 1, 1, 1))
             recurrent = ttnn.add(
                 ttnn.multiply(recurrent, state_mask),
@@ -1099,9 +1145,7 @@ class MultichipDecoder(OptimizedDecoder):
             )
             ttnn.deallocate(final_state)
             ttnn.deallocate(query)
-            return self._linear_attention_prefill_chunk_tail(
-                attended, z, sequence, value_heads, value_dim, value_width
-            )
+            return self._linear_attention_prefill_chunk_tail(attended, z, sequence, value_heads, value_dim, value_width)
 
         identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
         zero = ttnn.multiply(identity, 0.0)

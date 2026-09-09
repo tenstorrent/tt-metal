@@ -1,0 +1,11 @@
+{
+  "batch": 32,
+  "skip_prefill": true,
+  "num_layers": 8,
+  "prompt_tokens": 128,
+  "timed_tokens": 32,
+  "timed_seconds": 1.0101422159932554,
+  "ms_per_token": 31.56694424978923,
+  "t_s_u": 31.678707704078036,
+  "profiled_replays": 0
+}

@@ -1,7 +1,10 @@
 {
   "schema_version": 1,
-  "config_id": "full_attention_bfp4_lofi",
-  "base_policy": {"full_attention": "final_cumulative", "linear_attention": "linear_final"},
+  "config_id": "full_attention_bfp4_lofi_kda_conv",
+  "base_policy": {
+    "full_attention": "final_cumulative",
+    "linear_attention": "linear_kda_conv"
+  },
   "weight_groups": {
     "full_attention_qkv": "BFP4_B",
     "full_attention_o": "BFP4_B",
@@ -23,7 +26,10 @@
     "mlp": "LoFi"
   },
   "activation_residual_dtype": "BF16",
-  "ccl_dtype": {"token_mixer": "BF16", "mlp": "BF16"},
+  "ccl_dtype": {
+    "token_mixer": "BF16",
+    "mlp": "BF16"
+  },
   "kv_cache_dtype": "BFP8_B",
   "linear_recurrent_state_dtype": "BFP8_B",
   "logits_sampling": {

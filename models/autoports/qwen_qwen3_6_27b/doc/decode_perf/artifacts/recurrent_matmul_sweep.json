@@ -1,0 +1,52 @@
+[
+  {
+    "case": "auto (no program_config)",
+    "us": 623.3286578208208,
+    "m": 1
+  },
+  {
+    "case": "1D mcast grid 4x1 w4 (shipped)",
+    "us": 438.9268113300204,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 8x1 (8 cores)",
+    "us": 156.60191420465708,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 8x2 (16 cores)",
+    "us": 100.48993863165379,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 4x8 (32 cores)",
+    "us": 67.7280593663454,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 6x8 (48 cores)",
+    "us": 68.19996051490307,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 8x4 (32 cores)",
+    "us": 74.51793644577265,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 8x6 (48 cores)",
+    "us": 64.99378941953182,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 8x8 (64 cores)",
+    "us": 66.7000887915492,
+    "m": 1
+  },
+  {
+    "case": "reuse grid 8x8 LoFi",
+    "us": 66.23719818890095,
+    "m": 1
+  }
+]

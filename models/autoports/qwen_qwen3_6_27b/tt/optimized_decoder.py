@@ -57,6 +57,9 @@ class OptimizationPolicy:
     linear_output_weight_dtype: object = ttnn.bfloat16
     linear_input_fidelity: object = ttnn.MathFidelity.HiFi2
     linear_output_fidelity: object = ttnn.MathFidelity.HiFi2
+    # "auto" (ttnn selects), "batched_reuse" (batch spread over the widest
+    # legal grid -- the selected default), or the "grid4_w*"/"grid2_n2"
+    # 1D-multicast rows the earlier decode sweep recorded.
     linear_recurrent_program: str = "auto"
     linear_recurrent_fidelity: object = ttnn.MathFidelity.HiFi2
     linear_recurrent_state_dtype: object = ttnn.float32
@@ -276,6 +279,12 @@ _LINEAR_FINAL = replace(
     linear_packed_in0_block_w=5,
     linear_out_in0_block_w=12,
     advisor_plan="mlp_product_only",
+    # The grid4_* family this inherited pins the state matmuls to a 4-core row
+    # and loops the batch there: 438.9 us at the served per-device shape against
+    # 65.0 us for the batched-reuse program on 48 cores.  The earlier
+    # ``linear_recurrent_explicit_*`` candidates keep grid4 so their recorded
+    # A/B stays comparable; see ``_linear_recurrent_matmul``.
+    linear_recurrent_program="batched_reuse",
 )
 POLICIES.update(
     {
@@ -360,6 +369,10 @@ POLICIES.update(
         # linear-attention prefill chunk.  The model's conv kernel is
         # exactly the op's four taps, and Q/K/V are tile-aligned.
         "linear_kda_conv": replace(_LINEAR_FINAL, linear_kda_conv=True),
+        # The shipped linear policy with the state matmuls back on the 4-core
+        # 1D-multicast row, so the batched-reuse program can be shown numerically
+        # inert on real weights rather than only faster.  See doc/decode_perf.
+        "linear_kda_conv_grid4": replace(_LINEAR_FINAL, linear_kda_conv=True, linear_recurrent_program="grid4_w4"),
         "advisor_mlp_product_linear_b32": replace(_LINEAR_FINAL, advisor_plan="mlp_product_only"),
         "linear_state_fp32": replace(
             _LINEAR_PROJECTION_BASELINE,
@@ -1569,6 +1582,24 @@ class OptimizedDecoder(FunctionalDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _batched_reuse_grid(self, groups: int):
+        """Largest legal ``MatmulMultiCoreReuse`` grid for ``groups`` batches.
+
+        The program splits work over the batch dimension only, and it does not
+        fail but *hangs* when the batch does not divide the core count (see
+        ``_scan_matmul`` in ``functional_decoder.py``), so only grids whose
+        product divides ``groups`` are candidates.  Returns ``None`` when the
+        device grid admits none, which leaves the caller on its old program.
+        """
+        size = self.mesh_device.compute_with_storage_grid_size()
+        for cores in range(min(groups, size.x * size.y), 0, -1):
+            if groups % cores:
+                continue
+            for gx in range(min(size.x, cores), 0, -1):
+                if cores % gx == 0 and cores // gx <= size.y:
+                    return gx, cores // gx
+        return None
+
     def _linear_recurrent_matmul(self, left, right):
         mode = self.policy.linear_recurrent_program
         kwargs = {
@@ -1576,6 +1607,44 @@ class OptimizedDecoder(FunctionalDecoder):
             "compute_kernel_config": self.linear_recurrent_compute_kernel_config,
             "dtype": ttnn.bfloat16,
         }
+        if mode == "batched_reuse":
+            # ``left`` is [groups, M, K] against ``right`` [groups, K, N] with
+            # one M tile: pure batch parallelism, so the batched-reuse program
+            # spreads ``groups`` over the grid while the shipped 1D-multicast
+            # config pinned it to a 4-core row and looped the batch there.
+            # Swept at the served per-device shape [384, 32, 128, 128]:
+            #
+            #   auto (no program config)          623.3 us
+            #   1D mcast grid 4x1 w4 (previous)   438.9 us
+            #   batched reuse 8x1  ( 8 cores)     156.6 us
+            #   batched reuse 8x2  (16 cores)     100.5 us
+            #   batched reuse 4x8  (32 cores)      67.7 us
+            #   batched reuse 8x6  (48 cores)      65.0 us
+            #   batched reuse 8x8  (64 cores)      66.7 us
+            #
+            # 6.8x, flat past 32 cores -- at 48 cores it reads the 12.58 MB
+            # state in 65 us, i.e. 194 GB/s, so it is bandwidth bound there.
+            # This is the decode twin of the prefill defect in
+            # doc/prefill_general_optimizations: the same batched shape, the
+            # same wrong program class, found there and never applied here.
+            groups = math.prod(tuple(left.padded_shape)[:-2])
+            grid = self._batched_reuse_grid(groups)
+            m_tiles = left.padded_shape[-2] // ttnn.TILE_SIZE
+            k_tiles = left.padded_shape[-1] // ttnn.TILE_SIZE
+            n_tiles = right.padded_shape[-1] // ttnn.TILE_SIZE
+            if grid is not None and min(m_tiles, k_tiles, n_tiles) >= 1:
+                subblock_w = n_tiles
+                while subblock_w > 1 and (subblock_w * m_tiles > 4 or n_tiles % subblock_w):
+                    subblock_w -= 1
+                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=k_tiles,
+                    out_subblock_h=m_tiles if m_tiles * subblock_w <= 4 else 1,
+                    out_subblock_w=subblock_w,
+                    per_core_M=m_tiles,
+                    per_core_N=n_tiles,
+                )
+            return ttnn.matmul(left, right, **kwargs)
         if mode != "auto":
             if mode == "grid2_n2":
                 grid = (2, 1)

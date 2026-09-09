@@ -1,0 +1,9 @@
+{
+  "batch": 32,
+  "candidate": "linear_kda_conv",
+  "kind": "linear_attention",
+  "passed": true,
+  "path": "optimized",
+  "pcc": 0.9982924342381899,
+  "reference": "hf"
+}

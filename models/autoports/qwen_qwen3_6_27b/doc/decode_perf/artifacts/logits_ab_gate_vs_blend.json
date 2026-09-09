@@ -1,0 +1,56 @@
+{
+  "baseline": "/tmp/claude-6002/-home-mvasiljevic-tt-metal/86c074d5-381c-4dfe-8adf-1013784fc7b7/scratchpad/tf_new.json",
+  "baseline_precision_config": "full_attention_bfp4_lofi_kda_conv",
+  "baseline_state_mask_mode": "gate",
+  "this_precision_config": "full_attention_bfp4_lofi_kda_conv",
+  "this_state_mask_mode": "blend",
+  "worst_per_slot_logit_pcc": 0.9999998807907104,
+  "argmax_agreement": "288/288",
+  "per_step": [
+    {
+      "step": 0,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 1,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 2,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 3,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 4,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 5,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 6,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 7,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 8,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    }
+  ]
+}

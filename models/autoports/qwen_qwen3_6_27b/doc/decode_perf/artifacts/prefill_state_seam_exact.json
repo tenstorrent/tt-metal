@@ -1,0 +1,92 @@
+{
+  "this": "full_attention_bfp4_lofi",
+  "baseline": "full_attention_bfp4_lofi_kda_conv",
+  "per_tensor": [
+    {
+      "tensor": "conv0",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "conv1",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "conv2",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "conv4",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "conv5",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "conv6",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "rec0",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "rec1",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "rec2",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "rec4",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "rec5",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    },
+    {
+      "tensor": "rec6",
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "worst_slot": 0,
+      "exact": true
+    }
+  ],
+  "all_exact": true,
+  "worst_max_abs_diff": 0.0
+}

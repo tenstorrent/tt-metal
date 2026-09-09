@@ -1,0 +1,176 @@
+{
+  "baseline": "/tmp/claude-6002/-home-mvasiljevic-tt-metal/86c074d5-381c-4dfe-8adf-1013784fc7b7/scratchpad/long_new.json",
+  "baseline_precision_config": "full_attention_bfp4_lofi_kda_conv",
+  "baseline_state_mask_mode": "gate",
+  "this_precision_config": "full_attention_bfp4_lofi",
+  "this_state_mask_mode": "blend",
+  "worst_per_slot_logit_pcc": 0.7462887167930603,
+  "argmax_agreement": "1050/1056",
+  "per_step": [
+    {
+      "step": 0,
+      "worst_slot_pcc": 0.9999998807907104,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 1,
+      "worst_slot_pcc": 0.7462887167930603,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 2,
+      "worst_slot_pcc": 0.9965866804122925,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 3,
+      "worst_slot_pcc": 0.9973623752593994,
+      "argmax_agree": "31/32"
+    },
+    {
+      "step": 4,
+      "worst_slot_pcc": 0.9920321106910706,
+      "argmax_agree": "31/32"
+    },
+    {
+      "step": 5,
+      "worst_slot_pcc": 0.9980112314224243,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 6,
+      "worst_slot_pcc": 0.9977628588676453,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 7,
+      "worst_slot_pcc": 0.9915847778320312,
+      "argmax_agree": "31/32"
+    },
+    {
+      "step": 8,
+      "worst_slot_pcc": 0.9949536323547363,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 9,
+      "worst_slot_pcc": 0.997026264667511,
+      "argmax_agree": "30/32"
+    },
+    {
+      "step": 10,
+      "worst_slot_pcc": 0.9963759183883667,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 11,
+      "worst_slot_pcc": 0.9913679957389832,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 12,
+      "worst_slot_pcc": 0.9937480688095093,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 13,
+      "worst_slot_pcc": 0.9946803450584412,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 14,
+      "worst_slot_pcc": 0.9962995052337646,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 15,
+      "worst_slot_pcc": 0.9893860816955566,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 16,
+      "worst_slot_pcc": 0.9772252440452576,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 17,
+      "worst_slot_pcc": 0.9947040677070618,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 18,
+      "worst_slot_pcc": 0.9890538454055786,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 19,
+      "worst_slot_pcc": 0.9555210471153259,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 20,
+      "worst_slot_pcc": 0.9950132966041565,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 21,
+      "worst_slot_pcc": 0.9949309229850769,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 22,
+      "worst_slot_pcc": 0.9942231774330139,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 23,
+      "worst_slot_pcc": 0.9857032895088196,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 24,
+      "worst_slot_pcc": 0.9828341603279114,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 25,
+      "worst_slot_pcc": 0.9957682490348816,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 26,
+      "worst_slot_pcc": 0.992336630821228,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 27,
+      "worst_slot_pcc": 0.9763267040252686,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 28,
+      "worst_slot_pcc": 0.9894269108772278,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 29,
+      "worst_slot_pcc": 0.9853571653366089,
+      "argmax_agree": "31/32"
+    },
+    {
+      "step": 30,
+      "worst_slot_pcc": 0.9874292016029358,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 31,
+      "worst_slot_pcc": 0.9769168496131897,
+      "argmax_agree": "32/32"
+    },
+    {
+      "step": 32,
+      "worst_slot_pcc": 0.97978675365448,
+      "argmax_agree": "32/32"
+    }
+  ]
+}
