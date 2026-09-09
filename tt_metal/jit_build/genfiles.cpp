@@ -58,11 +58,15 @@ namespace tt::tt_metal {
 namespace {
 
 string get_kernel_source_to_include(const KernelSource& kernel_src) {
+    // Kernels define kernel_main() with no prior declaration (-Wmissing-prototypes). Not static:
+    // that lets the compiler inline the only call and drop the symbol, which dump-consts.py and
+    // llk-audit resolve by name.
+    constexpr const char* kernel_main_decl = "void kernel_main();\n";
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
-            return "#include \"" + kernel_src.path_.string() + "\"\n";
+            return kernel_main_decl + ("#include \"" + kernel_src.path_.string() + "\"\n");
         }
-        case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        case KernelSource::SOURCE_CODE: return kernel_main_decl + kernel_src.source_;
     }
     ttsl::unreachable();
 }
