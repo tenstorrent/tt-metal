@@ -23,8 +23,13 @@ namespace ttnn::up_front_compile {
 
 // Result of a parallel_compile pass.
 struct CompileStats {
-    std::size_t num_programs = 0;  // distinct programs JIT-compiled
+    std::size_t num_programs = 0;  // distinct programs handed to the pass
     std::size_t num_errors = 0;    // programs whose compile threw
+    // Programs that were ALREADY compiled on arrival, so this pass did no work for
+    // them. A non-zero value means something compiled them inline during collect —
+    // i.e. the pass ran serially behind op dispatch instead of in parallel here.
+    // Healthy is 0. See the note on eager spec-factory compilation below.
+    std::size_t num_already_compiled = 0;
     int max_workers = 0;
     double wall_seconds = 0.0;
 };
@@ -91,6 +96,21 @@ private:
     std::size_t total_collected_ = 0;
     std::uint64_t synthetic_key_ = 0;  // for hash==0 (cache-disabled) fallback
 };
+
+// Should the caller building a Metal 2.0 workload from a ProgramSpec SKIP the
+// compile step and hand back an uncompiled workload?
+//
+// True exactly while a collect pass is active on this thread. During collect the
+// workload is stashed and discarded, never dispatched, and its kernels are
+// JIT-compiled later in bulk by parallel_compile. Compiling at construction
+// instead (the Metal 2.0 spec-factory default) makes that later pass a no-op and
+// degenerates the warm pass into serial, one-kernel-at-a-time compilation behind
+// op dispatch.
+//
+// Deferral is not separately configurable: it is exactly the collect pass's own
+// state. A workload built during collect is never dispatched, and one built
+// outside it always is.
+bool should_defer_compile();
 
 // Begin a collect pass: enables NO_DISPATCH graph capture (buffers mocked,
 // nothing dispatched) and marks the collector active on this thread.

@@ -30,6 +30,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/up_front_compile.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
@@ -921,7 +922,15 @@ public:
             for (const auto& range : tensor_coords.ranges()) {
                 program_specs.emplace(range, artifacts.spec);
             }
-            auto mesh_workload = tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(*mesh_device, program_specs);
+            // Up-front parallel precompile: while the collect pass is active the
+            // workload is stashed and discarded (device_operation.hpp), never
+            // dispatched — so ask the spec factory NOT to compile it here. Leaving
+            // the compile eager would JIT every kernel inline and serially, and the
+            // later parallel_compile would find nothing to do. See
+            // ttnn/up_front_compile.hpp.
+            const bool defer_compile = ttnn::up_front_compile::should_defer_compile();
+            auto mesh_workload = tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(
+                *mesh_device, program_specs, /*skip_validation=*/false, defer_compile);
 
             // Apply the factory's initial ProgramRunArgs to each MeshWorkload program.
             for (auto& [range, program] : mesh_workload.get_programs()) {

@@ -434,18 +434,22 @@ void py_graph_module(nb::module_& m) {
         "up_front_compile",
         [](tt::tt_metal::distributed::MeshDevice* device, int max_workers, bool clear) {
             auto s = ttnn::up_front_compile::parallel_compile(device, max_workers, clear);
-            return std::make_tuple(s.num_programs, s.num_errors, s.max_workers, s.wall_seconds);
+            return std::make_tuple(s.num_programs, s.num_errors, s.max_workers, s.wall_seconds, s.num_already_compiled);
         },
         nb::arg("device"),
         nb::arg("max_workers") = 0,
         nb::arg("clear") = true,
         nb::call_guard<nb::gil_scoped_release>(),
-        R"doc(up_front_compile(device, max_workers=0, clear=True) -> (num_programs, num_errors, max_workers, wall_seconds)
+        R"doc(up_front_compile(device, max_workers=0, clear=True) -> (num_programs, num_errors, max_workers, wall_seconds, num_already_compiled)
 
         JIT-compile every distinct collected program in parallel, warming the on-disk
         kernel cache (TT_METAL_CACHE). The subsequent real run / trace capture runs warm.
         max_workers<=0 uses hardware concurrency (note: the build executor saturates
         ~4 workers, so higher buys little). The GIL is released for the duration.
+
+        num_already_compiled counts programs that arrived already compiled, i.e. that
+        this pass did NO work for. Healthy is 0; a large value means they were JIT'd
+        inline and serially during the collect pass.
         )doc");
 }
 
