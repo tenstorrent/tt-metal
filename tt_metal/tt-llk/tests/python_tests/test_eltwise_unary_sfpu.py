@@ -1093,9 +1093,10 @@ def test_eltwise_unary_sfpu_int(
 
 _INT32_MAX = 2**31 - 1
 
-# Only a negative threshold reaches relu_min's vInt branch, so both signs are swept, the
-# non-negative ones as the control. The negative extreme stops short of INT_MIN: CustomStrategy
-# clamps stimuli at info.min + 1, so no input could straddle it.
+# Both signs are swept. Every threshold reaches the vInt branch; what the negative half alone
+# reaches is the overflow-safe compare it is split on, and Wormhole's hand-built threshold
+# encoding. The negative extreme stops short of INT_MIN: CustomStrategy clamps stimuli at
+# info.min + 1, so no input could straddle it.
 _RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
 
 
