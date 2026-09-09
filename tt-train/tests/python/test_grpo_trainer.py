@@ -49,14 +49,14 @@ from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
 # import path so this test can use it without copy-pasting the completer.
-_GRPO_EXAMPLES_DIR = os.path.join(
+_EXAMPLES_DIR = os.path.join(
     os.environ.get("TT_METAL_HOME", os.path.join(os.path.dirname(__file__), "..", "..", "..")),
     "tt-train",
     "sources",
     "examples",
 )
-if _GRPO_EXAMPLES_DIR not in sys.path:
-    sys.path.insert(0, _GRPO_EXAMPLES_DIR)
+if _EXAMPLES_DIR not in sys.path:
+    sys.path.insert(0, _EXAMPLES_DIR)
 
 from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
 
