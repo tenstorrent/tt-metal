@@ -92,6 +92,400 @@ def _copy_golden_comparison_config(source, destination):
     return destination
 
 
+def compare_tensors_using_pcc(
+    python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
+):
+    import numbers
+    import torch
+
+    from models.common.utility_functions import comp_pcc, comp_ulp
+
+    if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
+        comparison_records = []
+        for golden_output, output in _structured_output_pairs(golden_outputs, outputs):
+            comparison_records.extend(
+                compare_tensors_using_pcc(
+                    python_fully_qualified_name,
+                    golden_output,
+                    output,
+                    desired_pcc,
+                    level,
+                    fail_on_bad_comparison,
+                )
+            )
+        return comparison_records
+
+    if golden_outputs is None or outputs is None:
+        return list(_structured_output_pairs(golden_outputs, outputs))
+
+    if isinstance(golden_outputs, ttnn.DistributedGolden):
+        comparison_records = []
+        for golden_shard, output_shard in _distributed_comparison_pairs(golden_outputs, outputs):
+            comparison_records.extend(
+                compare_tensors_using_pcc(
+                    python_fully_qualified_name,
+                    golden_shard,
+                    output_shard,
+                    desired_pcc,
+                    level,
+                    fail_on_bad_comparison,
+                )
+            )
+        return comparison_records
+
+    if isinstance(golden_outputs, numbers.Number) or isinstance(outputs, numbers.Number):
+        if not isinstance(golden_outputs, numbers.Number) or not isinstance(outputs, numbers.Number):
+            raise TypeError(
+                f"Output structure mismatch: golden type {type(golden_outputs)} does not match output type {type(outputs)}"
+            )
+        return compare_scalar_outputs(
+            python_fully_qualified_name,
+            golden_outputs,
+            outputs,
+            desired_pcc,
+            level,
+            fail_on_bad_comparison,
+        )
+
+    if not isinstance(outputs, (ttnn.Tensor, torch.Tensor)):
+        raise TypeError(f"Expected a tensor output, got {type(outputs)}")
+    if not isinstance(golden_outputs, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor golden output, got {type(golden_outputs)}")
+
+    output = outputs
+    golden_output = golden_outputs
+    torch_output = output if isinstance(output, torch.Tensor) else to_torch_for_comparison(output, golden_output)
+    same_shape = golden_output.shape == torch_output.shape
+    comparison_config = getattr(golden_output, "_ttnn_comparison_config", None)
+    comparison_golden = golden_output
+    comparison_output = torch_output
+    if comparison_config is not None and comparison_config.mask is not None and same_shape:
+        comparison_mask = comparison_config.mask.to(dtype=torch.bool, device=golden_output.device)
+        while comparison_mask.ndim < golden_output.ndim:
+            comparison_mask = comparison_mask.unsqueeze(-1)
+        try:
+            comparison_mask = torch.broadcast_to(comparison_mask, golden_output.shape)
+        except RuntimeError as error:
+            raise ValueError(
+                f"Golden comparison mask shape {tuple(comparison_config.mask.shape)} cannot be broadcast "
+                f"to output shape {tuple(golden_output.shape)}"
+            ) from error
+        comparison_golden = golden_output[comparison_mask]
+        comparison_output = torch_output[comparison_mask]
+
+    flattened_golden = comparison_golden.reshape(-1)
+    flattened_output = comparison_output.reshape(-1)
+
+    def is_constant(flattened_tensor):
+        if flattened_tensor.numel() == 0:
+            return True
+        first_value = flattened_tensor[0]
+        if flattened_tensor.dtype.is_floating_point or flattened_tensor.dtype.is_complex:
+            if bool(torch.isnan(first_value)):
+                return bool(torch.all(torch.isnan(flattened_tensor)))
+        return bool(torch.all(flattened_tensor == first_value))
+
+    pcc_is_degenerate = (
+        flattened_golden.numel() < 2
+        or flattened_output.numel() < 2
+        or is_constant(flattened_golden)
+        or is_constant(flattened_output)
+    )
+    use_comparison_config = comparison_config is not None and (comparison_config.scope == "all" or pcc_is_degenerate)
+    if use_comparison_config and comparison_config.method == "skip":
+        return []
+
+    if use_comparison_config and same_shape:
+        nonfinite_masks_match = True
+        if comparison_config.nonfinite == "mask" and (
+            comparison_golden.dtype.is_floating_point
+            or comparison_golden.dtype.is_complex
+            or comparison_output.dtype.is_floating_point
+            or comparison_output.dtype.is_complex
+        ):
+            golden_finite = torch.isfinite(comparison_golden)
+            output_finite = torch.isfinite(comparison_output)
+            nonfinite_masks_match = bool(torch.equal(golden_finite, output_finite))
+            if nonfinite_masks_match and not bool(golden_finite.all()):
+                comparison_golden = comparison_golden.clone()
+                comparison_output = comparison_output.clone()
+                comparison_golden[~golden_finite] = 0
+                comparison_output[~output_finite] = 0
+
+        if not nonfinite_masks_match:
+            matches = False
+        elif comparison_config.method == "ulp":
+            matches, _ = comp_ulp(
+                comparison_golden,
+                comparison_output,
+                ulp_threshold=comparison_config.ulp_threshold,
+                allow_nonfinite=True,
+            )
+            matches = bool(matches)
+        else:
+            if comparison_golden.dtype != comparison_output.dtype:
+                comparison_output = comparison_output.to(comparison_golden.dtype)
+            matches = bool(
+                torch.allclose(
+                    comparison_golden,
+                    comparison_output,
+                    rtol=comparison_config.rtol,
+                    atol=comparison_config.atol,
+                    equal_nan=comparison_config.equal_nan,
+                )
+            )
+        actual_pcc = 1.0 if matches else 0.0
+    elif use_comparison_config:
+        matches = False
+        actual_pcc = 0.0
+    elif pcc_is_degenerate:
+        if golden_output.dtype != torch_output.dtype:
+            torch_output = torch_output.to(golden_output.dtype)
+        matches = same_shape and bool(torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True))
+        actual_pcc = 1.0 if matches else 0.0
+    else:
+        matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
+
+    comparison_record = {
+        "tensor_id": int(output.tensor_id),
+        "golden_tensor_id": int(golden_output.tensor_id),
+        "matches": bool(matches),
+        "desired_pcc": float(desired_pcc),
+        "actual_pcc": float(actual_pcc),
+    }
+    if not matches:
+        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0 against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+        if fail_on_bad_comparison:
+            raise RuntimeError(error_message)
+        logger.error(error_message)
+    return [comparison_record]
+
+
+PRE_OPERATION_HOOKS = []
+POST_OPERATION_HOOKS = []
+
+push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_queue_id_for_thread
+pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
+get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
+
+
+@contextmanager
+def register_pre_operation_hook(hook):
+    """
+
+    register_pre_operation_hook is a context manager that registers a pre-operation hook. The hook can be used to run custom code before the operation is executed.
+
+    Args:
+        operation: The operation that is being called.
+        args: The arguments that are passed to the operation.
+        kwargs: The keyword arguments that are passed to the operation.
+
+    Returns:
+        `None`: the hook is executed.
+
+    """
+
+    global PRE_OPERATION_HOOKS
+    PRE_OPERATION_HOOKS.append(hook)
+    yield
+    PRE_OPERATION_HOOKS.pop()
+
+
+@contextmanager
+def command_queue(cq_id: int):
+    """Context manager to set a default command queue for all TTNN operations within this context.
+
+    Operations within this context will use the specified cq_id unless they explicitly
+    provide their own cq_id parameter, which takes precedence.
+
+    Args:
+        cq_id: The command queue ID to use for operations in this context
+
+    Example:
+        with ttnn.command_queue(1):
+            result = ttnn.some_operation(tensor)  # Will use cq_id 1
+            result2 = ttnn.other_operation(tensor, queue_id=0)  # Will use cq_id 0 (overrides context)
+    """
+    if cq_id is None:
+        raise ValueError("cq_id cannot be None in command_queue context")
+
+    push_current_command_queue_id_for_thread(cq_id)
+    try:
+        yield
+    finally:
+        # Check if command queue is in expected state when exiting context
+        current_cq_id = get_current_command_queue_id_for_thread()
+        if current_cq_id != cq_id:
+            logger.warning(
+                f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
+                f"This might indicate an operation didn't properly restore the command queue state. "
+                f"Restoring to original value {cq_id}."
+            )
+        pop_current_command_queue_id_for_thread()
+
+
+@contextmanager
+def register_post_operation_hook(hook):
+    """
+
+    register_post_operation_hook is a context manager that registers a post-operation hook. The hook can be used to run custom code after the operation is executed.
+
+    Args:
+        operation: The operation that is being called.
+        args: The arguments that are passed to the operation.
+        kwargs: The keyword arguments that are passed to the operation.
+        output: The output of the operation.
+
+    Returns:
+        `None`: the hook is executed.
+
+    """
+
+    global POST_OPERATION_HOOKS
+    POST_OPERATION_HOOKS.append(hook)
+    yield
+    POST_OPERATION_HOOKS.pop()
+
+
+def get_devices(object_value):
+    devices = set()
+    if isinstance(object_value, ttnn.Tensor):
+        if ttnn.is_tensor_storage_on_device(object_value) and object_value.is_allocated():
+            devices.update(object_value.devices())
+    elif isinstance(object_value, ttnn.Device):
+        devices.add(object_value)
+    elif isinstance(object_value, (list, tuple)):
+        for element in object_value:
+            devices |= get_devices(element)
+    elif isinstance(object_value, dict):
+        for value in object_value.values():
+            devices |= get_devices(value)
+    return devices
+
+
+def get_tensors(object_value, tensor_type):
+    tensors = []
+    if isinstance(object_value, tensor_type):
+        tensors.append(object_value)
+    elif isinstance(object_value, ttnn.DistributedGolden):
+        if object_value.global_value is not None:
+            tensors += get_tensors(object_value.global_value, tensor_type)
+        if object_value.shards is not None:
+            tensors += get_tensors(object_value.shards, tensor_type)
+    elif isinstance(object_value, (list, tuple)):
+        for element in object_value:
+            tensors += get_tensors(element, tensor_type)
+    elif isinstance(object_value, dict):
+        for value in object_value.values():
+            tensors += get_tensors(value, tensor_type)
+    return tensors
+
+
+def get_ttnn_tensors(object_value):
+    return get_tensors(object_value, ttnn.Tensor)
+
+
+def get_all_tensors(object_value):
+    import torch
+
+    return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
+
+
+def should_compare_tensor_outputs(golden_outputs, outputs):
+    return bool(get_all_tensors(golden_outputs)) or bool(get_all_tensors(outputs))
+
+
+def should_compare_scalar_outputs(golden_outputs, outputs):
+    import numbers
+
+    try:
+        output_pairs = _structured_output_pairs(golden_outputs, outputs)
+    except (TypeError, ValueError):
+        return True
+    return any(
+        isinstance(golden_output, numbers.Number) or isinstance(output, numbers.Number)
+        for golden_output, output in output_pairs
+    )
+
+
+def compare_scalar_outputs(
+    python_fully_qualified_name, golden_output, output, desired_pcc, level, fail_on_bad_comparison
+):
+    import numbers
+    import torch
+
+    golden_tensor = torch.as_tensor(golden_output)
+    output_tensor = torch.as_tensor(output)
+    set_tensor_id(golden_tensor)
+    set_tensor_id(output_tensor)
+    if isinstance(golden_output, numbers.Integral) and isinstance(output, numbers.Integral):
+        matches = golden_output == output
+    else:
+        common_dtype = torch.promote_types(golden_tensor.dtype, output_tensor.dtype)
+        matches = bool(
+            torch.allclose(
+                golden_tensor.to(common_dtype),
+                output_tensor.to(common_dtype),
+                rtol=1e-5,
+                atol=1e-4,
+                equal_nan=True,
+            )
+        )
+
+    comparison_record = {
+        "tensor_id": int(output_tensor.tensor_id),
+        "golden_tensor_id": int(golden_tensor.tensor_id),
+        "matches": bool(matches),
+        "desired_pcc": float(desired_pcc),
+        "actual_pcc": 1.0 if matches else 0.0,
+    }
+    ttnn.graph.record_tensor_comparison_data(
+        tensors=[get_tensor_report_record(output_tensor), get_tensor_report_record(golden_tensor)]
+    )
+    if not matches:
+        error_message = (
+            f"{python_fully_qualified_name}: Comparing scalar output against CPU {level} failed: "
+            f"expected {golden_output!r}, got {output!r}"
+        )
+        if fail_on_bad_comparison:
+            raise RuntimeError(error_message)
+        logger.error(error_message)
+    return [comparison_record]
+
+
+def set_tensor_id(tensor, force=False):
+    import torch
+
+    if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
+        if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
+            return
+        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
+    elif isinstance(tensor, ttnn.DistributedGolden):
+        if tensor.global_value is not None:
+            set_tensor_id(tensor.global_value, force)
+        if tensor.shards is not None:
+            for shard in tensor.shards.values():
+                set_tensor_id(shard, force)
+    elif isinstance(tensor, (list, tuple)):
+        for element in tensor:
+            set_tensor_id(element, force)
+    else:
+        raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
+
+
+def get_output_tensor_ids(output):
+    """Return the list of tensor_id ints from all tensors in *output*.
+
+    Tensor IDs must already be assigned (via ``set_tensor_id``).
+    """
+    ids = []
+    for t in get_all_tensors(output):
+        tid = getattr(t, "tensor_id", None)
+        if tid is not None:
+            ids.append(int(tid))
+    return ids
+
+
 def _convert_ttnn_to_torch_for_comparison(tensor):
     if tensor.dtype == ttnn.DataType.FP8_E4M3:
         if ttnn.is_tensor_storage_on_device(tensor):
@@ -275,235 +669,58 @@ def _structured_output_pairs(golden_outputs, outputs):
     )
 
 
-def compare_tensors_using_pcc(
-    python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
-):
-    import numbers
+def get_tensor_report_record(tensor):
     import torch
 
-    from models.common.utility_functions import comp_pcc, comp_ulp
+    if isinstance(tensor, ttnn.Tensor):
+        device_id = None
+        address = None
+        memory_config = None
+        buffer_type = None
+        if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
+            memory_config = ttnn.get_memory_config(tensor)
+            device_id = tensor.device().id()
+            address = tensor.buffer_address()
+            buffer_type = memory_config.buffer_type.value
 
-    if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
-        comparison_records = []
-        for golden_output, output in _structured_output_pairs(golden_outputs, outputs):
-            comparison_records.extend(
-                compare_tensors_using_pcc(
-                    python_fully_qualified_name,
-                    golden_output,
-                    output,
-                    desired_pcc,
-                    level,
-                    fail_on_bad_comparison,
-                )
-            )
-        return comparison_records
+        return {
+            "tensor_id": int(tensor.tensor_id),
+            "shape": str(tensor.shape),
+            "dtype": str(tensor.dtype),
+            "layout": str(tensor.layout),
+            "memory_config": str(memory_config) if memory_config is not None else None,
+            "device_id": device_id,
+            "address": address,
+            "buffer_type": buffer_type,
+        }
 
-    if golden_outputs is None or outputs is None:
-        return list(_structured_output_pairs(golden_outputs, outputs))
+    if isinstance(tensor, torch.Tensor):
+        return {
+            "tensor_id": int(tensor.tensor_id),
+            "shape": str(tensor.shape),
+            "dtype": str(tensor.dtype),
+            "layout": str(tensor.layout),
+            "memory_config": None,
+            "device_id": None,
+            "address": None,
+            "buffer_type": None,
+        }
 
-    if isinstance(golden_outputs, ttnn.DistributedGolden):
-        comparison_records = []
-        for golden_shard, output_shard in _distributed_comparison_pairs(golden_outputs, outputs):
-            comparison_records.extend(
-                compare_tensors_using_pcc(
-                    python_fully_qualified_name,
-                    golden_shard,
-                    output_shard,
-                    desired_pcc,
-                    level,
-                    fail_on_bad_comparison,
-                )
-            )
-        return comparison_records
-
-    if isinstance(golden_outputs, numbers.Number) or isinstance(outputs, numbers.Number):
-        if not isinstance(golden_outputs, numbers.Number) or not isinstance(outputs, numbers.Number):
-            raise TypeError(
-                f"Output structure mismatch: golden type {type(golden_outputs)} does not match output type {type(outputs)}"
-            )
-        return compare_scalar_outputs(
-            python_fully_qualified_name,
-            golden_outputs,
-            outputs,
-            desired_pcc,
-            level,
-            fail_on_bad_comparison,
-        )
-
-    if not isinstance(outputs, (ttnn.Tensor, torch.Tensor)):
-        raise TypeError(f"Expected a tensor output, got {type(outputs)}")
-    if not isinstance(golden_outputs, torch.Tensor):
-        raise TypeError(f"Expected torch.Tensor golden output, got {type(golden_outputs)}")
-
-    output = outputs
-    golden_output = golden_outputs
-    torch_output = output if isinstance(output, torch.Tensor) else to_torch_for_comparison(output, golden_output)
-    same_shape = golden_output.shape == torch_output.shape
-    comparison_config = getattr(golden_output, "_ttnn_comparison_config", None)
-    comparison_golden = golden_output
-    comparison_output = torch_output
-    if comparison_config is not None and comparison_config.mask is not None and same_shape:
-        comparison_mask = comparison_config.mask.to(dtype=torch.bool, device=golden_output.device)
-        while comparison_mask.ndim < golden_output.ndim:
-            comparison_mask = comparison_mask.unsqueeze(-1)
-        try:
-            comparison_mask = torch.broadcast_to(comparison_mask, golden_output.shape)
-        except RuntimeError as error:
-            raise ValueError(
-                f"Golden comparison mask shape {tuple(comparison_config.mask.shape)} cannot be broadcast "
-                f"to output shape {tuple(golden_output.shape)}"
-            ) from error
-        comparison_golden = golden_output[comparison_mask]
-        comparison_output = torch_output[comparison_mask]
-
-    flattened_golden = comparison_golden.reshape(-1)
-    flattened_output = comparison_output.reshape(-1)
-
-    def is_constant(flattened_tensor):
-        if flattened_tensor.numel() == 0:
-            return True
-        first_value = flattened_tensor[0]
-        if flattened_tensor.dtype.is_floating_point or flattened_tensor.dtype.is_complex:
-            if bool(torch.isnan(first_value)):
-                return bool(torch.all(torch.isnan(flattened_tensor)))
-        return bool(torch.all(flattened_tensor == first_value))
-
-    pcc_is_degenerate = (
-        flattened_golden.numel() < 2
-        or flattened_output.numel() < 2
-        or is_constant(flattened_golden)
-        or is_constant(flattened_output)
-    )
-    use_comparison_config = comparison_config is not None and (comparison_config.scope == "all" or pcc_is_degenerate)
-    if use_comparison_config and comparison_config.method == "skip":
-        return []
-
-    if use_comparison_config and same_shape:
-        nonfinite_masks_match = True
-        if comparison_config.nonfinite == "mask" and (
-            comparison_golden.dtype.is_floating_point
-            or comparison_golden.dtype.is_complex
-            or comparison_output.dtype.is_floating_point
-            or comparison_output.dtype.is_complex
-        ):
-            golden_finite = torch.isfinite(comparison_golden)
-            output_finite = torch.isfinite(comparison_output)
-            nonfinite_masks_match = bool(torch.equal(golden_finite, output_finite))
-            if nonfinite_masks_match and not bool(golden_finite.all()):
-                comparison_golden = comparison_golden.clone()
-                comparison_output = comparison_output.clone()
-                comparison_golden[~golden_finite] = 0
-                comparison_output[~output_finite] = 0
-
-        if not nonfinite_masks_match:
-            matches = False
-        elif comparison_config.method == "ulp":
-            matches, _ = comp_ulp(
-                comparison_golden,
-                comparison_output,
-                ulp_threshold=comparison_config.ulp_threshold,
-                allow_nonfinite=True,
-            )
-            matches = bool(matches)
-        else:
-            if comparison_golden.dtype != comparison_output.dtype:
-                comparison_output = comparison_output.to(comparison_golden.dtype)
-            matches = bool(
-                torch.allclose(
-                    comparison_golden,
-                    comparison_output,
-                    rtol=comparison_config.rtol,
-                    atol=comparison_config.atol,
-                    equal_nan=comparison_config.equal_nan,
-                )
-            )
-        actual_pcc = 1.0 if matches else 0.0
-    elif use_comparison_config:
-        matches = False
-        actual_pcc = 0.0
-    elif pcc_is_degenerate:
-        if golden_output.dtype != torch_output.dtype:
-            torch_output = torch_output.to(golden_output.dtype)
-        matches = same_shape and bool(torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True))
-        actual_pcc = 1.0 if matches else 0.0
-    else:
-        matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
-
-    comparison_record = {
-        "tensor_id": int(output.tensor_id),
-        "golden_tensor_id": int(golden_output.tensor_id),
-        "matches": bool(matches),
-        "desired_pcc": float(desired_pcc),
-        "actual_pcc": float(actual_pcc),
-    }
-    if not matches:
-        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0 against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
-        if fail_on_bad_comparison:
-            raise RuntimeError(error_message)
-        logger.error(error_message)
-    return [comparison_record]
+    raise RuntimeError(f"Unsupported tensor report record type: {type(tensor)}")
 
 
-def should_compare_tensor_outputs(golden_outputs, outputs):
-    return bool(get_all_tensors(golden_outputs)) or bool(get_all_tensors(outputs))
+def set_output_tensor_id_decorator(function):
+    @wraps(function)
+    def call_wrapper(*function_args, **function_kwargs):
+        output = function(*function_args, **function_kwargs)
+        output_tensors = get_all_tensors(output)
+        set_tensor_id(output_tensors, force=True)
+        return output
+
+    return call_wrapper
 
 
-def should_compare_scalar_outputs(golden_outputs, outputs):
-    import numbers
-
-    try:
-        output_pairs = _structured_output_pairs(golden_outputs, outputs)
-    except (TypeError, ValueError):
-        return True
-    return any(
-        isinstance(golden_output, numbers.Number) or isinstance(output, numbers.Number)
-        for golden_output, output in output_pairs
-    )
-
-
-def compare_scalar_outputs(
-    python_fully_qualified_name, golden_output, output, desired_pcc, level, fail_on_bad_comparison
-):
-    import numbers
-    import torch
-
-    golden_tensor = torch.as_tensor(golden_output)
-    output_tensor = torch.as_tensor(output)
-    set_tensor_id(golden_tensor)
-    set_tensor_id(output_tensor)
-    if isinstance(golden_output, numbers.Integral) and isinstance(output, numbers.Integral):
-        matches = golden_output == output
-    else:
-        common_dtype = torch.promote_types(golden_tensor.dtype, output_tensor.dtype)
-        matches = bool(
-            torch.allclose(
-                golden_tensor.to(common_dtype),
-                output_tensor.to(common_dtype),
-                rtol=1e-5,
-                atol=1e-4,
-                equal_nan=True,
-            )
-        )
-
-    comparison_record = {
-        "tensor_id": int(output_tensor.tensor_id),
-        "golden_tensor_id": int(golden_tensor.tensor_id),
-        "matches": bool(matches),
-        "desired_pcc": float(desired_pcc),
-        "actual_pcc": 1.0 if matches else 0.0,
-    }
-    ttnn.graph.record_tensor_comparison_data(
-        tensors=[get_tensor_report_record(output_tensor), get_tensor_report_record(golden_tensor)]
-    )
-    if not matches:
-        error_message = (
-            f"{python_fully_qualified_name}: Comparing scalar output against CPU {level} failed: "
-            f"expected {golden_output!r}, got {output!r}"
-        )
-        if fail_on_bad_comparison:
-            raise RuntimeError(error_message)
-        logger.error(error_message)
-    return [comparison_record]
+OPERATION_CALL_STACK = []
 
 
 def default_preprocess_golden_function_inputs(function_args, function_kwargs):
@@ -716,7 +933,7 @@ def _merge_local_golden_metadata_into_global_inputs(local_inputs, global_inputs)
     return global_inputs
 
 
-def create_comparison_mode_wrapper(operation, function):
+def _create_comparison_mode_wrapper(operation, function):
     @wraps(function)
     def call_wrapper(*function_args, **function_kwargs):
         import torch
@@ -909,260 +1126,6 @@ def create_comparison_mode_wrapper(operation, function):
         )
 
     return call_wrapper
-
-
-def get_golden_function(operation):
-    if operation.golden_function is None:
-        raise RuntimeError(f"{operation} does not have a golden function")
-    return operation.golden_function
-
-
-def get_fallback_function(operation):
-    golden_function = get_golden_function(operation)
-
-    def fallback_function(*function_args, **function_kwargs):
-        preprocess_inputs = operation.preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
-        postprocess_outputs = (
-            operation.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
-        )
-        updated_function_args, updated_function_kwargs = preprocess_inputs(function_args, function_kwargs)
-        output = golden_function(*updated_function_args, **updated_function_kwargs)
-        return postprocess_outputs(output, function_args, function_kwargs)
-
-    return fallback_function
-
-
-def attach_golden_function(
-    operation,
-    golden_function,
-    *,
-    preprocess_golden_function_inputs=None,
-    postprocess_golden_function_outputs=None,
-):
-    operation.golden_function = golden_function
-    operation.preprocess_golden_function_inputs = (
-        preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
-    )
-    operation.postprocess_golden_function_outputs = (
-        postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
-    )
-
-
-PRE_OPERATION_HOOKS = []
-POST_OPERATION_HOOKS = []
-
-push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_queue_id_for_thread
-pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
-get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
-
-
-@contextmanager
-def register_pre_operation_hook(hook):
-    """
-
-    register_pre_operation_hook is a context manager that registers a pre-operation hook. The hook can be used to run custom code before the operation is executed.
-
-    Args:
-        operation: The operation that is being called.
-        args: The arguments that are passed to the operation.
-        kwargs: The keyword arguments that are passed to the operation.
-
-    Returns:
-        `None`: the hook is executed.
-
-    """
-
-    global PRE_OPERATION_HOOKS
-    PRE_OPERATION_HOOKS.append(hook)
-    yield
-    PRE_OPERATION_HOOKS.pop()
-
-
-@contextmanager
-def command_queue(cq_id: int):
-    """Context manager to set a default command queue for all TTNN operations within this context.
-
-    Operations within this context will use the specified cq_id unless they explicitly
-    provide their own cq_id parameter, which takes precedence.
-
-    Args:
-        cq_id: The command queue ID to use for operations in this context
-
-    Example:
-        with ttnn.command_queue(1):
-            result = ttnn.some_operation(tensor)  # Will use cq_id 1
-            result2 = ttnn.other_operation(tensor, queue_id=0)  # Will use cq_id 0 (overrides context)
-    """
-    if cq_id is None:
-        raise ValueError("cq_id cannot be None in command_queue context")
-
-    push_current_command_queue_id_for_thread(cq_id)
-    try:
-        yield
-    finally:
-        # Check if command queue is in expected state when exiting context
-        current_cq_id = get_current_command_queue_id_for_thread()
-        if current_cq_id != cq_id:
-            logger.warning(
-                f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
-                f"This might indicate an operation didn't properly restore the command queue state. "
-                f"Restoring to original value {cq_id}."
-            )
-        pop_current_command_queue_id_for_thread()
-
-
-@contextmanager
-def register_post_operation_hook(hook):
-    """
-
-    register_post_operation_hook is a context manager that registers a post-operation hook. The hook can be used to run custom code after the operation is executed.
-
-    Args:
-        operation: The operation that is being called.
-        args: The arguments that are passed to the operation.
-        kwargs: The keyword arguments that are passed to the operation.
-        output: The output of the operation.
-
-    Returns:
-        `None`: the hook is executed.
-
-    """
-
-    global POST_OPERATION_HOOKS
-    POST_OPERATION_HOOKS.append(hook)
-    yield
-    POST_OPERATION_HOOKS.pop()
-
-
-def get_devices(object_value):
-    devices = set()
-    if isinstance(object_value, ttnn.Tensor):
-        if ttnn.is_tensor_storage_on_device(object_value) and object_value.is_allocated():
-            devices.update(object_value.devices())
-    elif isinstance(object_value, ttnn.Device):
-        devices.add(object_value)
-    elif isinstance(object_value, (list, tuple)):
-        for element in object_value:
-            devices |= get_devices(element)
-    elif isinstance(object_value, dict):
-        for value in object_value.values():
-            devices |= get_devices(value)
-    return devices
-
-
-def get_tensors(object_value, tensor_type):
-    tensors = []
-    if isinstance(object_value, tensor_type):
-        tensors.append(object_value)
-    elif isinstance(object_value, ttnn.DistributedGolden):
-        if object_value.global_value is not None:
-            tensors += get_tensors(object_value.global_value, tensor_type)
-        if object_value.shards is not None:
-            tensors += get_tensors(object_value.shards, tensor_type)
-    elif isinstance(object_value, (list, tuple)):
-        for element in object_value:
-            tensors += get_tensors(element, tensor_type)
-    elif isinstance(object_value, dict):
-        for value in object_value.values():
-            tensors += get_tensors(value, tensor_type)
-    return tensors
-
-
-def get_ttnn_tensors(object_value):
-    return get_tensors(object_value, ttnn.Tensor)
-
-
-def get_all_tensors(object_value):
-    import torch
-
-    return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
-
-
-def set_tensor_id(tensor, force=False):
-    import torch
-
-    if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
-        if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
-            return
-        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
-    elif isinstance(tensor, ttnn.DistributedGolden):
-        if tensor.global_value is not None:
-            set_tensor_id(tensor.global_value, force)
-        if tensor.shards is not None:
-            for shard in tensor.shards.values():
-                set_tensor_id(shard, force)
-    elif isinstance(tensor, (list, tuple)):
-        for element in tensor:
-            set_tensor_id(element, force)
-    else:
-        raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
-
-
-def get_output_tensor_ids(output):
-    """Return the list of tensor_id ints from all tensors in *output*.
-
-    Tensor IDs must already be assigned (via ``set_tensor_id``).
-    """
-    ids = []
-    for t in get_all_tensors(output):
-        tid = getattr(t, "tensor_id", None)
-        if tid is not None:
-            ids.append(int(tid))
-    return ids
-
-
-def get_tensor_report_record(tensor):
-    import torch
-
-    if isinstance(tensor, ttnn.Tensor):
-        device_id = None
-        address = None
-        memory_config = None
-        buffer_type = None
-        if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
-            memory_config = ttnn.get_memory_config(tensor)
-            device_id = tensor.device().id()
-            address = tensor.buffer_address()
-            buffer_type = memory_config.buffer_type.value
-
-        return {
-            "tensor_id": int(tensor.tensor_id),
-            "shape": str(tensor.shape),
-            "dtype": str(tensor.dtype),
-            "layout": str(tensor.layout),
-            "memory_config": str(memory_config) if memory_config is not None else None,
-            "device_id": device_id,
-            "address": address,
-            "buffer_type": buffer_type,
-        }
-
-    if isinstance(tensor, torch.Tensor):
-        return {
-            "tensor_id": int(tensor.tensor_id),
-            "shape": str(tensor.shape),
-            "dtype": str(tensor.dtype),
-            "layout": str(tensor.layout),
-            "memory_config": None,
-            "device_id": None,
-            "address": None,
-            "buffer_type": None,
-        }
-
-    raise RuntimeError(f"Unsupported tensor report record type: {type(tensor)}")
-
-
-def set_output_tensor_id_decorator(function):
-    @wraps(function)
-    def call_wrapper(*function_args, **function_kwargs):
-        output = function(*function_args, **function_kwargs)
-        output_tensors = get_all_tensors(output)
-        set_tensor_id(output_tensors, force=True)
-        return output
-
-    return call_wrapper
-
-
-OPERATION_CALL_STACK = []
 
 
 if TRACE_ALLOC_DIAGNOSTICS:
@@ -1477,7 +1440,7 @@ class Operation:
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
                 if ttnn.CONFIG.enable_comparison_mode:
-                    decorated_function = create_comparison_mode_wrapper(self, decorated_function)
+                    decorated_function = _create_comparison_mode_wrapper(self, decorated_function)
 
                 # Initialize variables for comparison mode
                 local_tensor_comparison_records = []
@@ -1664,6 +1627,43 @@ def dump_operations(csv_file, include_experimental=False):
         ]
     ]
     df.to_csv(csv_file, index=False)
+
+
+def get_golden_function(operation):
+    if operation.golden_function is None:
+        raise RuntimeError(f"{operation} does not have a golden function")
+    return operation.golden_function
+
+
+def get_fallback_function(operation):
+    golden_function = get_golden_function(operation)
+
+    def fallback_function(*function_args, **function_kwargs):
+        preprocess_inputs = operation.preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
+        postprocess_outputs = (
+            operation.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
+        )
+        updated_function_args, updated_function_kwargs = preprocess_inputs(function_args, function_kwargs)
+        output = golden_function(*updated_function_args, **updated_function_kwargs)
+        return postprocess_outputs(output, function_args, function_kwargs)
+
+    return fallback_function
+
+
+def attach_golden_function(
+    operation,
+    golden_function,
+    *,
+    preprocess_golden_function_inputs=None,
+    postprocess_golden_function_outputs=None,
+):
+    operation.golden_function = golden_function
+    operation.preprocess_golden_function_inputs = (
+        preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
+    )
+    operation.postprocess_golden_function_outputs = (
+        postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
+    )
 
 
 def create_module_if_not_exists(module_name):
