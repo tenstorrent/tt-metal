@@ -350,7 +350,18 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
         f"wait_ready_ms={wait_ready_timeout_ms}"
     )
     client.send_kv_chunk_table(table_path)
-    client.wait_ready(wait_ready_timeout_ms)
+    try:
+        client.wait_ready(wait_ready_timeout_ms)
+    except RuntimeError as e:
+        # The resp queue has competing consumers: the dgen prefill worker attached to this endpoint
+        # drains it too and can take the one-shot WORKER_READY. Serving does not depend on observing
+        # it (that worker's peer tracker gates migrations), so continue instead of exiting.
+        logger.warning(
+            f"[migration] WORKER_READY not observed within {wait_ready_timeout_ms} ms ({e}); entering the "
+            f"request loop anyway. Confirm readiness from the migration worker ([ctrl N] WORKER_READY) or "
+            f"the dgen prefill worker (migration kv client: ready)."
+        )
+        return client
     logger.info(f"[migration] WORKER_READY: table={table_path}")
 
     return client
