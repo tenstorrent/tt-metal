@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""One implementation of every perf-counter metric, shared by the Tracy tool and the LLK harness.
-
-Consumers adapt their data to CounterView (count, cycles, has) and call compute_metrics(); metrics whose
-counters are absent read None, never a fake 0. Keys end in _pct (bounded) or _ratio (unbounded).
-"""
+"""Every perf-counter metric, shared by the Tracy tool and the LLK harness. Consumers adapt their data to
+CounterView; absent counters read None, never 0. Keys end in _pct (bounded) or _ratio (unbounded)."""
 
 import re
 from pathlib import Path
@@ -56,7 +53,6 @@ def safe_div(numerator: float, denominator: float) -> "float | None":
 
 
 def pct(value: "float | None") -> "float | None":
-    """Convert ratio to percentage."""
     return (value * 100.0) if value is not None else None
 
 
@@ -67,12 +63,10 @@ def bounded(value: "float | None") -> "float | None":
 
 
 def one_minus(value: "float | None") -> "float | None":
-    """Compute 1.0 - value, for inverting 'not stalled' into 'stalled'."""
     return (1.0 - value) if value is not None else None
 
 
 def avg_pair(a: "float | None", b: "float | None") -> "float | None":
-    """Average of two optional values."""
     if a is not None and b is not None:
         return (a + b) / 2.0
     return a if a is not None else b
@@ -147,8 +141,7 @@ L1_ALL = (
 
 
 def compute_metrics(v: CounterView) -> dict:
-    """Compute all derived metrics from a counter view. Returns a flat dict of *_pct values."""
-    # ── Reference cycles per bank ──
+    """Every metric for one counter view; None wherever an input counter is absent."""
     fpu_cycles = v.cycles("FPU")
     instrn_cycles = v.cycles("INSTRN_THREAD")
 
@@ -159,13 +152,11 @@ def compute_metrics(v: CounterView) -> dict:
     pack_cycles = v.cycles("TDMA_PACK")
     l1_cycles = v.cycles("L1")
 
-    # Compute Utilization (FPU bank). Counter names mirror tt-metal PerfCounterType.
     fpu_instruction = v.count("FPU", "FPU_COUNTER")
     fpu_or_sfpu = v.count("FPU", "MATH_COUNTER")
     fpu_utilization = safe_div(fpu_instruction, fpu_cycles)
     compute_utilization = safe_div(fpu_or_sfpu, fpu_cycles)
 
-    # ── Thread Stall Rates (INSTRN_THREAD bank) ──
     stalls_0 = v.count("INSTRN_THREAD", "THREAD_STALLS_0")
     stalls_1 = v.count("INSTRN_THREAD", "THREAD_STALLS_1")
     stalls_2 = v.count("INSTRN_THREAD", "THREAD_STALLS_2")
@@ -173,13 +164,11 @@ def compute_metrics(v: CounterView) -> dict:
     math_thread_stall = safe_div(stalls_1, instrn_cycles)
     pack_thread_stall = safe_div(stalls_2, instrn_cycles)
 
-    # ── Semaphore Wait Rates (INSTRN_THREAD bank) ──
     sem_wait_1 = v.count("INSTRN_THREAD", "WAITING_FOR_NONZERO_SEM_1")
     sem_wait_2 = v.count("INSTRN_THREAD", "WAITING_FOR_NONZERO_SEM_2")
     math_sem_wait = safe_div(sem_wait_1, instrn_cycles)
     pack_sem_wait = safe_div(sem_wait_2, instrn_cycles)
 
-    # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
     srca_write = v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
     srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
     unpack0_busy = v.count("TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
@@ -188,7 +177,6 @@ def compute_metrics(v: CounterView) -> dict:
     unpack1_eff = safe_div(srcb_write, unpack1_busy)
     unpack_eff = avg_pair(unpack0_eff, unpack1_eff)
 
-    # ── Unpacker-to-Math Data Flow (TDMA_UNPACK bank) ──
     srca_avail = v.count("TDMA_UNPACK", "SRCA_WRITE_REQ")
     srcb_avail = v.count("TDMA_UNPACK", "SRCB_WRITE_REQ")
     flow0 = safe_div(srca_avail, unpack0_busy)
@@ -201,12 +189,10 @@ def compute_metrics(v: CounterView) -> dict:
     dest_read = v.count("TDMA_PACK", "PACKER0_DEST_READ_REQ")
     pack_dest_eff = safe_div(dest_read, packer_busy)
 
-    # ── Math Pipeline Stalls (TDMA_UNPACK bank only: same bank, reliable) ──
     math_available = v.count("TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
     # No src-data stall metric: MATH_SRC_DATA_READY is gated on dec_instr_alu while
     # MATH_INSTRN_AVAILABLE counts the whole math pipe, so their ratio is not a stall fraction.
 
-    # ── L1 / NoC utilization: mean per-port busy fraction across each client group (see mean_port_util) ──
     noc_ring0_util = mean_port_util(v, "L1", L1_RING0, l1_cycles)
     noc_ring1_util = mean_port_util(v, "L1", L1_RING1, l1_cycles)
     unpacker_l1_util = mean_port_util(v, "L1", L1_UNPACKER, l1_cycles)
@@ -222,13 +208,10 @@ def compute_metrics(v: CounterView) -> dict:
     _ring0_grant = sum(v.count("L1", c + "_GRANT") for c in L1_RING0 if v.has(c + "_GRANT"))
     noc_ring0_grant_eff = bounded(safe_div(_ring0_grant, _ring0_req))
 
-    # ── Per-thread instruction throughput (INSTRN bank) ──
     thread0_ipc = _instrn_rate("THREAD_INSTRUCTIONS_0")
     thread1_ipc = _instrn_rate("THREAD_INSTRUCTIONS_1")
     thread2_ipc = _instrn_rate("THREAD_INSTRUCTIONS_2")
 
-    # ── Cross-thread dependency stalls (INSTRN per-thread WAITING_FOR_*) ──
-    # Where each pipeline stage blocks: math starved by unpack, pack blocked on math, etc.
     math_wait_unpack = _instrn_rate("WAITING_FOR_UNPACK_IDLE_1")
     math_wait_sfpu = _instrn_rate("WAITING_FOR_SFPU_IDLE_1")
     pack_wait_math = _instrn_rate("WAITING_FOR_MATH_IDLE_2")
@@ -243,13 +226,10 @@ def compute_metrics(v: CounterView) -> dict:
         v.count("TDMA_PACK", "PACKER_BUSY_2"),
         v.count("TDMA_PACK", "PACKER_BUSY"),  # engine 3 (see hw_counters naming note)
     ]
-    # Engines 0-2 are WH-only; gate on has() so BH reads N/A instead of the fake 0% that
-    # count()'s 0.0-for-absent default would produce. Engine 3 (PACKER_BUSY) exists on both arches.
+    # Engines 0-2 are Wormhole-only signals, so gate on has(); PACKER_BUSY is the whole packer on both arches.
     packer0_util = safe_div(pb[0], pack_cycles) if v.has("PACKER_BUSY_0") else None
     packer1_util = safe_div(pb[1], pack_cycles) if v.has("PACKER_BUSY_1") else None
     packer2_util = safe_div(pb[2], pack_cycles) if v.has("PACKER_BUSY_2") else None
-    # Engine 3 only exists as a separate signal on WH; on BH PACKER_BUSY is |tdma_pack_busy (the single
-    # packer), which pack_utilization_pct already reports.
     packer3_util = safe_div(pb[3], pack_cycles) if v.has("PACKER_BUSY_0") else None
     # Idle engines count as zero (100% imbalance), so gate on presence of all four, not on activity.
     _engines = ("PACKER_BUSY_0", "PACKER_BUSY_1", "PACKER_BUSY_2", "PACKER_BUSY")
@@ -257,7 +237,6 @@ def compute_metrics(v: CounterView) -> dict:
     dest_granted = v.count("TDMA_PACK", "DEST_READ_GRANTED_0")
     pack_dest_grant_eff = safe_div(dest_granted, dest_read)
 
-    # ── Source-register write completion efficiency (TDMA_UNPACK) ──
     srca_write_eff = safe_div(srca_write, srca_avail)
     srcb_write_eff = safe_div(srcb_write, srcb_avail)
 
@@ -274,7 +253,6 @@ def compute_metrics(v: CounterView) -> dict:
     l1_port1 = first_present(v, L1_PORT1_NAMES)
     l1_port8 = first_present(v, L1_PORT8_NAMES)
 
-    # ── Compute (extra) ──
     sfpu_util = safe_div(v.count("FPU", "SFPU_COUNTER"), fpu_cycles)
     fpu_exec_eff = (
         safe_div(fpu_instruction, v.count("INSTRN_THREAD", "MATH_INSTRN_AVAILABLE_1")) if v.has("FPU_COUNTER") else None
@@ -286,7 +264,6 @@ def compute_metrics(v: CounterView) -> dict:
         safe_div(available_math, packer_busy) if packer_busy > 0 else safe_div(available_math, pack_cycles)
     )
 
-    # ── Extra INSTRN waits / availability (all / instrn_cycles) ──
     srca_clear_wait = _instrn_rate("WAITING_FOR_SRCA_CLEAR")
     srcb_clear_wait = _instrn_rate("WAITING_FOR_SRCB_CLEAR")
     math_idle_wait_t1 = _instrn_rate("WAITING_FOR_MATH_IDLE_1")
@@ -307,16 +284,12 @@ def compute_metrics(v: CounterView) -> dict:
     unpack_instrn_avail_t0 = _instrn_rate("UNPACK_INSTRN_AVAILABLE_0")
     pack_instrn_avail_t2 = _instrn_rate("PACK_INSTRN_AVAILABLE_2")
 
-    # ── Write-blocked complements (TDMA_UNPACK: fraction of available writes NOT completed) ──
     srca_write_port_blocked = one_minus(safe_div(srca_write, srca_avail))
     srca_write_ovr_blocked = one_minus(safe_div(v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_OVR"), srca_avail))
     srcb_write_ovr_blocked = one_minus(safe_div(srcb_write, srcb_avail))
     srcb_write_port_blocked = one_minus(safe_div(v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_PORT"), srcb_avail))
     dest_read_backpressure = one_minus(safe_div(dest_granted, dest_read))
 
-    # ── Instruction issue rates are the IPC metrics above (thread{0,1,2}_ipc). ──
-
-    # ── L1 per-port utilisation + grant efficiency (extra) ──
     risc_core_l1_util = (
         safe_div(v.count("L1", "L1_0_TDMA_BUNDLE_0_RISC"), l1_cycles) if v.has("L1_0_TDMA_BUNDLE_0_RISC") else None
     )
@@ -344,7 +317,6 @@ def compute_metrics(v: CounterView) -> dict:
         else None
     )
 
-    # ── NoC ring back-pressure (mean (req-grant)/req over the ring's outgoing/incoming ports) ──
     def _bp(names):
         req = sum(v.count("L1", n) for n in names if v.has(n))
         grant = sum(v.count("L1", n + "_GRANT") for n in names if v.has(n + "_GRANT"))
@@ -366,7 +338,6 @@ def compute_metrics(v: CounterView) -> dict:
     noc_ring1_out_util = mean_port_util(v, "L1", _R1_OUT, l1_cycles)
     noc_ring1_in_util = mean_port_util(v, "L1", _R1_IN, l1_cycles)
 
-    # ── L1 bank-0 composite balance metrics (over the 8 primary L1_0 ports) ──
     _unp0 = v.count("L1", "L1_0_UNPACKER_0")
     _pk = v.count("L1", l1_port1) if l1_port1 else 0.0
     _bundle = v.count("L1", "L1_0_TDMA_BUNDLE_0_RISC") + v.count("L1", "L1_0_TDMA_BUNDLE_1_TRISC")
@@ -509,7 +480,6 @@ def compute_metrics(v: CounterView) -> dict:
         # Source-register write completion efficiency
         "srca_write_eff_pct": pct(srca_write_eff),
         "srcb_write_eff_pct": pct(srcb_write_eff),
-        # ── Superset (also used by the Tracy tool) ──
         # Compute
         "sfpu_utilization_pct": pct(sfpu_util),
         "fpu_exec_eff_pct": pct(fpu_exec_eff),

@@ -1174,8 +1174,7 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        # Unbounded ratio family gets "(ratio)"; everything else (incl. instruction-
-                        # issue rates, now bounded percentages) gets "(%)".
+                        # The ratio family gets "(ratio)", everything else "(%)".
                         suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
                         # Legacy "Avg on full grid" column names.
                         if base_name == "SFPU Util":
