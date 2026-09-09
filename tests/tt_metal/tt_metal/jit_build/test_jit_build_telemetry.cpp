@@ -244,7 +244,8 @@ TEST_F(JitBuildWindowTest, ConcurrentBuildsWidenTheWindowToTheirExtent) {
     // covers [i ms, i+5 ms], making the union [0 ms, 20 ms].
     const auto base = std::chrono::steady_clock::now();
     std::vector<std::thread> threads;
-    for (int i = 0; i < num_threads; ++i) {
+    threads.reserve(num_threads);
+for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i] {
             for (int j = 0; j < 200; ++j) {
                 tel.note_build_window(base + std::chrono::milliseconds(i), base + std::chrono::milliseconds(i + 5));
