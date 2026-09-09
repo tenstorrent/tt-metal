@@ -890,3 +890,135 @@
   unconditionally, and where the claim is absent the framework's allocation
   refusal AND the op's own `UnsupportedAxisValue` are both asserted by message.
   It self-skips its value half on Blackhole, where the dtype matrix covers it.
+
+---
+
+## Refinement 6 — Speed up the transposed / rough-`C` geometries
+
+- **Date**: 2026-09-09
+- **What was done**: the two levers the entry named, both measured first and both
+  kept. **No SUPPORTED change** (perf refinement). All numbers 8x8 Wormhole, fresh
+  cache, **64/64 cores throughout**.
+
+  **The ablation came first, whole-op, on both targets.**
+
+  | variant | `[1,1,16384,32]` | `[1,1,1,50304]` (pad auto) |
+  |---|---|---|
+  | all payloads stubbed | **6221** (NCRISC 5921, BRISC 598) | **1264** |
+  | + read payload only | **14362** (NCRISC 14054, BRISC 630) | **6506** |
+  | + write payload only | **9220** (BRISC 8909) | **25350** |
+  | + compute payload only | **6479** | **3533** |
+  | full op | **20993** (NCRISC 17448, BRISC 20688) | **31790** |
+
+  The two shapes are bound by *opposite* halves, which is why one lever each.
+  `[1,1,16384,32]` is the `split_reader` catalog signature verbatim: the reader
+  RISC-V is on the critical path for the whole kernel, **6221 ns of the 20993 is
+  its per-stick loop with no NoC payload at all** (256 sticks/core at 64 B —
+  the tensor's own row width, which no blocking can coarsen because consecutive
+  ROW_MAJOR sticks live on different DRAM banks), while the writer's own payload
+  is 2999 ns. `[1,1,1,50304]` is the mirror: **write-dominated** (24086 ns of
+  stores for 3.2 MiB), with the reads mostly in-kernel pad fills because `H = 1`.
+
+  **Lever 1 — SPLIT READER (item 1). 20993 -> 17736 ns (median of 3), 1.18x.**
+  The writer kernel now issues the *trailing* `split_reader` tile-rows of every
+  block's stick read into its own input CB, `cb_input_rows_split`; the reader
+  takes the leading ones; compute tilizes the block as **two back-to-back
+  sub-blocks** (`tilize<cb_input_rows>(rows_main)` then
+  `tilize<cb_input_rows_split>(rows_split)`), which reproduces the block's
+  tile-row order with no handshake. A second CB rather than a second producer on
+  the first: one producer per CB is a hard CB invariant and two pushers is silent
+  UB. Its capacity is the writer's **whole** half-block, and that is a deadlock
+  argument rather than a perf one — a shallower buffer lets the writer block in
+  `cb_reserve_back(split)` while compute blocks in `cb_reserve_back(output)`.
+
+  The share is a knob and it is **not 50**. Swept on device at the target's
+  8-tile-row block (writer tile-rows -> device ns):
+
+  | writer rows | 0 | 1 | 2 | **3** | 4 | 6 |
+  |---|---|---|---|---|---|---|
+  | device ns | 20770 | 19923 | 18864 | **17945** | 20797 | 24716 |
+  | NCRISC | 17278 | 15751 | 14721 | 10402 | 8417 | 4262 |
+
+  38% is the floor. Past it the writer becomes the wall faster than the reader is
+  relieved — at an even split NCRISC is down to 8417 but BRISC is still ~20500,
+  i.e. **BRISC costs roughly 2.3x per stick what NCRISC does** once its stores
+  are counted, because its split reads share NoC1 with them. Gated
+  (`_split_reader_rows`) on the plain stick path, a non-native output, a read at
+  or below `SPLIT_READER_MAX_ROW_BYTES = 256`, blocks at least two tile-rows
+  tall, and the extra CB fitting the same budget the column extent was solved
+  against. `SPLIT_READER_MAX_ROW_BYTES = 0` turns it off everywhere and the plan
+  is byte-identical to Refinement 5.
+
+  **Lever 2 — RAGGED COLUMN TAIL (item 2). 31179 -> 28474 ns on the padded
+  witness (1.10x) and 37356 -> 35338 on the tile-aligned `[1,1,32,50304]`
+  (1.06x).** The escape `l1_ledger.md` had recorded, built: a `ProgramDescriptor`
+  carries **two disjoint core ranges** — full-width cores and tail cores — each
+  with its own `block_width_tiles`, `col_tile_offset` and CB sizes. The CB-wrap
+  invariant (`llk_push_tiles`' `LLK_ASSERT`, `cb_pop_front`'s
+  `fifo_rd_ptr <= fifo_limit`) is untouched because it was only ever a *per-core*
+  invariant, and the two families are a prefix/suffix split of the row-wise core
+  order, so no core ever sees two quanta. `block_width_tiles` goes back to the
+  design's `ceil(C / target)`; `C = 1572 = 2^2*3*131` went from **131 chunks of
+  12** (768 B reads, 3 blocks on the busiest core against a 2.05 average) to
+  **120 of 13 plus one 12-wide tail** (832 B, 2 blocks). Smooth `C` emits no tail
+  group and is byte-identical to Refinement 5; a sub-row-paged source keeps the
+  divisor rule, because there the divisor is a constraint on the *width*, not on
+  the per-core mix.
+
+  **A third finding fell out of lever 2.** The wave ladder walked `4, 3, 2`, and
+  the ragged rule makes the intermediate rungs reachable *for the first time* —
+  under the divisor rule a non-power-of-two wave count almost always collapsed
+  onto its neighbour's divisor. On `C = 1572` the new `waves = 3` rung is a 576 B
+  read, and it measured **29058** against 27035 for `waves = 2`'s 832 B: the
+  uncalibrated rung is the worst of the three. The ladder now **halves**
+  (`cap, cap/2, ..., 2`), which is what `MIN_BLOCK_ROW_BYTES = 512` was
+  calibrated on (Refinement 3 measured w1/w2/w4/w8). Verified to change **no
+  other shape's plan**: attention 8, square_large 16, square_mid 8,
+  short_wide_wide 8, full_width 2, tall_narrow 1 — all unchanged.
+
+  **One HANG the static analyzer caught before it shipped.** The split was not
+  gated on `output_native`. A natively sharded output emits **no writer kernel at
+  all** (the packer has already written the shard), so `cb_input_rows_split`
+  would have had no producer and compute would have waited forever — reachable at
+  `[1,1,16384,32]` bf16 DRAM -> L1 HEIGHT_SHARDED, a cell inside SUPPORTED.
+  Fixed, and pinned by `test_split_reader_off_on_native_sharded_output`.
+  A second, quieter one found by the new fp32 case: the lossless fp32 relay
+  tags `cb_input_rows` with `UnpackToDestFp32`, and the split CB is the same
+  relay's second input, so it needs the tag too — otherwise the helper's own
+  `Fp32Mode::Lossless` static_assert fires at build time.
+
+- **Accuracy achieved**: **bit-identical** (`torch.equal`) on every shape
+  touched — tilize does no arithmetic, so PCC/rtol/atol are not the bar and any
+  deviation would be a bug. Verified on `[1,1,16384,32]`, `[1,1,16000,32]`,
+  `[1,1,8192,32]` fp32, `[1,1,1,50304]`, `[1,1,32,50304]`, `[1,1,32,32*67]`,
+  `[1,1,256,32*67]`, `[1,1,100,32*45+17]`, plus the whole Refinement 3 guard set.
+- **Golden test progress**: full suite re-run. `test_golden.py` **677 passed,
+  2394 skipped, 14 xfailed, 2 failed**; `test_golden_main_tests.py` **169
+  passed**; `test_regression.py` **10 passed**; `test_translated.py` **928
+  passed, 294 skipped, 58 failed**. **Every failure is pre-existing**: the
+  `test_translated.py` set is character-for-character identical with
+  `RAGGED_COLUMN_TAIL = False` + `SPLIT_READER_MAX_ROW_BYTES = 0` (byte-identical
+  to Refinement 5), and the two `test_golden.py` failures are the bfp4 x pad x
+  `hw_non_aligned` near-miss Refinement 5 recorded (both at `C = 2`, so neither
+  new mechanism is even active). `test_golden_main_trace.py` reports 2 setup
+  ERRORS from the harness's own `use_module_device` x `device_params`
+  incompatibility — also pre-existing and independent of this op's code.
+  `tests/ttnn/unit_tests/operations/tilize/`: **641 passed, 1 skipped**.
+- **Issues encountered**: (1) the `output_native` hang above — found by
+  `ttnn-static-analyzer`, not by any test, because no unit test paired a
+  tall-narrow shape with a sharded output; (2) the fp32 lossless static_assert
+  on the split CB; (3) `test_tilize_lever_block_width.py` monkeypatched
+  `_largest_divisor_at_most`, which the ragged rule no longer calls — updated to
+  set `RAGGED_COLUMN_TAIL = False` alongside it (`C = 512` is smooth, so the
+  measurement is unchanged); (4) the wave-ladder rung described above, which
+  would have shipped a 7% regression against the achievable value on rough `C`.
+- **Tests added**:
+  `tests/ttnn/unit_tests/operations/tilize/test_tilize_perf_transposed.py` (the
+  perf harness: both targets + the Refinement 3 guard set),
+  `test_tilize_ablation_r6.py` (the whole-op ablation harness; the payload
+  switches are temporary kernel edits, documented in its docstring),
+  `test_tilize_lever_split_reader.py` (the share sweep),
+  `test_tilize_lever_ragged_tail.py` (the tail x wave-depth sweep on both
+  rough-`C` witnesses), and `test_tilize_column_tail_and_split.py` (11
+  correctness cases pinning both mechanisms, their knobs-off equivalence, and
+  every structural leg of the split gate).

@@ -15,6 +15,7 @@ Named block axes (all four appear in every row): `leading`, `tile_row`, `tile_co
 | `cb_input_rows`, **RETILE path** (Refinement 4, `plan.is_retile`) | **1** page of `tb_in` | none — the CB is never written, waited on, pushed or popped. | `{all four axes: absent}` — it carries no data on this path. | `input_tensor.dtype`, `tile = TileDescriptor(tile_h, 32)` | none | none | whole program | **Deliberately kept at one page rather than deleted.** A re-tile needs no row-major intermediate at all (the reader assembles output tiles directly — see the `cb_output_tiles` retile row), so the honest capacity is zero. It is one page and not zero because `kernel_main` is not a template: the DISCARDED branch of an `if constexpr` is still type-checked, and `read_sticks_for_tilize`'s `constexpr elem_size = get_tile_size(cb)/get_tile_hw(cb)` would be a division by zero against an unconfigured CB, so the ROW_MAJOR branches would not compile. One page (`<= 4 KB`) buys a well-formed JIT descriptor for dead code; the alternative is templating `kernel_main`'s whole body, which is churn for the same bytes. |
 | `cb_output_tiles`, **RETILE path** (Refinement 4) | `output_depth_batches * write_rows_per_barrier * block_width_tiles` — unchanged | `write_rows_per_barrier * block_width_tiles` pages — unchanged | unchanged, except that `within_tile: spans` is now satisfied by the READER's face walk rather than by the packer | unchanged | **`reader`** (not `compute`) | `writer` | whole program | **The producer moves, the CB does not.** `retile_block` assembles each output tile IN PLACE in this CB out of `retile_copy_unit`-sized runs of the source tiles' faces, so the program carries no compute kernel and this CB's producer/consumer pair is reader -> writer. Still exactly one producer and one consumer, which is the invariant that matters. Because the input CB collapses to one page, the `W_FIT` solve's denominator drops the `input_depth_rows * tb_in` term on this path and the whole budget goes to the column extent — so the retile footprint is **strictly smaller** than the ROW_MAJOR one at the same `block_width_tiles`. |
 | `cb_pad_row` (Refinement 2, `plan.pad_active` only) | **1** page of `block_row_bytes` = `block_width_tiles * 32 * element_size(in_dtype)` bytes — i.e. `tb_in / tile_h`, ONE row of the block, not one tile-row | the same 1 page. Nothing is ever pushed or popped: the reader seeds it once per kernel and thereafter only reads from it, so the live set IS the capacity. | `{leading: absent, tile_row: absent -> the fill is row-invariant, so ONE row serves every padded row of every block, tile_col: spans -> block_width_tiles*32 elements, within_tile: partial -> one ROW of a tile-row, not a tile}` | `input_tensor.dtype` — the fill is written into `cb_input_rows`, so it is encoded in the INPUT's format (`pad_fill_word`); the output cast happens later at pack time, exactly as it does for a real element. No `page_size`/DEST interaction: this CB never reaches the unpacker. | `reader` (seeds it) | `reader` (reads it as a local NoC source) | whole program; **allocated at all only when a pad region exists** | **Deliberately NOT shared, and deliberately not eliminated.** Sharing with `cb_input_rows` is foreclosed by concurrency: the reader reads this page as a NoC *source* while the same barrier writes `cb_input_rows` pages, and `cb_input_rows` is simultaneously being popped by compute — a single-producer/single-consumer CB cannot be both. Sharing with `cb_output_tiles` is worse (compute owns it). Eliminating it means filling each padded row with a RISC store loop over `block_row_bytes` (up to 32 KB, per row, on the critical path of whichever core owns a tail block) instead of one DM-engine transfer; `[1,1,1,50304]` at 31 pad rows per tile-row is the shape that makes that the difference. The page is `1/tile_h` of a `cb_input_rows` page, so at `tile_h = 32` this row adds **1.5%** to the footprint (see the total below). |
+| `cb_input_rows_split` (Refinement 6, `plan.split_reader > 0` only) | `split_reader * block_width_tiles`, where `split_reader = min(max_extent - 1, floor(max_extent * SPLIT_READER_WRITER_SHARE_PCT / 100))` and `max_extent = ceil(R / num_row_groups)` — i.e. the WRITER's whole half-block, in tile-rows | `block_width_tiles` pages — one tile-row, exactly as `cb_input_rows`: `compute_kernel_lib::tilize` waits/pops one tile-row per iteration and `read_sticks_for_tilize` reserves/pushes one per tile-row. **The capacity is deliberately the whole half-block rather than a depth-2 window**, and that is a DEADLOCK argument, not a perf one: the writer must be able to finish its read and reach its store without waiting on compute, or it can block in `cb_reserve_back(cb_input_rows_split)` while compute blocks in `cb_reserve_back(cb_output_tiles)` — a cycle. | `{leading: streams, tile_row: spans -> split_reader tile-rows (the writer's share of the block), tile_col: spans -> block_width_tiles pages, within_tile: spans -> one page IS one tile's row-major bytes}` | `input_tensor.dtype`, identical to `cb_input_rows` in format, `page_size` and `TileDescriptor` — which is what makes the compute kernel's `NoReconfigure` correct across the two back-to-back `tilize` calls. On the fp32 -> fp32 relay it carries `UnpackToDestMode::UnpackToDestFp32` too; setting it on `cb_input_rows` alone trips the helper's own `Fp32Mode::Lossless` static_assert on the split call (`tilize_helpers.inl:122`). | `writer` | `compute` | whole program; **allocated at all only where the split is on** | **Not shared, and it is the reason the split needs a second CB at all.** `cb_input_rows` already has the reader as its producer, and a CB has exactly one producer — two pushers is silent UB, not a compile error. Sharing with `cb_output_tiles` is worse (opposite direction, different page format). Aliasing with `cb_pad_row` is foreclosed by the gate: the split is off on every padded plan, so the two are never both allocated — but they are also never both live, so the non-overlap is a consequence of the gate rather than an opportunity. Cost is bounded by the gate: the split only turns on at `block_row_bytes <= SPLIT_READER_MAX_ROW_BYTES` (256 B), so `block_width_tiles <= 8` at bf16 and this CB is at most `split_reader * 8 * tb_in` — 6 KB on the measured target `[1,1,16384,32]` (3 rows x 1 tile x 2048 B). |
 
 Two CBs is the inventory floor for an UNPADDED call: each crosses a thread boundary (`reader`→`compute`,
 `compute`→`writer`), and the one candidate for elimination — an in-place transform —
@@ -23,6 +24,11 @@ phases (there is only one compute phase) and no scaler or mask CB. A padded call
 exactly ONE more — `cb_pad_row`, the constant CB — and it is one *row*, not one tile:
 the fill is invariant along `tile_row`, so a single row serves every padded row of
 every block, which is what keeps a constant buffer from being priced per tile.
+A SPLIT-READER call (Refinement 6) adds one more, `cb_input_rows_split`, and it is
+not an inventory failure but a direct consequence of the CB contract: the split's
+whole point is that a SECOND kernel produces part of the block, and a CB has exactly
+one producer. The two are mutually exclusive by the gate (the split is off on every
+padded plan), so the inventory is never four.
 
 ## Symbol table
 
@@ -32,8 +38,9 @@ predicate establishing it.
 | Symbol | Bound | Predicate establishing the bound |
 |--------|-------|----------------------------------|
 | `tile_h` | `{1, 2, 4, 8, 16, 32}`; Phase 0 `= 32` | `tile=` validation: height must be a power-of-two fraction of 32 and width must be 32 (raises `ValueError` otherwise). Phase 0 additionally pins it via `SUPPORTED["tile_height"] = [32]`. |
-| `block_width_tiles` | `1 <= block_width_tiles <= min(255, W_FIT)` | `W_FIT = clamp((budget - WRITE_BATCH_MIN_TILES*tb_out) // (2*tb_in + 2*tb_out), 1, FAST_TILIZE_WIDTH_CAP)` with `budget = ttnn.get_max_worker_l1_unreserved_size()` and `FAST_TILIZE_WIDTH_CAP = 255` from `can_use_fast_tilize`'s `block_width_tiles < 256` (`tilize_helpers.inl:77`). Under `low_l1=True` the additional cap `LOW_L1_WIDTH_CAP` (a host constant, independent of every tensor dimension) applies. `block_width_tiles` is the coarsest **divisor of `C`** that is `<= min(W_CAP, C / num_w_chunks_target)` with `num_w_chunks_target >= ceil(C / W_CAP)`, so the bound holds by construction. (The divisor constraint replaces the design's `ceil` — see "Deviations".) **On the shard-driven plan (Refinement 1) it is not solved at all: `= shard_cols_tiles`, read off the shard spec.** The bound still holds — a shard column is a whole number of tiles by construction, and the non-native side's DEPTH knobs (not the block) are what shrink if the pair overruns the budget. `low_l1` is inert there: the shard, not `W_CAP`, fixes the extent. **On a sub-row-paged source it must additionally divide the page width in tiles**, so a block's row segment sits inside ONE source page; expressed as `_largest_divisor_at_most(gcd(C, page_width_tiles), width_limit)`, which degenerates to the C-divisor rule exactly when a page is a whole row. **Refinement 3:** `num_w_chunks_target` is no longer just the occupancy cut — it is `max(w_chunks_for_l1, ceil(num_cores * waves / R))` evaluated at the largest `waves <= PIPELINE_WAVES_PER_CORE` whose resulting `block_row_bytes >= MIN_BLOCK_ROW_BYTES`, falling back to `waves = 1`. The bound is unaffected (a larger target can only make the divisor SMALLER), and so is every capacity expression below — the wave rule spends L1, never asks for more. |
-| `block_width_tail_tiles` | **does not exist in the implementation** | `block_width_tiles` divides `C` exactly, so `num_w_chunks = C / block_width_tiles` and every w-chunk is exactly `block_width_tiles` wide. There is no ragged column tail, hence no second CT instantiation of `compute_kernel_lib::tilize` and no second CB quantum. Forced by the wrap requirement — see "Deviations". |
+| `block_width_tiles` | `1 <= block_width_tiles <= min(255, W_FIT)` | `W_FIT = clamp((budget - WRITE_BATCH_MIN_TILES*tb_out) // (2*tb_in + 2*tb_out), 1, FAST_TILIZE_WIDTH_CAP)` with `budget = ttnn.get_max_worker_l1_unreserved_size()` and `FAST_TILIZE_WIDTH_CAP = 255` from `can_use_fast_tilize`'s `block_width_tiles < 256` (`tilize_helpers.inl:77`). Under `low_l1=True` the additional cap `LOW_L1_WIDTH_CAP` (a host constant, independent of every tensor dimension) applies. **Refinement 6:** `block_width_tiles` is `ceil(C / num_w_chunks_target)` — the design's own extent — clamped into `[1, min(W_CAP, C)]`, so the bound holds by construction. The leftover `C % block_width_tiles` columns become a tail chunk carried by a SECOND core range (see `block_width_tail_tiles`). The old coarsest-**divisor-of-`C`** rule survives on exactly one leg, a sub-row-paged source, where the width faces a constraint of its own — see below. **On the shard-driven plan (Refinement 1) it is not solved at all: `= shard_cols_tiles`, read off the shard spec.** The bound still holds — a shard column is a whole number of tiles by construction, and the non-native side's DEPTH knobs (not the block) are what shrink if the pair overruns the budget. `low_l1` is inert there: the shard, not `W_CAP`, fixes the extent. **On a sub-row-paged source it must additionally divide the page width in tiles**, so a block's row segment sits inside ONE source page; expressed as `_largest_divisor_at_most(gcd(C, page_width_tiles), width_limit)`. That is a constraint on the WIDTH itself, not on the per-core mix, so Refinement 6's tail cannot lift it and this leg keeps the divisor rule (`RAGGED_COLUMN_TAIL and input_pages_per_row == 1` is the gate). **Refinement 3:** `num_w_chunks_target` is no longer just the occupancy cut — it is `max(w_chunks_for_l1, ceil(num_cores * waves / R))` evaluated at the largest `waves <= PIPELINE_WAVES_PER_CORE` whose resulting `block_row_bytes >= MIN_BLOCK_ROW_BYTES`, falling back to `waves = 1`. The bound is unaffected (a larger target can only make the width SMALLER), and so is every capacity expression below — the wave rule spends L1, never asks for more. **Refinement 6** walks that `waves` ladder by HALVING (`cap, cap/2, ..., 2`) rather than decrementing, because `{1,2,4,8}` are the rungs `MIN_BLOCK_ROW_BYTES` was calibrated on and the ragged rule makes the intermediate rungs reachable for the first time. |
+| `block_width_tail_tiles` | `0 <= block_width_tail_tiles < block_width_tiles`; `= C - (C // block_width_tiles) * block_width_tiles` | **Refinement 6 gave it an implementation.** 0 on smooth `C` (no tail group, one core range, byte-identical to Refinement 5) and on a sub-row-paged source (the divisor rule still binds there). Non-zero, it names a SECOND core range with its own `block_width_tiles` CT arg, its own `col_tile_offset` and its own CB sizes. The wrap requirement is untouched, because it was only ever a per-CORE requirement: `split_work_to_cores`' contiguous ranges are what could mix two quanta on one core, and the two families are a prefix/suffix split of the row-wise core order, so no core ever sees both. Its capacities are all `<=` the full group's (same depths, narrower block), so it never sets `L1_per_core`. |
+| `split_reader` | `0 <= split_reader <= ceil(R / num_row_groups) - 1` | **Refinement 6.** The tile-rows of each block the WRITER kernel reads, and also `cb_input_rows_split`'s depth in tile-rows. `= min(max_extent - 1, floor(max_extent * SPLIT_READER_WRITER_SHARE_PCT / 100))` when every gate leg passes, else 0. The gate legs: the plain stick path only (not padded / retile / native input / sub-row-paged), a NON-native OUTPUT (a natively sharded output emits no writer kernel, so the split CB would have no producer — a hang, and the leg the static analyzer caught), `block_row_bytes <= SPLIT_READER_MAX_ROW_BYTES`, `max_extent >= 2`, and the extra CB fitting the same budget the column extent was solved against. That last check is what keeps this symbol out of the `W_FIT` inversion: the split is decided AFTER the width, and declines itself rather than narrowing the block. |
 | `write_rows_per_barrier` | `1 <= write_rows_per_barrier <= WRITE_BATCH_MIN_TILES = 4` | `= max(1, ceil(WRITE_BATCH_MIN_TILES / block_width_tiles))`; since `block_width_tiles >= 1`, the ceiling is at most `WRITE_BATCH_MIN_TILES`. |
 | `input_depth_rows` | `= 2` (Phase 0); `>= 2` in general. **Measured across {1,2,3,4} and flat at every value** on both shapes the design's overlap lamp names — kept at 2 as the smallest value that overlaps at all and the cheapest in L1 of those; still a live knob. Evidence and the bottleneck it implies (DRAM-bandwidth-bound, ~183 GB/s on `[1,1,2048,2048]`) are in `tilize_program_descriptor.INPUT_DEPTH_ROWS`. | Fixed host constant. Lower bound 2 is required by the overlap it buys and by `read_sticks_for_tilize`'s capacity assert `width_in_tiles <= cb_capacity` (`tilize_helpers_dataflow.inl:105-107`) plus `compute_kernel_lib::tilize`'s `get_dfb_num_pages(input_dfb) >= block_width_tiles` (`tilize_helpers.inl:220-222`). |
 | `output_depth_batches` | `= 2` (a host constant) | Depth measured in WRITE BATCHES rather than tile-rows. Lower bound 2 is what buys the compute-side overlap window; being an integer count of batches is what keeps the capacity an exact multiple of the batch quantum (the wrap requirement below). Capacity in tile-rows is therefore `2 * write_rows_per_barrier`, bounded by `2 * WRITE_BATCH_MIN_TILES = 8`. |
@@ -41,6 +48,7 @@ predicate establishing it.
 | `tb_out` | `= output_tensor.buffer_page_size()`; `<= 32*32*4 = 4096` B | Same: `tile_h <= 32`, and the widest format in `TARGET["output_dtype"]` is 4 B/element. Block-float outputs are *smaller* (`Bfp8_b` = 1088 B, `Bfp4_b` = 576 B for a 32x32 tile). **Refinement 5: `tb_out` and `tb_in` are independent** — the cast diagonal makes them differ by up to 4x in either direction (`bf16 -> fp32` widens 2048 -> 4096; `fp32 -> bfp4` narrows 4096 -> 576). Both appear separately in the `W_FIT` denominator, so the pair is solved rather than assumed equal, and the bound above still holds because each is independently `<= 4096`. |
 | `WRITE_BATCH_MIN_TILES` | `= 4`, a host constant | Named constant, single source. **MEASURED on device, not taken from the catalog:** the design's lamp asked whether 8 sits past the knee and it does. `[1,1,16384,32]` (C == 1, so this constant *is* `write_rows_per_barrier`), median device kernel ns over 3 fresh-cache runs at 64/64 cores — wb=1 **24430** (the one-write-per-barrier trap), wb=2 22519, wb=4 **20723**, wb=8 22568, wb=16 22403. The plateau is at 4, which is exactly where `double_buffer/report.md` put it; 4 is 1.18x over the trap and 1.09x over the design's 8, and costs *less* L1. Harness: `tests/ttnn/unit_tests/operations/tilize/test_tilize_lever_write_batch.py`. Not a tensor dimension. |
 | `PIPELINE_WAVES_PER_CORE` | `= 4`, a host constant | The CAP on how many pipeline WAVES (one wave = one tile-row of the block, i.e. one reader push / one compute call / one writer wait) the column cut is allowed to buy. A core overlaps its DRAM reads against its DRAM writes only above one wave, and the tensor holds `R * num_w_chunks` tile-rows, so `waves_per_core = R * num_w_chunks / num_cores` — the wave demand and the occupancy demand are ONE expression on the column axis, this constant being the factor between them. Past 4 the pipe is full. |
+| `SPLIT_READER_MAX_ROW_BYTES`, `SPLIT_READER_WRITER_SHARE_PCT` | `= 256` B and `= 38` %, host constants | Refinement 6's two split knobs. The first is the read-transaction size at or below which ONE data-movement RISC-V is issue-bound (established by a whole-op ablation, not assumed — see the constant's comment and `changelog.md`); at 0 the split is off everywhere and the plan is byte-identical to Refinement 5. The second is the writer's share of each block's tile-rows, swept on device (`tests/.../test_tilize_lever_split_reader.py`). Neither is a tensor dimension; the first bounds `block_width_tiles` on the split path, which is what bounds `cb_input_rows_split`. |
 | `MIN_BLOCK_ROW_BYTES` | `= 512`, a host constant, in BYTES | The read-transaction floor that stops the wave trade: a wave is bought by HALVING the block width, so it only pays while the read stays large enough to amortize the NoC/DRAM per-transaction cost. Measured across five geometries — see the constant's own comment in `tilize_program_descriptor.py` and `tests/.../tilize/test_tilize_lever_pipeline_waves.py`. In bytes rather than tiles so it means the same thing at every element size. |
 | `COMPUTE_SKIP_FORMAT_RECONFIG`, `COMPUTE_AMORTIZE_INIT` | `= True`, host constants | Compute-side per-call overhead knobs, both **capacity-neutral**: they change which `compute_kernel_lib::tilize` template arguments the kernel instantiates, not any CB size. `COMPUTE_AMORTIZE_INIT` is additionally gated at emission time on `max blocks per core > 1`, because the three extra instantiations grow the TRISC binary. |
 | `FAST_TILIZE_WIDTH_CAP` | `= 255`, a host constant | `can_use_fast_tilize` requires `block_width_tiles < 256` (`tilize_helpers.inl:77`). |
@@ -57,13 +65,23 @@ predicate establishing it.
 
 ```
 L1_per_core = input_depth_rows     * block_width_tiles * tb_in
+            + split_reader         * block_width_tiles * tb_in         # cb_input_rows_split
             + output_depth_batches * write_rows_per_barrier * block_width_tiles * tb_out
             + [pad_active] * block_width_tiles * (tb_in / tile_h)      # cb_pad_row
 
-            = 2 * block_width_tiles * tb_in
+            = (2 + split_reader) * block_width_tiles * tb_in
             + 2 * write_rows_per_barrier * block_width_tiles * tb_out
             + [pad_active] * block_width_tiles * (tb_in / tile_h)
 ```
+
+`split_reader` is 0 on every plan whose read transaction is large enough not to be
+RISC-V-issue-bound, and `[pad_active]` and `split_reader` are mutually exclusive by
+the gate — so no call pays both. Where the split IS on, it is bounded by its own
+gate: `block_row_bytes <= SPLIT_READER_MAX_ROW_BYTES` caps `block_width_tiles * tb_in
+/ tile_h` at 256 B, so this term is at most `split_reader * 256 * tile_h` bytes
+(6 KB on the measured target). The two-core-range plan does not appear here at all:
+the tail range's block is NARROWER at the same depths, so `L1_per_core` is the full
+range's, unchanged.
 
 On the **RETILE path** (`plan.is_retile`, Refinement 4) the first term collapses to
 one page, because the reader assembles output tiles directly into
@@ -149,7 +167,7 @@ see "Deviations".
 
 | Term | Scales with | Does **not** scale with |
 |------|-------------|-------------------------|
-| `2 * block_width_tiles * tb_in` | `block_width_tiles` (the `tile_col` extent), `input_depth_rows`, `tile_h`, `element_size(in_dtype)` | `block_row_extent`, `R`, `C`, `H`, `W`, `rank`, `num_images`, core count |
+| `(2 + split_reader) * block_width_tiles * tb_in` | `block_width_tiles` (the `tile_col` extent), `input_depth_rows`, `split_reader`, `tile_h`, `element_size(in_dtype)` | `block_row_extent`, `R`, `C`, `H`, `W`, `rank`, `num_images`, core count. **`split_reader` is bounded by `ceil(R / num_row_groups) - 1`, which IS an `R`-dependent expression** — but `num_row_groups = min(R, ceil(num_cores / total_w_chunks))`, so `ceil(R / num_row_groups) = ceil(R * total_w_chunks / num_cores)` grows with `R` on a shape whose column axis cannot fill the grid (`C == 1`). The gate closes that: it also requires `block_row_bytes <= SPLIT_READER_MAX_ROW_BYTES`, AND it re-checks the resulting footprint against the same `budget` the width was solved against and returns 0 if it does not fit. So this term is dimension-bounded by an explicit budget test rather than by a structural argument — the one term in this table that is, and the reason the check exists. |
 | `2 * write_rows_per_barrier * block_width_tiles * tb_out` | `block_width_tiles`, `write_rows_per_barrier`, `tile_h`, output format width | the same list |
 
 **No tensor dimension appears in the total, at either `low_l1` setting.** That is the
@@ -183,7 +201,7 @@ so every changed row is strictly SMALLER than it was; nothing grew.
 | `[1,1,32,32768]` short_wide_wide | 8 | 1 | 2 | 512 B | 64 / 64 | **64 KB** (was 128 KB at `bw = 16`) |
 | `[1,1,32,2048]` short_wide | 1 | 4 | 1 | 64 B | 64 / 64 | **20 KB** |
 | `[1,1,2048,64]` full_width | 2 | 2 | 1 | 128 B | 64 / 64 | **24 KB** |
-| `[1,1,16384,32]` tall_narrow | 1 | 4 | 8 | 64 B | 64 / 64 | **20 KB** |
+| `[1,1,16384,32]` tall_narrow | 1 | 4 | 8 | 64 B | 64 / 64 | **26 KB** (20 KB + 3 split pages; Refinement 6 turns the split reader on here) |
 | `[1,1,32,8192]` fp32, `low_l1=False` | 4 | 1 | 1 | 512 B | 64 / 64 | **64 KB** |
 | `[1,1,32,8192]` fp32, `low_l1=True` | `min(4, LOW_L1_WIDTH_CAP)` = 4 | 1 | 1 | 512 B | 64 / 64 | **64 KB**, and independent of `W` |
 
@@ -208,7 +226,7 @@ the padding path:
 | `[1,1,50,50]` hw tails | 1 | 4 | 4 (only 4 tiles exist) | 20 KB | 64 B | **20 KB** |
 | `[1,1,1,2048]` single stick, 31 pad rows / tile-row | 1 | 4 | 64 / 64 | 20 KB | 64 B | **20 KB** |
 | `[1,1,32,4090]` short_wide W tail | 2 | 2 | 64 / 64 | 24 KB | 128 B | **24 KB** |
-| `[1,1,1,50304]` logits row, C=1572 | 12 | 1 | 64 / 64 | 96 KB | 768 B | **97 KB** |
+| `[1,1,1,50304]` logits row, C=1572 | **13** + a 12-wide tail range | 1 | 64 / 64 | 104 KB | **832 B** | **105 KB** (was `bw = 12`, 768 B, 97 KB under the divisor rule; Refinement 6's tail) |
 | `[8,1,249,2048]` H tail through the fold | 16 | 1 | 64 / 64 | 128 KB | 1024 B | **129 KB** (was 516 KB at `bw = 64`) |
 | `[1,1,50,50]`, `low_l1=True` | 1 | 4 | 4 | 20 KB | 64 B | **20 KB** (identical to `False`) |
 | `[1,1,1,50304]`, `low_l1=True` | 4 | 1 | 64 / 64 | 32 KB | 256 B | **32 KB** |
@@ -250,7 +268,11 @@ padded path inherits the dimension-independence rather than re-arguing it.
    *(The fp32-output refinement additionally requires `Fp32Mode::Lossless` +
    `UnpackToDestFp32` — a correctness requirement of the LLK path, recorded in
    `op_design.md` → Key Risks, not a page-format finding.)*
-3. **Disjoint lifetime, no justification.** No CB pair has disjoint lifetimes — all
+3. **Disjoint lifetime, no justification.** `cb_input_rows_split` and `cb_pad_row`
+   are the one pair that is never co-allocated (the split gate excludes the padded
+   path), but that is mutual exclusion by construction rather than a disjoint
+   lifetime to exploit — aliasing them would save nothing, because no plan
+   allocates both. Otherwise no CB pair has disjoint lifetimes — all
    are live for the whole program, and the two streaming CBs are deliberately
    pipelined against each other. Both `Shares with / why not` cells are filled with
    three concrete reasons each, one of them a `static_assert` citation.
@@ -275,8 +297,12 @@ padded path inherits the dimension-independence rather than re-arguing it.
    implementation, because it is the audit the two CB endpoints enforce at
    runtime. `cb_input_rows` = `2 * W` pages against a `W`-page push/pop quantum;
    `cb_output_tiles` = `2 * wrpb * W` pages against a `wrpb * W`-page pop quantum
-   and a `W`-page push quantum. Both hold for every reachable `(W, wrpb)` pair
-   because `W` divides `C` exactly, so a single core never mixes two quanta.
+   and a `W`-page push quantum. **Refinement 6 changed the reason, not the fact:**
+   `W` no longer has to divide `C` — the leftover columns are a tail chunk — but a
+   core never mixes two quanta because the two widths live on DISJOINT CORE
+   RANGES, each with its own CB descriptors sized from its own `W`. The invariant
+   is per-core and it is satisfied per-core. `cb_input_rows_split` is
+   `split_reader * W` pages against the same `W`-page quantum, so it holds too.
    `cb_pad_row` has no quantum at all — nothing is pushed or popped on it, so the
    wrap invariant does not apply; the reader's local reads out of it are plain
    L1 addresses, never CB-relative ones. The padded reader branch pushes and waits
@@ -287,9 +313,22 @@ padded path inherits the dimension-independence rather than re-arguing it.
 
 ## Deviations from `op_design.md`
 
-Two, both recorded at their point of use in `tilize_program_descriptor.py`.
+One remains; the first was RESOLVED by Refinement 6 and is kept here with its
+resolution because the mechanism it describes is still live.
 
-1. **`block_width_tiles` is a DIVISOR of `C`, not `ceil(C / num_w_chunks_target)`;
+1. **RESOLVED (Refinement 6).** `block_width_tiles` is now
+   `ceil(C / num_w_chunks_target)` — the design's own extent — and
+   `block_width_tail_tiles` exists, carried by a second core range. The mechanism
+   below is unchanged and is what the two-core-range shape respects: the wrap
+   requirement is a **per-core** requirement, and the mix it forbids is a mix
+   *within one core*. Splitting the grid's row-wise core order into a full-width
+   prefix and a tail suffix means no core ever sees two quanta, so the ragged tail
+   is legal without weakening anything. `RAGGED_COLUMN_TAIL = False` restores the
+   divisor rule verbatim, and a sub-row-paged source still takes it unconditionally
+   (there the divisor is a constraint on the width itself, not on the per-core mix).
+   The original entry, for the record:
+
+   **`block_width_tiles` is a DIVISOR of `C`, not `ceil(C / num_w_chunks_target)`;
    `block_width_tail_tiles` therefore does not exist.**
    The ragged column tail violates a hard mechanism cap the design did not list:
    *neither CB endpoint may wrap mid-transfer.* On the producer side
@@ -312,6 +351,10 @@ Two, both recorded at their point of use in `tilize_program_descriptor.py`.
    `[1,1,1,50304]` (`C = 1572`), which becomes 12 x 131 chunks instead of
    25 x 63. Every geometry still reaches the full grid. The knob remains a live
    tunable at its coarsest correct value.
+   *(Refinement 6 measured exactly that exception: `[1,1,1,50304]` at 12 x 131
+   took 31179 ns and the ragged rule's 13 + a 12-wide tail takes 28474 ns, at the
+   same 64/64 cores. The `lcm(bw, tail)` capacity the entry priced is never needed,
+   because the two widths never meet on one core.)*
 
 2. **`cb_output_tiles` depth is counted in write BATCHES (`2 * wrpb * W` pages),
    not tile-rows (`(wrpb + 1) * W`).** Same cap, other half: `(wrpb + 1) * W` is
@@ -392,7 +435,34 @@ terms of that trade are measured, and the floor is set at the largest value that
 never the wrong call. DRAM crossings are untouched (still 1 in / 1 out): the wave
 rule re-partitions the same bytes, it does not re-fetch any.
 
-**Where the divisor constraint costs read transactions (verifier-added).** The
+**RESOLVED by Refinement 6 — the ragged tail now lands, and the escape below was
+taken.** `block_width_tiles` is `ceil(C / target)` and the leftover columns are one
+tail chunk on a second core range, so the realized `num_w_chunks` no longer
+overshoots: `[1,1,1,50304]` went from 131 chunks of 12 (768 B reads, and a busiest
+core carrying 3 blocks against a 2.05 average) to 120 of 13 plus one 12-wide tail
+(832 B reads, 2 blocks on the busiest core). Measured on device at 64/64 cores:
+**31179 -> 28474 ns** on the padded witness and **37356 -> 35338** on the
+tile-aligned one. DRAM crossings are untouched at 1 in / 1 out; only the
+transaction SHAPE moved. The paragraphs immediately below are the original
+statement of the problem and the escape, kept because the mechanism they describe
+(the per-core one-quantum invariant) is what the two-range plan respects rather
+than removes — and because a sub-row-paged source still takes the divisor rule,
+where the overshoot they describe is still real.
+
+**Refinement 6 also split the READ TRANSACTIONS across both data-movement
+RISC-Vs on the issue-bound geometries.** Neither the crossing count nor the byte
+count moves — the same sticks are read once each — but on a small read the cost is
+the RISC-V's *issue* work, not the bytes, and a whole-op ablation of
+`[1,1,16384,32]` (64 B sticks) put NCRISC on the critical path for the entire
+kernel while BRISC's own payload was 14% of the wall. The writer kernel now reads
+the trailing `split_reader` tile-rows of each block into `cb_input_rows_split`.
+Per-tensor crossings: **still 1 in / 1 out** (each stick is read exactly once, by
+exactly one of the two RISC-Vs); cross-core traffic: **still 0**. What changes is
+which NoC carries a read — the writer's split reads go out on NoC1 alongside its
+stores, which is why the writer's share is 38% and not 50%.
+
+**Where the divisor constraint costs read transactions (verifier-added, now
+historical for the interleaved path).** The
 minimization above is over a *continuous* chunk count; Deviation 1 restricts
 `block_width_tiles` to a **divisor of `C`**, so the realized `num_w_chunks` is
 `C / block_width_tiles` and can only *overshoot* the target. On every shape whose
@@ -414,18 +484,24 @@ disjoint core ranges with their own CBs and their own `block_width_tiles` CT arg
 full-width cores and tail cores, neither mixing quanta. That restores the ragged
 tail the design specified without weakening the wrap invariant. It is a
 work-distribution restructure, not a knob turn, so it is filed as a perf-refinement
-lever rather than fixed here.
+lever rather than fixed here. **Refinement 6 built exactly this** (`plan.groups`,
+`ColumnGroup`, `col_tile_offset`); the paragraph stands as the design of what
+shipped.
 
 > Cheapest-traffic split considered: **`tile_row` x `tile_col` with `num_w_chunks`
 > minimized** — `in_bytes + out_bytes` across DRAM (the minimum), `0` cross-core, and
 > the fewest read transactions of any split that fills the grid subject to the
 > one-quantum-per-core wrap invariant. Implemented: **that split**. Nothing deferred
-> on traffic grounds; the single rough-`C` overshoot is quantified above and carried
-> as a perf lever.
+> on traffic grounds; the single rough-`C` overshoot is quantified above and was
+> closed by Refinement 6's two-core-range plan, so on the interleaved path the
+> qualifier is now vacuous and the claim is simply "the fewest read transactions of
+> any split that fills the grid".
 
-**Reconciled against the built code.** `num_w_chunks = C / block_width_tiles`
-*exactly* (the divisor constraint, Deviation 1), so the transaction table above
-holds unchanged with `num_w_chunks` no longer a `ceil`. Each stick's column slice
+**Reconciled against the built code.** `num_w_chunks = C // block_width_tiles`
+plus a tail chunk of `C % block_width_tiles` columns when that remainder is
+non-zero (Refinement 6); the two families' `(row_group, w_chunk)` ranges cover the
+`R x C` tile grid exactly once, with the tail's `col_tile_offset` picking up
+precisely where the full family's last chunk ends. Each stick's column slice
 is read once by the one core owning it and each output tile page is written once
 by the one core owning it — `block_id -> (row_group, w_chunk)` is a bijection onto
 a partition of the `R x C` tile grid, and there is no halo, no shared operand and

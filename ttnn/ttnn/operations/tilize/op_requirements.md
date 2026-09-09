@@ -654,7 +654,7 @@ queued. The 4
 `test_golden_main_tests.py` / `test_golden_main_trace.py`), constant at 4 in
 every phase from Phase 0 onward, carry no axes, and are therefore neither
 responsible cells nor mine to change.
-### [ ] Refinement 6 — Speed up the transposed / rough-`C` geometries
+### [x] Refinement 6 — Speed up the transposed / rough-`C` geometries
 
 **Type**: perf
 
@@ -704,3 +704,49 @@ witness and say which); the core count is reported alongside every duration and 
 still 64/64; bit-identity is unchanged; the golden suite is green with the three loud
 categories at 0; and no regression across the same config-spanning guard set
 Refinement 3 established.
+
+**Outcome**: **both items landed and both won; the issue-bound diagnosis for item 1
+came back POSITIVE.** All numbers 8x8 Wormhole, fresh cache, 64/64 cores throughout.
+
+*Item 1 — `[1,1,16384,32]`: 20993 -> 17736 ns (median of 3), **1.18x**.* The
+diagnosis gate first, whole-op ablated: all payloads stubbed **6221** (NCRISC 5921,
+BRISC 598) / + reads **14362** (NCRISC 14054, BRISC 630) / + writes **9220** /
++ compute **6479** / full **20993** (NCRISC 17448, BRISC 20688). That is the
+`split_reader` catalog signature exactly — the reader RISC-V is on the critical path
+for the whole kernel, 6221 ns of the wall is its per-stick loop with NO NoC payload
+at all (256 sticks/core at 64 B), and the writer's own payload is 2999 ns. So the
+writer kernel now reads the TRAILING tile-rows of every block into its own input CB
+(`cb_input_rows_split`, single-producer) and compute tilizes the block as two
+back-to-back sub-blocks. The share is a knob and it is NOT 50: swept on device
+(writer tile-rows 0/1/2/3/4/6 -> 20770/19923/18864/17945/20797/24716), **3 of 8
+(38%) is the floor**, because BRISC's reads share NoC1 with its stores and cost
+roughly 2.3x per stick what NCRISC's do once the stores are counted.
+
+*Item 2 — `[1,1,1,50304]` (`pad_mode="auto"`): 31179 -> 28474 ns, **1.10x**; and on
+the tile-aligned witness `[1,1,32,50304]` 37356 -> 35338, **1.06x**.* The ragged
+column tail landed as the L1 ledger's recorded escape: two disjoint core ranges,
+each with its own `block_width_tiles` / `col_tile_offset` / CB sizes, so
+`block_width_tiles` goes back to the design's `ceil(C / target)` without weakening
+the per-core one-quantum wrap invariant. `C = 1572` went from 131 chunks of 12
+(768 B reads, 3 blocks on the busiest core) to 120 of 13 plus one 12-wide tail
+(832 B, 2 blocks). One extra finding made the difference: the wave ladder walked
+`4,3,2` and the ragged rule makes the intermediate rungs REACHABLE for the first
+time — `waves=3` gives a 576 B read that measured **29058** against 27035 for
+`waves=2`'s 832 B, i.e. the uncalibrated rung was the worst of the three. The ladder
+now HALVES (`4,2`), which is what `MIN_BLOCK_ROW_BYTES` was measured on, and changes
+no other shape's plan.
+
+*What the bottleneck is now, and what I would try next.* On item 2 the padded
+witness is **write-dominated** — ablated: floor 1264 / + reads 6506 / + writes
+**25350** / + compute 3533 / full 31790 — so the remaining headroom there is the
+store side, not the read shape the Goal named; 3.2 MiB of tile writes at ~134 GB/s
+is already at the `ttnn.clone` calibration Refinement 3 established for this size,
+so I did not chase it. On item 1 the wall is now the writer (BRISC 17.4 of 17.7 us):
+it carries 96 stick reads AND 27 KiB of stores on one NoC. The next lever would be
+to give the writer's split reads the OTHER NoC, which is not expressible today —
+`read_sticks_for_tilize` takes no `noc` argument and `DM_DEDICATED_NOC` assigns one
+NoC per RISC-V — so it is a helper/dataflow-API change, not a knob, and I left it.
+A second unexplored rung: `[1,1,32,2048]` and `[1,1,2048,64]` also read at 64/128 B
+but own exactly ONE tile-row per block, so the split (which cuts at tile-row
+granularity, because two producers on one CB page group is UB) cannot reach them;
+reaching them needs a different cut, not a different share.
