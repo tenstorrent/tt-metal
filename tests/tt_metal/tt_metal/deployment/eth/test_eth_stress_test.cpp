@@ -20,9 +20,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-template <typename FIXTURE>
 static void run_test_stress(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
@@ -33,7 +31,6 @@ static void run_test_stress(
     vector<struct core_setup>& cores,
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs) {
     /* =================== */
-    (void)fixture;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
 
@@ -185,7 +182,6 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                 string locinfo = get_locinfo(sender_device, sender_core, receiver_device, receiver_core, processor);
 
                 run_test_stress(
-                    this,
                     sender_mesh_device,
                     receiver_mesh_device,
                     sender_core,
@@ -204,7 +200,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
         }
     }
 
-    wait_to_finish_eth_timeout_cores(this, cores, programs);
+    wait_to_finish_eth_timeout_cores(cores, programs);
 
     bool pass = true;
 

@@ -20,9 +20,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-template <typename FIXTURE>
 static void prepare_receiver_integrity_dram(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& recv_core,
     uint32_t transfer_size,
@@ -37,10 +35,10 @@ static void prepare_receiver_integrity_dram(
     tt_metal::Program* recv_program,
     bool init_recv_dram) {
     /* ============= */
-    tensix_zero_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
+    tensix_zero_dram(recv_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
     if (init_recv_dram) {
         log_info(tt::LogTest, "      initing ram bank {}", dram_bank_id);
-        tensix_counter_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id);
+        tensix_counter_dram(recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id);
     }
 
     auto recv_eth_config = tt_metal::EthernetConfig{
@@ -68,9 +66,7 @@ static void prepare_receiver_integrity_dram(
     tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, recv_core, {});
 }
 
-template <typename FIXTURE>
 static void prepare_sender_integrity_dram(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const CoreCoord& send_core,
     uint32_t transfer_size,
@@ -91,7 +87,7 @@ static void prepare_sender_integrity_dram(
 
     if (init_send_dram) {
         log_info(tt::LogTest, "      initing ram bank {}", dram_bank_id);
-        tensix_counter_dram(fixture, send_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
+        tensix_counter_dram(send_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
     }
 
     auto send_eth_config = tt_metal::EthernetConfig{
@@ -130,9 +126,7 @@ struct test_config {
     uint32_t num_bytes_per_send;
 };
 
-template <typename FIXTURE>
 static bool run_test_integrity_dram(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
@@ -175,7 +169,6 @@ static bool run_test_integrity_dram(
 
     /* Receivers */
     prepare_receiver_integrity_dram(
-        fixture,
         recv_mesh_device,
         recv_core,
         transfer_size,
@@ -192,7 +185,6 @@ static bool run_test_integrity_dram(
 
     /* Senders */
     prepare_sender_integrity_dram(
-        fixture,
         send_mesh_device,
         send_core,
         transfer_size,
@@ -226,15 +218,14 @@ static bool run_test_integrity_dram(
             .expected_count = dram_end_addr,
         },
     };
-    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
+    wait_to_finish_eth_timeout_cores(cores, programs);
 
     auto* const send_device = send_mesh_device->get_devices()[0];
     double threshold = get_eth_bw() * 0.5;
 
     bool pass = true;
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
-    pass &= tensix_compare_dram_banks(
-        fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id, recv_bank_id);
+    pass &= tensix_compare_dram_banks(recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id, recv_bank_id);
 
     return pass;
 }
@@ -288,7 +279,6 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
                     log_info(tt::LogTest, "    running on {}", processor);
 
                     bool passed = run_test_integrity_dram(
-                        this,
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_core,

@@ -356,8 +356,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
                 per_core_M * per_core_N * single_tile_size,
                 result_vec);
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-            auto result_flat_layout =
-                convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
+            auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
             auto result_untilized = untilize_swizzled(result_flat_layout, per_core_M * 32, per_core_N * 32);
             pass &= (per_core_golden == result_untilized);
         }
@@ -466,8 +465,7 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(
-    tt_metal::MeshDispatchFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool matmul_multi_core_multi_dram(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     int num_cores_r = mesh_device->compute_with_storage_grid_size().y;
     int num_cores_c = mesh_device->compute_with_storage_grid_size().x;
@@ -578,7 +576,7 @@ bool matmul_multi_core_multi_dram(
     log_debug(LogTest, "Gathering data back from dram and checking against golden");
 
     vector<uint32_t> result;
-    fixture->ReadBuffer(mesh_device, out_buffer, result);
+    distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), result, out_buffer);
     auto golden = tt_metal::select_columns(tensor.get_values(), M, K, N);
 
     // Keeping this old code because took me too long to decipher. Matmul
@@ -592,8 +590,7 @@ bool matmul_multi_core_multi_dram(
             result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
             result_iter += 512;
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-            auto result_flat_layout =
-                convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
+            auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
 
             pass &= (golden_tile == result_flat_layout);
         }
@@ -630,8 +627,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
         if (this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }
-        ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_multi_dram(
-            this, devices_.at(id)));
+        ASSERT_TRUE(
+            unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_multi_dram(devices_.at(id)));
     }
 }
 
