@@ -156,6 +156,9 @@ protected:
 };
 
 class LLKMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+
 protected:
     template <class F>
     friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
