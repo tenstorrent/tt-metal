@@ -1,5 +1,24 @@
 # Metal 2.0 Audit Findings — `ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding`
 
+> **ADDENDUM (post-port, 2026-09-09) — audit findings stand; the port's scope narrowed.**
+> This is the pre-port audit record and is left intact. The port that followed converted all five
+> factories; owners then requested a **partial port**, so two were reverted:
+>
+> - **Reverted to `create_descriptor`:** `MultiCoreInterleaved`, `MultiCoreBlockInterleaved` — the
+>   only two factories reachable from `data_movement/untilize`'s codegen live-L1 native fallback.
+> - **Still on `ProgramSpecFactoryConcept`:** `SingleCore`, `MultiCoreSharded`, `MultiCoreNDSharded`.
+>
+> Two audit statements were found wrong during the port and are corrected here rather than edited
+> in place below:
+> 1. `writer_unary_stick_layout_wh_multicore.cpp` is listed as op-owned and not shared. It **is**
+>    shared — `data_movement/untilize`'s block factory binds it by full path.
+> 2. The op-owned-writer census appears to have been run only for kernels *outside* the op
+>    directory, so the *lent* direction (a kernel inside this op's directory that other ops bind)
+>    was not swept.
+>
+> Current state, the reachability derivation, and the full revert record:
+> [`METAL2_PORT_REPORT.md`](METAL2_PORT_REPORT.md).
+
 One device-operation, five program factories, all on the `descriptor` concept (each declares
 `static tt::tt_metal::ProgramDescriptor create_descriptor(...)` at its header's line 14):
 

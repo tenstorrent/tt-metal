@@ -3,7 +3,24 @@
 Port plan for `untilize_with_unpadding`, ported from `ProgramDescriptor` to Metal 2.0.
 Written during the inventory and planning steps; committed alongside the port for review.
 
-Scope: **all five factories, every configuration.** Nothing deferred.
+> ## ⚠ SCOPE CHANGE — this plan is now partly historical
+>
+> This plan was written for a **five-factory** port and executed as one. Owners then asked for a
+> **partial port**, so **two factories were reverted to `create_descriptor`**:
+>
+> | factory | concept now | reachable from untilize codegen's live-L1 fallback? |
+> |---|---|---|
+> | `MultiCoreInterleaved` | **`ProgramDescriptorFactoryConcept`** (reverted) | **yes** |
+> | `MultiCoreBlockInterleaved` | **`ProgramDescriptorFactoryConcept`** (reverted) | **yes** |
+> | `SingleCore` | `ProgramSpecFactoryConcept` (ported) | no |
+> | `MultiCoreSharded` | `ProgramSpecFactoryConcept` (ported) | no |
+> | `MultiCoreNDSharded` | `ProgramSpecFactoryConcept` (ported) | no |
+>
+> **Everything below describes the five-factory design as planned.** The three still-ported factories
+> are as described. For the two reverted ones, the plan records what *was* built and is retained as
+> the design record for a future re-port — read it as history, not as the current tree. The
+> reachability derivation and the full revert record are in
+> [`METAL2_PORT_REPORT.md`](METAL2_PORT_REPORT.md).
 
 ---
 
@@ -345,7 +362,7 @@ None of the six gates on an `#ifdef`, so no `defines` are forced on this side.
   - Each factory's `.hpp` swaps `static tt::tt_metal::ProgramDescriptor create_descriptor(...)` for
     `static ttnn::device_operation::ProgramArtifacts create_program_artifacts(...)`. `<tt-metalium/program_descriptors.hpp>`
     is replaced by `ttnn/metal_v2_artifacts.hpp` in the headers.
-  - **Unity-build hygiene** ([catalog](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)):
+  - **Unity-build hygiene** ([catalog](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)):
     all five factory `.cpp`s live in one CMake target, so every anonymous-namespace spec-name constant
     is prefixed per factory (`SC_`, `MCI_`, `SH_`, `BI_`, `ND_`) rather than sharing a bare `READER` /
     `IN` / `OUT`.
@@ -552,40 +569,40 @@ Every surviving CTA is named. Names, per kernel (rung-1 forks' names are inherit
 
 ## Applied Patterns
 
-- **[Self-loop DFB binding](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb):**
+- **[Self-loop DFB binding](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb):**
   `SH_SHARDED_OUT` in the Sharded factory, configs b / b′. Census on a node: the writer is the
   **only** kernel that touches `c_17` — it `reserve_back`s, fills via `get_write_ptr()`, and
   `push_back`s; nothing drains it, because the buffer *is* the output shard. One toucher → self-loop:
   `SH_WRITER` bound both PRODUCER and CONSUMER, one accessor name. Legal on Gen1 for a DM kernel;
   kernel code untouched. (Re-derived from the census; agrees with the brief.)
-- **[Conditional / optional resource bindings](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-conditional--optional-resource-bindings):**
+- **[Conditional / optional resource bindings](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#pattern-conditional--optional-resource-bindings):**
   `SH_SHARDED_OUT` exists only under `out_sharded && !cross_shard_type`. **No `#ifdef` is needed**:
   the host already selects a *different kernel source* per configuration
   (`…_multi_core_sharded…:204-240`), and only the b / b′ writers reference `dfb::out`. Each writer
   source is compiled against exactly the bindings its own `KernelSpec` declares, so no kernel ever
   name-looks-up a token its build does not bind. The conditional lives entirely on the host, where the
   legacy branch already is.
-- **[Borrowed-memory DFBs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/migration_guide.md#dataflowbufferspec):**
+- **[Borrowed-memory DFBs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/metal2_migration_guide.md#dataflowbufferspec):**
   `SH_IN.borrowed_from = SH_INPUT` (legacy `.buffer = a.buffer()`), and
   `SH_SHARDED_OUT.borrowed_from = SH_OUTPUT` (legacy `.buffer = output.buffer()`). No
   `dfb_run_overrides` entry is needed — the backing L1 address resolves from `tensor_args`.
-- **[Multi-variant factory](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-multi-variant-factories):**
+- **[Multi-variant factory](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#pattern-multi-variant-factories):**
   the Sharded factory's four configurations branch inside `create_program_artifacts`, as the legacy
   `create_descriptor` already did.
-- **[Pass DFB handles directly to LLKs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers):**
+- **[Pass DFB handles directly to LLKs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers):**
   `compute_kernel_hw_startup(dfb::src, dfb::out)` and `compute_kernel_lib::untilize<…, dfb::src, dfb::out, …>`
   in the `untilize_wh` fork — the token flows into both call-argument and non-type-template-parameter
   positions via the `constexpr operator uint32_t()`.
-- **[CB→DFB whitelist §A `constexpr` carve-out](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/cb_dfb_api_whitelist.md#tile--format-metadata-jit-descriptors):**
+- **CB→DFB whitelist §A `constexpr` carve-out *(the CB→DFB whitelist was a standalone doc at port time; the current docs tree has folded it away)*:**
   `writer_unary_unpad_width_16_sharded.cpp:22` declares `constexpr uint32_t tile_size_in_bytes = get_tile_size(cb_id_out);`
   and feeds it to a `static_assert` and to `NOC_MAX_BURST_SIZE` template arguments → keeps the free-function
   form with the token: `get_tile_size(dfb::out)`. By contrast
   `reader_unary_interleaved_wh_multicore.cpp:27` declares `const uint32_t tile_bytes` (not `constexpr`)
   → moves onto the object: `dfb.get_tile_size()`.
-- **[Caution: Porting a shared kernel](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#caution-porting-a-shared-kernel):**
+- **[Caution: Porting a shared kernel](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#caution-porting-a-shared-kernel):**
   6 forks reused at rung 1; **4 forks created at rung 2**, each beside its original with a pointer
   comment added to the original.
-- **[Caution: Avoid varargs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary):**
+- **[Caution: Avoid varargs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary):**
   two genuine vararg blocks retained (below); everything else named.
 
 ### Varargs — retained, with justification
@@ -675,7 +692,7 @@ index.
   Reported so a future Metal 2.0 sibling port can decide whether the helper should grow a spec-side
   twin rather than each factory re-deriving it.
 - **Construction addendum (recorded after the fact, for the reviewer):** two sweeps the
-  [anti-pattern self-audit](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#anti-pattern-self-audit)'s
+  [anti-pattern self-audit](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port_op_to_metal2_recipe.md#anti-pattern-self-audit)'s
   `cb`-name check forced, both inside the five factory bodies:
   - `input_cb_data_format` / `output_cb_data_format` → `input_dfb_data_format` / `output_dfb_data_format`
     (the documented `cb_*` → `dfb_*` API rename; these locals name the format of what is now a DFB).

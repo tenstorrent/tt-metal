@@ -2,62 +2,154 @@
 
 ## Outcome
 
-**`PORTED` — all five factories, every configuration; builds clean and tests pass.**
+**`PORTED` (partial, by owner request) — 3 of 5 factories on Metal 2.0; 2 reverted to
+`create_descriptor`.**
 
-All five factories satisfy `ProgramSpecFactoryConcept`, all 8 op-owned writer kernels are converted,
-6 existing `_metal2` forks are bound and 4 new ones created. `./build_metal.sh --build-tests`
-completes with **0 errors**, and the confirmed test set is green:
+### Current concept split
+
+| factory | concept | reachable from untilize codegen's live-L1 fallback? |
+|---|---|---|
+| `MultiCoreInterleaved` | `ProgramDescriptorFactoryConcept` — **reverted** | **yes** |
+| `MultiCoreBlockInterleaved` | `ProgramDescriptorFactoryConcept` — **reverted** | **yes** |
+| `SingleCore` | `ProgramSpecFactoryConcept` | no |
+| `MultiCoreSharded` | `ProgramSpecFactoryConcept` | no |
+| `MultiCoreNDSharded` | `ProgramSpecFactoryConcept` | no |
+
+The op ran fully ported (all five factories, green — results below). Owners then asked to keep the
+Metal 2.0 conversion only where untilize codegen's native fallback does **not** consume the factory,
+so the two consumed ones went back to the descriptor API. **The port is not descoped** — the three
+remaining factories keep every Metal 2.0 construct the port introduced (typed tensor bindings,
+DFB bindings, borrowed-memory DFBs, the `c_17` self-loop, named args, the two vararg blocks).
+
+### Which factories codegen actually consumes — the derivation
+
+`build_native_equivalent`'s non-tile-aligned branch
+(`untilize/codegen/untilize_codegen_program_factory.cpp:439-446`) calls
+`UntilizeWithUnpaddingDeviceOperation::select_program_factory` with `use_multicore = true` hardcoded,
+on a tensor that already passed `supported_by_codegen()` — which
+`untilize_codegen_device_operation.cpp:25-31` asserts as a hard `TT_FATAL` precondition. That
+predicate rejects **sharded input** (`untilize_codegen_supported.cpp:49-51`) and **sharded output**
+(`:52-54`). Walking `select_program_factory` under those constraints:
+
+| branch | condition | reachable? |
+|---|---|---|
+| `MultiCoreSharded` / `MultiCoreNDSharded` | `input.memory_config().is_sharded()` | **no** — rejected by `supported_by_codegen` |
+| `MultiCoreInterleaved` (via sharded output) | `output_mem_config.is_sharded()` | no — rejected |
+| `SingleCore` | `!use_multicore` | **no** — codegen hardcodes `true` |
+| `MultiCoreBlockInterleaved` | `!enough_space_height`, or the wide-row heuristic | **yes** |
+| `MultiCoreInterleaved` (fallthrough) | neither of the above | **yes** |
+
+So exactly **two** factories are live on that path, and those are the two reverted. This is a
+derivation from the gating code, not an inference from test coverage — the path itself is untested
+(see [Handoff points](#handoff-points) item 1).
+
+### The guard stays — dropping it does not compile
+
+The request included dropping the `if constexpr (requires { … })` + `TT_THROW` guard added by the
+earlier consumer fix. **That is not possible while any factory remains ported, and the build proves
+it.** `std::visit` instantiates its callable for **every** alternative of the five-alternative
+`program_factory_t` variant — including the three that codegen can never select at runtime. With the
+guard removed:
+
+```
+untilize_codegen_program_factory.cpp:448:75: error: no member named 'create_descriptor' in
+    'ttnn::prim::UntilizeWithUnpaddingSingleCoreProgramFactory'
+untilize_codegen_program_factory.cpp:447:16: error: no matching function for call to 'visit'
+```
+
+The guard was therefore restored. **The good news is that the partial revert makes it behaviorally
+inert:** its `if constexpr` true-branch now covers both runtime-reachable factories, so the
+non-tile-aligned fallback builds a native program again exactly as it did pre-port, and the `TT_THROW`
+else-branch is instantiated only for the three unreachable alternatives. **The regression this report
+previously recorded is resolved by the revert itself, not by removing the guard.** A comment at the
+call site now records this so the guard is not deleted again; the only way to drop it is to revert all
+five factories, which would descope the port.
+
+### Test results
+
+`./build_metal.sh --build-tests` completes with **0 errors** in both states. The sentinel run is
+**identical in both**, outcome for outcome:
 
 | test file | collected | passed | failed | skipped | xfailed |
 |---|---|---|---|---|---|
-| `tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py` | 375 | **361** | **0** | 6 | 8 |
-| `tests/ttnn/unit_tests/operations/data_movement/test_untilize.py` | 838 | **834** | **0** | 4 | 0 |
+| `tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py` | 375 | **363** | **0** | 6 | 6 |
+| `tests/ttnn/unit_tests/operations/data_movement/test_untilize.py` | 838 | **832** | **0** | 4 | 2 |
 | **total** | **1213** | **1195** | **0** | **10** | **8** |
 
-`1195 passed, 10 skipped, 8 xfailed in 806.58s`, with `TT_METAL_WATCHER=10` on and no watcher trip
-(no `0xdeadc0de`, no device-side assertion). `test_untilize.py` is included because it exercises the
-untilize-codegen paths that consume these factories.
+- fully ported (5/5): `1195 passed, 10 skipped, 8 xfailed in 806.58s`, `TT_METAL_WATCHER=10` on, no
+  watcher trip (no `0xdeadc0de`, no device-side assertion).
+- partial revert (3/5, current): `1195 passed, 10 skipped, 8 xfailed in 690.78s`, Watcher **off** (the
+  current recipe revision does not ask for it, and the sentinel command specified did not set it).
 
-All 18 non-passing outcomes are pre-existing and unrelated to the port:
+> **Correction to an earlier revision of this report.** It listed 361 / 834 passed and "8 xfails, all
+> in `test_untilize_with_unpadding.py`". That was wrong: the per-file passes were derived by assuming
+> every xfail landed in the unpadding file. Re-reading both logs, the split is **6 xfails in
+> `test_untilize_with_unpadding.py` and 2 in `test_untilize.py`** in *both* runs, so the per-file
+> passes are 363 / 832. The totals (1195 / 0 / 10 / 8) were correct and unchanged.
+
+`test_untilize.py` is included because it exercises the untilize-codegen paths that consume these
+factories — the paths this revert is about.
+
+All 18 non-passing outcomes are pre-existing and unrelated to the port or the revert:
 - **6 skips** — `test_untilize_with_unpadding.py:372`, "blocked until reshape supports ND-sharded
   tensors without using `ttnn::experimental::view`".
 - **4 skips** — `test_untilize.py:183`, "Width sharded case results in shard with width < tile width,
   which is not supported in single core implementation."
-- **8 xfails** — all `test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved`, each failing
-  in *test setup* (`from_torch failed while building sharded tensor: TT_FATAL @
+- **8 xfails** — 6 × `test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved` and
+  2 × `test_untilize_multi_core_nd_sharded_to_interleaved`, all on the same
+  `shard_core_grid={[0-0 - 0-2]}` / `[4, 4, 256, 512]` shape and all failing in *test setup*
+  (`from_torch failed while building sharded tensor: TT_FATAL @
   tt_metal/impl/allocator/bank_manager.cpp:462`), i.e. before the op under test is reached.
 
-**The legality checks were provably live for this run.** The log carries source locations, so the two
-markers are distinguishable rather than merely counted: `METAL2_CHECKS_FORCED (program_spec.cpp:2950)`
-**1118** times and `METAL2_CHECKS_FORCED (program_run_args.cpp:565)` **1118** times, interleaved as
-adjacent pairs — both translation units fresh, `ValidateProgramSpec` and the run-args validation both
-running on every one of the 1118 programs these tests construct. (Counting the bare marker string
-would not have shown this: both sites log identical text, so a single live TU would look the same at
-half the count.)
+**The legality checks were provably live for the fully-ported run.** The log carries source locations,
+so the two markers are distinguishable rather than merely counted:
+`METAL2_CHECKS_FORCED (program_spec.cpp:2950)` **1118** times and
+`METAL2_CHECKS_FORCED (program_run_args.cpp:565)` **1118** times, interleaved as adjacent pairs —
+both translation units fresh, `ValidateProgramSpec` and the run-args validation both running on every
+one of the 1118 programs those tests construct. (Counting the bare marker string would not have shown
+this: both sites log identical text, so a single live TU would look the same at half the count.)
 
-**One behavioral regression outside this op**, caused by the port and fixed deliberately rather than
-worked around — untilize codegen's non-tile-aligned L1 fallback now throws. See
-[Handoff points](#handoff-points) item 1; it is unreachable from the test suite, which is why the
-green above does not cover it.
-
-The forced-legality scaffolding remains uncommitted in the working tree and is **excluded from both
-commits**.
+**That forcing scaffolding is no longer in the tree.** It was removed between sessions, and the
+recipe revision now in `docs/…/metal_2.0/` has no forced-legality-check step at all (zero mentions of
+`skip_validation`), so it was not re-applied. Consequence for the post-revert run: the checks are in
+whatever state TTNN's own `skip_validation` handling leaves them, and this report can no longer
+*prove* they ran. Re-apply the forcing if that proof is wanted again — see
+[Handoff points](#handoff-points) item 2.
 
 ## Provenance
 
-- **Recipe docs (this port):** `9c1a0466220 2026-09-07 docs(metal_2.0): state the offset-base wall as a category, not as slice's current state`
+- **Recipe docs (the port itself):** `9c1a0466220 2026-09-07 docs(metal_2.0): state the offset-base wall as a category, not as slice's current state`
 - **Audit docs (inherited):** `9c1a0466220 2026-09-07 docs(metal_2.0): state the offset-base wall as a category, not as slice's current state`
+- **Recipe docs (this partial-revert pass):** the `docs/…/metal_2.0/` tree was **replaced and is now
+  untracked** (`git log` over that path returns nothing; `git status` shows `?? docs/…/metal_2.0/`),
+  so no commit can be pinned. The revision present is a restructured, smaller one
+  (`ai/port_op_to_metal2_recipe.md`, 841 lines). **It disagrees with the code and with the revision
+  the port was executed against, in two ways worth flagging** — see
+  [Friction → Gaps](#gaps) for the detail:
+  1. it names the target concept `MetalV2FactoryConcept`, which does not exist in
+     `ttnn/api/ttnn/operation_concepts.hpp` (the code has `ProgramSpecFactoryConcept`);
+  2. it instructs the port to **delete** a custom `compute_program_hash`, where the revision this
+     port followed forbade touching it. Moot here (this op has no custom hash) but a live
+     contradiction for other ports.
+  Doc links inside these artifacts were retargeted to the new filenames where an equivalent exists.
 
 ## TTNN ProgramFactory
 
 ### Concept realized
 
-`ProgramSpecFactoryConcept` (plain) on **all five** factories, exactly as the audit chose. No
-re-decision, nothing surfaced back to the invoker. Each factory's `create_descriptor` became
-`create_program_artifacts` returning `ttnn::device_operation::ProgramArtifacts{spec, run_params}`;
-`op_owned_tensors` is left defaulted (the op allocates no device tensors of its own).
+`ProgramSpecFactoryConcept` (plain) on **three of five** factories after the owner-requested partial
+revert — `SingleCore`, `MultiCoreSharded`, `MultiCoreNDSharded`. `MultiCoreInterleaved` and
+`MultiCoreBlockInterleaved` are back on `ProgramDescriptorFactoryConcept`; see
+[Outcome](#outcome) for which factories codegen consumes and why those two. The audit's concept
+choice was not re-decided — the scope was narrowed by owners after the port landed.
 
-The op already had a `program_factory_t` variant, so [exception 3](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/ttnn_factory.md#3-give-a-direct-descriptor-op-a-conventional-program-factory)
+For the three ported factories, `create_descriptor` became `create_program_artifacts` returning
+`ttnn::device_operation::ProgramArtifacts{spec, run_params}`; `op_owned_tensors` is left defaulted
+(the op allocates no device tensors of its own). **The mixed variant is legal and dispatches
+per-factory at runtime** — that is the recipe's own "atomic unit is one ProgramFactory" property,
+exercised here in the reverse direction.
+
+The op already had a `program_factory_t` variant, so [exception 3](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port_op_to_metal2_ttnn_factory.md#3-give-a-direct-descriptor-op-a-conventional-program-factory)
 (direct-descriptor conversion) did not apply — the port is a method swap inside the existing structs.
 
 ### Device-op-class edits
@@ -81,47 +173,85 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
 
 ## Handoff points
 
-1. **KNOWN REGRESSION — untilize codegen's non-tile-aligned L1 fallback now throws instead of
-   falling back to a native program.** This is the one behavioral change the port causes outside its
-   own op, and it is deliberate: it is the only shape available, not an oversight.
+1. **RESOLVED — the codegen non-tile-aligned regression is gone, and the path is still untested.**
+   The earlier fully-ported state made untilize codegen's non-tile-aligned L1 fallback throw, because
+   the factory it selects had no `create_descriptor`. The partial revert puts both selectable
+   factories (`MultiCoreInterleaved`, `MultiCoreBlockInterleaved`) back on the descriptor API, so that
+   fallback builds a native program again, exactly as pre-port. **No behavioral regression remains.**
 
-   `ttnn/cpp/ttnn/operations/data_movement/untilize/codegen/untilize_codegen_program_factory.cpp`'s
-   `build_native_equivalent` is the escape hatch used "when no codegen CB plan fits live L1". For a
-   **non-tile-aligned** logical shape it delegated to `untilize_with_unpadding` by calling
-   `create_descriptor` on whichever factory `select_program_factory` picked (`:446-448` pre-fix).
-   All five of those factories are now on `ProgramSpecFactoryConcept` and no longer have a
-   `create_descriptor`, so that call no longer compiles.
+   Two things still worth an owner's attention:
+   - **The guard cannot be deleted** while the other three factories stay ported — `std::visit`
+     instantiates over all five variant alternatives. Build evidence and the reasoning are in
+     [Outcome](#outcome); a comment at the call site now records it.
+   - **The path has no test coverage in either state.** Reaching `build_native_equivalent` needs live
+     L1 occupancy high enough that *no* codegen CB plan fits (`get_max_l1_space` reads
+     `lowest_occupied_compute_l1_address`, sampled per dispatch — `kUsableL1Note`, `:509-517`) *and* a
+     non-tile-aligned logical shape. No unit test constructs that occupancy, so the branch's only
+     coverage is the compiler. That is why the fully-ported breakage surfaced as a build error rather
+     than a test failure — and why the fix's correctness rests on the derivation above, not on a
+     green run. **Owner: untilize-codegen.** A test that pins L1 occupancy would retire this caveat.
 
-   **The fix** (committed separately) mirrors the `if constexpr (requires { … })` + `TT_THROW` guard
-   that already stood fifteen lines below on the *tile-aligned* branch (`:461-473`), which exists for
-   exactly this eventuality on the `untilize` side. The result: the non-tile-aligned fallback now
-   raises a clear `TT_THROW` naming the cause rather than silently failing to build.
+   **A `create_descriptor` shim on the ported factories is still NOT an option** — worth keeping on
+   record because it is the obvious-looking alternative to reverting:
+   `ProgramSpecFactoryConcept` requires `!ProgramDescriptorFactoryConcept`
+   (`ttnn/api/ttnn/operation_concepts.hpp:137-140`), and `ProgramDescriptorFactoryConcept` is
+   satisfied by the mere *presence* of `create_descriptor`. A factory declaring both is classified as
+   descriptor-concept and silently keeps running the legacy path — the port would appear to land while
+   changing nothing.
 
-   **A `create_descriptor` shim on the ported factories is NOT an option**, and this is worth
-   recording because it is the obvious-looking fix: `ProgramSpecFactoryConcept` requires
-   `!ProgramDescriptorFactoryConcept` (`ttnn/api/ttnn/operation_concepts.hpp:137-140`), and
-   `ProgramDescriptorFactoryConcept` is satisfied by the mere *presence* of `create_descriptor`. A
-   factory declaring both methods is therefore classified as descriptor-concept and silently keeps
-   running on the legacy path — the port would appear to land while changing nothing.
+2. **The forced-legality scaffolding is gone from the tree, and this recipe revision no longer asks
+   for it.** The fully-ported run proved both validator TUs live (1118 markers each). That scaffolding
+   — `skip_validation = false` at all 9 `grep -n 'bool skip_validation'` sites in
+   `tt_metal/impl/metal2_host_api/program_{run_args,spec}.cpp`, plus one `METAL2_CHECKS_FORCED` marker
+   per file — was removed between sessions and **not** re-applied, because the recipe revision now in
+   `docs/…/metal_2.0/ai/port_op_to_metal2_recipe.md` contains no forced-legality step (zero mentions
+   of `skip_validation`). So the post-revert run cannot prove the checks ran. If that proof is wanted,
+   re-apply the forcing and expect **two distinguishable** markers (they share text; the source
+   location in the log is what tells the two TUs apart). **Owner: whoever owns the recipe** — the
+   forcing step existed in the revision this port was executed against and is absent from the current
+   one; if it was dropped deliberately, this report's earlier proof method is no longer expected of
+   porters, and if not, the step needs restoring.
 
-   **Why no test catches it:** reaching `build_native_equivalent` at all requires live L1 occupancy
-   high enough that *no* codegen CB plan fits (`get_max_l1_space` reads
-   `lowest_occupied_compute_l1_address`, sampled per dispatch — see the `kUsableL1Note` comment at
-   `:509-517`), *and* a non-tile-aligned logical shape. No unit test constructs that occupancy, so
-   the whole branch is unreachable from the test suite; its coverage today is the compiler, which is
-   precisely why the pre-fix breakage showed up as a build error rather than a test failure.
+3. **The BACKWARDS page-id fix is no longer in the working tree — it lives only in history.** Deleting
+   the three orphaned forks (below) removes the file that carried it, which means the content of
+   commit **`b334c1ae941` "Fix BACKWARDS page id loop"** (mcw-anasuya, 2026-09-09) is no longer in the
+   tree. Recorded here verbatim so it is recoverable without archaeology.
 
-   **Owner: the untilize-codegen owners.** The real resolution is for codegen's L1 fallback to reach
-   `untilize_with_unpadding` through the spec path (or for codegen itself to port), at which point the
-   guard's `else` becomes dead and can go. Until then a production model that hits this combination
-   gets an exception where it previously got a working program.
+   The fix was in `eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore_metal2.cpp`.
+   The **legacy original still carries the broken form**, and it is a genuine bug: `dim` is `uint32_t`,
+   so `-third_dim` is a huge unsigned value and `0 > huge` is false — the BACKWARDS loop never
+   executes at all, and `-start_id` wraps.
 
-2. **The forced-legality scaffolding is in the working tree and must not be committed.**
-   `tt_metal/impl/metal2_host_api/program_run_args.cpp` and `program_spec.cpp` carry
-   `skip_validation = false;  // TEMP: … DO NOT COMMIT.` at all **9** sites `grep -n 'bool skip_validation'`
-   named, plus one `METAL2_CHECKS_FORCED` marker per file (in `SetProgramRunArgs` and
-   `BuildProgramFromSpec`). They are deliberately excluded from the commit. Re-apply them before the
-   verification run, and confirm **two** markers appear in the test log before trusting any green.
+   ```diff
+   -#ifdef BACKWARDS
+   -    for (uint32_t dim = 0; dim > -third_dim; dim--) {
+   -        for (uint32_t c = 0; c > -single_block_size_col_arg; c--) {
+   -            for (uint32_t r = 0; r > -single_block_size_row_arg; r--) {
+   -                uint32_t tile = -start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
+   -#else
+        for (uint32_t dim = 0; dim < third_dim; dim++) {
+            for (uint32_t c = 0; c < single_block_size_col_arg; c++) {
+                for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
+   -                uint32_t tile = start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
+   +                const uint32_t offset = dim * num_tiles_per_2d + c * total_tiles_per_row + r;
+   +#ifdef BACKWARDS
+   +                const uint32_t tile = start_id - offset;
+   +#else
+   +                const uint32_t tile = start_id + offset;
+    #endif
+   ```
+
+   **It is latent, not live.** Nothing defines `BACKWARDS` for this kernel — the only definer in the
+   tree is `data_movement/copy/device/copy_same_memory_config_program_factory.cpp:137`, and it binds
+   `copy/device/kernels/reader_unary_start_id.cpp`, a different file. So the branch is dead code in
+   both copies today and deleting the fork causes no behavior change. But the bug is real and will
+   bite the first consumer that defines `BACKWARDS`.
+
+   **Owner: `eltwise/unary` kernel owners.** The clean route is applying the same correction to the
+   legacy `reader_unary_interleaved_wh_multicore.cpp` as a standalone one-line change — deliberately
+   *not* done here, because that kernel is shared (`data_movement/untilize`'s block factory binds it)
+   and lives outside this op's writeable surface, so it needs its owner's review rather than a
+   revert-shaped port commit.
 
 3. **Audit gap — the brief's shared-kernel table missed a *lent* kernel.** The brief lists
    `device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp` among "8 op-owned writers …
@@ -132,7 +262,7 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
    the original, pointer comment added). **Owner: the audit tooling / next auditor** — the census in
    the audit brief appears to have been run only for kernels *outside* the op directory, so the
    *lent* direction (a kernel inside the op's own directory that other ops bind) was not swept. That
-   is the exact failure mode the [shared-kernel Caution](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#caution-porting-a-shared-kernel)
+   is the exact failure mode the [shared-kernel Caution](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#caution-porting-a-shared-kernel)
    warns about ("Nothing about the path warns you").
 
 4. **`num_runtime_varargs_per_node` — a `[[deprecated]]` API this port newly depends on.** The
@@ -149,7 +279,7 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
 
 ## Successes
 
-- **[Caution: Porting a shared kernel](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#caution-porting-a-shared-kernel)
+- **[Caution: Porting a shared kernel](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#caution-porting-a-shared-kernel)
   fired correctly, twice.** First on the six rung-1 forks: reading each fork *before* writing the
   factory made the binding vocabulary a constraint rather than a choice, and it is not the vocabulary
   this op's locals would have suggested — the untilize compute forks use `dfb::src`/`dfb::out` while
@@ -163,7 +293,7 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
   the census on the op's **own** writers at all — the brief said they were exclusively this op's. One
   of them wasn't. See Handoff point 3.
 
-- **The `constexpr` carve-out in [CB→DFB whitelist §A](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/cb_dfb_api_whitelist.md#tile--format-metadata-jit-descriptors)
+- **The `constexpr` carve-out in CB→DFB whitelist §A *(the CB→DFB whitelist was a standalone doc at port time; the current docs tree has folded it away)*
   is keyed on exactly the right thing.** Two `get_tile_size` sites in this op, and the rule splits
   them correctly on the legacy declaration alone:
   `writer_unary_unpad_width_16_sharded.cpp:23` was `constexpr` and feeds a `static_assert` and two
@@ -172,7 +302,7 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
   onto the object, `dfb.get_tile_size()`. Reaching for the member getter at the first site would not
   have compiled; the rule got there without needing the build I could not run.
 
-- **[Two-toucher / self-loop endpoint-assignment procedure](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split),
+- **[Two-toucher / self-loop endpoint-assignment procedure](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split),
   re-derived rather than transcribed.** The census agreed with the brief everywhere: `c_17` is a
   genuine one-toucher (the writer `reserve_back`s, fills by write pointer, `push_back`s; nothing
   drains it) → self-loop; every other buffer is an ordinary 1P+1C. The brief's "Watch for" note about
@@ -190,13 +320,44 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
 
 ### Gaps
 
-- **The recipe has no answer for a per-node-variable vararg count.** [Caution: Avoid varargs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary)
-  and the [migration guide](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/migration_guide.md#programrunargs)
+- **The recipe tree was swapped mid-work, and the revision now present contradicts both the code and
+  the revision the port followed.** `docs/…/metal_2.0/` is now **untracked** and restructured
+  (`ai/port_op_to_metal2_recipe.md`, 841 lines, replacing `ai/port/metal2_port.md`). Two
+  contradictions, found by checking the code rather than trusting the doc:
+  1. **Concept name.** The current recipe calls the target `MetalV2FactoryConcept`.
+     `ttnn/api/ttnn/operation_concepts.hpp:138` defines `ProgramSpecFactoryConcept`; no
+     `MetalV2FactoryConcept` exists anywhere in the tree. A porter following this revision literally
+     would look for a concept that isn't there.
+  2. **Custom `compute_program_hash`.** The current revision says the port **deletes** it
+     (`:155`, `:297`, `:617`). The revision this port followed said the opposite in the strongest
+     terms — leave it alone, touching it is a scope violation. These cannot both be right, and the
+     difference is a behavior change (the op's cache-equivalence class). Moot for this op (no custom
+     hash) but decidable only by the doc owner.
+
+  Also absent from the current revision: the **forced-legality-check** step (zero mentions of
+  `skip_validation`), which the port's verification leaned on to prove the validator was live. See
+  [Handoff points](#handoff-points) item 2. **Suggested fix:** track the docs tree in git so a port
+  can pin a provenance line, and reconcile the concept name and the custom-hash instruction against
+  the code before the next porter reads either.
+
+- **The recipe has no guidance for reverting a landed port.** This pass was a partial revert —
+  narrowing a five-factory port to three because a consumer needs the descriptor API on two of them.
+  Nothing in the recipe covers un-porting, and the one non-obvious hazard is not written down
+  anywhere: a consumer that `std::visit`s the op's `program_factory_t` needs **every** alternative to
+  satisfy the API it calls, so a mixed-concept variant only compiles behind an
+  `if constexpr (requires { … })` guard. That makes "which factories can this consumer actually
+  select?" a *compile-time* question about the whole variant, not just a runtime-reachability one —
+  the distinction that made "drop the guard" impossible here. **Suggested fix:** a short
+  "partial ports and consumers" note in the recipe, stating that a legacy consumer visiting the
+  variant pins every alternative to the descriptor API unless guarded.
+
+- **The recipe has no answer for a per-node-variable vararg count.** [Caution: Avoid varargs](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/metal2_port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary)
+  and the [migration guide](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/metal2_migration_guide.md#programrunargs)
   both describe varargs as a single `num_runtime_varargs` count, and the guide's worked example is a
   CTA-bounded shape where the count is uniform. Neither mentions `num_runtime_varargs_per_node`, which
   is the only construct that fits a payload whose length varies per core — the shape this op's
   MultiCoreInterleaved writer has. I found it by reading `advanced_options.hpp`, which is exactly what
-  ["go to the headers first"](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#read-this-first)
+  ["go to the headers first"](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port_op_to_metal2_recipe.md#read-this-first)
   promises — but a porter who trusted the docs alone would have reached for a max-count-plus-padding
   workaround, which silently changes the dispatch payload on most cores. **Suggested fix:** one
   sentence in the varargs caution naming the per-node override and its deprecation status, so the
@@ -210,7 +371,7 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
   (uniform, faithful, no per-site judgment — an unread named CTA lowers to an unused
   `constexpr experimental::CtaVal<uint32_t>` in the generated header and costs nothing), but the
   opposite choice is just as defensible, and two porters will split. **Suggested fix:** a line in
-  [Dropped Plumbing](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#dropped-plumbing)
+  [Dropped Plumbing](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port_op_to_metal2_recipe.md#dropped-plumbing)
   stating which way to go. The decision matters more than usual when the CTA lands in a **shared
   fork's** interface, where it becomes every future consumer's obligation — as
   `args::output_row_size` now is in `writer_unary_stick_layout_interleaved_blocks_metal2.cpp`.
@@ -230,7 +391,7 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
 - **The `cb`-name sweep's "expect zero hits" collides with the off-limits rule.** The sweep flags
   `input_cb_data_format` (a legitimate rename — done) but also four stale `CB` comments in
   `device/untilize_with_unpadding_device_operation.cpp` and `untilize_with_unpadding.cpp`, which
-  [Host-side: stay in the lane](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#host-side-stay-in-the-lane)
+  [Host-side: stay in the lane](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port_op_to_metal2_recipe.md#host-side-stay-in-the-lane)
   forbids touching. The self-audit item says "Expect **zero** hits … every hit is a real leftover",
   which reads as a hard gate; the resolution (the off-limits rule is the more specific one, so those
   hits are *reported*, not fixed) took a re-read of both sections to be confident about. **Suggested
@@ -252,7 +413,11 @@ The op already had a `program_factory_t` variant, so [exception 3](../../../../.
 
 ### Shared kernel touches
 
-Ten kernels, six reused and four forked. None was modified in place.
+Ten kernels touched during the port. None was modified in place. **After the partial revert, three
+of the four created forks were deleted** — the two reverted factories bind the legacy originals
+again, leaving those forks with zero consumers. Their pointer comments in the legacy originals were
+reverted with them, so no comment now advertises a fork that does not exist. The forks are recoverable
+from commit `a947a3cdf5d` (and the reader's BACKWARDS fix from `b334c1ae941` — Handoff 3).
 
 | kernel | relation | rung taken | remaining unmigrated consumers |
 |---|---|---|---|
@@ -262,10 +427,10 @@ Ten kernels, six reused and four forked. None was modified in place.
 | `data_movement/untilize/…/compute/untilize.cpp` | borrowed | **1 — reused** | `data_movement/fold` |
 | `data_movement/untilize/…/compute/untilize_variable_num_blocks.cpp` | borrowed | **1 — reused** | `data_movement/untilize` |
 | `ttnn/kernel/compute/eltwise_copy.cpp` | borrowed | **1 — reused** | `data_movement/copy`, `data_movement/sharded/interleaved_to_sharded`, `data_movement/sharded_partial/interleaved_to_sharded_partial`, `data_movement/sharded_partial/sharded_to_interleaved_partial` |
-| `eltwise/unary/…/reader_unary_interleaved_wh_multicore.cpp` | borrowed | **2 — created** `reader_unary_interleaved_wh_multicore_metal2.cpp`; pointer comment added to the original ✓ | `data_movement/untilize` |
-| `data_movement/untilize/…/compute/untilize_wh.cpp` | borrowed | **2 — created** `untilize_wh_metal2.cpp`; pointer comment added ✓ | `data_movement/untilize` |
-| `ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp` | borrowed | **2 — created** `…_metal2.cpp`; pointer comment added ✓ | none (this op was the only consumer) |
-| `…/untilize_with_unpadding/…/writer_unary_stick_layout_wh_multicore.cpp` | **lent** (audit missed it — Handoff 3) | **2 — created** `…_metal2.cpp` beside the original, inside this op's own directory; pointer comment added ✓ | `data_movement/untilize` |
+| `eltwise/unary/…/reader_unary_interleaved_wh_multicore.cpp` | borrowed | **fork created, then DELETED** on revert — original untouched again (pointer comment reverted). Carried the BACKWARDS fix; see Handoff 3 | `data_movement/untilize` (now the only consumer, as pre-port) |
+| `data_movement/untilize/…/compute/untilize_wh.cpp` | borrowed | **fork created, then DELETED** on revert — purely mechanical conversion, nothing unique lost | `data_movement/untilize` (as pre-port) |
+| `ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp` | borrowed | **2 — created** `…_metal2.cpp`; pointer comment added ✓ — **survives**, bound by the still-ported `MultiCoreSharded` | none (this op is the only consumer) |
+| `…/untilize_with_unpadding/…/writer_unary_stick_layout_wh_multicore.cpp` | **lent** (the audit missed it) | **fork created, then DELETED** on revert — purely mechanical conversion, nothing unique lost | `data_movement/untilize` (as pre-port) |
 
 Binding vocabulary the four new forks establish, for the next consumer to inherit:
 
@@ -360,7 +525,9 @@ overriding the invoker's chosen command.
 
 ## Verification status
 
-**Run and green.** What was executed, with the scaffolding in place:
+Two verified states, in order.
+
+**1 — fully ported (5/5 factories).** Run and green, with the forcing scaffolding in place:
 
 ```bash
 ./build_metal.sh --build-tests                      # 0 errors
@@ -371,10 +538,22 @@ pytest tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpaddi
 # -> METAL2_CHECKS_FORCED: 1118x (program_spec.cpp:2950) + 1118x (program_run_args.cpp:565)
 ```
 
-Counts and the marker breakdown are in [Outcome](#outcome). The build compiled every ported factory,
-all 8 converted op-owned writers and all 4 new forks; no warning names any file in this port.
+**2 — partial revert (3/5 factories), the current tree.** Rebuilt (0 errors) and re-tested:
+`1195 passed, 10 skipped, 8 xfailed in 690.78s` — **outcome-for-outcome identical to state 1**
+(table in [Outcome](#outcome)). Differences from state 1 that bear on how much the green is worth:
 
-Two notes on how the build got there, both worth knowing for the next port:
+- The forcing scaffolding is **gone** and was not re-applied (Handoff 2), so this run does **not**
+  prove the validator ran. State 1's proof stands for the three factories that are unchanged between
+  the two states, since neither their specs nor their kernels were touched by the revert.
+- `test_untilize.py` matters more in this state than in state 1: it exercises the untilize-codegen
+  paths, and codegen's native fallback now calls back into the two reverted factories.
+- Also note `d900e3339dd [Nightly L2] Use NO_DISPATCH capture in test_untilize.py` landed from
+  someone else between the two runs, so `test_untilize.py` is not byte-identical across them.
+
+A third state was built deliberately and is **not** a candidate: guard dropped as originally
+requested, which fails to compile (error text in [Outcome](#outcome)).
+
+Notes on how the builds got there, worth knowing for the next port:
 
 - **The first build attempt failed for a reason unrelated to the port.** The literal text `git status`
   had been prepended to line 1 of `tt_metal/impl/metal2_host_api/program_run_args.cpp` in the working
@@ -384,11 +563,19 @@ Two notes on how the build got there, both worth knowing for the next port:
   scaffolding (11 lines, all `skip_validation`/marker) immediately. Worth a diff-before-build habit
   whenever the scaffolding is applied by hand: a corrupted forcing file fails in `tt_metal/impl`,
   which reads at a glance like a framework problem rather than a typo.
-- **Nothing in the port needed fixing to compile.** The one code change this session was the required
+- **Nothing in the port needed fixing to compile.** The one code change in that pass was the required
   consumer fix in untilize codegen, committed separately.
+- **The revert clobbered nothing.** Three commits landed from another author between passes
+  (`b334c1ae941` BACKWARDS fix, `2eb85a3d2f7` Remove dead CTA, `d900e3339dd` NO_DISPATCH capture).
+  `git log a947a3cdf5d..HEAD -- <the six reverted paths>` was checked before reverting and returns
+  only this port's own guard commit, so restoring those six files from the pre-port tree discarded no
+  one else's work. `2eb85a3d2f7` touched `MultiCoreSharded` and the surviving
+  `writer_unary_stick_layout_interleaved_blocks_metal2.cpp` — both **kept ported**, so its change is
+  intact.
 
 **Still not covered by any test:** the codegen non-tile-aligned L1 fallback
-([Handoff points](#handoff-points) item 1). Its only guard is the compiler.
+([Handoff points](#handoff-points) item 1) — in *either* state. Its only coverage is the compiler,
+which is why the guard question had to be settled by building rather than by testing.
 
 **Remaining from the originally-confirmed baseline** — not run this session, and cheap to add:
 `./build/test/ttnn/unit_tests_ttnn --gtest_filter='*UntilizeWithUnpadding*'` (the graph-capture gtest,
@@ -399,6 +586,16 @@ now built) and `tests/ttnn/unit_tests/base_functionality/test_to_layout.py`. On 
 ND-sharded path this port touches.
 
 ### Anti-pattern self-audit results
+
+**Recorded against the fully-ported (5/5) tree.** The results below are the audit as run then; they
+are the audit of record for the three factories that remain ported, since the revert did not touch
+their factory `.cpp`s, their kernels, or their bindings.
+
+They are **no longer a whole-directory clean sweep**, because the two reverted factories and
+`writer_unary_stick_layout_split_rows_multicore.cpp` are legacy code again: the `cb`-name,
+`CBDescriptor`/`CircularBuffer`, positional-CTA and `TensorAccessorArgs<N>` checks all have
+legitimate hits in those three files now, by design. Re-running the sweep over the op directory as a
+pass/fail gate would be misreading it — scope it to the three ported factories and their kernels.
 
 Run over the op directory (**27 `.cpp`/`.hpp` files scanned** — non-zero denominator) plus the four
 new forks. Static checks only; the build-dependent items are unverified.

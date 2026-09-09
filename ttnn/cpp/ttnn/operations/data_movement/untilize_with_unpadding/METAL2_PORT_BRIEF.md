@@ -1,5 +1,20 @@
 # Metal 2.0 Port Brief — `ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding`
 
+> **ADDENDUM (post-port, 2026-09-09) — the brief's scope no longer matches the tree.**
+> This brief scoped **all five** factories, and the port delivered all five. Owners then asked for a
+> **partial port**: `MultiCoreInterleaved` and `MultiCoreBlockInterleaved` were **reverted to
+> `create_descriptor`** because they are the only two reachable from untilize codegen's live-L1
+> native fallback. `SingleCore`, `MultiCoreSharded` and `MultiCoreNDSharded` remain on
+> `ProgramSpecFactoryConcept`. The brief's findings below are unchanged and still accurate as audit
+> *findings* — but its "five factories, all in scope" framing, and the shared-kernel table's fork
+> rows for the two reverted factories, describe a state the tree no longer has. Current state and the
+> reachability derivation: [`METAL2_PORT_REPORT.md`](METAL2_PORT_REPORT.md).
+>
+> Also corrected by the port: this brief lists
+> `device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp` among "8 op-owned writers …
+> none is dead code" and does not flag it as shared. It **is** shared — `data_movement/untilize`'s
+> block factory binds it by full path.
+
 > Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
 **Gates cleared:** Device 2.0 ✓ · Features ✓ · TTNN factory concept ✓ · Offset base pointers ✓ · TensorAccessor 3rd arg ✓

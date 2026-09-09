@@ -444,6 +444,13 @@ ProgramDescriptor build_native_equivalent(
             .enough_space_height = enough_space_height,
             .sub_core_grids = std::nullopt};
         auto pf = UntilizeWithUnpaddingDeviceOperation::select_program_factory(params, input);
+        // untilize_with_unpadding is partially ported to the Metal 2.0 spec API: its interleaved and
+        // block-interleaved factories keep create_descriptor (they are the only two this fallback can
+        // select), while its single-core and sharded factories return ProgramArtifacts instead. The
+        // requires-guard is what makes that mixed variant legal here -- std::visit instantiates this
+        // lambda for EVERY alternative, including the spec-API ones this call can never select, so
+        // without it the visit does not compile. The throw below is therefore unreachable in practice;
+        // do not "simplify" it away.
         return std::visit(
             [&](auto&& factory) -> ProgramDescriptor {
                 using Factory = std::decay_t<decltype(factory)>;
