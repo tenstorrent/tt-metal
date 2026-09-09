@@ -104,7 +104,8 @@ mkdir -p ~/.ssh && chmod 700 ~/.ssh
 grep -qf /data/philei/.mig_ssh/id_ed25519.pub ~/.ssh/authorized_keys 2>/dev/null || cat /data/philei/.mig_ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 # on the DRIVING host only (prefill host for §3)
-printf 'Host bh-glx-*\n  IdentityFile /data/philei/.mig_ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' > ~/.ssh/config && chmod 600 ~/.ssh/config
+grep -q '^Host bh-glx-\*' ~/.ssh/config 2>/dev/null || printf 'Host bh-glx-*\n  IdentityFile /data/philei/.mig_ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' >> ~/.ssh/config
+chmod 600 ~/.ssh/config
 ssh -o BatchMode=yes <other-node> hostname      # and to itself: the harness ssh's to the prefill host too
 ```
 
@@ -285,7 +286,7 @@ node→node ssh from 0.2 and the Slurm detach in **both** the endpoint and the r
 ```bash
 export A=bh-glx-b08u02 B=bh-glx-b09u02
 # Terminal A (0.3, 0.4, TT_METAL_HOME=$ENGINE/tt-metal)
-./launch_migration_endpoints.sh --name_server_host $A --prefill_hosts $A,$B --prefill_endpoint_id 1 --tcp-transport
+$ENGINE/disaggregation/migration/launch_migration_endpoints.sh --name_server_host $A --prefill_hosts $A,$B --prefill_endpoint_id 1 --tcp-transport
 # Terminal B (0.3, 0.4)
 $RUN $M3/m3_binding_loopback_migration_2galaxy_2rank.yaml $A:1,$B:1
 # Terminal C (0.3) — one driver process per host so host B's layers are read back too
@@ -321,6 +322,7 @@ On the galaxy node:
 ls /dev/shm/mig_ep0_{cmd,table,resp}
 
 # ---- Terminal B — driver (0.3 decode preamble). PRINT=1 in front prints the ttrun command and exits.
+set -o pipefail
 $BLAZE/tests/testfiles/run_decode_migration.sh m3_migration_loopback.yaml $DECODE_HOST:4 \
   2>&1 | tee /data/philei/disagg_runs/m3_decode_loopback.log
 ```
@@ -412,16 +414,16 @@ unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p'); export PRTE_MCA_ras="^slurm" 
 export TT_METAL_HOME=$ENGINE/tt-metal        # reaches the endpoint/worker step only; prefill steps get prefill.tree
 ssh -o BatchMode=yes bh-glx-b09u02 hostname  # must print the decode host
 cd $ENGINE
-# The committed yaml carries /path/to placeholders ([EDIT]); a filled-in copy for this cluster lives at
-# /data/philei/disagg_runs/m3_pd_tools/disagg_harness_m3_pd.local.yaml -- point --config at that.
+# Copy disaggregation/launch_harness/disagg_harness_m3_pd.yaml, fill in its [EDIT] fields, point CFG at the copy.
+export CFG=/data/philei/disagg_runs/m3_pd_tools/disagg_harness_m3_pd.local.yaml
 
 # Read the plan: every command, log path and gate, no hardware touched. Also runs the preflight
 # (paths, shared dir, golden trace, launcher scripts).
 python3 -m disaggregation.launch_harness pd_migration \
-  --config disaggregation/launch_harness/disagg_harness_m3_pd.yaml --dry-run
+  --config "$CFG" --dry-run
 
 python3 -m disaggregation.launch_harness pd_migration \
-  --config disaggregation/launch_harness/disagg_harness_m3_pd.yaml
+  --config "$CFG"
 # --keep-up leaves runner/endpoints up after the verdict for a manual look; --run-id <name> names the run dir
 ```
 
