@@ -30,7 +30,10 @@
 
 #include "reshape.hpp"
 #include "reshape_common.hpp"
+#include "reshape_force.hpp"
 #include "device/reshape_device_operation.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/codegen/reshape_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/codegen/reshape_codegen_supported.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -556,10 +559,50 @@ ttnn::Tensor reshape_tiled(
     return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
 }
 
+namespace {
+
+// Whether the codegen path can serve this call. Correctness/placement only -- perf demotion is a
+// separate, routing-only question answered by reshape_codegen::is_demoted.
+//
+// sub_core_grid is a placement override: none of the codegen builders honour it, they place work
+// over the full compute_with_storage_grid_size() unconditionally. Accepting the call and ignoring
+// the override would land work on cores the caller deliberately reserved, so it is gated here
+// rather than folded into supported_by_codegen(), which is about layout/dtype/memory_config only.
+bool reshape_codegen_can_serve(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const MemoryConfig& mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    if (sub_core_grid.has_value()) {
+        return false;
+    }
+    return reshape_codegen::supported_by_codegen(tensor, logical_shape, padded_shape, mem_config);
+}
+
+// Dispatches to the generated program via ttnn::prim::reshape_codegen.
+ttnn::Tensor reshape_via_codegen(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const MemoryConfig& mem_config) {
+    return ttnn::prim::reshape_codegen(
+        tensor, logical_shape, padded_shape, ttnn::prim::ReshapeCodegenParams{.output_mem_config = mem_config});
+}
+
+}  // namespace
+
 }  // namespace ttnn::operations::data_movement
 
-// Free function implementations
-ttnn::Tensor ttnn::reshape(
+namespace {
+
+enum class ReshapeRouteMode { kAuto, kForceNative, kForceCodegen };
+
+// Shared body for the public entry and both forced verification entries. `mode` controls only the
+// final routing decision at the row-major/tiled dispatch point; every early-exit/view shortcut
+// above it is correctness/optimization logic that applies identically regardless of which
+// implementation ends up serving the call.
+ttnn::Tensor reshape_dispatch(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
@@ -567,7 +610,10 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const bool skip_padding_fill) {
+    const bool skip_padding_fill,
+    const ReshapeRouteMode mode) {
+    namespace reshape_codegen = ttnn::operations::data_movement::reshape_codegen;
+
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     const bool explicit_memory_config = memory_config.has_value();
     auto layout = tensor.layout();
@@ -577,6 +623,7 @@ ttnn::Tensor ttnn::reshape(
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
     // First Case, No reshape Required
     if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
+        TT_FATAL(mode != ReshapeRouteMode::kForceCodegen, "reshape_force_codegen invoked for a no-op reshape");
         return tensor;
     }
     PadValue default_pad_value;
@@ -601,11 +648,13 @@ ttnn::Tensor ttnn::reshape(
     // Just edit shape if shape has a 0 dimension
     if (tensor.logical_volume() == 0) {
         TT_FATAL(logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL(mode != ReshapeRouteMode::kForceCodegen, "reshape_force_codegen invoked for a zero-volume reshape");
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
     if (!is_device_tensor(tensor)) {
+        TT_FATAL(mode != ReshapeRouteMode::kForceCodegen, "reshape_force_codegen invoked for a host-storage tensor");
         // This case has been allowed in the past though it means introducing padding values to the data
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
@@ -619,6 +668,7 @@ ttnn::Tensor ttnn::reshape(
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
 
     if (this_is_view) {
+        TT_FATAL(mode != ReshapeRouteMode::kForceCodegen, "reshape_force_codegen invoked for a zero-cost view case");
         return operations::data_movement::PerformView(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
@@ -630,12 +680,42 @@ ttnn::Tensor ttnn::reshape(
              padded_shape[-1] % tile.get_width() == 0 and tensor.padded_shape()[-1] == padded_shape[-1]);
 
         if (tile_tensor_view_reshape_possible) {
+            TT_FATAL(
+                mode != ReshapeRouteMode::kForceCodegen,
+                "reshape_force_codegen invoked for a zero-cost view case (differing volumes)");
             // This case has been allowed in the past though it means introducing padding values to the data
             return ttnn::experimental::view(tensor, logical_shape, padded_shape);
         }
         // This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
+
+    const bool codegen_can_serve = operations::data_movement::reshape_codegen_can_serve(
+        tensor, logical_shape, padded_shape, mem_config, sub_core_grid);
+    bool use_codegen;
+    switch (mode) {
+        case ReshapeRouteMode::kForceNative: use_codegen = false; break;
+        case ReshapeRouteMode::kForceCodegen:
+            TT_FATAL(
+                codegen_can_serve,
+                "reshape_force_codegen invoked for a case the codegen path does not support (layout/dtype/memory "
+                "config out of scope, or a sub_core_grid override -- none of the codegen builders honour "
+                "sub_core_grid, they always place work over the full compute grid). This entry never falls back "
+                "to native, because a forced leg that quietly served native would make any comparison against "
+                "native vacuous. Use ttnn::reshape if you want the case routed.");
+            use_codegen = true;
+            break;
+        case ReshapeRouteMode::kAuto:
+        default:
+            use_codegen =
+                codegen_can_serve && !reshape_codegen::is_demoted(tensor, logical_shape, padded_shape, mem_config);
+            break;
+    }
+
+    if (use_codegen) {
+        return operations::data_movement::reshape_via_codegen(tensor, logical_shape, padded_shape, mem_config);
+    }
+
     // Do the reshape in row-major
     if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
         return operations::data_movement::detail::reshape_rm(
@@ -661,6 +741,64 @@ ttnn::Tensor ttnn::reshape(
         explicit_memory_config,
         skip_padding_fill,
         pad_value_explicit);
+}
+
+}  // namespace
+
+// Free function implementations
+ttnn::Tensor ttnn::reshape(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    return reshape_dispatch(
+        tensor,
+        logical_input_shape,
+        padded_input_shape,
+        memory_config,
+        pad_value,
+        reshape_map_mode,
+        sub_core_grid,
+        skip_padding_fill,
+        ReshapeRouteMode::kAuto);
+}
+
+ttnn::Tensor ttnn::operations::data_movement::detail::reshape_force_native(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config) {
+    return reshape_dispatch(
+        input_tensor,
+        logical_shape,
+        padded_shape,
+        memory_config,
+        std::nullopt,
+        TileReshapeMapMode::CACHE,
+        std::nullopt,
+        false,
+        ReshapeRouteMode::kForceNative);
+}
+
+ttnn::Tensor ttnn::operations::data_movement::detail::reshape_force_codegen(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config) {
+    return reshape_dispatch(
+        input_tensor,
+        logical_shape,
+        padded_shape,
+        memory_config,
+        std::nullopt,
+        TileReshapeMapMode::CACHE,
+        std::nullopt,
+        false,
+        ReshapeRouteMode::kForceCodegen);
 }
 
 ttnn::Tensor ttnn::reshape(
