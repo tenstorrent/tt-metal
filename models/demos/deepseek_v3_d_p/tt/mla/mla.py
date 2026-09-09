@@ -326,6 +326,7 @@ class ttMLA:
         active_seq_len: Optional[int] = None,
         first_layer_idx: Optional[int] = None,
         tp_shard_kv: bool = False,
+        llama4_scale_cache: Optional[dict] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -435,7 +436,9 @@ class ttMLA:
         # leaves every other variant's op graph byte-identical.
         self._llama4_beta = rope_scaling.get("llama_4_scaling_beta")
         self._llama4_orig_max = rope_scaling.get("original_max_position_embeddings")
-        self._llama4_cache: dict = {}
+        # Shared across layers when the caller threads one dict down (TtPrefillTransformer does);
+        # a bare ttMLA keeps its own. Contents are layer-invariant -- see _llama4_scale.
+        self._llama4_cache: dict = llama4_scale_cache if llama4_scale_cache is not None else {}
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -1158,31 +1161,29 @@ class ttMLA:
         Metadata/traced path reads ChunkMetadata.llama4_scale -- a captured graph can only read device
         memory, and write_chunk_metadata refreshes it alongside the scalars. Building a host tensor
         there would bake one chunk's offset into the capture. The host-scalar path builds it fresh and
-        caches on (start, seq_len_local), since the same offsets recur on every layer.
+        caches on (start, seq_len_local) in a dict shared by all layers, since the same offsets recur
+        on every layer.
 
         The geometry is re-derived from this object's own axes rather than through
         rope._llama4_scale_geometry: that helper reads mesh_device.shape[1 - sp_axis] where this reads
         self.tp_factor, which are the same value on a 2-D mesh but reached from different state. Keep
         the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
 
-        NOTE ON RESIDENCY: the cache is per ttMLA, i.e. per layer, and holds one
-        [1, heads_local, chunk, width] bf16 tensor per distinct offset -- 3.28 MB per entry at 8x4 /
-        chunk 5120, freed only with the model. Growth is linear in context depth, since an offset is
-        visited once per request and never repeats:
+        NOTE ON RESIDENCY: the cache holds one [1, heads_local, chunk, width] bf16 tensor per distinct
+        offset -- 3.28 MB per entry at 8x4 / chunk 5120, freed only with the model. Growth is linear in
+        context depth, since an offset is visited once per request and never repeats. TtPrefillTransformer
+        builds ONE dict and threads it down, so all 36 layers pay that once: 0.17 GB per device at
+        261,120 tokens and 0.67 GB at 1,048,576 (MAX_POSITION_EMBEDDINGS), against 6.0 / 24.1 GB when
+        every layer kept its own copies -- at 1M that left no room for weights and KV cache. Sharing is
+        sound because every input to the tensor (offset, sp_factor, seq_len_local, heads_local, width,
+        beta, orig_max) comes from the chunk, the config or the mesh; none varies by layer. Same shape as
+        what #55126 gives the traced path (TtPrefillRuntime._prepare_llama4_scale_offsets), which never
+        had the x36 problem -- it shares one ChunkMetadata.llama4_scale.
 
-            261,120 tokens (the longest row tested)   51 offsets  ->  6.0 GB per device
-            1,048,576 tokens (MAX_POSITION_EMBEDDINGS) 204 offsets -> 24.1 GB per device
-
-        Both are before weights and KV cache, so the advertised max context does not fit. The
-        contents are layer-invariant, so sharing one set across layers cuts either figure by 36x
-        (to 0.17 / 0.67 GB), and a single buffer refreshed in place cuts it to one tensor.
-
-        Left as follow-up rather than fixed here, and deliberately joined to
-        https://github.com/tenstorrent/tt-metal/issues/55126: the chosen fix there is to pre-build
-        one device buffer per deterministic k * chunk_size offset and reuse it, which is the same
-        machinery this needs. Refreshing in place additionally requires validating that no other
-        layer's enqueued multiply is still reading the buffer; doing both under one validation pass
-        is cheaper than doing them twice.
+        A shared per-offset SET, not one buffer refreshed in place: an entry is never mutated, so "is
+        another layer's enqueued multiply still reading this?" never arises. That is settled only for a
+        device-to-device refresh (copy and replay both on cq 0) and open for a host write, which is why
+        the sharing stops here.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
         miss and rebuild a ~105 MB host tensor, which measured 3x slower at long context.
