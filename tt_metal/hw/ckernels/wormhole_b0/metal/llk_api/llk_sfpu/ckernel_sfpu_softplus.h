@@ -64,6 +64,14 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 
     // Range reduction: x = k*ln(2) + r
     sfpi::vFloat z = x * INV_LN2;
+    // Clamp z: the Hacker's-Delight round-to-nearest helper (magic
+    // constant 0x4B400000, valid only for |z| <= 2^22) mis-rounds large
+    // negative z, producing a positive exponent that bypasses the
+    // new_exp > 0 flush-to-zero guard and returns inf/NaN instead of 0.
+    // exp(-a) underflows to 0 for a > ~126.5, so clamping here is exact.
+    // Mirrors the guard already present in ckernel_sfpu_xielu.h (#54046).
+    constexpr float UNDERFLOW_THRESHOLD = -126.5f;
+    z = sfpi::max(z, UNDERFLOW_THRESHOLD);
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
