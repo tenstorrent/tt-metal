@@ -324,6 +324,9 @@ template <bool dual_accumulator>
 inline void llk_math_two_pass_sfpu_switch_group(
     std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
     SAN_HOOK(unsupported());
+    LLK_ASSERT(
+        (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_two_pass_switch_group_<dual_accumulator>, mean_dst_idx, save_group_id, restore_group_id);
 }
