@@ -30,8 +30,21 @@
 namespace tt::tt_fabric::detail {
 
 // Full definition of the opaque session type forward-declared in topology_solver.hpp.
+// Clause-sharing portfolio ENUMERATION state (TT_TOPO_SAT_SHARE=1 + TT_TOPO_SAT_PORTFOLIO=N). Defined below the
+// portfolio drivers; forward-declared here so the session can own one.
+struct TopologySatShareEnumState;
+
 struct TopologySatSession {
     TopologySatSolver solver;
+    // Minimal-host priming (see TOPOLOGY_OCCUPANCY_SOLVE_README §7): when the session carries an occupancy objective,
+    // create_and_encode primes the solver (warm descent + full-packing lock) and makes the achieved cap PERMANENT.
+    // The primed model is returned by the FIRST solve_and_decode; subsequent calls are bounded (warm + capped).
+    std::vector<int> primed_first_mapping;
+    bool has_primed_mapping = false;
+    int enum_loop_budget = 0;  // >0 => bound each solve_and_decode with solve_limited (occupancy objective present)
+    // Non-null => this session enumerates through the clause-sharing PORTFOLIO (N persistent cooperating workers)
+    // instead of the single incremental solver above (which then only serves as the encode/var-numbering reference).
+    std::unique_ptr<TopologySatShareEnumState> share_enum;
 };
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
@@ -1208,16 +1221,67 @@ inline bool topology_sat_solve_minimize_groups(
 
     const bool profile = !quiet_mode;
 
+    // HYBRID (TT_TOPO_SAT_GIMSATUL=1): delegate each heavy SAT solve to the external gimsatul binary while our
+    // CaDiCaL keeps driving descent/decode. `assumption` (a counter/cap literal, 0 = none) is baked into gimsatul's
+    // CNF as a temporary hard unit (gimsatul has no assume()); on kSat our val() reflects gimsatul's model so
+    // count_occupied()/decode work unchanged. Returns 0 (unknown, e.g. binary missing) -> native fallback below.
+    const bool use_gimsatul = topology_sat_env_long("TT_TOPO_SAT_GIMSATUL", 0) != 0;
+    const int gimsatul_threads = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_GIMSATUL_THREADS", 32));
+    // TT_TOPO_SAT_GIM_FIRST=1: gimsatul does only the FIRST (warm feasible) solve; the descent then runs on native
+    // incremental CaDiCaL, warm-started from gimsatul's model via phase hints. gim_active is flipped off after the
+    // warm solve. (Without it, every solve is delegated to gimsatul -- re-export + cold re-solve per descent step.)
+    const bool gim_first_only = topology_sat_env_long("TT_TOPO_SAT_GIM_FIRST", 0) != 0;
+    // Same size gate as the other experiment hooks: only the big inter-mesh solve is worth a subprocess round-trip
+    // (and only it participates in the distilled pool's formula family).
+    bool gim_active = use_gimsatul && solver.num_variables() > 5000;
+    // `cap_k` = the host cap the `assumption` literal enforces for this solve (0 = uncapped); with TT_TOPO_SAT_POOL=1
+    // it bounds which distilled pool entries the gimsatul dump may inject (see gimsatul_solve).
+    auto delegated_solve = [&](int assumption, int native_budget, size_t cap_k) -> int {
+        if (gim_active) {
+            std::vector<int> units;
+            if (assumption != 0) {
+                units.push_back(assumption);
+            }
+            const int st = solver.gimsatul_solve(gimsatul_threads, units, assumption != 0 ? cap_k : 0);
+            if (st != 0) {
+                return st;  // gimsatul returned a verdict (kSat/kUnsat)
+            }
+            // st == 0 (no binary / parse fail) -> fall through to the native solve
+        }
+        if (assumption != 0) {
+            solver.assume(assumption);
+        }
+        return (native_budget > 0) ? solver.solve_limited(native_budget) : solver.solve();
+    };
+
     // EXPERIMENT mode 3 (HardCapOnly): skip the warm feasible solve AND the descent -- go straight to a single
     // cold all-or-nothing hard-cap solve at hard_cap_k. Tests whether the warm-start (mode 1) actually matters.
     if (min_mode == TopoMinMode::HardCapOnly && hard_cap_k > 0 && hard_cap_k < num_present) {
         topology_sat_add_all_or_nothing_tightening(solver, occ, used_per_group);
         const int bound = atmost_lit(hard_cap_k);
-        const auto t_hc = std::chrono::steady_clock::now();
-        if (bound != 0) {
-            solver.assume(bound);
+        // EXPERIMENT hook: dump the HOST-CAP-INCLUSIVE CNF. write_dimacs ignores assumptions, so bake the atmost
+        // bound in as a HARD unit clause first -- otherwise the dumped CNF would silently drop the host cap and be
+        // trivially SAT. This lets an external one-shot solver (gimsatul) attempt the full with-host-min problem.
+        if (const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
+            dp != nullptr && dp[0] != '\0' && solver.num_variables() > 5000) {
+            if (bound != 0) {
+                solver.add(bound);
+                solver.add(0);
+                solver.note_permanent_cap(hard_cap_k);
+            }
+            const bool okw = solver.write_dimacs(dp);
+            log_info(
+                tt::LogFabric,
+                "[topo-sat] TT_TOPO_SAT_DUMP_DIMACS hardcap(occupied<={}) -> {} ({}), {} vars, {} clauses (wrapper count)",
+                hard_cap_k,
+                dp,
+                okw ? "ok" : "FAILED",
+                solver.num_variables(),
+                solver.num_clauses());
+            return false;
         }
-        const int st = solver.solve();
+        const auto t_hc = std::chrono::steady_clock::now();
+        const int st = delegated_solve(bound, 0, hard_cap_k);
         bool ok = false;
         if (st == TopologySatSolver::kSat) {
             best_k_out = count_occupied();
@@ -1226,6 +1290,21 @@ inline bool topology_sat_solve_minimize_groups(
                 *hard_cap_met_out = (best_k_out <= hard_cap_k);
             }
             ok = !best_mapping_out.empty();
+            // Enumeration support (search_n / session prime): make the hard cap PERMANENT so every subsequent
+            // solve/enumeration step -- native OR a GIM_EVERY gimsatul dump of the clause tape -- stays capped.
+            // (The delegated/assumed bound above is one-shot; without this unit the post-prime enumeration would
+            // silently run uncapped in mode 3.)
+            if (ok && make_cap_permanent && bound != 0) {
+                solver.add(bound);
+                solver.add(0);
+                solver.note_permanent_cap(hard_cap_k);
+                if (profile) {
+                    log_debug(
+                        tt::LogFabric,
+                        "[topo-sat-profile]   hardcap_only.permanent_cap : asserted <= {} occupied (unit clause)",
+                        hard_cap_k);
+                }
+            }
         }
         if (profile) {
             log_debug(
@@ -1248,6 +1327,7 @@ inline bool topology_sat_solve_minimize_groups(
         if (bound != 0) {
             solver.add(bound);
             solver.add(0);
+            solver.note_permanent_cap(target);
         }
         const auto t_am = std::chrono::steady_clock::now();
         const int st = solver.solve();
@@ -1274,7 +1354,7 @@ inline bool topology_sat_solve_minimize_groups(
     }
 
     auto t_warm = std::chrono::steady_clock::now();
-    if (solver.solve() != TopologySatSolver::kSat) {  // step 1: warm feasible model
+    if (delegated_solve(0, 0, 0) != TopologySatSolver::kSat) {  // step 1: warm feasible model
         if (profile) {
             log_debug(
                 tt::LogFabric,
@@ -1294,6 +1374,12 @@ inline bool topology_sat_solve_minimize_groups(
             best_k_out,
             num_present);
     }
+    // HYBRID gimsatul-first: gimsatul did the heavy warm feasible solve; hand its model to CaDiCaL as phase hints
+    // and run the rest of the descent/lock on native incremental CaDiCaL (learned-clause reuse across steps).
+    if (gim_active && gim_first_only) {
+        solver.phase_hint_from_last_gimsatul_model();
+        gim_active = false;
+    }
 
     const size_t floor = std::max<size_t>(k_floor, 1);
     // TT_TOPO_SAT_SKIP_DESCENT: skip the one-host-at-a-time soft descent and rely on the direct k_min hard-cap
@@ -1308,9 +1394,8 @@ inline bool topology_sat_solve_minimize_groups(
         if (bound == 0) {
             break;
         }
-        solver.assume(bound);
         auto t_iter = std::chrono::steady_clock::now();
-        const int st = (conflict_cap > 0) ? solver.solve_limited(conflict_cap) : solver.solve();
+        const int st = delegated_solve(bound, conflict_cap, target_k);
         ++iter;
         if (st == TopologySatSolver::kSat) {
             best_k_out = count_occupied();  // may drop by more than one
@@ -1348,10 +1433,7 @@ inline bool topology_sat_solve_minimize_groups(
         topology_sat_add_all_or_nothing_tightening(solver, occ, used_per_group);
         const int bound = atmost_lit(hard_cap_k);
         auto t_lock = std::chrono::steady_clock::now();
-        if (bound != 0) {
-            solver.assume(bound);
-        }
-        const int st = (hard_conflict_cap > 0) ? solver.solve_limited(hard_conflict_cap) : solver.solve();
+        const int st = delegated_solve(bound, hard_conflict_cap, hard_cap_k);
         if (st == TopologySatSolver::kSat) {
             best_k_out = count_occupied();
             topology_sat_decode_hard_solution(solver, enc, best_mapping_out);
@@ -1377,6 +1459,7 @@ inline bool topology_sat_solve_minimize_groups(
         if (bound != 0) {
             solver.add(bound);
             solver.add(0);
+            solver.note_permanent_cap(best_k_out);
             if (profile) {
                 log_debug(
                     tt::LogFabric,
@@ -2409,6 +2492,237 @@ inline bool topology_sat_run_sharing_portfolio(
     return true;
 }
 
+// ── Clause-sharing portfolio ENUMERATION (TT_TOPO_SAT_SHARE=1 + TT_TOPO_SAT_PORTFOLIO=N, occupancy cap) ─────────
+// Extends the sharing portfolio from the single solve to MULTI-SOLUTION enumeration. N persistent CaDiCaL workers
+// each hold their own deterministic encode of the SAME base formula (deterministic encode => identical variable
+// numbering => blocking clauses reconstruct exactly), the hard host cap as a PERMANENT unit (mode-3 semantics:
+// all-or-nothing tightening + occupancy counter + cap unit), and a Learner exporting short learned clauses to one
+// shared pool. Each solution is a cooperative ROUND: workers race budgeted solve windows, importing peers' clauses
+// between windows; the first model cancels the rest. The winning mapping is then blocked in EVERY worker before the
+// next round starts (so all workers always agree on the found-solution set and dedup stays global), and workers
+// PERSIST across rounds -- learned clauses, imports and saved phases carry over. Soundness: worker formulas are
+// add-only supersets of one common base, every shared clause is learned from (hence entailed by) that family, and a
+// genuine kUnsat from any worker proves global exhaustion (all workers' formulas are equisatisfiable: they differ
+// only by entailed clauses).
+struct TopologySatShareEnumState {
+    int n_workers = 0;
+    int share_budget = 2000;
+    int share_max_size = 8;
+    size_t hard_cap_k = 0;
+    bool exhausted = false;
+    size_t rounds = 0;
+    std::vector<std::unique_ptr<TopologySatSolver>> solvers;
+    std::vector<TopologySatHardEncoding> encs;
+    ClauseSharingPool pool;
+    std::vector<std::size_t> cursors;      // per-worker drain cursor into `pool`
+    std::atomic<bool> round_done{false};   // per-round cancel flag (reset at each round start)
+    std::atomic<long> imported_total{0};
+};
+
+inline bool topology_sat_share_enum_enabled() {
+    return topology_sat_env_long("TT_TOPO_SAT_SHARE", 0) != 0 &&
+           topology_sat_env_long("TT_TOPO_SAT_PORTFOLIO", 0) > 1;
+}
+
+// EXPERIMENT (rebase adaptation): the old branch's mapper set MappingConstraints::max_same_rank_groups_used to the
+// capacity lower bound k_min (ceil(n_target / max host-group capacity)); the rebased base removed that hard-cap API
+// (its default single-solve path is an upward host-budget walk instead). The experiment paths reconstruct the same
+// hard cap locally, and only when an experiment knob (TT_TOPO_SAT_MIN_MODE / TT_TOPO_SAT_SHARE+PORTFOLIO) is set --
+// with no experiment env every path is the base's default.
+inline bool topology_sat_min_mode_env_set() {
+    const char* v = std::getenv("TT_TOPO_SAT_MIN_MODE");
+    return v != nullptr && v[0] != '\0';
+}
+inline bool topology_sat_experiment_minhost_enabled(const TopologySatConstraintView& constraint_data) {
+    return constraint_data.minimize_same_rank_groups_used &&
+           (topology_sat_min_mode_env_set() || topology_sat_share_enum_enabled());
+}
+inline size_t topology_sat_experiment_hard_cap_k(
+    const TopologySatGraphView& graph_data, const TopologySatConstraintView& constraint_data) {
+    if (!topology_sat_experiment_minhost_enabled(constraint_data)) {
+        return 0;
+    }
+    size_t max_cap = 0;
+    for (const auto& g : constraint_data.same_rank_groups) {
+        max_cap = std::max(max_cap, g.size());
+    }
+    return (max_cap > 0) ? (graph_data.n_target + max_cap - 1) / max_cap : 0;
+}
+
+// Build the N-worker state. Returns nullptr when the formula is too small to be the inter-mesh solve (<= 5000 vars,
+// same gate as the other experiment hooks -- the caller then falls back to the normal single-solver path) or when a
+// worker fails to encode.
+inline std::unique_ptr<TopologySatShareEnumState> topology_sat_share_enum_init(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    size_t hard_cap_k,
+    bool quiet_mode) {
+    (void)quiet_mode;  // path markers below are deliberately always-on (experiment evidence)
+    auto st = std::make_unique<TopologySatShareEnumState>();
+    st->n_workers = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_PORTFOLIO", 0));
+    st->share_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_BUDGET", 2000));
+    st->share_max_size = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_MAX_SIZE", 8));
+    st->hard_cap_k = hard_cap_k;
+    const long base_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", 0);
+    const bool fastsat = topology_sat_env_long("TT_TOPO_SAT_FASTSAT", 0) != 0;
+    st->cursors.assign(static_cast<size_t>(st->n_workers), 0);
+    st->encs.resize(static_cast<size_t>(st->n_workers));
+    for (int k = 0; k < st->n_workers; ++k) {
+        auto solver = std::make_unique<TopologySatSolver>();
+        solver->configure_for_blocking_clause_enumeration();
+        (void)solver->set_option("seed", static_cast<int>((base_seed >= 0 ? base_seed : 0) + k));
+        if (fastsat) {
+            (void)solver->set_option("target", 2);
+            (void)solver->set_option("phase", 1);
+        }
+        if (!topology_sat_encode_hard_constraints(
+                *solver, graph_data, constraint_data, st->encs[static_cast<size_t>(k)], validation_mode,
+                /*quiet_mode=*/true)) {
+            return nullptr;
+        }
+        if (k == 0 && solver->num_variables() <= 5000) {
+            return nullptr;  // small (intra-mesh per-stage) solve: not worth N threads; use the normal path
+        }
+        // Permanent host cap, mode-3 (HardCapOnly) semantics: all-or-nothing tightening + shared unoccupancy
+        // counter + "at most hard_cap_k occupied" as a unit clause. Permanent (not assumed) so it binds every round.
+        if (hard_cap_k > 0) {
+            std::vector<int> occ;
+            std::vector<std::vector<int>> upg;
+            topology_sat_build_group_occupancy(
+                *solver, constraint_data, st->encs[static_cast<size_t>(k)], /*all_or_nothing=*/false, occ, &upg);
+            if (hard_cap_k < occ.size()) {
+                topology_sat_add_all_or_nothing_tightening(*solver, occ, upg);
+                std::vector<int> neg;
+                neg.reserve(occ.size());
+                for (int o : occ) {
+                    neg.push_back(-o);
+                }
+                std::vector<int> geq_unoccupied;
+                topology_sat_add_at_least_k_counter(*solver, neg, occ.size() - 1, /*force=*/false, &geq_unoccupied);
+                const size_t need = occ.size() - hard_cap_k;
+                const int bound =
+                    (need >= 1 && need - 1 < geq_unoccupied.size()) ? geq_unoccupied[need - 1] : 0;
+                if (bound != 0) {
+                    solver->add(bound);
+                    solver->add(0);
+                    solver->note_permanent_cap(hard_cap_k);
+                }
+            }
+        }
+        // Connect export AFTER encode so only learned (not input) clauses are published.
+        solver->enable_clause_export(&st->pool, k, st->share_max_size);
+        st->solvers.push_back(std::move(solver));
+    }
+    // Always-on path marker (survives quiet_mode) so experiments can PROVE the sharing-portfolio path ran.
+    log_info(
+        tt::LogFabric,
+        "[topo-sat] SHARE-PORTFOLIO enumeration: {} workers (budget={}, max_size={}, hard_cap_k={}, seed_base={}, "
+        "{} vars/worker)",
+        st->n_workers,
+        st->share_budget,
+        st->share_max_size,
+        hard_cap_k,
+        base_seed,
+        st->solvers.empty() ? 0 : st->solvers[0]->num_variables());
+    return st;
+}
+
+// One cooperative round: race the persistent workers for the next model. Returns kSat (mapping_out filled from the
+// winner), kUnsat (genuinely exhausted; sticky via st.exhausted) or 0 (no verdict -- should not normally happen).
+inline int topology_sat_share_enum_solve(
+    TopologySatShareEnumState& st, std::vector<int>& mapping_out, bool quiet_mode) {
+    (void)quiet_mode;
+    if (st.exhausted || st.solvers.empty()) {
+        return TopologySatSolver::kUnsat;
+    }
+    st.round_done.store(false, std::memory_order_relaxed);
+    std::mutex mtx;
+    int winner = -1;
+    bool unsat = false;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> workers;
+    workers.reserve(st.solvers.size());
+    for (int k = 0; k < st.n_workers; ++k) {
+        workers.emplace_back([&, k]() {
+            TopologySatSolver& S = *st.solvers[static_cast<size_t>(k)];
+            S.set_cancel_flag(&st.round_done);
+            std::vector<std::vector<int>> imported;
+            for (;;) {
+                if (st.round_done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                const int status = S.solve_limited(st.share_budget);
+                if (status == TopologySatSolver::kSat) {
+                    std::lock_guard<std::mutex> lk(mtx);
+                    if (!st.round_done.exchange(true)) {
+                        winner = k;
+                    }
+                    return;
+                }
+                if (status == TopologySatSolver::kUnsat) {
+                    // Genuine proof (cancellation returns 0, never kUnsat) -> the whole enumeration is exhausted.
+                    std::lock_guard<std::mutex> lk(mtx);
+                    if (!st.round_done.exchange(true)) {
+                        unsat = true;
+                    }
+                    return;
+                }
+                // status == 0: window exhausted (or cancelled) -> import peers' clauses and continue.
+                imported.clear();
+                st.pool.drain(k, st.cursors[static_cast<size_t>(k)], imported);
+                for (const auto& cl : imported) {
+                    for (const int lit : cl) {
+                        S.add(lit);
+                    }
+                    S.add(0);
+                }
+                st.imported_total.fetch_add(static_cast<long>(imported.size()), std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+    ++st.rounds;
+    if (winner >= 0) {
+        if (!topology_sat_decode_hard_solution(
+                *st.solvers[static_cast<size_t>(winner)], st.encs[static_cast<size_t>(winner)], mapping_out)) {
+            return 0;
+        }
+        log_info(
+            tt::LogFabric,
+            "[topo-sat] share-enum round {}: winner=worker {} in {:.1f} ms (pool={}, imports={})",
+            st.rounds,
+            winner,
+            topology_sat_elapsed_ms(t0),
+            st.pool.size(),
+            st.imported_total.load(std::memory_order_relaxed));
+        return TopologySatSolver::kSat;
+    }
+    if (unsat) {
+        st.exhausted = true;
+        log_info(
+            tt::LogFabric,
+            "[topo-sat] share-enum round {}: UNSAT in {:.1f} ms -> enumeration exhausted",
+            st.rounds,
+            topology_sat_elapsed_ms(t0));
+        return TopologySatSolver::kUnsat;
+    }
+    return 0;
+}
+
+// Block `mapping` in EVERY worker (before the next round -- the composition invariant for sound sharing + global
+// dedup). Deterministic encode => the clause is literally identical across workers.
+inline bool topology_sat_share_enum_block(
+    TopologySatShareEnumState& st, const std::vector<int>& mapping, bool unique_shapes) {
+    bool ok = true;
+    for (size_t k = 0; k < st.solvers.size(); ++k) {
+        ok = topology_sat_add_blocking_clause_for_mapping(*st.solvers[k], st.encs[k], mapping, unique_shapes) && ok;
+    }
+    return ok;
+}
+
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -2536,6 +2850,25 @@ bool topology_sat_search(
             }
             return false;
         }
+        // EXPERIMENT hook: dump the encoded CNF to DIMACS (TT_TOPO_SAT_DUMP_DIMACS=path) to feed an external
+        // parallel / clause-sharing solver (gimsatul, plingeling, ...). Gated on size so it captures the big
+        // inter-mesh solve, not the tiny intra-mesh per-stage ones. Dumps then stops (returns false).
+        // Only for the BASE-embedding experiment (NO_MINHOST): otherwise a min-host run's hardcap dump (in
+        // solve_minimize_groups) would be clobbered by this base-solve fallback writing the same path.
+        if (const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
+            dp != nullptr && dp[0] != '\0' && solver.num_variables() > 5000 &&
+            std::getenv("TT_TOPO_SAT_NO_MINHOST") != nullptr) {
+            const bool ok = solver.write_dimacs(dp);
+            log_info(
+                tt::LogFabric,
+                "[topo-sat-profile] DUMP_DIMACS: wrote CNF to {} ({}), {} vars, {} clauses",
+                dp,
+                ok ? "ok" : "FAILED",
+                solver.num_variables(),
+                solver.num_clauses());
+            state.error_message = "TT_TOPO_SAT_DUMP_DIMACS: dumped CNF, skipping solve";
+            return false;
+        }
         // TT_TOPO_SAT_BASE_WARMHINT=1: phase-hint a greedy adjacency-walk embedding before the solve (Goal 1).
         if (topology_sat_env_long("TT_TOPO_SAT_BASE_WARMHINT", 0) != 0) {
             const auto t_wh = std::chrono::steady_clock::now();
@@ -2564,6 +2897,115 @@ bool topology_sat_search(
         }
         return finalize_success(solver, enc);
     };
+
+    // EXPERIMENT single-solve minimal-host path (TT_TOPO_SAT_MIN_MODE / TT_TOPO_SAT_SHARE+PORTFOLIO): the
+    // occupancy-based solve from the pre-rebase branch (warm descent + full-packing hard-cap lock, or the
+    // clause-sharing portfolio round), with the capacity lower bound k_min as the hard cap (the old mapper set
+    // MappingConstraints::max_same_rank_groups_used to exactly this value; the rebased base removed that API).
+    // Active only when an experiment knob is set; on failure it falls through to the base's budget walk below.
+    if (topology_sat_experiment_minhost_enabled(constraint_data)) {
+        const int kGroupDescentConflictBudget =
+            static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        const int kGroupLockConflictBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
+        const bool profile = !quiet_mode;
+        size_t exp_max_cap = 0;
+        for (const auto& g : constraint_data.same_rank_groups) {
+            exp_max_cap = std::max(exp_max_cap, g.size());
+        }
+        const size_t k_floor = (exp_max_cap > 0) ? (graph_data.n_target + exp_max_cap - 1) / exp_max_cap : 1;
+        const size_t hard_cap_k = topology_sat_experiment_hard_cap_k(graph_data, constraint_data);
+        TopologySatSolver solver;
+        TopologySatHardEncoding enc;
+        auto t_min_enc = std::chrono::steady_clock::now();
+        const bool min_enc_ok =
+            topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode, quiet_mode);
+        if (profile) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile] minimize: encode_hard_constraints total : {:.1f} ms (ok={})",
+                topology_sat_elapsed_ms(t_min_enc),
+                min_enc_ok);
+        }
+        // Mode D SINGLE solve (SHARE=1 + PORTFOLIO=N with a hard host cap): route the capped min-host solve through
+        // one cooperative share-enum round so the portfolio composes with the occupancy objective too.
+        if (min_enc_ok && topology_sat_share_enum_enabled() && hard_cap_k > 0 && solver.num_variables() > 5000) {
+            auto se = topology_sat_share_enum_init(graph_data, constraint_data, validation_mode, hard_cap_k, quiet_mode);
+            if (se) {
+                std::vector<int> m;
+                if (topology_sat_share_enum_solve(*se, m, quiet_mode) == TopologySatSolver::kSat && !m.empty()) {
+                    state.mapping = std::move(m);
+                    std::fill(state.used.begin(), state.used.end(), false);
+                    for (int gi : state.mapping) {
+                        if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                            state.used[static_cast<size_t>(gi)] = true;
+                        }
+                    }
+                    log_info(
+                        tt::LogFabric,
+                        "Topology SAT: hard-capped host-group usage at {} group(s) (via clause-sharing portfolio)",
+                        hard_cap_k);
+                    return true;
+                }
+                // No model from the portfolio round -> fall through to the normal minimize path below.
+            }
+        }
+        if (min_enc_ok) {
+            auto t_min = std::chrono::steady_clock::now();
+            std::vector<int> best_mapping;
+            size_t best_k = 0;
+            bool hard_cap_met = false;
+            const bool min_ok = topology_sat_solve_minimize_groups(
+                graph_data,
+                solver,
+                enc,
+                constraint_data,
+                kGroupDescentConflictBudget,
+                k_floor,
+                best_mapping,
+                best_k,
+                hard_cap_k,
+                kGroupLockConflictBudget,  // strict: unbounded by default (run lock until k_min proven / UNSAT)
+                &hard_cap_met,
+                /*make_cap_permanent=*/false,
+                quiet_mode);
+            if (profile) {
+                log_debug(
+                    tt::LogFabric,
+                    "[topo-sat-profile] minimize: solve_minimize_groups : {:.1f} ms (ok={}, best_k={}, "
+                    "hard_cap_k={}, hard_cap_met={})",
+                    topology_sat_elapsed_ms(t_min),
+                    min_ok,
+                    best_k,
+                    hard_cap_k,
+                    hard_cap_met);
+            }
+            if (min_ok && !best_mapping.empty()) {
+                state.mapping = best_mapping;
+                std::fill(state.used.begin(), state.used.end(), false);
+                for (int gi : state.mapping) {
+                    if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                        state.used[static_cast<size_t>(gi)] = true;
+                    }
+                }
+                if (!quiet_mode) {
+                    if (hard_cap_k > 0 && hard_cap_met) {
+                        log_info(
+                            tt::LogFabric,
+                            "Topology SAT: hard-capped host-group usage at {} group(s) (via warm full-packing lock)",
+                            best_k);
+                    } else {
+                        log_info(
+                            tt::LogFabric,
+                            "Topology SAT: minimized host-group usage to {} group(s) (capacity lower bound {})",
+                            best_k,
+                            k_floor);
+                    }
+                }
+                return true;
+            }
+        }
+        // Experiment objective produced no model -> fall through to the base's budget walk below.
+    }
 
     // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) the mapping
     // touches. Walk a host-usage budget upward from the capacity-based lower bound (ceil(n_target / max group
@@ -2757,10 +3199,17 @@ bool topology_sat_search_n(
         return false;
     }
 
+    // EXPERIMENT (Story 3): seed applied to BOTH enumeration modes (incremental + from-scratch) so a seed-variance
+    // sweep is fair. Must be set pre-encode (CONFIGURING state). -1 (default) leaves CaDiCaL's default seed.
+    const long enum_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", -1);
+
     // One CaDiCaL::Solver for the whole enumeration: encode once, then add blocking clauses and solve() in a loop.
     // (No full re-encode / new solver per model.)
     TopologySatSolver solver;
     solver.configure_for_blocking_clause_enumeration();
+    if (enum_seed >= 0) {
+        (void)solver.set_option("seed", static_cast<int>(enum_seed));
+    }
     TopologySatHardEncoding enc;
     // Top-level phase attribution for the enumeration path (encode / minimal-host prime / enumerate loop). The scoped
     // timer emits search_n.total on every return; the manual subtotals below split it. DEBUG only, quiet_mode silent.
@@ -2785,15 +3234,246 @@ bool topology_sat_search_n(
         topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
     }
 
+    // EXPERIMENT (Story 3, TT_TOPO_SAT_ENUM_FROMSCRATCH=1): from-scratch enumeration -- the control for measuring the
+    // benefit of incremental state reuse. Instead of ONE persistent solver reused across solutions (the loop below),
+    // rebuild a FRESH solver + re-encode + replay ALL prior blocking clauses each solution, then do a mode-3 hardcap
+    // solve. No learned-clause / phase / VSIDS carryover. Same result set, different cost. Compares vs the incremental
+    // path (default). Uses the same solve_minimize_groups(mode 3) per step -- run with TT_TOPO_SAT_MIN_MODE=3.
+    if (topology_sat_env_long("TT_TOPO_SAT_ENUM_FROMSCRATCH", 0) != 0) {
+        // Always-on confirmation marker (survives quiet_mode) so experiments can PROVE this path ran.
+        log_info(
+            tt::LogFabric,
+            "[topo-sat] ENUM path = FROM-SCRATCH (fresh solver + replay blocks per solution), seed={}",
+            enum_seed);
+        size_t fs_max_cap = 0;
+        for (const auto& g : constraint_data.same_rank_groups) {
+            fs_max_cap = std::max(fs_max_cap, g.size());
+        }
+        const size_t fs_k_floor = (fs_max_cap > 0) ? (graph_data.n_target + fs_max_cap - 1) / fs_max_cap : 1;
+        const size_t fs_hard_cap_k = topology_sat_experiment_hard_cap_k(graph_data, constraint_data);
+        const int fs_descent_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        const int fs_lock_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
+        const auto t_fs = std::chrono::steady_clock::now();
+        while (all_mappings_out.size() < max_solutions) {
+            TopologySatSolver fs_solver;
+            if (enum_seed >= 0) {
+                (void)fs_solver.set_option("seed", static_cast<int>(enum_seed));
+            }
+            TopologySatHardEncoding fs_enc;
+            if (!topology_sat_encode_hard_constraints(
+                    fs_solver, graph_data, constraint_data, fs_enc, validation_mode, quiet_mode)) {
+                break;
+            }
+            // Replay the initial forbidden shapes + every solution already found (deterministic encode => same var
+            // numbering => blocking clauses reconstruct exactly).
+            for (const auto& shape_key : initial_forbidden_shape_keys) {
+                std::vector<int> fc;
+                topology_sat_build_shape_blocking_clause(fs_enc, shape_key, fc);
+                topology_sat_add_shape_clause_or_unsat(fs_solver, fs_enc, fc);
+            }
+            for (const auto& m : all_mappings_out) {
+                topology_sat_add_blocking_clause_for_mapping(fs_solver, fs_enc, m, unique_shapes);
+            }
+            std::vector<int> fs_mapping;
+            size_t fs_best_k = 0;
+            bool fs_met = false;
+            const bool ok = topology_sat_solve_minimize_groups(
+                graph_data, fs_solver, fs_enc, constraint_data, fs_descent_budget, fs_k_floor, fs_mapping, fs_best_k,
+                fs_hard_cap_k, fs_lock_budget, &fs_met, /*make_cap_permanent=*/false, quiet_mode);
+            if (!ok || fs_mapping.empty()) {
+                break;
+            }
+            all_mappings_out.push_back(std::move(fs_mapping));
+            if (!quiet_mode) {
+                log_info(
+                    tt::LogFabric,
+                    "topology_sat_search_n[fromscratch]: found {} solution(s) so far (max={}), {:.1f} ms elapsed",
+                    all_mappings_out.size(),
+                    max_solutions,
+                    topology_sat_elapsed_ms(t_fs));
+            }
+        }
+        if (!all_mappings_out.empty()) {
+            state.mapping = all_mappings_out.back();
+            std::fill(state.used.begin(), state.used.end(), false);
+            for (int gi : state.mapping) {
+                if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                    state.used[static_cast<size_t>(gi)] = true;
+                }
+            }
+        }
+        return !all_mappings_out.empty();
+    }
+
+    // Clause-sharing portfolio enumeration (TT_TOPO_SAT_SHARE=1 + PORTFOLIO=N): run the whole multi-solution
+    // enumeration through the N-worker cooperative portfolio (see TopologySatShareEnumState). Requires the hard host
+    // cap (mode-3 semantics baked permanently into every worker). Falls through to the incremental path when the
+    // formula is small (intra-mesh) or the init fails.
+    const size_t share_cap_k = topology_sat_experiment_hard_cap_k(graph_data, constraint_data);
+    if (topology_sat_share_enum_enabled() && share_cap_k > 0) {
+        auto se = topology_sat_share_enum_init(graph_data, constraint_data, validation_mode, share_cap_k, quiet_mode);
+        if (se) {
+            log_info(
+                tt::LogFabric,
+                "[topo-sat] ENUM path = SHARE-PORTFOLIO ({} persistent workers, blocking clauses fanned out per "
+                "round), seed={}",
+                se->n_workers,
+                enum_seed);
+            for (const auto& shape_key : initial_forbidden_shape_keys) {
+                for (size_t k = 0; k < se->solvers.size(); ++k) {
+                    std::vector<int> fc;
+                    topology_sat_build_shape_blocking_clause(se->encs[k], shape_key, fc);
+                    topology_sat_add_shape_clause_or_unsat(*se->solvers[k], se->encs[k], fc);
+                }
+            }
+            while (all_mappings_out.size() < max_solutions) {
+                std::vector<int> m;
+                if (topology_sat_share_enum_solve(*se, m, quiet_mode) != TopologySatSolver::kSat || m.empty()) {
+                    break;
+                }
+                all_mappings_out.push_back(std::move(m));
+                if (!quiet_mode) {
+                    log_info(
+                        tt::LogFabric,
+                        "topology_sat_search_n[share-portfolio]: found {} solution(s) so far (max={})",
+                        all_mappings_out.size(),
+                        max_solutions);
+                }
+                if (!topology_sat_share_enum_block(*se, all_mappings_out.back(), unique_shapes)) {
+                    break;
+                }
+            }
+            if (!all_mappings_out.empty()) {
+                state.mapping = all_mappings_out.back();
+                std::fill(state.used.begin(), state.used.end(), false);
+                for (int gi : state.mapping) {
+                    if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                        state.used[static_cast<size_t>(gi)] = true;
+                    }
+                }
+            }
+            return !all_mappings_out.empty();
+        }
+    }
+
+    // Drive the solve heartbeat's "progress to first solution" / enumeration counters (see TopologySatSolver).
+    solver.set_solution_progress(0, static_cast<std::int64_t>(max_solutions));
+    solver.set_progress_phase("enumerate");
+    // Always-on confirmation marker (survives quiet_mode) so experiments can PROVE the incremental path ran.
+    log_info(
+        tt::LogFabric,
+        "[topo-sat] ENUM path = INCREMENTAL (one solver reused + blocking clauses), seed={}",
+        enum_seed);
+
+    // Minimal-host occupancy objective (same strategy as the single solve): PRIME the solver with the warm descent
+    // + full-packing lock and make the achieved cap PERMANENT (unit clause), so every enumerated solution occupies
+    // the minimal host count -- not just the first. The primed model is the first solution; the loop below finds
+    // the rest (warm, permanently capped, only a blocking clause added). See TOPOLOGY_OCCUPANCY_SOLVE_README §6.
+    // Per-solve budget for the blocking-clause enumeration loop. DEFAULT 0 = UNBOUNDED: for --all-solutions we must
+    // NOT give up on a conflict budget -- a bounded solve that hits its cap returns kUnknown, which is
+    // indistinguishable from "no more solutions" and would silently truncate the enumeration (reporting fewer
+    // solutions than exist and a false "exhaustive"). Unbounded means each solve runs to a definite kSat (another
+    // solution) or kUnsat (genuinely exhausted). Set TT_TOPO_SAT_ENUM_BUDGET>0 only if you explicitly want a
+    // best-effort truncated enumeration. (Dedicated var so it doesn't perturb the single-solve objective budget.)
+    const int kEnumLoopConflictBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_ENUM_BUDGET", 0));
+    if (topology_sat_experiment_minhost_enabled(constraint_data)) {
+        const int kDescentBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        const int kLockBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
+        size_t max_cap = 0;
+        for (const auto& g : constraint_data.same_rank_groups) {
+            max_cap = std::max(max_cap, g.size());
+        }
+        const size_t k_floor = (max_cap > 0) ? (graph_data.n_target + max_cap - 1) / max_cap : 1;
+        const size_t hard_cap_k = topology_sat_experiment_hard_cap_k(graph_data, constraint_data);
+        std::vector<int> first_mapping;
+        size_t best_k = 0;
+        bool hard_cap_met = false;
+        solver.set_progress_phase("descent");  // minimal-host warm descent -- the long pre-first-solution phase
+        const auto t_prime = std::chrono::steady_clock::now();
+        const bool primed = topology_sat_solve_minimize_groups(
+            graph_data,
+            solver,
+            enc,
+            constraint_data,
+            kDescentBudget,
+            k_floor,
+            first_mapping,
+            best_k,
+            hard_cap_k,
+            kLockBudget,
+            &hard_cap_met,
+            /*make_cap_permanent=*/true,
+            quiet_mode);
+        if (!quiet_mode) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile] search_n.prime_minimize : {:.1f} ms (primed={}, best_k={})",
+                topology_sat_elapsed_ms(t_prime),
+                primed,
+                best_k);
+        }
+        if (primed && !first_mapping.empty()) {
+            all_mappings_out.push_back(first_mapping);
+            solver.set_progress_phase("enumerate");
+            solver.set_solution_progress(
+                static_cast<std::int64_t>(all_mappings_out.size()), static_cast<std::int64_t>(max_solutions));
+            if (!quiet_mode) {
+                log_info(
+                    tt::LogFabric,
+                    "topology_sat_search_n: primed minimal-host enumeration at {} occupied host group(s) "
+                    "(hard_cap_k={}, met={})",
+                    best_k,
+                    hard_cap_k,
+                    hard_cap_met);
+            }
+            if (all_mappings_out.size() >= max_solutions ||
+                !topology_sat_add_blocking_clause_for_mapping(solver, enc, all_mappings_out.back(), unique_shapes)) {
+                // Reached the cap with the first solution, or can't block it -> done.
+                if (!all_mappings_out.empty()) {
+                    state.mapping = all_mappings_out.back();
+                    std::fill(state.used.begin(), state.used.end(), false);
+                    for (int gi : state.mapping) {
+                        if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                            state.used[static_cast<size_t>(gi)] = true;
+                        }
+                    }
+                }
+                return !all_mappings_out.empty();
+            }
+        }
+        // If priming failed, fall through to the plain enumeration loop below (best-effort, uncapped).
+    }
+
     using enum_clock = std::chrono::steady_clock;
     constexpr auto kEnumProgressLogInterval = std::chrono::seconds(5);
     // Eligible for an immediate first progress line, then at most once per kEnumProgressLogInterval.
     auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
 
+    // GIM_EVERY (TT_TOPO_SAT_GIMSATUL=1 + TT_TOPO_SAT_GIM_EVERY=1): delegate EVERY enumeration step to a fresh
+    // gimsatul run on the full clause tape (base CNF + permanent cap + all accumulated blocking clauses, + distilled
+    // pool clauses when TT_TOPO_SAT_POOL=1). Model parse-back/decoding stay in this driver. gimsatul returning 0
+    // (no binary / parse fail) falls back to the native solve.
+    const bool gim_every = topology_sat_env_long("TT_TOPO_SAT_GIMSATUL", 0) != 0 &&
+                           topology_sat_env_long("TT_TOPO_SAT_GIM_EVERY", 0) != 0 &&
+                           solver.num_variables() > 5000;  // big-solve gate (see delegated_solve)
+    const int gim_threads = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_GIMSATUL_THREADS", 32));
+    if (gim_every) {
+        log_info(tt::LogFabric, "[topo-sat] ENUM steps = GIM_EVERY (fresh gimsatul run per solution)");
+    }
+
     const auto t_enum_loop = enum_clock::now();
     const size_t enum_start_count = all_mappings_out.size();
     while (all_mappings_out.size() < max_solutions) {
-        const int status = solver.solve();
+        // Default (kEnumLoopConflictBudget==0): UNBOUNDED solve -- never give up on a budget, so we only stop on a
+        // real kUnsat (genuine exhaustion), never on a kUnknown that would silently truncate. If a budget is set,
+        // fall back to solve_limited (best-effort; kUnknown then stops the loop).
+        int status = 0;
+        if (gim_every) {
+            status = solver.gimsatul_solve(gim_threads, {});
+        }
+        if (status == 0) {
+            status = (kEnumLoopConflictBudget > 0) ? solver.solve_limited(kEnumLoopConflictBudget) : solver.solve();
+        }
         if (status != TopologySatSolver::kSat) {
             break;
         }
@@ -2861,6 +3541,76 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
             session->solver, graph_data, constraint_data, enc, validation_mode, quiet_mode)) {
         return nullptr;
     }
+    // Same minimal-host strategy as topology_sat_search_n: PRIME the solver with the warm descent + full-packing
+    // lock, make the achieved cap PERMANENT, and stash the primed model so every incremental (.next) solution
+    // occupies the minimal host count. See TOPOLOGY_OCCUPANCY_SOLVE_README §7.
+    if (topology_sat_experiment_minhost_enabled(constraint_data)) {
+        const int kDescentBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        const int kLockBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
+        // 0 = UNBOUNDED (default): never give up on a budget during .next enumeration -- see the rationale in
+        // topology_sat_search_n. A kUnknown budget give-up would silently truncate the incremental enumeration.
+        session->enum_loop_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_ENUM_BUDGET", 0));
+        size_t max_cap = 0;
+        for (const auto& g : constraint_data.same_rank_groups) {
+            max_cap = std::max(max_cap, g.size());
+        }
+        const size_t k_floor = (max_cap > 0) ? (graph_data.n_target + max_cap - 1) / max_cap : 1;
+        const size_t hard_cap_k = topology_sat_experiment_hard_cap_k(graph_data, constraint_data);
+        std::vector<int> first_mapping;
+        size_t best_k = 0;
+        bool hard_cap_met = false;
+        // Clause-sharing portfolio enumeration (TT_TOPO_SAT_SHARE=1 + PORTFOLIO=N): the session enumerates through
+        // N persistent cooperating workers instead of the single incremental solver. The prime is round 1.
+        if (topology_sat_share_enum_enabled() && hard_cap_k > 0) {
+            session->share_enum =
+                topology_sat_share_enum_init(graph_data, constraint_data, validation_mode, hard_cap_k, quiet_mode);
+            if (session->share_enum) {
+                if (topology_sat_share_enum_solve(*session->share_enum, first_mapping, quiet_mode) ==
+                        TopologySatSolver::kSat &&
+                    !first_mapping.empty()) {
+                    session->primed_first_mapping = std::move(first_mapping);
+                    session->has_primed_mapping = true;
+                    log_info(
+                        tt::LogFabric,
+                        "Topology SAT enumeration session: primed SHARE-PORTFOLIO minimal-host enumeration "
+                        "(hard_cap_k={})",
+                        hard_cap_k);
+                }
+                // Prime failed => share_enum is exhausted/stuck; solve_and_decode will report no solutions. Either
+                // way the session stays on the portfolio path (mixing paths would lose the workers' blocking state).
+                return session;
+            }
+            // init returned nullptr (small formula / encode failure) -> normal single-solver path below.
+        }
+        const bool primed = topology_sat_solve_minimize_groups(
+            graph_data,
+            session->solver,
+            enc,
+            constraint_data,
+            kDescentBudget,
+            k_floor,
+            first_mapping,
+            best_k,
+            hard_cap_k,
+            kLockBudget,
+            &hard_cap_met,
+            /*make_cap_permanent=*/true,
+            quiet_mode);
+        if (primed && !first_mapping.empty()) {
+            session->primed_first_mapping = std::move(first_mapping);
+            session->has_primed_mapping = true;
+            if (!quiet_mode) {
+                log_info(
+                    tt::LogFabric,
+                    "Topology SAT enumeration session: primed minimal-host enumeration at {} occupied host group(s) "
+                    "(hard_cap_k={}, met={})",
+                    best_k,
+                    hard_cap_k,
+                    hard_cap_met);
+            }
+        }
+        // If priming failed, the session falls back to plain (unbounded, uncapped) enumeration.
+    }
     return session;
 }
 
@@ -2869,12 +3619,54 @@ bool topology_sat_session_add_blocking_clause(
     TopologySatHardEncoding& enc,
     const std::vector<int>& raw_mapping,
     bool unique_shapes) {
+    // SHARE-PORTFOLIO enumeration: fan the blocking clause out to EVERY persistent worker before the next round
+    // (the composition invariant -- all workers always agree on the found-solution set; dedup stays global).
+    if (session->share_enum) {
+        return topology_sat_share_enum_block(*session->share_enum, raw_mapping, unique_shapes);
+    }
     return topology_sat_add_blocking_clause_for_mapping(session->solver, enc, raw_mapping, unique_shapes);
 }
 
 bool topology_sat_session_solve_and_decode(
     TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    if (session->solver.solve() != TopologySatSolver::kSat) {
+    // First call after a minimal-host prime returns the primed model directly (already decoded); no extra solve.
+    if (session->has_primed_mapping) {
+        session->has_primed_mapping = false;
+        raw_out = session->primed_first_mapping;
+        return true;
+    }
+    // SHARE-PORTFOLIO enumeration: each further solution is one cooperative round over the persistent workers.
+    if (session->share_enum) {
+        std::vector<int> m;
+        if (topology_sat_share_enum_solve(*session->share_enum, m, /*quiet_mode=*/false) !=
+                TopologySatSolver::kSat ||
+            m.empty()) {
+            return false;
+        }
+        raw_out = std::move(m);
+        return true;
+    }
+    // GIM_EVERY (TT_TOPO_SAT_GIMSATUL=1 + TT_TOPO_SAT_GIM_EVERY=1): delegate EVERY .next step to a fresh gimsatul
+    // run over the full clause tape (base CNF + permanent host cap + all accumulated blocking clauses, + distilled
+    // pool clauses when TT_TOPO_SAT_POOL=1). Decode stays here; gimsatul 0 (no binary) falls back to native.
+    if (topology_sat_env_long("TT_TOPO_SAT_GIMSATUL", 0) != 0 &&
+        topology_sat_env_long("TT_TOPO_SAT_GIM_EVERY", 0) != 0 &&
+        session->solver.num_variables() > 5000) {  // big-solve gate: intra-mesh sessions stay native
+        const int gim_threads = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_GIMSATUL_THREADS", 32));
+        const int gim_status = session->solver.gimsatul_solve(gim_threads, {});
+        if (gim_status == TopologySatSolver::kSat) {
+            return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
+        }
+        if (gim_status == TopologySatSolver::kUnsat) {
+            return false;
+        }
+        // 0 -> fall through to the native solve below.
+    }
+    // With an occupancy objective the solver is permanently capped -- bound each solve so enumeration terminates
+    // (a distinct minimal-host packing can still be hard); on unknown/unsat we report no further solution.
+    const int status = (session->enum_loop_budget > 0) ? session->solver.solve_limited(session->enum_loop_budget)
+                                                        : session->solver.solve();
+    if (status != TopologySatSolver::kSat) {
         return false;
     }
     return topology_sat_decode_hard_solution(session->solver, enc, raw_out);

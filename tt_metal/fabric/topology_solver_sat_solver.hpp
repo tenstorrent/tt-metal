@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -50,6 +52,32 @@ private:
     };
     mutable std::mutex m_;
     std::vector<Entry> clauses_;
+};
+
+// Distilled clause pool (TT_TOPO_SAT_POOL=1): session-persistent, in-process store of SHORT learned clauses (via the
+// clause-sharing Learner hook, size <= TT_TOPO_SAT_POOL_MAX_LITS, default 8) plus root-level FIXED units harvested
+// after each native solve. Entries are injected into every gimsatul DIMACS dump (after the base clauses + blocking
+// clauses), shortest-first, capped at TT_TOPO_SAT_POOL_MAX_CLAUSES (default 20000) -- baking CaDiCaL's incremental
+// knowledge into each cold gimsatul run. Soundness contract: entries must come from the SAME add-only base formula
+// family (guaranteed within one generate_rank_bindings process; the >5000-var gate excludes the tiny intra-mesh
+// solves). Each entry carries the host-cap level permanently asserted on its producer's formula when it was learned
+// (cap_tag; INT_MAX = no permanent cap); a dump only includes entries whose tag is >= (looser than or equal to) the
+// run's cap. Hardcap mode (MIN_MODE=3) uses a single cap level, so this is mostly bookkeeping. Dedup by sorted
+// literal set (a duplicate keeps the loosest tag). In-memory, per-process; no files.
+struct DistilledClausePool {
+    static DistilledClausePool& instance();
+    static constexpr int kNoCap = std::numeric_limits<int>::max();
+    // `lits` must be a clause entailed by (base formula + "occupied <= cap_tag" when cap_tag != kNoCap).
+    void publish(const std::vector<int>& lits, int cap_tag);
+    // Entries valid for a run enforcing "occupied <= run_cap" (tag >= run_cap) whose literals all fit in max_var,
+    // shortest-first, at most max_clauses.
+    std::vector<std::vector<int>> collect(int run_cap, std::size_t max_clauses, int max_var) const;
+    std::size_t size() const;
+
+private:
+    static constexpr std::size_t kMaxStored = 200'000;  // memory safety valve; new entries are dropped beyond this
+    mutable std::mutex m_;
+    std::map<std::vector<int>, int> entries_;  // sorted-lits -> loosest cap tag seen
 };
 
 /**
@@ -118,6 +146,30 @@ struct TopologySatSolver {
     // vars and disable elimination). Call once, before solve(). `pool` must outlive this solver. No-op if pool==null.
     void enable_clause_export(ClauseSharingPool* pool, int producer_id, int max_size);
 
+    // Write the current CNF to a DIMACS file (experiment hook: feed an external parallel/clause-sharing solver).
+    // Returns true on success. Variable numbering matches declare_one_more_variable() so a model round-trips.
+    bool write_dimacs(const std::string& path);
+
+    // HYBRID: solve the current formula (+ `assumption_units` baked in as temporary hard units, since gimsatul has
+    // no assumption API) with the external gimsatul binary (path from TT_TOPO_SAT_GIMSATUL_BIN), `threads` workers.
+    // Returns kSat / kUnsat / 0 (unknown, e.g. no binary -> caller should fall back to CaDiCaL). On kSat, val()
+    // returns gimsatul's model until the next solve()/solve_limited(). Requires the clause tee (auto-enabled when
+    // TT_TOPO_SAT_GIMSATUL is set). Lets our solver keep driving descent/decode/enumeration while delegating the
+    // heavy SAT search. `run_cap_k` (0 = uncapped) is the host cap the assumption units enforce for THIS run; with
+    // TT_TOPO_SAT_POOL=1 it bounds which distilled pool entries may be injected (entry tag >= min(permanent cap,
+    // run_cap_k)). See ONESHOT_EXTERNAL_SAT_EXPERIMENT.md and POOL_EXPERIMENT_PLAN.md.
+    int gimsatul_solve(int threads, const std::vector<int>& assumption_units, std::size_t run_cap_k = 0);
+
+    // Distilled pool bookkeeping: record that the formula now PERMANENTLY enforces "occupied <= cap" (a unit clause
+    // was add()'ed). Lowers the cap tag stamped on this solver's future pool exports AND the run cap of its future
+    // gimsatul dumps. Cheap no-op when the pool is off.
+    void note_permanent_cap(std::size_t cap);
+
+    // HYBRID warm-start: after gimsatul_solve() found a model, bias CaDiCaL's decision phases toward it, so a
+    // subsequent NATIVE incremental descent starts from gimsatul's feasible solution (gimsatul does the heavy first
+    // solve; CaDiCaL does the cheap incremental tightening, reusing its own learned clauses). No-op if no model.
+    void phase_hint_from_last_gimsatul_model();
+
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;
 
@@ -127,6 +179,16 @@ private:
     int next_var_ = 0;
     std::size_t num_clauses_ = 0;
     std::size_t num_literals_ = 0;
+    // EXPERIMENT: faithful DIMACS tee. CaDiCaL::write_dimacs drops clauses added incrementally after a solve()
+    // (e.g. the occupancy/host-cap clauses built in solve_minimize_groups), so when dump_record_ is on we record
+    // every literal add()'ed and emit DIMACS from this tape instead. Enabled only when TT_TOPO_SAT_DUMP_DIMACS is
+    // set, so production pays nothing.
+    bool dump_record_ = false;
+    std::vector<int> dump_tape_;
+    // HYBRID: when a gimsatul_solve() found a model, val() answers from it (per-var sign: +1 true, -1 false, 0 unset)
+    // instead of CaDiCaL, until the next native solve()/solve_limited() clears it.
+    bool have_gimsatul_model_ = false;
+    std::vector<signed char> gimsatul_model_;
 };
 
 // Internal SAT function declarations — implemented in topology_solver_sat.cpp.
