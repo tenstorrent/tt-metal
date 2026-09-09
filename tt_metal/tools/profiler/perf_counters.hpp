@@ -430,10 +430,8 @@ FORCE_INLINE std::uint32_t neo_reg_offset(std::uint32_t) { return 0; }
 #endif
 
 #if defined(ARCH_QUASAR)
-// Quasar's profiler is L1-only and one risc buffer holds about 80 records, short of a single NEO's
-// streams and far short of four NEOs. DM0 therefore files each NEO's records into that NEO's own
-// TRISC buffers, which are complete once wait_subordinates() returns, and advances their end
-// indices. The host decodes them under the TRISC's label; the record's neo field says which NEO.
+// Quasar's profiler is L1-only (about 80 records per risc buffer), so DM0 files each NEO's readout into that
+// NEO's own TRISC buffers (complete after wait_subordinates()); the record's neo field says which NEO.
 constexpr std::uint32_t TRISCS_PER_NEO = 4;
 constexpr std::uint32_t PERF_RECORD_WORDS = PROFILER_L1_MARKER_UINT32_SIZE * 3;  // marker + two 64-bit words
 

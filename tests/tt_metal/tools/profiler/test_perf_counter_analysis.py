@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Offline tests for the perf counter decode and metric computation in tools/tracy.
-
-These need no hardware: they feed synthetic counter captures through the same code paths the
-profiler reports use.
-"""
+"""Offline tests for the perf counter decode and metrics in tools/tracy: synthetic captures, no hardware."""
 
 import re
 import sys

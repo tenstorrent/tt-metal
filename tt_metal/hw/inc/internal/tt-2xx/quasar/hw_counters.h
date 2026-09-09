@@ -12,9 +12,8 @@
 // Quasar counter tables, verified against the A0 tapeout RTL. Included by perf_counters.hpp after
 // the PerfCounterType enum; each NEO's math TRISC reaches its own units through the local-regs window.
 
-// The tt-1xx register names in quasar/tensix.h carry Blackhole offsets that are wrong here; alias
-// from the generated tensix_neo_reg.h instead. Addresses are NEO0's absolute ones: DM0 reads all
-// four NEOs, and NEO n sits QUASAR_NEO_REG_STRIDE further up.
+// Offsets come from the generated tensix_neo_reg.h (quasar/tensix.h carries Blackhole ones). Addresses are
+// NEO0's; NEO n sits QUASAR_NEO_REG_STRIDE further up.
 #define QUASAR_NEO_REG_STRIDE                                             \
     (NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR - \
      NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR)
@@ -43,9 +42,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters PERF_
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr std::size_t NUM_FPU_COUNTERS = 3;
 
-// TDMA_UNPACK unit: 11 banks. Sels 2/256/257 are dead on A0 (fidelity logic hardwired off) and
-// sel 258 duplicates sel 3, so they are not captured. Quasar runs 3 unpackers per thread: sel 9 is
-// unpacker2/thread0 and sel 10 is unpacker0/thread1 (the Blackhole names do not carry over).
+// TDMA_UNPACK: sels 2/256/257 are dead on A0 (fidelity off) and 258 duplicates 3. Three unpackers per thread:
+// sel 9 is unpacker2/thread0 and sel 10 unpacker0/thread1.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
@@ -76,11 +74,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters PERF
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
-// INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 per-thread
-// any-stall, 36-50 thread-ORed backend stall conditions (sampled past the ibuffer, so they can exceed the
-// any-stall counts); grants (sel >= 256) are the thread's ibuffer dequeues. Xsearch requests (12-15) are tied to 0
-// and its grants alias THREAD_INSTRUCTIONS, so neither is exposed. Thread 3, the THCON class and SRCS_STALL_* are
-// live wires that current firmware never drives (0 on every op swept).
+// INSTRN: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 any-stall per thread, 36-50
+// thread-ORed backend stalls; grants (>= 256) are ibuffer dequeues. Xsearch is tied to 0 (its grants alias
+// THREAD_INSTRUCTIONS); thread 3, THCON and SRCS_STALL_* read 0 on every op swept so far.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 51> instrn_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},

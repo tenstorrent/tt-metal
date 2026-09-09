@@ -150,9 +150,7 @@ L1_ALL = (
 )
 
 
-# ── Quasar (A0) ──
-# A NEO runs four threads, adds the INSTISSUE instruction class and reports the backend stall reasons
-# OR-reduced across the threads. Counters both architectures share keep their tt-1xx names.
+# ── Quasar (A0): four threads, the INSTISSUE class, backend stall reasons OR-reduced across threads ──
 # Metric key stem -> INSTRN counter, one per thread-ORed stall reason.
 STALL_REASON_COUNTERS = {
     "tile_counter_stall_pack": "TILE_COUNTER_STALL_PACK",
@@ -487,9 +485,7 @@ def compute_metrics(v: CounterView) -> dict:
         safe_div(_sb_even, _sb_even + _sb_odd) if strict(v, "SRCB_WRITE_TID_EVEN", "SRCB_WRITE_TID_ODD") else None
     )
 
-    # ── Quasar (A0): four threads, two extra instruction classes, thread-ORed stall reasons ──
-    # Every metric here is has()-gated: a tt-1xx capture has none of these counters and must read None,
-    # not the fake 0% that count()'s 0.0-for-absent default would give.
+    # ── Quasar (A0), all has()-gated so a tt-1xx capture reads None ──
     unpack_cycles = v.cycles("TDMA_UNPACK")
 
     def _gated_rate(bank, name, cycles):
@@ -716,7 +712,7 @@ def compute_metrics(v: CounterView) -> dict:
         "unpack2_busy_t0_pct": pct(_unpack_busy(2, 0)),
         "unpack0_busy_t1_pct": pct(_unpack_busy(0, 1)),
         "unpack1_busy_t1_pct": pct(_unpack_busy(1, 1)),
-        # Source-write thread shares (T1 side), math source readiness, FPU/SFPU overlap
+        # Math source readiness, FPU/SFPU overlap
         "math_src_data_ready_pct": pct(math_src_data_ready),
         "fpu_sfpu_overlap_pct": pct(fpu_sfpu_overlap),
         # Instructions per issue-ready cycle, per thread
@@ -902,10 +898,8 @@ RATIO_KEYS = {k for k in METRIC_LABELS if k.endswith("_ratio")}
 RATIO_LABELS = {METRIC_LABELS[k] for k in RATIO_KEYS}
 
 
-# ── Quasar l1_client event counter ──
-# One clear-on-read CSR behind a subport*8 + event mux, routed per run by TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL.
-# Its records are named after the run's selection, so the metric is dynamic: consumers pass the counter
-# names they saw to compute_l1_client_metrics() and map keys back through metric_label().
+# ── Quasar l1_client event counter: one clear-on-read CSR behind a subport*8 + event mux, selected per run ──
+# Records are named after the selection, so this metric family is dynamic (compute_l1_client_metrics, metric_label).
 L1_CLIENT_PREFIX = "L1_CLIENT_"
 QUASAR_L1_CLIENT_NUM_SUBPORTS = 37
 # Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or order
@@ -923,14 +917,9 @@ QUASAR_L1_CLIENT_EVENT_NAMES = (
 
 
 def quasar_l1_client_label(sel) -> str:
-    """Counter name for an l1_client selection (subport*8 + event), e.g. L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP.
-
-    Subport wiring from t6_l1_client_map.sv at the A0 pin, checked on the emulator: 0-3 are the TRISC
-    ports, 4 is the packer THCON port, 5-24 are the unpacker read clients (three unpackers, two L1
-    interfaces each, four 16-byte lanes per interface, subport = 5 + (unpacker*2 + interface)*4 + lane;
-    unpacker 2 only has interface 0) and 25-36 are the packer write clients with the same layout
-    (packer 0 interfaces 0 and 1, packer 1 interface 0). Events 1-3 count per SBank of the port (its
-    port-local index, so the THCON port aliases TRISC SBank 0), not per subport.
+    """Counter name for an l1_client selection (subport*8 + event). Subports (t6_l1_client_map.sv): 0-3 TRISC, 4 THCON,
+    5-24 unpacker reads (3 unpackers x 2 interfaces x 4 lanes, unpacker 2 has interface 0 only), 25-36 packer writes
+    (packer 0 interfaces 0-1, packer 1 interface 0). Events 1-3 count per SBank of the port, so THCON aliases TRISC SBank 0.
     """
     sel = int(sel)
     if not 0 <= sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * 8:
@@ -971,13 +960,8 @@ def metric_label(key: str) -> str:
 
 
 def compute_l1_client_metrics(v: CounterView, counter_names) -> dict:
-    """Per-run rate of every l1_client counter present, keyed by l1_client_metric_key.
-
-    The CSR has no reference counter; the firmware records the wall-clock span from arming to freezing
-    as ref cnt, which the view exposes as cycles("L1_CLIENT"). Carry events pulse once per four lane
-    events, so their rates are scaled by the lane count; the pending-request carry's divisor is
-    configuration-derived and stays raw.
-    """
+    """Per-run rate of every l1_client counter present over the capture's wall-clock span (the CSR has no reference
+    counter). Carry events pulse once per four lane events and are scaled up; the pending-request carry stays raw."""
     cycles = v.cycles("L1_CLIENT")
     out = {}
     for name in sorted(set(counter_names)):
