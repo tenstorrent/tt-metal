@@ -294,8 +294,7 @@ constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] = {
 };
 constexpr std::uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
-// Lookup table indexed by PerfCounterGroup. Smaller than a 10-case switch.
-// Keep ordered to match the enum (FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4, L1_5).
+// Indexed by PerfCounterGroup; keep the enum order.
 constexpr std::uint32_t cntl_reg_for_group[10] = {
     RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
     RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
