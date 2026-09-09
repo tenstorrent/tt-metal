@@ -54,7 +54,7 @@ struct boot_results_t {
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "internal/ethernet/erisc.h"
+#include "internal/risc_attribs.h"
 
 FORCE_INLINE bool is_link_up() {
     // Collected when FW/Fabric is idle and context switches to base FW
