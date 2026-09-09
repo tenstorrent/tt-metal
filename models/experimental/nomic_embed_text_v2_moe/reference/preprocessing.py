@@ -26,21 +26,15 @@ from typing import Optional, Sequence, Union
 class NomicPromptPrefix(str, Enum):
     """The task prefixes the model was trained with, verbatim from config_sentence_transformers.json.
 
-    The trailing space is part of the prefix. Upstream lists nine MTEB task names over four
-    distinct prefixes, so the five repeats are enum aliases rather than members of their own:
-    NomicPromptPrefix.STS is NomicPromptPrefix.CLASSIFICATION.
+    The trailing space is part of the prefix. Upstream names nine MTEB tasks but maps them onto
+    only these four prefixes, so the prefix is the member and the repeats are not spelled out:
+    an STS or summarization task takes CLASSIFICATION, a speed task takes PASSAGE.
     """
 
-    QUERY = "search_query: "
-    PASSAGE = "search_document: "
     CLASSIFICATION = "classification: "
+    PASSAGE = "search_document: "
     CLUSTERING = "clustering: "
-
-    MULTILABEL_CLASSIFICATION = "classification: "
-    PAIR_CLASSIFICATION = "classification: "
-    STS = "classification: "
-    SUMMARIZATION = "classification: "
-    SPEED = "search_document: "
+    QUERY = "search_query: "
 
 
 # From sentence_bert_config.json.
