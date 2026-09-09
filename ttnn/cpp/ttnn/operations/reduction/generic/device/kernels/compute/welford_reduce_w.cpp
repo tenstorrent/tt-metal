@@ -124,6 +124,9 @@ void kernel_main() {
 #endif
         two_pass_stats_finalize_to_row<true, false /* store_mean */>(mean_dst, two_pass_variance_reciprocal);
         // Orient variance in DEST, avoiding a pack/reload round trip through L1.
+        // MOVD2B honours DST row-valid bits, so the transpose materialises zeros
+        // in untouched padding before tile-wide SFPU post-processing. Unlike H
+        // reduction's direct SFPU reads, this path does not need a physical fill.
         transpose_dest_init<DST_ACCUM_MODE>();
         transpose_dest<DST_ACCUM_MODE>(var_dst);
         if constexpr (is_std) {
