@@ -121,8 +121,15 @@ void kernel_main() {
                 // scale_idx controls the divisor for M2 -> variance conversion:
                 //   correction=false: scale_idx = H-1, reciprocal = 1/H  (population variance)
                 //   correction=true:  scale_idx = H-2, reciprocal = 1/(H-1) (sample variance)
-                const uint32_t scale_idx = correction ? (H - 2) : (H - 1);
-                welford_finalize_to_row<0>(mean_dst, scale_idx, {});
+                // Branch instead of selecting the index: each call site passes a literal, so the
+                // reciprocal folds at compile time in both arms and lands in the SFPLOADI immediate.
+                // A runtime scale_idx reaches _load_recip_of_idx_ as a runtime value and costs a
+                // software float division (__divsf3) per output tile on a core with no FPU.
+                if (correction) {
+                    welford_finalize_to_row<0>(mean_dst, H - 2, {});
+                } else {
+                    welford_finalize_to_row<0>(mean_dst, H - 1, {});
+                }
                 if constexpr (is_std) {
                     sqrt_tile_init();
                     sqrt_tile(var_dst);
