@@ -73,8 +73,9 @@ ALWI void sub_bcast_cols_compensated(
         // calls so the CB page size determines every input address. The input
         // CB is compile-time constant, leaving the BF16/FP32 fast path intact.
         for (std::uint32_t tile = 0; tile < tile_count; ++tile) {
-            MATH((llk_math_sub_bcast_cols_compensated(input_cb, dst_tile + tile, 1)));
-            UNPACK((llk_unpack_AB_sub_bcast_col_custom(input_cb, split_mean_cb, input_tile + tile, 0, 1)));
+            MATH((llk_math_sub_bcast_cols_compensated(input_cb, dst_tile + tile, 1 /*ct_dim*/)));
+            UNPACK((llk_unpack_AB_sub_bcast_col_custom(
+                input_cb, split_mean_cb, input_tile + tile, 0 /*tile_index_b*/, 1 /*ct_dim*/)));
         }
         return;
     }
