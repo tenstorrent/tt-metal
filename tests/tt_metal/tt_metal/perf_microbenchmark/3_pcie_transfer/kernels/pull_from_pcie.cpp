@@ -20,7 +20,7 @@ void kernel_main() {
     uint64_t pcie_noc_xy_encoding = (uint64_t)NOC_XY_PCIE_ENCODING(PCIE_NOC_X, PCIE_NOC_Y);
     while (done_address_ptr[0] == 0) {
         uint64_t host_src_addr = pcie_noc_xy_encoding | pcie_read_ptr;
-        noc_async_read(host_src_addr, done_address, read_sizeB);
+        noc_async_read_pcie(host_src_addr, done_address, read_sizeB);
         pcie_read_ptr += read_sizeB;
         if (pcie_read_ptr > pcie_base + pcie_sizeB) {
             pcie_read_ptr = pcie_base;

@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t pcie_dst_address = base_pcie_dst_address;
     for (uint32_t i = 0; i < num_16b_writes; i++) {
         uint64_t dst_noc_addr = pcie_core_noc_encoding | pcie_dst_address;
-        noc_async_write(l1_src_address, dst_noc_addr, L1_ALIGNMENT);
+        noc_async_write_pcie(l1_src_address, dst_noc_addr, L1_ALIGNMENT);
         l1_src_address += L1_ALIGNMENT;
         pcie_dst_address += L1_ALIGNMENT;
     }
