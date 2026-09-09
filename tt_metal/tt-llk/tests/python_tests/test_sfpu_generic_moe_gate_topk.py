@@ -72,12 +72,11 @@ by the FPU kernel `_llk_math_deepseek_moe_gate_eltwise_binary_`; here they are s
 by plain datacopy so this test isolates the SFPU half. Cover the FPU kernel
 separately.
 
+The original sweep uses 256 experts. The partial-face regression covers counts
+from 16 through 240, with deliberately large inactive keys to exercise padding.
+
 Configurations left uncovered
 -----------------------------
-* `num_total_experts` is pinned 256, which is one full face and the only layout the
-  stimuli and the id = 16 * row + column expectation here are written for. 128 routes
-  to `_generic_moe_gate_top8_sort_half_face_` instead and needs a half-face stimulus
-  tile, so it wants its own variant rather than an axis bolted onto this one.
 * `dest_acc` is pinned No, structurally: the kernel carries the expert id in the LO16
   and the score in the HI16 of one DEST word, which only exists for a 16-bit DEST
   format. A 32-bit DEST leaves no room for the payload.
@@ -88,7 +87,7 @@ Configurations left uncovered
 """
 
 import torch
-from conftest import skip_for_wormhole
+from conftest import blackhole_only, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -100,10 +99,7 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    MOE_GATE_NORMALIZE_PARAMS,
-    MOE_GATE_TOPK,
-)
+from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -201,6 +197,28 @@ def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
 def test_sfpu_generic_moe_gate_topk(
     num_selected_experts, full_sort, normalize, zero_tail
 ):
+    _check_moe_gate(num_selected_experts, full_sort, normalize, zero_tail)
+
+
+@blackhole_only
+@parametrize(
+    num_total_experts=[16, 48, 64, 80, 112, 128, 144, 192, 240],
+    num_selected_experts=[4, 8, 12, 16],
+    normalize=[False, True],
+)
+def test_sfpu_generic_moe_gate_partial_face(
+    num_total_experts, num_selected_experts, normalize
+):
+    _check_moe_gate(num_selected_experts, True, normalize, True, num_total_experts)
+
+
+def _check_moe_gate(
+    num_selected_experts,
+    full_sort,
+    normalize,
+    zero_tail,
+    num_total_experts=NUM_TOTAL_EXPERTS,
+):
     torch.manual_seed(0)
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -210,6 +228,8 @@ def test_sfpu_generic_moe_gate_topk(
     # deliberately on a different scale from the keys so that reporting the key
     # instead of the score would be caught.
     biased = _distinct_bf16_keys()
+    # Without the SFPU's -inf padding these inactive experts would win.
+    biased[num_total_experts:] = 1000.0
     scores = (
         torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
         .uniform_(0.05, 0.95)
@@ -236,7 +256,7 @@ def test_sfpu_generic_moe_gate_topk(
         templates=[
             MOE_GATE_TOPK(
                 num_selected_experts=num_selected_experts,
-                num_total_experts=NUM_TOTAL_EXPERTS,
+                num_total_experts=num_total_experts,
                 normalize=normalize,
                 zero_tail=zero_tail,
                 full_sort=full_sort,
@@ -287,7 +307,12 @@ def test_sfpu_generic_moe_gate_topk(
     scale = _bits_to_float(SCALE_BITS)
     eps = _bits_to_float(EPS_BITS)
     golden_ids, _ = golden_generator(
-        biased, scores, num_winners, normalize, eps=eps, scale=scale
+        biased[:num_total_experts],
+        scores[:num_total_experts],
+        num_winners,
+        normalize,
+        eps=eps,
+        scale=scale,
     )
 
     got_ids = [int(result_indices[row, 0].item()) for row in range(num_winners)]
@@ -332,7 +357,7 @@ def test_sfpu_generic_moe_gate_topk(
             f"got id {got_id}, score {got_score}"
         )
 
-    if not is_top16_path:
+    if not is_top16_path and num_total_experts == NUM_TOTAL_EXPERTS:
         # All eight emitted rows, blanked ones included -- the tail zeroing hits the
         # even-column payload, never the odd columns.
         assert_odd_columns_untouched(

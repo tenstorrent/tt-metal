@@ -78,7 +78,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     sfpu::sfpu_rope_dest_setup();
-    sfpu::sfpu_rope_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_SIN_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE>(ROPE_SCALE_FP32);
+    if constexpr (ROPE_FUSED_COS_SIN)
+    {
+        sfpu::sfpu_rope_fused_all_rows<
+            ROPE_HT,
+            ROPE_WT,
+            ROPE_X_BASE,
+            ROPE_X_STRIDE,
+            ROPE_COS_BASE,
+            ROPE_CS_STRIDE,
+            ROPE_HAS_SCALE,
+            ROPE_TILE_H,
+            ROPE_COS_SIN_PER_ROW>(ROPE_SCALE_FP32);
+    }
+    else
+    {
+        sfpu::sfpu_rope_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_SIN_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE>(ROPE_SCALE_FP32);
+    }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

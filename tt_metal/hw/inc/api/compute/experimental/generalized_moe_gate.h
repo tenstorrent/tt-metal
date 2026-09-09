@@ -6,7 +6,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #ifdef TRISC_MATH
 // SFPU topk: call ckernel::sfpu functors directly via SFPU_UNARY_CALL (no per-op llk_api wrapper layer).
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -17,16 +17,22 @@
 
 namespace ckernel {
 
-template <bool enable_sigmoid = false, bool is_32bit = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// A one-face input can select within-face transpose only. Multi-face callers keep Both.
+template <
+    bool enable_sigmoid = false,
+    bool is_32bit = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool transpose_of_faces = true>
 ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
     if constexpr (enable_sigmoid) {
         // Init sigmoid (SFPU)
         sigmoid_tile_init<false>();
         // Init transpose wh (FPU)
-        transpose_wh_init_short(icb0);
+        transpose_init(icb0);
     } else {
         // Init copy add (FPU)
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::Both)));
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(
+            icb0, icb1, transpose_of_faces ? Transpose::Both : Transpose::IntraFace)));
         MATH((llk_math_generalized_moe_gate_eltwise_binary_init_with_operands<
               EltwiseBinaryType::ELWADD,
               GeneralizedMoeGateEltwiseBinaryMode::COPY,
@@ -111,6 +117,10 @@ ALWI void generalized_moe_gate_relocate_run() {
 // produce_run: for the multi-block (>256) path, end the ungrouped pipeline at merge16_to_run (a
 // re-mergeable top-8 RUN at {run_store_lo, run_store_hi}, idx += idx_offset) and SKIP normalize+step2.
 // Default (produce_run=false) = the single-256 path: finalize (merge + normalize) + step2.
+// Grouped callers may set do_extra_scale=true to fold extra_scale (fp32 bits) into scale on the
+// SFPU, and output_tiles=2 to transpose only scores/indices. The default still transposes bias
+// as well, which is required by the multi-block combine. Register setup and synchronization
+// remain those of the shared generalized gate.
 template <
     bool ungrouped_top8,
     bool enable_sigmoid = false,
@@ -121,8 +131,13 @@ template <
     uint32_t idx_offset = 0,
     uint32_t topk = 8,
     bool output_softmax = false,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool do_extra_scale = false,
+    uint32_t output_tiles = 3>
+ALWI void generalized_moe_gate(
+    uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0x3f800000) {
+    static_assert(!do_extra_scale || !ungrouped_top8, "extra scaling is supported by the grouped gate");
+    static_assert(output_tiles == 3 || (!ungrouped_top8 && output_tiles == 2), "only grouped output may omit bias");
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
         transpose_tile<is_fp32_dest_acc_en>(icb0, 0, 0);
@@ -235,20 +250,33 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
             VectorMode::RC_custom)));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<is_fp32_dest_acc_en, is_32bit>()));
-        MATH((SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            generalized_moe_gate_top8,
-            (APPROX, is_fp32_dest_acc_en),
-            0,
-            VectorMode::RC_custom,
-            eps,
-            scale)));
+        if constexpr (do_extra_scale) {
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                generalized_moe_gate_top8_scaled,
+                (APPROX, is_fp32_dest_acc_en),
+                0,
+                VectorMode::RC_custom,
+                eps,
+                scale,
+                extra_scale)));
+        } else {
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                generalized_moe_gate_top8,
+                (APPROX, is_fp32_dest_acc_en),
+                0,
+                VectorMode::RC_custom,
+                eps,
+                scale)));
+        }
     }
     // Transpose dest step 2 (FPU) — final output layout. Skipped in produce_run mode (the run stays
     // in the SFPU run layout for the combine; step2 runs once after the combine instead).
     if constexpr (!produce_run) {
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit, output_tiles>()));
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<is_fp32_dest_acc_en, is_32bit>()));
     }
 }

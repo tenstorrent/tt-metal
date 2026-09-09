@@ -64,10 +64,10 @@ inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi() 
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, is_32bit>();
 }
 
-template <bool is_32bit = false>
+template <bool is_32bit = false, std::uint32_t num_tiles = 3>
 inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init() {
     SAN_HOOK(unsupported());
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<is_32bit>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<is_32bit, num_tiles>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>

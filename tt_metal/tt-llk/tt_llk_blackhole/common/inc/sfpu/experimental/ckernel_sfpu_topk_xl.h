@@ -114,7 +114,7 @@
 // "SFPLOADMACRO acceleration for the UNFUSED merge / rebuild" section below
 // for the full design, silicon validation, and the opt-out contract. Defined
 // here (before `topk_mop_config`) because the merge MOP body length keys on it.
-#if !defined(DISABLE_TOPK_XL_SFPLOADMACRO) && !defined(DISABLE_SFPLOADMACRO)
+#if !defined(TOPK_XL_BLAZE_COMPAT) && !defined(DISABLE_TOPK_XL_SFPLOADMACRO) && !defined(DISABLE_SFPLOADMACRO)
 #define TOPK_XL_UNFUSED_MACRO 1
 #else
 #define TOPK_XL_UNFUSED_MACRO 0
@@ -124,6 +124,15 @@ namespace ckernel
 {
 namespace sfpu
 {
+
+// The Blaze pipeline owns SrcB validity, destination zero flags, and the shared
+// SFPU/replay state across MATH and PACK. Select this protocol consistently on
+// all three TRISCs. The default remains the standalone Metal protocol.
+#ifdef TOPK_XL_BLAZE_COMPAT
+constexpr bool topk_xl_blaze_compat = true;
+#else
+constexpr bool topk_xl_blaze_compat = false;
+#endif
 
 // =============================================================================
 //  MOP Expander programs
@@ -1271,14 +1280,20 @@ inline void enter_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(1);
+    if constexpr (!topk_xl_blaze_compat)
+    {
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(1);
+    }
 }
 
 inline void leave_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
+    if constexpr (!topk_xl_blaze_compat)
+    {
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
+    }
 }
 
 // Transpose all 8 value faces (and, for the unfused path, all 8 index
@@ -1835,7 +1850,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
                 // Early-exit sorts each column in isolation, so it suppresses the
                 // inter-pair flip when there is only one pair; the full sort keeps
                 // its historical unconditional flip.
-                if constexpr (!early_exit_K64 || (row_scale_factor >> 1) > 1)
+                if constexpr ((!topk_xl_blaze_compat && !early_exit_K64) || (row_scale_factor >> 1) > 1)
                 {
                     dir = !dir;
                 }
@@ -1856,7 +1871,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
                 lltt::replay(0, 8);
                 bitonic_sort_len_32(dir);
                 lltt::replay(8, 8);
-                if constexpr (!early_exit_K64 || row_scale_factor > 2)
+                if constexpr ((!topk_xl_blaze_compat && !early_exit_K64) || row_scale_factor > 2)
                 {
                     if ((i & 1) == 1)
                     {
@@ -2798,7 +2813,7 @@ inline void _topk_xl_add_lsb_indices_()
             TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPIADD(256, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPIADD(256, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-            TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
+            TTI_SFPLOAD(topk_xl_blaze_compat ? p_sfpu::LREG4 : p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
             for (int i = 0; i < 4; i++)
             {
@@ -2888,7 +2903,7 @@ inline void _topk_xl_add_lsb_indices_()
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
     for (int j = 1; j < row_scale_factor; j++)
     {
-        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
+        TTI_SFPLOAD(topk_xl_blaze_compat ? p_sfpu::LREG4 : p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
         for (int i = 0; i < 4; i++)
         {
@@ -3001,13 +3016,16 @@ inline void _topk_xl_remove_msb_values_init_()
     }
         .set(ADDR_MOD_0);
 
-    // ADDR_MOD_7 with zero advance for the SFPLOAD.
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
+    if constexpr (!topk_xl_blaze_compat)
+    {
+        // ADDR_MOD_7 with zero advance for the SFPLOAD.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 0},
+        }
+            .set(ADDR_MOD_7);
     }
-        .set(ADDR_MOD_7);
 }
 
 // Store zero into the hi16 half of every DST word in the K-sized region.
@@ -3021,24 +3039,39 @@ inline void _topk_xl_remove_msb_values_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
 
-    // The loop below holds a value in LREG0 across instructions while running on
-    // PACK, and MATH does SFPU work itself, so this is only safe under SyncFull.
-    static_assert(Dst == DstSync::SyncFull, "_topk_xl_remove_msb_values_ needs MATH quiesced: SyncFull only");
-
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
-
-    // Drain any SFPU work still in flight before touching LREG0.
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
-
-    for (int i = 0; i < row_scale_factor * 16; i++)
+    if constexpr (topk_xl_blaze_compat)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);  // fused [value|index]
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);            // clear hi16, keep the index
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0); // [0|index], advance one group
+        // Caller must quiesce MATH and retain ADDR_MOD_7 = zero advance while
+        // PACK owns LREG0 and replay slots [0, 3). SyncHalf alone is insufficient.
+        lltt::record<lltt::Exec>(0, 3);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        for (int i = 1; i < row_scale_factor * 16; i++)
+        {
+            lltt::replay(0, 3);
+        }
     }
+    else
+    {
+        // The loop below holds a value in LREG0 across instructions while running on
+        // PACK, and MATH does SFPU work itself, so this is only safe under SyncFull.
+        static_assert(Dst == DstSync::SyncFull, "_topk_xl_remove_msb_values_ needs MATH quiesced: SyncFull only");
 
-    // Hold the packer until those stores drain.
-    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+        // Drain any SFPU work still in flight before touching LREG0.
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
+
+        for (int i = 0; i < row_scale_factor * 16; i++)
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);  // fused [value|index]
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);            // clear hi16, keep the index
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0); // [0|index], advance one group
+        }
+
+        // Hold the packer until those stores drain.
+        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+    }
 }
 
 // In addition to programming ADDR_MOD_0, this also stashes the runtime
