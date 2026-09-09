@@ -370,5 +370,6 @@ def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame, distinc
         eager_ms=eager_ms,
         traced_ms=traced_ms,
         traced_vs_eager_min_pcc=min(pccs),
+        traced_vs_eager_max_abs_diff=max_abs,
         note="host wall time per 7-step teacher-forced frame incl. per-step logits read-back; warmed",
     )

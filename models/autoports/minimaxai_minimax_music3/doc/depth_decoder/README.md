@@ -119,7 +119,7 @@ Hardware: host `qbge-devex-02`, board `p300c`, board id `000004613193411b`, PCI 
 
 ## Evidence
 
-### Correctness (`pcc/pcc_results.json`, gate run 2026-09-09 17:51, 11 passed)
+### Correctness (`pcc/pcc_results.json`, final gate run 2026-09-09 17:59, 11 passed)
 
 Reference for (1): the fp32 torch transcription loaded from the same bf16 safetensors; input = the
 reference's own projected 9-step sequence for golden frame 1 (backbone hidden, semantic-code
@@ -162,19 +162,20 @@ device-seeded traced frames are bit-identical per row (logits and `hidden_for()`
 
 | variant | host wall per frame | device time per frame (Tracy, sum of `Device Time` in `perf_report.csv`) | ops per frame |
 |---|---|---|---|
-| eager (`teacher_forced_loop` + 7 logits read-backs) | 29.9 ms (gate run, mean of 10) / 30.5 ms (under Tracy) | 28.69 ms | 576 |
-| traced (`DepthStepTrace`, seed replay + 7 step replays + 7 read-backs) | 31.4 ms (gate run, mean of 20) / 32.3 ms (under Tracy) | 29.53 ms | 601 |
+| eager (`teacher_forced_loop` + 7 logits read-backs) | 29.5 ms (final gate run, mean of 10; 29.7-29.9 in the two earlier gate runs) / 30.5 ms (under Tracy) | 28.69 ms | 576 |
+| traced (`DepthStepTrace`, seed replay + 7 step replays + 7 read-backs) | 31.1 ms (final gate run, mean of 20; 31.3-31.4 earlier) / 32.3 ms (under Tracy) | 29.53 ms | 601 |
 
 Before the two layout changes below (first version of this stage, commit `dabf3050d01`): eager 35.2 ms
 wall / 34.39 ms device (450 ops), traced 37.4 ms / 35.26 ms (476 ops) (wall times from the first
-version's gate-style run, `generated/logs_depth_trace.log`, 17:11; device times from the committed
-`tracy/*/perf_report.txt` of that commit). The loop is device-bound
+version's gate-style run, `generated/logs_depth_trace.log`, 17:11; device times summed from that
+commit's `tracy/*/ops.csv.gz` / `perf_report.csv`, the integer-us rows of its `perf_report.txt` give
+34.41 / 35.28 ms). The loop is device-bound
 (device time = 94-97 % of wall), so tracing does not help yet; it costs ~0.8 ms of extra copies and
 buffer rewrites. Device-time breakdown of the eager frame (`tracy/eager/perf_report.csv`):
 
 | op | device time / frame | count | cores | note |
 |---|---|---|---|---|
-| Matmul (bf16 weights) | 22.4 ms (78 %) | 170 | 32-96 | weight matmuls run at 73-78 % of DRAM bandwidth (376-397 GB/s); 1.14 GB of weights per step |
+| Matmul (bf16 weights) | 22.4 ms (78 %) | 170 | 32-96 | transformer-weight matmuls run at 73-78 % of DRAM bandwidth (376-397 GB/s); 1.14 GB of weights per step. The eager path's 7 per-head `32 x 4096 x 1024` matmuls are the exception (59 us each on 32 cores, 29 % DRAM, `SLOW` in the report, 0.41 ms/frame); the traced path uses the fused head (155 us, 75 %) - stage-07 item for eager `head(k)` |
 | `nlp_create_qkv_heads` (L1) | 3.2 ms (11 %) | 28 | 2 | 113 us each (155 us from DRAM before) - one core per batch row's single tile row |
 | `nlp_concat_heads` (L1) | 1.1 ms (4 %) | 28 | 2 | 38 us each (52 us before) |
 | RMSNorm, width-sharded 4x4 + reshards | 0.87 ms (3 %) | 63 + 126 | 16 | 8.5 us norm + 2.4 + 2.9 us resharding (75 us on 2 cores before: the interleaved kernel parallelizes over the 2 tile rows) |
@@ -254,7 +255,12 @@ un-ignored / listed as local-only, placeholders removed, `release()` frees the p
 `hidden_for()` exposes the hidden the step trace already produced, the `cq_id` parameter dropped
 (single queue), the once-per-process nature of the allocator warning documented in the test, the
 "PCC unchanged" wording made precise, the argmax classification backed by a script + JSON, the
-`Device 3` naming explained. A third pass is recorded in the commit message of the final commit.
+`Device 3` naming explained.
+
+Third pass (on `b5abab58263`): **`clean-pass`**, no required work. Its remaining remarks are folded
+into this log (per-head eager matmuls are `SLOW`, the traced-vs-eager max |diff| is now in the JSON,
+the "before" device times 34.39 / 35.26 ms come from `ops.csv.gz`, the committed `perf_report.txt`
+rows round to 34.41 / 35.28 ms).
 
 ## Open risks / hand-off to later stages
 
@@ -274,5 +280,7 @@ un-ignored / listed as local-only, placeholders removed, `release()` frees the p
 * `dabf3050d01` — first version: implementation, reference, tests, perf scripts, Tracy evidence, work log.
 * `5a0e40d38fd` — first-pass review fixes: seed trace, distinct-rows test (eager), sharded norm / L1
   heads, refreshed evidence, triage evidence in `doc/`.
-* the commit that adds this line — second-pass review fixes (traced distinct rows, doc corrections,
-  `release()` / `hidden_for()`, rank-check script); gate re-run 2026-09-09 17:51 (`11 passed`).
+* `b5abab58263` — second-pass review fixes (traced distinct rows, doc corrections, `release()` /
+  `hidden_for()`, rank-check script); reviewed `clean-pass` by the third pass.
+* the commit that adds this line — third-pass remarks folded into the log, `traced_vs_eager_max_abs_diff`
+  recorded, final gate run 2026-09-09 17:59 (`11 passed`, `GATE_OK`).
