@@ -3,19 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
 
+// The value passed to noc_inline_dw_write_with_state is supplied on every call, even where
+// set_state already latched it (update_val = false). Gen1 ignores the argument and reuses the
+// latched value; Quasar has no value register in its inline-write state and always issues the
+// argument, so passing it keeps both generations writing the same data.
 void kernel_main() {
-    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
-    constexpr uint32_t num_writes = get_named_compile_time_arg_val("num_writes");
-    constexpr uint32_t write_value_base = get_named_compile_time_arg_val("write_val_base");
-    constexpr uint32_t use_posted_writes = get_named_compile_time_arg_val("use_posted");
-    constexpr uint32_t same_destination = get_named_compile_time_arg_val("same_dest");
-    constexpr uint32_t same_value = get_named_compile_time_arg_val("same_value");
-    constexpr uint32_t dest_l1_addr = get_named_compile_time_arg_val("dest_l1_addr");
-    constexpr uint32_t addr_stride = get_named_compile_time_arg_val("addr_stride");
-    constexpr uint32_t packed_receiver_coords = get_named_compile_time_arg_val("receiver_coords");
-    constexpr uint32_t noc_id = get_named_compile_time_arg_val("noc_id");
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    const uint32_t num_writes = get_arg(args::num_writes);
+    constexpr uint32_t write_value_base = get_arg(args::write_val_base);
+    constexpr uint32_t use_posted_writes = get_arg(args::use_posted);
+    constexpr uint32_t same_destination = get_arg(args::same_dest);
+    constexpr uint32_t same_value = get_arg(args::same_value);
+    constexpr uint32_t dest_l1_addr = get_arg(args::dest_l1_addr);
+    constexpr uint32_t addr_stride = get_arg(args::addr_stride);
+    constexpr uint32_t packed_receiver_coords = get_arg(args::receiver_coords);
 
     // Extract receiver coordinates
     uint32_t receiver_x = (packed_receiver_coords >> 16) & 0xFFFF;
@@ -32,50 +36,38 @@ void kernel_main() {
                 // When writing same value, set it in the state and reuse it
                 if constexpr (use_posted_writes) {
                     noc_inline_dw_write_set_state<true, true>(
-                        dest_noc_addr,
-                        write_value_base,  // Set the value once in state
-                        0xF,
-                        write_at_cmd_buf,
-                        noc_id);
+                        dest_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_index);
                 } else {
                     noc_inline_dw_write_set_state<false, true>(
-                        dest_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_id);
+                        dest_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_index);
                 }
 
                 // Perform writes - reuse value from state
                 for (uint32_t i = 0; i < num_writes; i++) {
                     if constexpr (use_posted_writes) {
                         noc_inline_dw_write_with_state<false, true, true, false, false>(
-                            0,  // value unused since we reuse from state
-                            0,
-                            write_at_cmd_buf,
-                            noc_id);
+                            write_value_base, 0, write_at_cmd_buf, noc_index);
                     } else {
                         noc_inline_dw_write_with_state<false, true, false, false, false>(
-                            0, 0, write_at_cmd_buf, noc_id);
+                            write_value_base, 0, write_at_cmd_buf, noc_index);
                     }
                 }
             } else {
                 // When writing different values, set addr only in state
                 if constexpr (use_posted_writes) {
-                    noc_inline_dw_write_set_state<true, false>(
-                        dest_noc_addr,
-                        0,  // value will be provided in each with_state call
-                        0xF,
-                        write_at_cmd_buf,
-                        noc_id);
+                    noc_inline_dw_write_set_state<true, false>(dest_noc_addr, 0, 0xF, write_at_cmd_buf, noc_index);
                 } else {
-                    noc_inline_dw_write_set_state<false, false>(dest_noc_addr, 0, 0xF, write_at_cmd_buf, noc_id);
+                    noc_inline_dw_write_set_state<false, false>(dest_noc_addr, 0, 0xF, write_at_cmd_buf, noc_index);
                 }
 
                 // Perform writes - provide new value each time
                 for (uint32_t i = 0; i < num_writes; i++) {
                     if constexpr (use_posted_writes) {
                         noc_inline_dw_write_with_state<false, true, true, false, true>(
-                            write_value_base + i, 0, write_at_cmd_buf, noc_id);
+                            write_value_base + i, 0, write_at_cmd_buf, noc_index);
                     } else {
                         noc_inline_dw_write_with_state<false, true, false, false, true>(
-                            write_value_base + i, 0, write_at_cmd_buf, noc_id);
+                            write_value_base + i, 0, write_at_cmd_buf, noc_index);
                     }
                 }
             }
@@ -88,10 +80,10 @@ void kernel_main() {
                 // When writing same value to different addresses, set value in state
                 if constexpr (use_posted_writes) {
                     noc_inline_dw_write_set_state<true, true>(
-                        base_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_id);
+                        base_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_index);
                 } else {
                     noc_inline_dw_write_set_state<false, true>(
-                        base_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_id);
+                        base_noc_addr, write_value_base, 0xF, write_at_cmd_buf, noc_index);
                 }
 
                 // Perform writes - provide new address each time, reuse value from state
@@ -100,18 +92,18 @@ void kernel_main() {
 
                     if constexpr (use_posted_writes) {
                         noc_inline_dw_write_with_state<true, true, true, false, false>(
-                            0, current_local_addr, write_at_cmd_buf, noc_id);
+                            write_value_base, current_local_addr, write_at_cmd_buf, noc_index);
                     } else {
                         noc_inline_dw_write_with_state<true, true, false, false, false>(
-                            0, current_local_addr, write_at_cmd_buf, noc_id);
+                            write_value_base, current_local_addr, write_at_cmd_buf, noc_index);
                     }
                 }
             } else {
                 // When writing different values to different addresses, set base addr in state
                 if constexpr (use_posted_writes) {
-                    noc_inline_dw_write_set_state<true, false>(base_noc_addr, 0, 0xF, write_at_cmd_buf, noc_id);
+                    noc_inline_dw_write_set_state<true, false>(base_noc_addr, 0, 0xF, write_at_cmd_buf, noc_index);
                 } else {
-                    noc_inline_dw_write_set_state<false, false>(base_noc_addr, 0, 0xF, write_at_cmd_buf, noc_id);
+                    noc_inline_dw_write_set_state<false, false>(base_noc_addr, 0, 0xF, write_at_cmd_buf, noc_index);
                 }
 
                 // Perform writes - provide new address and new value each time
@@ -120,10 +112,10 @@ void kernel_main() {
 
                     if constexpr (use_posted_writes) {
                         noc_inline_dw_write_with_state<true, true, true, false, true>(
-                            write_value_base + i, current_local_addr, write_at_cmd_buf, noc_id);
+                            write_value_base + i, current_local_addr, write_at_cmd_buf, noc_index);
                     } else {
                         noc_inline_dw_write_with_state<true, true, false, false, true>(
-                            write_value_base + i, current_local_addr, write_at_cmd_buf, noc_id);
+                            write_value_base + i, current_local_addr, write_at_cmd_buf, noc_index);
                     }
                 }
             }
@@ -140,5 +132,5 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Same destination", same_destination);
     DeviceTimestampedData("Same value", same_value);
-    DeviceTimestampedData("NoC Index", noc_id);
+    DeviceTimestampedData("NoC Index", noc_index);
 }
