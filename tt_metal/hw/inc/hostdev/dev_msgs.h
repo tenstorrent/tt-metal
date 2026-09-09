@@ -447,11 +447,11 @@ struct mailboxes_t {
 };
 
 // DevicePrintMemoryLayout asserts
-// DPRINT_BUFFER_SIZE is the legacy default buffer size, kept only to check that the layout has not
-// changed size. hostdevcommon/dprint_common.h does not declare it under ENV_LLK_INFRA, and the layout
-// is sized by DEVICE_PRINT_BUFFER_SIZE whenever that is overridden, so this check only applies to the
-// default layout.
-#if !defined(DEVICE_PRINT_BUFFER_SIZE) && !defined(ENV_LLK_INFRA)
+// DPRINT_BUFFER_SIZE is the legacy per-thread size, kept only to check that the layout has not changed
+// size: every default layout is 204 bytes per processor. hostdevcommon/dprint_common.h does not declare
+// it under ENV_LLK_INFRA, and DEVICE_PRINT_BUFFER_SIZE / DEVICE_PRINT_BUFFER_SIZE2 resize the buffers
+// when overridden, so this check only describes the default layout.
+#if !defined(DEVICE_PRINT_BUFFER_SIZE) && !defined(DEVICE_PRINT_BUFFER_SIZE2) && !defined(ENV_LLK_INFRA)
 static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
 #endif
 static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
