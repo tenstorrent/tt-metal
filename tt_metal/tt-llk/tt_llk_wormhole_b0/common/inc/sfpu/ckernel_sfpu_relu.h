@@ -171,33 +171,12 @@ inline void _relu_min_(T threshold)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
-            // SFPSWAP orders its operands as sign+magnitude, so both of them have to be in
-            // that form before the compare. They get there by different routes, and the two
-            // have to agree:
-            //
-            //   the input      arrives through SFPLOAD from a DEST that already holds int32
-            //                  as sign+magnitude, so what is wanted is the mode that leaves
-            //                  it alone. InstrModLoadStore::INT32 (SFP format I32, mod0 4)
-            //                  is that mode -- it copies the bits, and the SFPSTORE puts the
-            //                  sign+magnitude result straight back.
-            //   the threshold  is written into LREG2 by _sfpu_load_imm32_, which is not a
-            //                  load from DEST and so passes through no mode at all. It is
-            //                  re-encoded by hand below to match the input.
-            //
-            // Selecting INT32_2S_COMP (SFP format SM32, mod0 12) above instead is what
-            // tt-metal #55643 was. Read those two names carefully, because they are the
-            // opposite way round to the intuition and the inversion is what the original code
-            // walked into: INT32_2S_COMP is the *converting* mode -- it exists to hand an
-            // integer datapath the two's complement it needs, so on load it turns DEST's
-            // sign+magnitude into two's complement and on store turns it back. Under it the
-            // input reached SFPSWAP in two's complement while the threshold was
-            // sign+magnitude, and the compare saw two different encodings. So the fix is to
-            // stop converting, not to start: INT32_2S_COMP is the right mode for the integer
-            // add/sub kernels next door, which do want two's-complement LREGs, and the wrong
-            // one here where SFPSWAP wants sign+magnitude.
-            //
-            // Scoped to this branch because the re-encoding is only meaningful for an
-            // integer threshold -- applying it to a float would reinterpret, not convert.
+            // SFPSWAP orders its operands as sign+magnitude and DEST already holds int32 in
+            // that form, so the load and store use InstrModLoadStore::INT32, the mode that
+            // leaves the bits alone -- INT32_2S_COMP is the converting one, despite being the
+            // name that sounds otherwise. The threshold does not arrive through a load and so
+            // passes through no mode at all, which is why it is re-encoded by hand here to
+            // match, and why that is scoped to the integer branch.
             const int scalar       = static_cast<int>(threshold);
             std::uint32_t sign_mag = static_cast<std::uint32_t>(scalar);
             if (scalar < 0)
