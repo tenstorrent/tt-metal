@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "emulated_program_runner.hpp"
+#include "emule_multi_rank_runtime.hpp"
 #include "emule_live_ranges.hpp"
 #include "host_sanitizers.hpp"
 #include "emule_sanitizers.hpp"
@@ -75,9 +76,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
-#include <tt-metalium/experimental/fabric/topology_mapper.hpp>  // TopologyMapper (peer chip asic ids)
-#include <tt-metalium/distributed_context.hpp>
-
 #include "tt_emule/chip_store.hpp"
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
@@ -278,9 +276,7 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
 namespace efib = tt::tt_metal::emule_fiber;
 extern "C" void __emule_fiber_lock(void) { efib::FiberScheduler::instance().lock(); }
 extern "C" void __emule_fiber_unlock(void) { efib::FiberScheduler::instance().unlock(); }
-extern "C" void __emule_fiber_park_locked(const void* key) {
-    efib::FiberScheduler::instance().park_locked(key);
-}
+extern "C" void __emule_fiber_park_locked(const void* key) { efib::FiberScheduler::instance().park_locked(key); }
 extern "C" void __emule_fiber_park_locked_socket(const void* key) {
     efib::FiberScheduler::instance().park_locked_socket(key);
 }
@@ -293,9 +289,7 @@ extern "C" void __emule_fiber_note_cb_poll_wait(unsigned cb_id, unsigned n) {
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
 extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
-extern "C" void __emule_fiber_note_publish(unsigned pages) {
-    efib::FiberScheduler::instance().note_publish(pages);
-}
+extern "C" void __emule_fiber_note_publish(unsigned pages) { efib::FiberScheduler::instance().note_publish(pages); }
 
 // Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
 // bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
@@ -433,7 +427,8 @@ extern "C" bool __emule_noc_addr_is_worker(uint64_t noc_addr) {
 // silicon clears the bit and the sender NIU drops the packet at itself ->
 // include_self=false. Sender coords come from the TLS that thread launch
 // wires up (my_x[0], my_y[0]).
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self, uint8_t noc) {
+extern "C" void __emule_multicast_write(
+    uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self, uint8_t noc) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -465,8 +460,12 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     // wraparound → receivers never see their semaphore → quiescent deadlock.
     if (noc != 0) {
         uint32_t t;
-        t = x_start; x_start = x_end; x_end = t;
-        t = y_start; y_start = y_end; y_end = t;
+        t = x_start;
+        x_start = x_end;
+        x_end = t;
+        t = y_start;
+        y_start = y_end;
+        y_end = t;
     }
 
     // Torus-wraparound walk on physical coords. Silicon's NOC treats the rectangle on
@@ -601,7 +600,8 @@ struct Metal2BindingsSnapshot {
             s += ":dfb:" + name + "=" + std::to_string(id);
             if (dfb_accessor_is_relay.contains(name) && dfb_accessor_is_relay.at(name)) {
                 s += ":relay";
-                if (dfb_accessor_prefetcher_pipe_id.contains(name) && dfb_accessor_prefetcher_pipe_id.at(name) != 0xFF) {
+                if (dfb_accessor_prefetcher_pipe_id.contains(name) &&
+                    dfb_accessor_prefetcher_pipe_id.at(name) != 0xFF) {
                     s += ":prefetcher_pipe" + std::to_string(dfb_accessor_prefetcher_pipe_id.at(name));
                 }
             }
@@ -610,8 +610,7 @@ struct Metal2BindingsSnapshot {
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
         }
         for (const auto& ta : ta_accessors) {
-            s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
-                 std::to_string(ta.addr_crta_offset);
+            s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," + std::to_string(ta.addr_crta_offset);
         }
         for (const auto& sp : scratch_accessors) {
             s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
@@ -646,7 +645,7 @@ struct PendingKernelInfo {
     std::vector<std::string> variant_cache_keys;
     bool run_all_variants = false;
     uint8_t processor_id = 0;
-    uint8_t thread_idx = 0;    // Index within this kernel's processor list
+    uint8_t thread_idx = 0;  // Index within this kernel's processor list
     bool is_tensix = false;
     uint32_t num_threads = 1;
     uint32_t kernel_config_base = 0;
@@ -655,7 +654,7 @@ struct PendingKernelInfo {
     // Runtime-arg values (unique + common); buffer L1 addresses appear verbatim, so
     // Object-Intent uses them to find this kernel's I/O tensors (§12).
     std::vector<uint32_t> rt_arg_values;
-    std::string kernel_name;  // kernel source path, for the ASAN trace
+    std::string kernel_name;          // kernel source path, for the ASAN trace
     uint32_t num_unique_rt_args = 0;  // size of the per-core (rta) region; see KernelInfo
 };
 
@@ -901,8 +900,7 @@ static void emit_metal2_namespaces(
             crta_offset += sizeof(uint32_t);
         }
         // Sort CTAs for deterministic wrapper output.
-        std::vector<std::pair<std::string, uint32_t>> cta_entries(
-            named_compile_args.begin(), named_compile_args.end());
+        std::vector<std::pair<std::string, uint32_t>> cta_entries(named_compile_args.begin(), named_compile_args.end());
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
             // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
@@ -926,8 +924,9 @@ static void emit_metal2_namespaces(
         for (const auto& [name, id] : s.dfb_accessors) {
             const bool is_relay = s.dfb_accessor_is_relay.contains(name) && s.dfb_accessor_is_relay.at(name);
             if (is_relay) {
-                const uint8_t prefetcher_pipe_id =
-                    s.dfb_accessor_prefetcher_pipe_id.contains(name) ? s.dfb_accessor_prefetcher_pipe_id.at(name) : 0xFF;
+                const uint8_t prefetcher_pipe_id = s.dfb_accessor_prefetcher_pipe_id.contains(name)
+                                                       ? s.dfb_accessor_prefetcher_pipe_id.at(name)
+                                                       : 0xFF;
                 f << "constexpr RelayDFBBindingToken " << name << "{" << id;
                 if (prefetcher_pipe_id != 0xFF) {
                     f << ", " << static_cast<uint32_t>(prefetcher_pipe_id);
@@ -1279,8 +1278,7 @@ static void populate_bank_mapping(
         for (uint32_t b = 0; b < num_l1_banks_out && b < MAX_NUM_BANKS; ++b) {
             auto logical = allocator->get_logical_core_from_bank_id(b);
             auto virt = device->virtual_core_from_logical_core(logical, CoreType::WORKER);
-            uint16_t noc_xy = (static_cast<uint16_t>(virt.y) << NOC_NODE_ID_BITS) |
-                              static_cast<uint16_t>(virt.x);
+            uint16_t noc_xy = (static_cast<uint16_t>(virt.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(virt.x);
             l1_tbl[0 * num_l1_banks_out + b] = noc_xy;  // NOC 0
             l1_tbl[1 * num_l1_banks_out + b] = noc_xy;  // NOC 1 (same target in emule)
             // Intentionally leave bank_to_l1_offset[b] = 0.  emule's per-core
@@ -1511,8 +1509,11 @@ static std::map<std::string, std::string> build_kernel_defines(
         static std::set<int> seen;
         std::lock_guard<std::mutex> g(mu);
         if (seen.insert(static_cast<int>(fabric_cfg)).second) {
-            std::fprintf(stderr, "[EMULE_FABRIC] kernel defines: fabric_config=%d EMULE_FABRIC_2D=%d\n",
-                         static_cast<int>(fabric_cfg), tt::tt_fabric::is_2d_fabric_config(fabric_cfg) ? 1 : 0);
+            std::fprintf(
+                stderr,
+                "[EMULE_FABRIC] kernel defines: fabric_config=%d EMULE_FABRIC_2D=%d\n",
+                static_cast<int>(fabric_cfg),
+                tt::tt_fabric::is_2d_fabric_config(fabric_cfg) ? 1 : 0);
         }
     }
     // Upstream tensor/dspec.h gates `get_common_arg_addr` as a forward-decl
@@ -1751,9 +1752,8 @@ static void collect_kernels(
             // so root-rooted includes resolve at compile time; silicon's build wires
             // these through the compiler include dirs, so mirror that here.
             std::string kernel_extra_inc = extra_inc;
-            kernel->process_include_paths([&kernel_extra_inc](const std::string& p) {
-                kernel_extra_inc += " -I\"" + p + "\"";
-            });
+            kernel->process_include_paths(
+                [&kernel_extra_inc](const std::string& p) { kernel_extra_inc += " -I\"" + p + "\""; });
 
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
@@ -1910,8 +1910,7 @@ static void collect_kernels(
                 return key;
             };
 
-            auto register_cache_key = [&](const std::string& key,
-                                          const std::map<std::string, std::string>& defs) {
+            auto register_cache_key = [&](const std::string& key, const std::map<std::string, std::string>& defs) {
                 std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
                 auto it = g_jit_cache.find(key);
                 if (it != g_jit_cache.end()) {
@@ -2057,7 +2056,7 @@ static unsigned jit_compile_concurrency_cap() {
     // and enough on its own in most containers (large hard limit), so the throttle
     // rarely engages on well-provisioned hosts. Kept as a floor because some containers
     // pin the hard limit at 1024 too; derive the cap from the (possibly raised) soft limit.
-    struct rlimit rl {};
+    struct rlimit rl{};
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != rl.rlim_max) {
         rl.rlim_cur = rl.rlim_max;
         setrlimit(RLIMIT_NOFILE, &rl);
@@ -2195,8 +2194,7 @@ static void jit_compile_pending(
 // Per-device physical {x,y}->Core* maps, at file scope so the fabric teleport hooks below can resolve a
 // remote chip's core (its map is built by that device's own concurrent run). See tt-emule docs/fabric-ccl-emulation.md.
 static std::mutex g_core_map_mutex;
-static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
-    g_core_map_cache;
+static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>> g_core_map_cache;
 // The SWEmuleChip each cached core_map was built against. A device close+reopen mints
 // a NEW SWEmuleChip with fresh per-core L1 mmaps (single-process-galaxy L1 model), so a
 // core_map cached from the prior chip holds Core* into a now-disjoint L1 region. The NOC
@@ -2252,8 +2250,8 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
             for (uint32_t view = 0; view < msoc.get_num_dram_views() && view < MAX_NUM_BANKS; view++) {
                 for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
                     auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
-                    auto lg = umd.translate_coord_to(
-                        tt_xy_pair(dc.x, dc.y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+                    auto lg =
+                        umd.translate_coord_to(tt_xy_pair(dc.x, dc.y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
                     auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
                     uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
                     (*core_map)[key] = core;
@@ -2275,219 +2273,19 @@ static std::mutex g_fabric_route_mutex;
 // (src_chip << 3 | dir) -> ordered chips at distance 1,2,... in that direction (cached; topology is static).
 static std::unordered_map<uint32_t, std::vector<uint32_t>> g_fabric_walk_cache;
 
-// ---------------------------------------------------------------------------
-// Global chip registry: emule chip ids that stay valid when a peer RANK owns the chip.
-// ---------------------------------------------------------------------------
-// Multi-rank hands each rank only its own chips (TT_VISIBLE_DEVICES, then the cluster descriptor
-// renumbers them 0..N-1), so a peer chip has no local ChipId and
-// get_physical_chip_id_from_fabric_node_id TT_FATALs for its node. Emule chip ids never leave this
-// process — a delivery is a direct write, not a message — so the id space can simply be EXTENDED:
-// local chips keep their existing ChipId (single-rank behaviour is byte-identical) and each peer
-// gets a synthetic id above the local maximum. Each entry carries the globally stable AsicID, which
-// is the same value chip_store names the chip's shared segment with, so this table is also what
-// turns a route into an attachable peer segment. See tt-emule docs/fabric-ccl-emulation.md.
-struct EmuleGlobalChip {
-    uint64_t asic_id = 0;   // == cluster unique_chip_id; the chip_store segment key
-    int owner_rank = -1;    // MPI rank that owns the chip, -1 if unknown
-    bool local = false;     // owned by this rank (then the emule id IS the local ChipId)
-};
-static std::mutex g_gchip_mu;
-static std::vector<EmuleGlobalChip> g_gchips;                          // indexed by emule chip id
-static std::unordered_map<uint64_t, uint32_t> g_asic_to_gchip;         // AsicID -> emule chip id
-static std::map<tt::tt_fabric::FabricNodeId, uint32_t> g_node_to_gchip;
-static std::unordered_map<uint32_t, tt::tt_fabric::FabricNodeId> g_gchip_to_node;
-static bool g_gchip_built = false;
-
-// TopologyMapper is globally complete: each rank fills its own chips then
-// broadcast_chip_info_to_hosts exchanges the rest, so get_asic_id_from_fabric_node_id answers for a
-// node this rank does not own. That is the whole reason no extra collective is needed here.
-static void __emule_build_gchip_registry(tt::tt_fabric::ControlPlane& cp) {
-    // A build that produced nothing is NOT final: the first lookup can land before the control plane
-    // is populated, and latching that would leave the registry permanently empty.
-    if (g_gchip_built && !g_gchips.empty()) {
-        return;
-    }
-    g_gchip_built = true;
-    uint32_t next_synthetic = 0;
-    try {
-        const auto& tm = cp.get_topology_mapper();
-        // EVERY mesh in the graph, not get_user_physical_mesh_ids(): that one is derived from this
-        // rank's own logical-to-physical map, so under a rank-per-mesh topology it returns only the
-        // local mesh and every peer would stay unnameable.
-        const auto all_meshes = cp.get_mesh_graph().get_mesh_ids();
-        for (auto mesh_id : all_meshes) {
-            // Straight off the mesh GRAPH: it is the same file in every rank, so it describes foreign
-            // meshes too, whereas anything routed through this rank's physical bindings stops at its
-            // own submesh -- the exact truncation this registry exists to undo.
-            uint32_t n = 0;
-            try {
-                n = static_cast<uint32_t>(cp.get_mesh_graph().get_mesh_shape(mesh_id).mesh_size());
-            } catch (...) {
-                continue;
-            }
-            for (uint32_t c = 0; c < n; ++c) {
-                const tt::tt_fabric::FabricNodeId node(mesh_id, c);
-                uint64_t asic = 0;
-                try {
-                    asic = *tm.get_asic_id_from_fabric_node_id(node);
-                } catch (...) {
-                    continue;  // node not in the mapping at all — nothing nameable here
-                }
-                int local_chip = -1;
-                try {
-                    local_chip = static_cast<int>(cp.get_physical_chip_id_from_fabric_node_id(node));
-                } catch (...) {
-                    local_chip = -1;  // owned by a peer rank
-                }
-                uint32_t id;
-                if (local_chip >= 0) {
-                    id = static_cast<uint32_t>(local_chip);
-                    next_synthetic = std::max(next_synthetic, id + 1);
-                } else {
-                    id = 0xFFFFFFFFu;  // assigned below, after every local id is known
-                }
-                if (id != 0xFFFFFFFFu) {
-                    if (g_gchips.size() <= id) {
-                        g_gchips.resize(id + 1);
-                    }
-                    g_gchips[id] = EmuleGlobalChip{asic, -1, true};
-                    g_asic_to_gchip[asic] = id;
-                    g_node_to_gchip[node] = id;
-                    g_gchip_to_node.emplace(id, node);
-                }
-            }
-        }
-        // Second pass for peers: their synthetic ids must not collide with any local ChipId, which is
-        // only known once every local chip above has been seen.
-        for (auto mesh_id : all_meshes) {
-            uint32_t n = 0;
-            try {
-                n = static_cast<uint32_t>(cp.get_mesh_graph().get_mesh_shape(mesh_id).mesh_size());
-            } catch (...) {
-                continue;
-            }
-            for (uint32_t c = 0; c < n; ++c) {
-                const tt::tt_fabric::FabricNodeId node(mesh_id, c);
-                if (g_node_to_gchip.count(node)) {
-                    continue;
-                }
-                uint64_t asic = 0;
-                try {
-                    asic = *tm.get_asic_id_from_fabric_node_id(node);
-                } catch (...) {
-                    continue;
-                }
-                int owner = -1;
-                try {
-                    const auto host_rank = tm.get_host_rank_for_chip(mesh_id, static_cast<ChipId>(c));
-                    if (host_rank.has_value()) {
-                        owner = tm.get_mpi_rank_for_mesh_host_rank(mesh_id, *host_rank);
-                    }
-                } catch (...) {
-                    owner = -1;
-                }
-                const uint32_t id = next_synthetic++;
-                if (g_gchips.size() <= id) {
-                    g_gchips.resize(id + 1);
-                }
-                g_gchips[id] = EmuleGlobalChip{asic, owner, false};
-                g_asic_to_gchip[asic] = id;
-                g_node_to_gchip[node] = id;
-                g_gchip_to_node.emplace(id, node);
-            }
-        }
-    } catch (...) {
-        // No control plane / no fabric: single-rank runs never need this table.
-    }
-}
-
-// emule chip id for a fabric node, valid whether or not this rank owns it. -1 when unnameable.
-static int __emule_gchip_of_node(tt::tt_fabric::ControlPlane& cp, const tt::tt_fabric::FabricNodeId& node) {
-    // Multi-rank consults the registry FIRST. The control-plane lookup raises for every peer node,
-    // and this sits on the teleport's hot path: letting it raise first cost a million thrown
-    // exceptions (each formatting and logging a TT_FATAL) in one socket run. The registry holds local
-    // chips too, so it is a complete answer, not a fallback. Single-rank keeps the original order so
-    // its behaviour is untouched.
-    if (tt_emule::chip_store_job_is_multi_rank()) {
-        std::lock_guard<std::mutex> lk(g_gchip_mu);
-        __emule_build_gchip_registry(cp);
-        auto it = g_node_to_gchip.find(node);
-        if (it != g_node_to_gchip.end()) {
-            return static_cast<int>(it->second);
-        }
-    }
-    try {
-        return static_cast<int>(cp.get_physical_chip_id_from_fabric_node_id(node));  // local fast path
-    } catch (...) {
-        // fall through to the global registry
-    }
-    std::lock_guard<std::mutex> lk(g_gchip_mu);
-    __emule_build_gchip_registry(cp);
-    auto it = g_node_to_gchip.find(node);
-    return (it == g_node_to_gchip.end()) ? -1 : static_cast<int>(it->second);
-}
-
-// Chip id for a fabric node, valid across ranks; -1 when unnameable. Exported because the fabric
-// host path records connections whose DESTINATION may sit on a mesh this rank does not own, where
-// the control plane's own lookup raises. See tt-emule docs/multi-rank-emulation.md.
-extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id) {
-    try {
-        auto& cp = MetalContext::instance().get_control_plane();
-        return __emule_gchip_of_node(
-            cp, tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id}, chip_id));
-    } catch (...) {
-        return -1;
-    }
-}
-
-// The registry entry for an emule chip id, or nullptr when the id is not a known peer.
-static const EmuleGlobalChip* __emule_gchip_info(uint32_t chip) {
-    std::lock_guard<std::mutex> lk(g_gchip_mu);
-    if (chip >= g_gchips.size()) {
-        return nullptr;
-    }
-    const EmuleGlobalChip& e = g_gchips[chip];
-    return (e.asic_id == 0) ? nullptr : &e;
-}
-
-// Fabric node for an emule chip id. The registry is consulted FIRST for peer ids: under emulation
-// get_fabric_node_id_from_physical_chip_id answers any unmapped chip with a synthetic
-// FabricNodeId(MeshId{0}, chip) stub (control_plane.cpp:1254), which for a synthetic peer id is a
-// plausible-looking wrong answer rather than an error.
-static bool __emule_node_of_gchip(
-    tt::tt_fabric::ControlPlane& cp, uint32_t chip, tt::tt_fabric::FabricNodeId& out) {
-    {
-        std::lock_guard<std::mutex> lk(g_gchip_mu);
-        auto it = g_gchip_to_node.find(chip);
-        if (it != g_gchip_to_node.end()) {
-            out = it->second;
-            return true;
-        }
-        if (chip < g_gchips.size() && !g_gchips[chip].local && g_gchips[chip].asic_id != 0) {
-            return false;  // a known peer with no node — do not fall through to the stub
-        }
-    }
-    try {
-        out = cp.get_fabric_node_id_from_physical_chip_id(static_cast<ChipId>(chip));
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
 // Immediate same-mesh neighbor chip of `chip` in `dir`, or -1 if none. The neighbor may be owned by
 // a peer rank, in which case this is its synthetic emule id rather than a local ChipId.
 static int __emule_fabric_dir_neighbor(
     tt::tt_fabric::ControlPlane& cp, uint32_t chip, tt::tt_fabric::RoutingDirection dir) {
     try {
         tt::tt_fabric::FabricNodeId node(tt::tt_fabric::MeshId{0}, 0);
-        if (!__emule_node_of_gchip(cp, chip, node)) {
+        if (!tt::tt_metal::emule::multi_rank::node_for_global_chip(cp, chip, node)) {
             return -1;
         }
         auto neighbors = cp.get_chip_neighbors(node, dir);
         for (auto& [mesh, chips] : neighbors) {
             if (!chips.empty()) {
-                return __emule_gchip_of_node(
+                return tt::tt_metal::emule::multi_rank::global_chip_for_node(
                     cp, tt::tt_fabric::FabricNodeId(mesh, static_cast<std::uint32_t>(chips.front())));
             }
         }
@@ -2530,40 +2328,9 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
 // its semaphore wait. See tt-emule docs/fabric-ccl-emulation.md.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Peer-owned chips: resolve into another RANK's shared L1 segment.
-// ---------------------------------------------------------------------------
-// A chip owned by a peer rank has no SWEmuleChip here and so no entry in g_core_map_cache. It does
-// have a chip_store segment, named by the globally stable AsicID the gchip registry carries, and the
-// slot layout is derived from the SoC descriptor alone — so an identically-harvested peer chip has
-// the SAME core->slot map as ours. That makes the resolve pure arithmetic on the attached segment:
-//   base + slot * SLOT_SIZE + (addr & L1_SLOT_MASK)
-// which is exactly what Core::l1_ptr does for a WORKER. Only WORKER cores are reachable this way;
-// DRAM lives in per-channel private mmaps that are not part of the shared segment.
-static std::mutex g_peer_seg_mu;
-struct EmulePeerSegment {
-    uint8_t* base = nullptr;
-    std::unique_ptr<tt::umd::SocDescriptor> soc;
-    std::unordered_map<tt_xy_pair, size_t> slot_of;
-};
-static std::unordered_map<uint32_t, std::unique_ptr<EmulePeerSegment>> g_peer_seg;
-
-// Cross-rank writes resolved in the packet currently being delivered, published only once its stores
-// are complete. Per-fiber-worker, so concurrent deliveries cannot mix their tallies.
+// Cross-rank delivery state and rank coordination live in emule_multi_rank_runtime. This tally
+// remains per-fiber here because the terminal delivery operation decides when stores are complete.
 static thread_local uint32_t t_peer_writes = 0;
-
-// ---------------------------------------------------------------------------
-// Cross-rank quiescence: shared rank state, no collective on the hot path.
-// ---------------------------------------------------------------------------
-// A cross-rank delivery makes the destination WORD correct immediately, but the parked fiber that
-// is waiting on it never re-evaluates: the wake in __emule_fabric_deliver is a host pointer into
-// THIS process's scheduler, and the waiter belongs to another one. A rank also cannot decide locally
-// whether its stall is peer-fed — every worker L1 is a legal fabric destination, so any classifier
-// degenerates to "any waiter". The decision is therefore global, but it does not need a collective:
-// the state lives in shared memory alongside the chip L1. See tt-emule docs/multi-rank-emulation.md.
-static bool emule_peer_may_still_deliver();
-static void emule_install_peer_probes();
-static bool emule_peer_liveness();
 
 namespace {
 
@@ -2572,194 +2339,6 @@ namespace {
 thread_local bool t_holds_dispatch_lock = false;
 
 }  // namespace
-
-static tt_emule::RankState& emule_rank_state() {
-    static tt_emule::RankState rs = [] {
-        using tt::tt_metal::distributed::multihost::DistributedContext;
-        if (!tt_emule::chip_store_shared() || !DistributedContext::is_initialized()) {
-            return tt_emule::RankState(nullptr, 0, 0);
-        }
-        const auto& ctx = DistributedContext::get_current_world();
-        const auto world = static_cast<uint32_t>(*ctx->size());
-        if (world <= 1) {
-            return tt_emule::RankState(nullptr, 0, 0);  // single rank: no peer can ever deliver here
-        }
-        tt_emule::RankState s = tt_emule::rank_state_attach(world, static_cast<uint32_t>(*ctx->rank()));
-        if (s.valid()) {
-            s.join();
-            emule_install_peer_probes();
-        }
-        return s;
-    }();
-    // `done` means this process has permanently left the emulated job, not that one dispatch
-    // completed. Peers must keep treating a rank as live while its host is between dispatches: it
-    // may enter another dispatch and deliver again. Construct this after rs so its destructor runs
-    // first and can publish normal process departure while the shared mapping is still valid.
-    static const struct RankDeparture {
-        tt_emule::RankState* state;
-        ~RankDeparture() { state->note_departed(); }
-    } rank_departure{&rs};
-    (void)rank_departure;
-    return rs;
-}
-
-static std::atomic<bool> g_emule_peer_probes_installed{false};
-// A confirmed fixed point makes the next quiescence authoritative instead of reopening peer churn.
-static std::atomic<bool> g_peer_fixed_point_confirmed{false};
-
-static bool emule_peer_liveness() {
-    auto& r = emule_rank_state();
-    return r.valid() && !r.any_faulted() && !g_peer_fixed_point_confirmed.load(std::memory_order_acquire) &&
-           r.any_peer_unfinished() && !r.global_fixed_point();
-}
-
-// Installed only when shared rank state is active, so single-rank scheduling keeps empty probes.
-static void emule_install_peer_probes() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        tt::tt_metal::emule_fiber::set_peer_progress_probe(&emule_peer_may_still_deliver);
-        tt::tt_metal::emule_fiber::set_peer_liveness_probe(&emule_peer_liveness);
-        g_emule_peer_probes_installed.store(true, std::memory_order_release);
-    });
-}
-
-// Called from the scheduler at local quiescence. Publishing BEFORE testing is what makes the answer
-// meaningful: until this rank's own slot says parked, the fixed point can never hold.
-static bool emule_peer_may_still_deliver() {
-    auto& rs = emule_rank_state();
-    if (!rs.valid()) {
-        return false;
-    }
-    if (rs.any_faulted()) {
-        return false;  // a peer threw; waiting for it would hang this rank too
-    }
-    if (g_peer_fixed_point_confirmed.load(std::memory_order_acquire)) {
-        return false;  // already established that nothing is coming — let the engine report it
-    }
-    rs.publish_quiesced(true);
-    return !rs.global_fixed_point();
-}
-
-static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr) {
-    if (!tt_emule::chip_store_shared()) {
-        return nullptr;  // no shared backing: a peer chip is simply unreachable
-    }
-    const EmuleGlobalChip* info = __emule_gchip_info(dst_chip);
-    if (info == nullptr || info->local) {
-        return nullptr;
-    }
-    // The peer's mask selects both its exact segment and its worker-slot geometry; never guess either.
-    auto* local = get_sw_emulated_chip(static_cast<tt::ChipId>(__emule_self->chip_id));
-    if (local == nullptr) {
-        return nullptr;
-    }
-    EmulePeerSegment* peer = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(g_peer_seg_mu);
-        auto it = g_peer_seg.find(dst_chip);
-        if (it != g_peer_seg.end()) {
-            peer = it->second.get();
-        } else {
-            const std::string prefix =
-                "tt_emule." + tt_emule::chip_store_job_id() + ".u" + std::to_string(info->asic_id) + ".h";
-            std::optional<uint64_t> peer_mask;
-            try {
-                for (const auto& entry : std::filesystem::directory_iterator("/dev/shm")) {
-                    const std::string name = entry.path().filename().string();
-                    if (!name.starts_with(prefix)) {
-                        continue;
-                    }
-                    const std::string suffix = name.substr(prefix.size());
-                    if (suffix.empty() ||
-                        !std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) { return std::isdigit(c); })) {
-                        continue;
-                    }
-                    const uint64_t mask = std::stoull(suffix);
-                    if (peer_mask.has_value() && *peer_mask != mask) {
-                        peer_mask.reset();
-                        break;  // ambiguous geometry must never pick an arbitrary segment
-                    }
-                    peer_mask = mask;
-                }
-            } catch (...) {
-                peer_mask.reset();
-            }
-            if (peer_mask.has_value()) {
-                constexpr uint64_t field_mask = (1ull << 20) - 1;
-                ChipInfo chip_info;
-                chip_info.noc_translation_enabled = local->get_soc_descriptor().noc_translation_enabled;
-                chip_info.harvesting_masks.tensix_harvesting_mask = *peer_mask & field_mask;
-                chip_info.harvesting_masks.dram_harvesting_mask = (*peer_mask >> 20) & field_mask;
-                chip_info.harvesting_masks.eth_harvesting_mask = (*peer_mask >> 40) & field_mask;
-                auto soc = std::make_unique<tt::umd::SocDescriptor>(
-                    std::make_shared<tt::umd::SocArchDescriptor>(local->get_soc_descriptor().arch), chip_info);
-                // Same builder SWEmuleChip's ctor uses, so the layout this rank derives for a peer
-                // chip cannot drift from the one the owning rank actually allocated.
-                auto slot_of = tt::umd::build_worker_slot_map(*soc);
-                const size_t bytes = slot_of.size() * tt_emule::L1Pool::SLOT_SIZE;
-                auto* base = static_cast<uint8_t*>(tt_emule::chip_store_attach_peer(
-                    info->asic_id, *peer_mask, bytes, tt_emule::L1Pool::SLOT_SIZE));
-                if (base != nullptr) {
-                    auto segment = std::make_unique<EmulePeerSegment>();
-                    segment->base = base;
-                    segment->soc = std::move(soc);
-                    segment->slot_of = std::move(slot_of);
-                    peer = g_peer_seg.emplace(dst_chip, std::move(segment)).first->second.get();
-                }
-            }
-            // Cache SUCCESSES only. A miss usually means the owning rank has not opened its devices
-            // yet — ranks are not lock-stepped through device open — and caching that would drop
-            // every later delivery to the chip for the rest of the run. Retrying costs one failing
-            // shm_open. Warn once so a permanent miss is still visible.
-            if (peer == nullptr) {
-                static std::set<uint32_t> warned;
-                if (warned.insert(dst_chip).second) {
-                    std::fprintf(stderr,
-                                 "[EMULE_FABRIC] WARNING: no shared segment yet for peer chip=%u (asic=0x%llx, "
-                                 "rank=%d); will retry. A persistent miss drops deliveries to it.\n",
-                                 dst_chip, static_cast<unsigned long long>(info->asic_id), info->owner_rank);
-                }
-            }
-        }
-    }
-    if (peer == nullptr) {
-        return nullptr;
-    }
-    const uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
-    const uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
-    auto verbatim = peer->slot_of.find(tt_xy_pair(noc_x, noc_y));
-    size_t slot = verbatim == peer->slot_of.end() ? SIZE_MAX : verbatim->second;
-    try {
-        auto logical = local->get_soc_descriptor().translate_coord_to(
-            tt_xy_pair(noc_x, noc_y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-        auto dst_xy = peer->soc->translate_coord_to(
-            tt_xy_pair(logical.x, logical.y), CoordSystem::LOGICAL, CoordSystem::TRANSLATED);
-        auto it = peer->slot_of.find(dst_xy);
-        if (it != peer->slot_of.end()) {
-            slot = it->second;
-        }
-    } catch (...) {
-        // Preserve a valid verbatim worker mapping when coordinate translation is unavailable.
-    }
-    if (slot == SIZE_MAX) {
-        return nullptr;
-    }
-    // Bounded by the destination's own L1, exactly as the local path is below: a worker's L1 is
-    // smaller than the 2 MB slot stride, so masking alone would land a write in the slot's padding
-    // where the core can never read it -- and still count it as delivered, which is worse than
-    // dropping it, because the tally the fixed point rests on would move without any data behind it.
-    const uint64_t peer_raw = noc_addr & NOC_LOCAL_MASK;
-    if (peer_raw >= static_cast<uint64_t>(peer->soc->worker_l1_size)) {
-        return nullptr;  // masking first would alias an out-of-slot address into range
-    }
-    const uint32_t peer_offset = static_cast<uint32_t>(peer_raw) & L1_SLOT_MASK;
-    // Only TALLIED here — publishing happens in __emule_fabric_deliver once the stores are done.
-    // The counter must never lead the data: a peer that saw it move without the bytes behind it
-    // would re-poll, find nothing, and re-park, which is precisely the lost wakeup this exists to
-    // prevent. See tt-emule docs/multi-rank-emulation.md.
-    ++t_peer_writes;
-    return peer->base + slot * tt_emule::L1Pool::SLOT_SIZE + peer_offset;
-}
 
 // Resolve (noc_addr) -> host pointer on an arbitrary chip, mirroring __emule_resolve_noc_addr but
 // against the destination chip's cached core map (already built by that chip's launch).
@@ -2771,17 +2350,22 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     if (it == g_core_map_cache.end() || !it->second) {
         // No local core map. Under multi-rank that is the NORMAL case for a chip a peer rank owns, so
         // try the peer's shared segment before treating it as a drop.
-        if (uint8_t* peer = __emule_fabric_resolve_peer(dst_chip, noc_addr)) {
-            return peer;
+        if (auto* local = get_sw_emulated_chip(static_cast<tt::ChipId>(__emule_self->chip_id))) {
+            if (uint8_t* peer = tt::tt_metal::emule::multi_rank::resolve_peer_l1(dst_chip, noc_addr, *local)) {
+                ++t_peer_writes;
+                return peer;
+            }
         }
         // Returning nullptr DROPS the delivery: the peer's semaphore never moves and the only symptom
         // is a quiescent deadlock elsewhere. Report it once per chip even without EMULE_FABRIC_DEBUG.
         static std::set<uint32_t> warned;
         if (rdbg || warned.insert(dst_chip).second) {
-            std::fprintf(stderr,
-                         "[EMULE_FABRIC] WARNING: dropping a fabric delivery — no core map for dst_chip=%u "
-                         "(cache has %zu chips). The addressed peer will never observe this write.\n",
-                         dst_chip, g_core_map_cache.size());
+            std::fprintf(
+                stderr,
+                "[EMULE_FABRIC] WARNING: dropping a fabric delivery — no core map for dst_chip=%u "
+                "(cache has %zu chips). The addressed peer will never observe this write.\n",
+                dst_chip,
+                g_core_map_cache.size());
         }
         return nullptr;
     }
@@ -2790,9 +2374,7 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;
 
-    auto find_core = [&](uint32_t x, uint32_t y) {
-        return m.find((uint64_t(x) << 32) | y);
-    };
+    auto find_core = [&](uint32_t x, uint32_t y) { return m.find((uint64_t(x) << 32) | y); };
 
     // (noc_x,noc_y) are the SOURCE chip's coords (get_noc_addr packs the caller core's); resolve against
     // the destination chip's map. Cross-chip src->logical->dst translation applies ONLY to WORKER cores
@@ -2801,8 +2383,7 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     // See tt-emule docs/fabric-ccl-emulation.md.
     auto cit = find_core(noc_x, noc_y);
     const uint32_t src_chip = __emule_self->chip_id;
-    const bool verbatim_is_worker =
-        (cit != m.end() && cit->second->role() == tt_emule::CoreRole::WORKER);
+    const bool verbatim_is_worker = (cit != m.end() && cit->second->role() == tt_emule::CoreRole::WORKER);
     if (src_chip != dst_chip && (verbatim_is_worker || cit == m.end())) {
         auto* src_obj = get_sw_emulated_chip(src_chip);
         auto* dst_obj = get_sw_emulated_chip(dst_chip);
@@ -2823,8 +2404,13 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     }
     if (cit == m.end()) {
         if (rdbg) {
-            fprintf(stderr, "[EMULE_FABRIC]   resolve_remote: dst_chip=%u has map (%zu cores) but core (%u,%u) NOT FOUND\n",
-                    dst_chip, m.size(), noc_x, noc_y);
+            fprintf(
+                stderr,
+                "[EMULE_FABRIC]   resolve_remote: dst_chip=%u has map (%zu cores) but core (%u,%u) NOT FOUND\n",
+                dst_chip,
+                m.size(),
+                noc_x,
+                noc_y);
         }
         return nullptr;
     }
@@ -2848,16 +2434,17 @@ extern "C" uint32_t __emule_fabric_neighbor(uint32_t src_chip) {
 
 // emule route metadata, keyed by packet-header L1-alias address: the fabric_set_*_route shims record the
 // kernel's semantic dst (2D FabricNodeId, 1D hop distance, or line-multicast extent) here; the teleport
-// resolves it to physical chip(s). KIND constants KEEP IN SYNC with the shim. See tt-emule docs/fabric-ccl-emulation.md.
+// resolves it to physical chip(s). KIND constants KEEP IN SYNC with the shim. See tt-emule
+// docs/fabric-ccl-emulation.md.
 namespace emule_route_kind {
 constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_1D = 3, MCAST_2D = 4;
 }
 struct EmuleRoute {
     uint32_t kind = 0, a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
-    uint32_t dir_index = 0;  // 1D: which of the worker's connections (fwd=0/bwd=1), set at send time
+    uint32_t dir_index = 0;             // 1D: which of the worker's connections (fwd=0/bwd=1), set at send time
     uint32_t eth_channel = 0xFFFFFFFF;  // VC0 connection identity, set at send time
     // Mux-path direction hint (preferred over the range-match heuristic), set at send time:
-    uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;   // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
+    uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;  // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
 };
 static std::mutex g_route_meta_mu;
 // Keyed by the header's FULL host pointer (bridge_l1 + offset). Post-offset-migration a packet
@@ -2879,7 +2466,13 @@ extern "C" void __emule_fabric_set_route(
     emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
     auto& r = g_route_meta[emule_route_key(hdr)];
-    r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
+    r.kind = kind;
+    r.a = a;
+    r.b = b;
+    r.c = c;
+    r.d = d;
+    r.e = e;
+    r.f = f;  // dir_index set separately at send
 }
 
 // Record a 1D send's per-connection direction signals: the fwd/bwd conn_index (direct path) and the
@@ -2979,10 +2572,6 @@ static void __emule_seed_global_ring_adj() {  // pre: g_conn_route_mu held
     try {
         auto& cluster = MetalContext::instance().get_cluster();
         auto& cp = MetalContext::instance().get_control_plane();
-        {
-            std::lock_guard<std::mutex> lk(g_gchip_mu);
-            __emule_build_gchip_registry(cp);
-        }
         const auto* desc = cluster.get_cluster_desc();
         if (desc == nullptr) {
             return;
@@ -3001,11 +2590,9 @@ static void __emule_seed_global_ring_adj() {  // pre: g_conn_route_mu held
             for (const auto& [chan, remote] : by_chan) {
                 (void)chan;
                 const uint64_t peer_uid = std::get<0>(remote);
-                std::lock_guard<std::mutex> lk(g_gchip_mu);
-                auto it = g_asic_to_gchip.find(peer_uid);
-                if (it != g_asic_to_gchip.end()) {
-                    g_ring_adj[local].insert(it->second);
-                    g_ring_adj[it->second].insert(local);
+                if (const auto peer = tt::tt_metal::emule::multi_rank::global_chip_for_asic(cp, peer_uid)) {
+                    g_ring_adj[local].insert(*peer);
+                    g_ring_adj[*peer].insert(local);
                 }
             }
         }
@@ -3014,8 +2601,7 @@ static void __emule_seed_global_ring_adj() {  // pre: g_conn_route_mu held
     }
 }
 
-extern "C" void __emule_fabric_record_conn(
-    uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t dst) {
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t dst) {
     // The caller (fabric.cpp) passes the connection's FINAL destination chip. On silicon a fabric
     // connection is per-hop, so for CCL that destination IS the adjacent chip and the two agree —
     // but a MeshSocket opens one connection straight to a peer that may be several hops away along
@@ -3027,8 +2613,7 @@ extern "C" void __emule_fabric_record_conn(
     uint32_t neighbor = dst;
     {
         auto& cp = MetalContext::instance().get_control_plane();
-        const int nb =
-            __emule_fabric_dir_neighbor(cp, src, static_cast<tt::tt_fabric::RoutingDirection>(dir));
+        const int nb = __emule_fabric_dir_neighbor(cp, src, static_cast<tt::tt_fabric::RoutingDirection>(dir));
         if (nb >= 0) {
             neighbor = static_cast<uint32_t>(nb);
         }
@@ -3117,8 +2702,8 @@ static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t sta
             int dir_next = -1;
             try {
                 auto& cp = MetalContext::instance().get_control_plane();
-                dir_next = __emule_fabric_dir_neighbor(
-                    cp, cur, static_cast<tt::tt_fabric::RoutingDirection>(start_dir));
+                dir_next =
+                    __emule_fabric_dir_neighbor(cp, cur, static_cast<tt::tt_fabric::RoutingDirection>(start_dir));
             } catch (...) {
                 dir_next = -1;
             }
@@ -3162,7 +2747,10 @@ static void __emule_fabric_route_unresolved(uint32_t src_chip, const char* why, 
         TT_THROW(
             "emule fabric: unresolved route from chip {} ({}, detail={}). Would deliver to neighbor chip {} "
             "instead of the addressed peer.",
-            src_chip, why, detail, fallback);
+            src_chip,
+            why,
+            detail,
+            fallback);
     }
     bool first = false;
     {
@@ -3170,11 +2758,15 @@ static void __emule_fabric_route_unresolved(uint32_t src_chip, const char* why, 
         first = seen.insert((static_cast<uint64_t>(src_chip) << 32) | detail).second;
     }
     if (first) {
-        std::fprintf(stderr,
-                     "[EMULE_FABRIC] WARNING: unresolved route from chip %u (%s, detail=%u) — delivering to "
-                     "neighbor chip %u, which is probably NOT the addressed peer. Set EMULE_FABRIC_STRICT=1 "
-                     "to make this fatal.\n",
-                     src_chip, why, detail, fallback);
+        std::fprintf(
+            stderr,
+            "[EMULE_FABRIC] WARNING: unresolved route from chip %u (%s, detail=%u) — delivering to "
+            "neighbor chip %u, which is probably NOT the addressed peer. Set EMULE_FABRIC_STRICT=1 "
+            "to make this fatal.\n",
+            src_chip,
+            why,
+            detail,
+            fallback);
     }
 }
 
@@ -3202,15 +2794,28 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
     if (rdbg) {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         auto cit = g_conn_route.find(src_chip);
-        fprintf(stderr, "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u ewns=%u/%u/%u/%u dir_idx=%u conns=%zu mux=(%u,%u)\n",
-                src_chip, r.kind, r.a, r.b, r.c, r.d, r.e, r.f, r.dir_index,
-                cit == g_conn_route.end() ? (size_t)0 : cit->second.size(), r.mux_x, r.mux_y);
+        fprintf(
+            stderr,
+            "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u ewns=%u/%u/%u/%u dir_idx=%u conns=%zu mux=(%u,%u)\n",
+            src_chip,
+            r.kind,
+            r.a,
+            r.b,
+            r.c,
+            r.d,
+            r.e,
+            r.f,
+            r.dir_index,
+            cit == g_conn_route.end() ? (size_t)0 : cit->second.size(),
+            r.mux_x,
+            r.mux_y);
     }
     auto& cp = MetalContext::instance().get_control_plane();
     if (r.kind == emule_route_kind::UNICAST_2D) {  // a=dst_dev, b=dst_mesh
         // Through the registry: a 2D unicast names its destination by mesh, and under multi-rank
         // that mesh routinely belongs to a peer rank, which has no local physical chip id.
-        const int g = __emule_gchip_of_node(cp, tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{r.b}, r.a));
+        const int g = tt::tt_metal::emule::multi_rank::global_chip_for_node(
+            cp, tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{r.b}, r.a));
         if (g >= 0) {
             return {static_cast<uint32_t>(g)};
         }
@@ -3306,8 +2911,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                     auto lg = src_obj->get_soc_descriptor().translate_coord_to(
                         tt_xy_pair(r.mux_x, r.mux_y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
                     std::lock_guard<std::mutex> lk(g_conn_route_mu);
-                    auto mit = g_mux_dir.find(__emule_worker_key(
-                        src_chip, static_cast<uint32_t>(lg.x), static_cast<uint32_t>(lg.y)));
+                    auto mit = g_mux_dir.find(
+                        __emule_worker_key(src_chip, static_cast<uint32_t>(lg.x), static_cast<uint32_t>(lg.y)));
                     if (mit != g_mux_dir.end()) {
                         dir = static_cast<int>(mit->second);
                     }
@@ -3400,10 +3005,7 @@ static void __emule_fabric_deliver(
     __emule_fabric_deliver_ops(dst_chip, h, payload, size, noc_send_type, dbg);
     if (t_peer_writes != 0) {
         std::atomic_thread_fence(std::memory_order_release);
-        auto& rs = emule_rank_state();
-        for (uint32_t i = 0; i < t_peer_writes; ++i) {
-            rs.note_delivery();
-        }
+        tt::tt_metal::emule::multi_rank::note_deliveries(t_peer_writes);
         t_peer_writes = 0;
     }
 }
@@ -3436,8 +3038,14 @@ static void __emule_fabric_deliver_ops(
             if (d != nullptr) {
                 uint32_t old = reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
                 if (dbg) {
-                    fprintf(stderr, "[EMULE_FABRIC]   atomic_inc chip=%u dst=%p %u->%u (val=%u)\n",
-                            dst_chip, (void*)d, old, old + val, val);
+                    fprintf(
+                        stderr,
+                        "[EMULE_FABRIC]   atomic_inc chip=%u dst=%p %u->%u (val=%u)\n",
+                        dst_chip,
+                        (void*)d,
+                        old,
+                        old + val,
+                        val);
                 }
                 __emule_fiber_wake(d);
             }
@@ -3516,8 +3124,12 @@ static void __emule_fabric_deliver_ops(
                     if (d != nullptr) {
                         reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
                         if (dbg) {
-                            fprintf(stderr, "[EMULE_FABRIC]   scatter_seminc chip=%u dst=%p val=%u\n",
-                                    dst_chip, (void*)d, val);
+                            fprintf(
+                                stderr,
+                                "[EMULE_FABRIC]   scatter_seminc chip=%u dst=%p val=%u\n",
+                                dst_chip,
+                                (void*)d,
+                                val);
                         }
                         __emule_fiber_wake(d);
                     }
@@ -3570,11 +3182,16 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
         for (auto t : targets) {
             ts += " " + std::to_string(t);
         }
-        fprintf(stderr,
-                "[EMULE_FABRIC] teleport src=%u targets=[%s ] (neighbor=%u) send_type=%u noc_addr=0x%llx "
-                "payload_size=%u\n",
-                src_chip, ts.c_str(), __emule_fabric_neighbor(src_chip), noc_send_type,
-                (unsigned long long)noc_address, size);
+        fprintf(
+            stderr,
+            "[EMULE_FABRIC] teleport src=%u targets=[%s ] (neighbor=%u) send_type=%u noc_addr=0x%llx "
+            "payload_size=%u\n",
+            src_chip,
+            ts.c_str(),
+            __emule_fabric_neighbor(src_chip),
+            noc_send_type,
+            (unsigned long long)noc_address,
+            size);
         // Route-table self-consistency: dump this src chip's per-direction distance walk (once per src).
         static std::mutex dump_mu;
         static std::unordered_map<uint32_t, bool> dumped;
@@ -3609,8 +3226,8 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
         static const char* xfer_path = std::getenv("EMULE_FABRIC_XFER");
         if (xfer_path != nullptr) {
             const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
-            const uint64_t src_off = static_cast<uint64_t>(
-                reinterpret_cast<const uint8_t*>(payload) - __emule_self->bridge_l1);
+            const uint64_t src_off =
+                static_cast<uint64_t>(reinterpret_cast<const uint8_t*>(payload) - __emule_self->bridge_l1);
             uint32_t w0 = 0;
             std::memcpy(&w0, payload, sizeof(uint32_t));
             std::string ts;
@@ -3621,13 +3238,19 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             std::lock_guard<std::mutex> lk(xfer_mu);
             FILE* fp = std::fopen(xfer_path, "a");
             if (fp != nullptr) {
-                std::fprintf(fp,
-                             "[XFER] src_chip=%u core=(%u,%u) proc=%u src_off=0x%llx size=%u "
-                             "dst_noc=0x%llx w0=0x%08x targets=[%s ]\n",
-                             src_chip, (unsigned)__emule_self->core->logical_x,
-                             (unsigned)__emule_self->core->logical_y, (unsigned)__emule_self->processor_id,
-                             (unsigned long long)src_off, size,
-                             (unsigned long long)noc_address, w0, ts.c_str());
+                std::fprintf(
+                    fp,
+                    "[XFER] src_chip=%u core=(%u,%u) proc=%u src_off=0x%llx size=%u "
+                    "dst_noc=0x%llx w0=0x%08x targets=[%s ]\n",
+                    src_chip,
+                    (unsigned)__emule_self->core->logical_x,
+                    (unsigned)__emule_self->core->logical_y,
+                    (unsigned)__emule_self->processor_id,
+                    (unsigned long long)src_off,
+                    size,
+                    (unsigned long long)noc_address,
+                    w0,
+                    ts.c_str());
                 std::fclose(fp);
             }
         }
@@ -3691,7 +3314,13 @@ static void init_core_cb_sync(
             log_debug(
                 tt::LogMetal,
                 "  Core({},{}) CB[{}]: addr=0x{:x} page_size={} num_pages={} base={:p}",
-                lc.x, lc.y, idx, cb_addr, page_size, num_pages, (void*)base);
+                lc.x,
+                lc.y,
+                idx,
+                cb_addr,
+                page_size,
+                num_pages,
+                (void*)base);
         }
     };
     // core_ranges-scoped, no global fill: blaze shares one cb_id across CBs on disjoint
@@ -4073,9 +3702,9 @@ size_t emule_decode_divlen(const uint8_t* p, int* width) {
     }
     uint8_t mod = modrm >> 6;
     uint8_t rm = modrm & 0x7;
-    ++i;  // ModRM
-    if (mod != 3) {                          // memory operand
-        if (rm == 4) {                       // SIB present
+    ++i;                // ModRM
+    if (mod != 3) {     // memory operand
+        if (rm == 4) {  // SIB present
             uint8_t base = p[i] & 0x7;
             ++i;
             if (mod == 0 && base == 5) {
@@ -4138,10 +3767,10 @@ void emule_sigfpe_handler(int sig, siginfo_t* info, void* uc_void) {
 // Installs the handler for the duration of kernel execution, restoring the
 // previous disposition afterward so emule does not permanently alter the host.
 struct EmuleSigfpeGuard {
-    struct sigaction prev_ {};
+    struct sigaction prev_{};
     bool installed_ = false;
     EmuleSigfpeGuard() {
-        struct sigaction sa {};
+        struct sigaction sa{};
         sa.sa_sigaction = emule_sigfpe_handler;
         sa.sa_flags = SA_SIGINFO;  // synchronous, thread-directed; handler never re-faults
         sigemptyset(&sa.sa_mask);
@@ -4232,13 +3861,9 @@ static std::atomic<bool> g_emule_host_wait{false};
 static std::atomic<bool> g_emule_peer_wait{false};
 static std::atomic<bool> g_emule_pump_in_flight{false};
 static std::atomic<uint64_t> g_emule_run_sequence{0};
-static std::exception_ptr g_emule_driver_fault;
 
-class PeerWaitDriver;
-static std::atomic<PeerWaitDriver*> g_peer_wait_driver{nullptr};
 static void notify_peer_wait_driver();
-static void ensure_peer_wait_driver(
-    tt::tt_metal::emule_fiber::FiberScheduler&, tt_emule::RankState&);
+static void ensure_peer_wait_driver();
 
 static bool emule_run_suspended() { return g_emule_host_wait || g_emule_peer_wait; }
 
@@ -4248,12 +3873,11 @@ static bool emule_run_suspended() { return g_emule_host_wait || g_emule_peer_wai
 static bool emule_run_needs_peer_pump();
 
 static bool emule_run_has_peer_fed_waiter() {
-    return emule_run_suspended() &&
-           tt::tt_metal::emule_fiber::FiberScheduler::instance().has_peer_fed_waiter();
+    return emule_run_suspended() && tt::tt_metal::emule_fiber::FiberScheduler::instance().has_peer_fed_waiter();
 }
 
 static void resume_emule_run() {
-    emule_rank_state().publish_quiesced(false);
+    tt::tt_metal::emule::multi_rank::rank_state().publish_quiesced(false);
     g_emule_host_wait = false;
     g_emule_peer_wait = false;
     notify_peer_wait_driver();
@@ -4268,7 +3892,7 @@ static void suspend_emule_run(tt::tt_metal::emule_fiber::RunOutcome outcome) {
     // Only a rank parked on a PEER is a fixed-point participant. One that went back to its host is
     // running as far as peers are concerned, and counting it as parked would fabricate a fixed point.
     if (host) {
-        emule_rank_state().publish_quiesced(false);
+        tt::tt_metal::emule::multi_rank::rank_state().publish_quiesced(false);
     }
     g_emule_host_wait = host;
     g_emule_peer_wait = outcome == tt::tt_metal::emule_fiber::RunOutcome::PeerWait;
@@ -4390,15 +4014,16 @@ static void launch_cores(
             // Build + populate the fiber-owned ctx (set-once identity). The scheduler
             // repoints __emule_self to this ctx on swap-in; my_x/my_y are restored from
             // the FiberIdentity (they cannot move into the ctx — silicon-named globals).
-            std::unique_ptr<ThreadCommonCtx> ctx =
-                ki.is_tensix ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
-                             : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
+            std::unique_ptr<ThreadCommonCtx> ctx = ki.is_tensix
+                                                       ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
+                                                       : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
             ctx->rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.rta_offset_in_kc))
-                : nullptr;
-            ctx->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
-                : nullptr;
+                               ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.rta_offset_in_kc))
+                               : nullptr;
+            ctx->common_rt_args =
+                (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                    ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
+                    : nullptr;
             // Bounds so out-of-range per-core/common arg reads return 0 (silicon zero-pads
             // the RTA region; emule's mock L1 keeps stale bytes).
             ctx->rt_args_count = ki.num_unique_rt_args;
@@ -4490,8 +4115,7 @@ static void launch_cores(
                         }
                         clear_sanitizer_thread_locals();
                         std::throw_with_nested(std::runtime_error(
-                            "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) +
-                            ") failed"));
+                            "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) + ") failed"));
                     }
                     if (intent_tracker != nullptr) {
                         // Fold this kernel's resolved extents into the core's resolved set, then
@@ -4571,8 +4195,17 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     std::unordered_map<std::string, std::function<void()>> resolved_fns;
     std::vector<std::string> inline_src_temps;
     collect_kernels(
-        impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str,
-        emule_sem_base, extra_inc, pending_core_kernels, deferred_compiles, resolved_fns, inline_src_temps);
+        impl,
+        num_dram_channels,
+        num_l1_banks,
+        worker_col_map_str,
+        worker_row_map_str,
+        emule_sem_base,
+        extra_inc,
+        pending_core_kernels,
+        deferred_compiles,
+        resolved_fns,
+        inline_src_temps);
     jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
 
     ResolvedProgram resolved;
@@ -4758,7 +4391,7 @@ void run_mesh_dispatch() {
                 clear_suspended_run_state();
             }
             if (std::uncaught_exceptions() > 0) {
-                emule_rank_state().note_faulted();
+                tt::tt_metal::emule::multi_rank::rank_state().note_faulted();
             }
         }
     } cleanup;
@@ -4770,12 +4403,9 @@ void run_mesh_dispatch() {
     // Force the rank state up before the run: it is what installs the scheduler's peer probe, and
     // without it a quiescence could never be classified as a PeerWait in the first place.
     auto& scheduler = tt::tt_metal::emule_fiber::FiberScheduler::instance();
-    auto& rank_state = emule_rank_state();
-    rank_state.begin_dispatch();
-    ensure_peer_wait_driver(scheduler, rank_state);
-    g_emule_driver_fault = nullptr;
+    tt::tt_metal::emule::multi_rank::begin_dispatch();
+    ensure_peer_wait_driver();
     g_emule_run_sequence.fetch_add(1, std::memory_order_release);
-    g_peer_fixed_point_confirmed.store(false, std::memory_order_release);
     tt::tt_metal::emule_fiber::RunOutcome oc = scheduler.run_persistent();
     if (oc != tt::tt_metal::emule_fiber::RunOutcome::Completed) {
         cleanup.armed = false;
@@ -4815,211 +4445,24 @@ static void pump_device_locked() {
         // fault they hold a PeerWait against a rank that has already given up and only escape on the
         // driver's wall-clock timeout. The dispatch path and the driver both publish it; this path
         // was the gap.
-        emule_rank_state().note_faulted();
+        tt::tt_metal::emule::multi_rank::rank_state().note_faulted();
         clear_suspended_run_state();
         throw;
     }
 }
 
-static std::chrono::seconds peer_driver_timeout() {
-    static const uint64_t seconds = [] {
-        const char* v = std::getenv("TT_EMULE_PEER_DRIVER_TIMEOUT_SEC");
-        if (v == nullptr || v[0] == '\0') {
-            return uint64_t{120};
-        }
-        errno = 0;
-        char* end = nullptr;
-        const unsigned long long n = std::strtoull(v, &end, 10);
-        // Reject 0 as well as garbage: it is not "no timeout", it expires on the first check and
-        // abandons every run. Cap it so the value still fits a steady_clock duration unwrapped.
-        constexpr uint64_t kMaxSeconds = 86400;  // a day; anything longer is indistinguishable
-        if (end == v || *end != '\0' || errno == ERANGE || std::strchr(v, '-') != nullptr || n == 0 ||
-            static_cast<uint64_t>(n) > kMaxSeconds) {
-            log_warning(
-                tt::LogMetal,
-                "TT_EMULE_PEER_DRIVER_TIMEOUT_SEC='{}' is not an integer in 1..{} seconds; using 120",
-                v,
-                kMaxSeconds);
-            return uint64_t{120};
-        }
-        return static_cast<uint64_t>(n);
-    }();
-    return std::chrono::seconds(seconds);
+static void ensure_peer_wait_driver() {
+    tt::tt_metal::emule::multi_rank::ensure_peer_wait_driver({
+        .needs_peer_pump = &emule_run_needs_peer_pump,
+        .run_sequence = [] { return g_emule_run_sequence.load(std::memory_order_acquire); },
+        .invalidate_run_sequence = [] { g_emule_run_sequence.fetch_add(1, std::memory_order_release); },
+        .run_mutex = &g_emule_run_mu,
+        .pump_locked = &pump_device_locked,
+        .clear_suspended_state = &clear_suspended_run_state,
+    });
 }
 
-[[noreturn]] static void abort_peer_driver(const char* reason, const std::exception_ptr& fault) {
-    std::string detail = "unknown exception";
-    try {
-        if (fault) {
-            std::rethrow_exception(fault);
-        }
-    } catch (const std::exception& e) {
-        detail = e.what();
-    } catch (...) {
-        detail = "non-std exception";
-    }
-    std::fprintf(stderr, "[EMULE] peer-wait driver: %s\n%s\n", reason, detail.c_str());
-    emule_rank_state().dump(reason);
-    std::fflush(stderr);
-    try {
-        using tt::tt_metal::distributed::multihost::DistributedContext;
-        if (DistributedContext::is_initialized()) {
-            DistributedContext::get_world_context()->abort(EXIT_FAILURE);
-        }
-    } catch (...) {
-    }
-    std::abort();
-}
-
-class PeerWaitDriver {
-public:
-    PeerWaitDriver() : thread_(&PeerWaitDriver::run, this) {}
-    ~PeerWaitDriver() noexcept {
-        g_peer_wait_driver.store(nullptr, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> g(wait_mu_);
-            stop_ = true;
-        }
-        cv_.notify_one();
-        if (thread_.joinable()) {
-            try {
-                thread_.join();
-            } catch (...) {
-                std::terminate();
-            }
-        }
-    }
-
-    void notify() { cv_.notify_one(); }
-
-private:
-    bool stopping() {
-        std::lock_guard<std::mutex> g(wait_mu_);
-        return stop_;
-    }
-
-    void back_off() {
-        std::unique_lock<std::mutex> lk(wait_mu_);
-        cv_.wait_for(lk, std::chrono::milliseconds(1), [this] { return stop_; });
-    }
-
-    void fail_locked(const char* reason, std::exception_ptr fault) {
-        g_emule_driver_fault = std::move(fault);
-        emule_rank_state().note_faulted();
-        g_emule_run_sequence.fetch_add(1, std::memory_order_release);
-        abort_peer_driver(reason, g_emule_driver_fault);
-    }
-
-    void abandon_locked(const char* reason, const std::string& diagnostic) {
-        try {
-            tt::tt_metal::emule_fiber::FiberScheduler::instance().abandon_host_wait(diagnostic);
-        } catch (...) {
-            clear_suspended_run_state();
-            fail_locked(reason, std::current_exception());
-        }
-        // Returned instead of throwing: the registry was already torn down, so the run is simply over
-        // and there is nothing to report. Faulting the job here would abort on a benign state.
-        clear_suspended_run_state();
-    }
-
-    void run() {
-        uint64_t sequence = 0;
-        uint64_t progress = 0;
-        std::chrono::steady_clock::time_point deadline;
-        while (!stopping()) {
-            if (!emule_run_needs_peer_pump()) {
-                std::unique_lock<std::mutex> lk(wait_mu_);
-                // BOUNDED, not a plain wait: the flags the predicate reads are set outside wait_mu_
-                // and notify() cannot take it (the driver reaches notify() through
-                // abandon_locked -> resume_emule_run, so locking there would self-deadlock). A notify
-                // landing between the check above and this wait would otherwise be dropped, leaving
-                // the driver asleep with a peer-fed run parked -- the exact hang it exists to prevent.
-                cv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
-                    return stop_ || emule_run_needs_peer_pump();
-                });
-                if (stop_) {
-                    return;
-                }
-                if (!emule_run_needs_peer_pump()) {
-                    continue;
-                }
-            }
-            const uint64_t current_sequence = g_emule_run_sequence.load(std::memory_order_acquire);
-            // Refresh on DELIVERIES too, not just on a new run: a deadline set once per dispatch is a
-            // lifetime cap, and a healthy run that keeps taking peer data is abandoned for being slow.
-            const uint64_t current_progress = emule_rank_state().delivery_sum();
-            if (sequence != current_sequence || progress != current_progress) {
-                sequence = current_sequence;
-                progress = current_progress;
-                deadline = std::chrono::steady_clock::now() + peer_driver_timeout();
-            }
-
-            std::unique_lock<std::mutex> run_lock(g_emule_run_mu, std::try_to_lock);
-            if (!run_lock.owns_lock()) {
-                back_off();
-                continue;
-            }
-            if (!emule_run_needs_peer_pump() ||
-                sequence != g_emule_run_sequence.load(std::memory_order_acquire)) {
-                continue;
-            }
-            if (emule_rank_state().any_faulted()) {
-                abandon_locked(
-                    "peer rank faulted",
-                    "EMULE fiber engine: peer-wait driver observed a faulted rank; the peer cannot deliver.");
-                continue;
-            }
-            if (std::chrono::steady_clock::now() >= deadline) {
-                abandon_locked(
-                    "peer-wait deadline expired",
-                    fmt::format(
-                        "EMULE fiber engine: peer-wait driver saw no cross-rank delivery for {}s "
-                        "(TT_EMULE_PEER_DRIVER_TIMEOUT_SEC).",
-                        peer_driver_timeout().count()));
-                continue;
-            }
-            if (!emule_peer_liveness()) {
-                run_lock.unlock();
-                std::unique_lock<std::mutex> lk(wait_mu_);
-                cv_.wait_until(lk, std::min(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(250)),
-                               [this, sequence] {
-                    // The SAME predicate the loop is gated on. Waking on the narrower socket-poller
-                    // form left a plain PeerWait passing this immediately, so the driver re-took the
-                    // run mutex every iteration until its deadline instead of backing off.
-                    return stop_ || !emule_run_needs_peer_pump() ||
-                           sequence != g_emule_run_sequence.load(std::memory_order_acquire);
-                });
-                continue;
-            }
-            try {
-                pump_device_locked();
-            } catch (...) {
-                fail_locked("background pump failed", std::current_exception());
-            }
-            run_lock.unlock();
-            back_off();
-        }
-    }
-
-    std::mutex wait_mu_;
-    std::condition_variable cv_;
-    bool stop_ = false;
-    std::thread thread_;
-};
-
-static void ensure_peer_wait_driver(tt::tt_metal::emule_fiber::FiberScheduler&, tt_emule::RankState&) {
-    if (!g_emule_peer_probes_installed.load(std::memory_order_acquire)) {
-        return;
-    }
-    static PeerWaitDriver driver;
-    g_peer_wait_driver.store(&driver, std::memory_order_release);
-}
-
-static void notify_peer_wait_driver() {
-    if (auto* driver = g_peer_wait_driver.load(std::memory_order_acquire); driver != nullptr) {
-        driver->notify();
-    }
-}
+static void notify_peer_wait_driver() { tt::tt_metal::emule::multi_rank::notify_peer_wait_driver(); }
 
 void pump_device() {
     // One scheduler quantum. pump() re-polls: the host's credit store was a raw L1 write with no wake.
