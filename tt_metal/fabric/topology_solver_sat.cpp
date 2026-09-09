@@ -24,26 +24,27 @@
 
 namespace tt::tt_fabric::detail {
 
-// Full definition of the opaque session type forward-declared in topology_solver.hpp.
-// Conflict budget for solving under a HARD host-group cap.
 static constexpr int kHostCapConflictBudget = 300'000;
 
-struct TopologySatSession {
+struct SatSearchBackend::Impl {
     TopologySatSolver solver;
-    // Set when a HARD host-group cap is encoded: capped solves are conflict-limited to kHostCapConflictBudget so an
-    // intractable cap is abandoned instead of hanging in CaDiCaL. The caller (mapper) then drops the cap and
-    // restarts the session.
+    TopologySatHardEncoding enc;
     bool cap_active = false;
     size_t solve_calls = 0;
-    int symmetry_lit = 0;  // 0 = no hint; assumed each solve() and retracted after
-    // Preferred at-least-k is optional: asserting clauses carry ¬preferred_lit, then preferred_lit is assumed
-    // per solve. Host-group occupancy is never optional here -- a HARD cap is CNF, and relaxing it is the
-    // mapper's restart, not a solver stage.
+    int symmetry_lit = 0;
     int preferred_lit = 0;
+    int minimize_lit = 0;
     std::vector<std::vector<int>> stages;
     size_t stage = 0;
     bool unique_shapes = false;
 };
+
+SatSearchBackend::SatSearchBackend() = default;
+SatSearchBackend::~SatSearchBackend() = default;
+SatSearchBackend::SatSearchBackend(SatSearchBackend&&) noexcept = default;
+SatSearchBackend& SatSearchBackend::operator=(SatSearchBackend&&) noexcept = default;
+
+void SatSearchBackend::reset() { impl_.reset(); }
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
@@ -694,7 +695,8 @@ inline bool topology_sat_encode_at_most_k_groups(
     const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc,
     size_t k_hosts,
-    bool full_packing) {
+    bool full_packing,
+    int extra_lit = 0) {
     std::vector<int> occ;
     topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ);
     const size_t num_present = occ.size();
@@ -709,7 +711,8 @@ inline bool topology_sat_encode_at_most_k_groups(
     }
     static constexpr size_t kGroupBudgetCombClauses = 500000;
     std::string reason;
-    return topology_sat_add_at_least_k_literals(solver, neg, num_present - k_hosts, kGroupBudgetCombClauses, &reason);
+    return topology_sat_add_at_least_k_literals(
+        solver, neg, num_present - k_hosts, kGroupBudgetCombClauses, &reason, extra_lit);
 }
 
 // ── Hard Constraint Encoding Sub-functions ────────────────────────────────────
@@ -1500,28 +1503,32 @@ int topology_sat_symmetry_assumption_lit(const TopologySatGraphView& graph_data,
     return enc.assign_lit[0][0];
 }
 
-// ── Session bridge functions (public API — declared in topology_solver.hpp) ────
+// ── SatSearchBackend (session + CaDiCaL live only here) ───────────────────────
 
-void topology_sat_session_destroy(TopologySatSession* p) noexcept { delete p; }
-
-std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_session_create_and_encode(
+bool SatSearchBackend::start(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
-    TopologySatHardEncoding& enc,
     ConnectionValidationMode validation_mode,
     bool unique_shapes,
-    const std::vector<std::vector<int>>& initial_forbidden_shape_keys) {
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+    std::string* error_out) {
+    impl_.reset();
     if (constraint_data.max_same_rank_groups_used > 0 &&
         !topology_sat_max_groups_cap_capacity_feasible(
             constraint_data, graph_data.n_target, constraint_data.max_same_rank_groups_used)) {
-        return nullptr;
+        return false;
     }
-    auto session = std::unique_ptr<TopologySatSession, TopologySatSessionDeleter>(new TopologySatSession{});
-    session->solver.configure_for_blocking_clause_enumeration();
-    session->unique_shapes = unique_shapes;
-    enc = {};
-    if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
-        return nullptr;
+    impl_ = std::make_unique<Impl>();
+    auto& s = *impl_;
+    s.solver.configure_for_blocking_clause_enumeration();
+    s.unique_shapes = unique_shapes;
+    s.enc = {};
+    if (!topology_sat_encode_hard_constraints(s.solver, graph_data, constraint_data, s.enc, validation_mode)) {
+        if (error_out != nullptr) {
+            *error_out = s.enc.trivial_reason;
+        }
+        impl_.reset();
+        return false;
     }
 
     // HARD host-group cap: at-most-k occupancy in CNF. Infeasible caps fail the session; the mapper restarts
@@ -1541,13 +1548,44 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
             const size_t K = constraint_data.max_same_rank_groups_used;
             const bool uniform_capacity = (min_group_capacity == max_group_capacity);
             const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
-            if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K)) {
-                return nullptr;
+            if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K) ||
+                !topology_sat_encode_at_most_k_groups(s.solver, constraint_data, s.enc, K, full_packing)) {
+                impl_.reset();
+                return false;
             }
-            if (!topology_sat_encode_at_most_k_groups(session->solver, constraint_data, enc, K, full_packing)) {
-                return nullptr;
+            s.cap_active = true;
+        }
+    }
+
+    // SOFT occupancy packing: only when there is no HARD cap. Encode at-most-k_floor as optional CNF
+    // (activation extra_lit on asserting clauses). First solve assumes the lit; later stages drop it so
+    // an infeasible packing never fails the session.
+    if (constraint_data.max_same_rank_groups_used == 0 && constraint_data.minimize_same_rank_groups_used) {
+        size_t num_host_groups = 0;
+        size_t max_group_capacity = 0;
+        size_t min_group_capacity = SIZE_MAX;
+        for (const auto& grp : constraint_data.same_rank_groups) {
+            if (!grp.empty()) {
+                ++num_host_groups;
+                max_group_capacity = std::max(max_group_capacity, grp.size());
+                min_group_capacity = std::min(min_group_capacity, grp.size());
             }
-            session->cap_active = true;
+        }
+        if (num_host_groups >= 1 && max_group_capacity > 0) {
+            const size_t k_floor = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
+            const bool uniform_capacity = (min_group_capacity == max_group_capacity);
+            const bool full_packing = uniform_capacity && (graph_data.n_target == k_floor * max_group_capacity);
+            if (k_floor < num_host_groups &&
+                topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, k_floor)) {
+                const int minimize_lit = s.solver.declare_one_more_variable();
+                if (topology_sat_encode_at_most_k_groups(
+                        s.solver, constraint_data, s.enc, k_floor, full_packing, /*extra_lit=*/-minimize_lit)) {
+                    s.minimize_lit = minimize_lit;
+                } else {
+                    s.solver.add(-minimize_lit);
+                    s.solver.add(0);
+                }
+            }
         }
     }
 
@@ -1557,7 +1595,7 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     // them while making the first placements depend on the preference rather than on the topology.
     std::vector<int> pref_hit_literals;
     if (!unique_shapes) {
-        topology_sat_append_preferred_hit_indicators(session->solver, enc, constraint_data, pref_hit_literals);
+        topology_sat_append_preferred_hit_indicators(s.solver, s.enc, constraint_data, pref_hit_literals);
     }
     if (!pref_hit_literals.empty()) {
         static constexpr size_t kExactPreferredLbMaxTargets = 10;
@@ -1567,35 +1605,34 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
         const size_t nt = graph_data.n_target;
         size_t k_lb = 0;
         if (nt <= kExactPreferredLbMaxTargets) {
-            k_lb =
-                topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, kPreferredLbDfsBudgetSmall);
+            k_lb = topology_sat_preferred_exact_lower_bound(
+                graph_data, constraint_data, s.enc, kPreferredLbDfsBudgetSmall);
         } else if (nt <= kMidPreferredLbMaxTargets) {
-            k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, kPreferredLbDfsBudgetMid);
+            k_lb =
+                topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, s.enc, kPreferredLbDfsBudgetMid);
         } else {
-            k_lb = topology_sat_preferred_greedy_lower_bound(graph_data, constraint_data, enc);
+            k_lb = topology_sat_preferred_greedy_lower_bound(graph_data, constraint_data, s.enc);
             if (k_lb == 0) {
-                k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, 600'000);
+                k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, s.enc, 600'000);
             }
         }
         if (k_lb > 0) {
             const size_t k_use = std::min(k_lb, pref_hit_literals.size());
             static constexpr size_t kPrefCardinalityCombClauses = 500000;
             std::string card_reason;
-            // Optional: extra_lit = ¬preferred_lit on the asserting clauses, then assume preferred_lit first.
-            // Enumeration can continue past preferred models without a solver-wrapper clause guard.
-            const int preferred_lit = session->solver.declare_one_more_variable();
+            const int preferred_lit = s.solver.declare_one_more_variable();
             const bool encoded = topology_sat_add_at_least_k_literals(
-                session->solver,
+                s.solver,
                 pref_hit_literals,
                 k_use,
                 kPrefCardinalityCombClauses,
                 &card_reason,
                 /*extra_lit=*/-preferred_lit);
             if (encoded) {
-                session->preferred_lit = preferred_lit;
+                s.preferred_lit = preferred_lit;
             } else {
-                session->solver.add(-preferred_lit);
-                session->solver.add(0);
+                s.solver.add(-preferred_lit);
+                s.solver.add(0);
             }
         }
     }
@@ -1606,66 +1643,81 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
             std::vector<int> ch_lits;
             std::string ch_reason;
             (void)topology_sat_append_relaxed_channel_threshold_literals(
-                session->solver, enc, graph_data, ch_lits, &ch_reason);
+                s.solver, s.enc, graph_data, ch_lits, &ch_reason);
         }
     }
 
-    session->symmetry_lit = topology_sat_symmetry_assumption_lit(graph_data, enc);
-    const int pref = session->preferred_lit;
-    if (pref != 0) {
-        session->stages = {{pref}, {}};
+    s.symmetry_lit = topology_sat_symmetry_assumption_lit(graph_data, s.enc);
+    const int min_lit = s.minimize_lit;
+    const int pref = s.preferred_lit;
+    s.stages.clear();
+    if (min_lit != 0 && pref != 0) {
+        s.stages = {{min_lit, pref}, {min_lit}, {pref}, {}};
+    } else if (min_lit != 0) {
+        s.stages = {{min_lit}, {}};
+    } else if (pref != 0) {
+        s.stages = {{pref}, {}};
     } else {
-        session->stages = {{}};
+        s.stages = {{}};
     }
     for (const auto& shape_key : initial_forbidden_shape_keys) {
         std::vector<int> forbid_clause;
-        topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
-        topology_sat_add_shape_clause_or_unsat(session->solver, enc, forbid_clause);
+        topology_sat_build_shape_blocking_clause(s.enc, shape_key, forbid_clause);
+        topology_sat_add_shape_clause_or_unsat(s.solver, s.enc, forbid_clause);
     }
-    return session;
-}
-
-bool topology_sat_session_add_blocking_clause(
-    TopologySatSession* session, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping) {
-    return topology_sat_add_blocking_clause_for_mapping(session->solver, enc, raw_mapping, session->unique_shapes);
-}
-
-bool topology_sat_session_solve_and_decode(
-    TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    // Assumptions are retracted by CaDiCaL after each solve(), so each attempt re-assumes what it needs. Stages are
-    // consumed in order and a failed stage is never revisited (see TopologySatSession::stages).
-    for (; session->stage < session->stages.size(); ++session->stage) {
-        const auto& optional_lits = session->stages[session->stage];
-        auto solve_once = [&](bool with_symmetry_hint) -> bool {
-            if (with_symmetry_hint) {
-                session->solver.assume(session->symmetry_lit);
-            }
-            for (int lit : optional_lits) {
-                session->solver.assume(lit);
-            }
-            ++session->solve_calls;
-            const int status =
-                session->cap_active ? session->solver.solve_limited(kHostCapConflictBudget) : session->solver.solve();
-            return status == TopologySatSolver::kSat;
-        };
-        if ((session->symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||
-            solve_once(/*with_symmetry_hint=*/false)) {
-            return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
-        }
-    }
-    return false;
-}
-
-bool topology_sat_session_next(TopologySatSession* session, TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    if (!topology_sat_session_solve_and_decode(session, enc, raw_out)) {
-        return false;
-    }
-    (void)topology_sat_session_add_blocking_clause(session, enc, raw_out);
     return true;
 }
 
-size_t topology_sat_session_solve_calls(const TopologySatSession* session) noexcept {
-    return session == nullptr ? 0 : session->solve_calls;
+bool SatSearchBackend::block(const std::vector<int>& mapping) {
+    if (impl_ == nullptr) {
+        return false;
+    }
+    auto& s = *impl_;
+    return topology_sat_add_blocking_clause_for_mapping(s.solver, s.enc, mapping, s.unique_shapes);
 }
+
+bool SatSearchBackend::next(std::vector<int>& mapping_out) {
+    if (impl_ == nullptr) {
+        return false;
+    }
+    auto& s = *impl_;
+    auto solve_and_decode = [&]() -> bool {
+        for (; s.stage < s.stages.size(); ++s.stage) {
+            const auto& optional_lits = s.stages[s.stage];
+            auto solve_once = [&](bool with_symmetry_hint) -> bool {
+                if (with_symmetry_hint) {
+                    s.solver.assume(s.symmetry_lit);
+                }
+                for (int lit : optional_lits) {
+                    s.solver.assume(lit);
+                }
+                ++s.solve_calls;
+                bool limited = s.cap_active;
+                if (!limited && s.minimize_lit != 0) {
+                    for (int lit : optional_lits) {
+                        if (lit == s.minimize_lit) {
+                            limited = true;
+                            break;
+                        }
+                    }
+                }
+                const int status = limited ? s.solver.solve_limited(kHostCapConflictBudget) : s.solver.solve();
+                return status == TopologySatSolver::kSat;
+            };
+            if ((s.symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||
+                solve_once(/*with_symmetry_hint=*/false)) {
+                return topology_sat_decode_hard_solution(s.solver, s.enc, mapping_out);
+            }
+        }
+        return false;
+    };
+    if (!solve_and_decode()) {
+        return false;
+    }
+    (void)block(mapping_out);
+    return true;
+}
+
+size_t SatSearchBackend::solve_calls() const noexcept { return impl_ == nullptr ? 0 : impl_->solve_calls; }
 
 }  // namespace tt::tt_fabric::detail

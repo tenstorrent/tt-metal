@@ -3530,8 +3530,8 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTar
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Host-group occupancy: set_max_same_rank_groups_used(k) is a HARD cap (SAT at-most-k CNF, DFS candidate prune).
-// If that cap is infeasible, MultiMeshSolutionEnumerator drops it and restarts the session -- the solver does not
-// fall back internally.
+// If that cap is infeasible, MultiMeshSolutionEnumerator drops it, sets SOFT minimize_same_rank_groups_used, and
+// restarts the session -- the solver does not fall back internally.
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Counts how many distinct host groups (from `global_groups`) the produced mapping lands on.
@@ -3661,6 +3661,56 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_ReducesOc
     ASSERT_EQ(result.target_to_global.size(), kNumTargets);
     EXPECT_LE(count_host_groups_used(result, host_groups), kMinGroups)
         << "hard cap must not exceed the capacity lower bound of " << kMinGroups << " host groups";
+}
+
+// SOFT minimize (no hard cap): SAT should still pack into the capacity lower bound when that packing is feasible.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftPacksWithoutHardCap) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
+    constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;  // 2
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_host_groups_used(result, host_groups), kMinGroups)
+        << "SOFT minimize must pack into the capacity lower bound of " << kMinGroups << " host groups when feasible";
+}
+
+// SOFT minimize must not fail the solve when packing at k_floor is infeasible (required pins force extra hosts).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftFallsThroughWhenPackingInfeasible) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 4;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(100)));  // host group 0
+    ASSERT_TRUE(constraints.add_required_constraint(2, TestGlobalNode(104)));  // host group 1
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_host_groups_used(result, host_groups), 2u)
+        << "SOFT minimize must fall through to an unconstrained solve when k_floor packing is pinned-infeasible";
 }
 
 // Issue #50253 shape: a ring (cycle) embedded using whole hosts. The 4-node target cycle only closes on the 4-cycle

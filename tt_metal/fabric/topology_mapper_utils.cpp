@@ -2619,7 +2619,8 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     } else {
         // 2. HARD CAP: fit the mapping within k_min = ceil(chips used / chips per host) hosts. The solver
         //    encodes this as a hard at-most-k occupancy constraint (not an optional/guarded clause). If that
-        //    solve is infeasible, MultiMeshSolutionEnumerator::next() drops the cap and restarts the session.
+        //    solve is infeasible, MultiMeshSolutionEnumerator::next() drops the cap, sets
+        //    set_minimize_same_rank_groups_used (SOFT occupancy packing), and restarts the session.
         std::size_t chips_per_host = 0;
         for (const auto& [hostname, asics] : config.hostname_to_asics) {
             chips_per_host = std::max(chips_per_host, asics.size());
@@ -3630,9 +3631,9 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
     while (true) {
         // One incremental session for the first solve and every later one. A failed first solve with a hard
-        // host-group cap means the cap is infeasible for this instance -> drop the cap and restart the session
-        // (same as main's incremental enumerator). Later exhaustion with emitted_ > 0 is genuine "no more
-        // capped solutions" and must not start emitting over-cap placements.
+        // host-group cap means the cap is infeasible for this instance -> drop the cap, enable SOFT
+        // minimize_same_rank_groups_used, and restart the session. Later exhaustion with emitted_ > 0 is
+        // genuine "no more capped solutions" and must not start emitting over-cap placements.
         MappingResult<MeshId, MeshId> placement = session_.next(
             mesh_logical_graph,
             mesh_physical_graph,
@@ -3647,11 +3648,12 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                 log_warning(
                     tt::LogFabric,
                     "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
-                    "capped solutions ({}); restarting the session without the cap -- returned placements may occupy "
-                    "more than k host groups",
+                    "capped solutions ({}); dropping the cap and falling back to SOFT minimize, then "
+                    "restarting the session -- returned placements may occupy more than k host groups",
                     inter_mesh_constraints_.max_same_rank_groups_used(),
                     placement.error_message);
                 inter_mesh_constraints_.set_max_same_rank_groups_used(0);
+                inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
                 session_ = {};
                 host_cap_relaxed_ = true;
                 continue;

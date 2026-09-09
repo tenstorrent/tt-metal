@@ -3462,58 +3462,6 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::next(std::vector<int>& mapping_out
     return false;
 }
 
-template <typename TargetNode, typename GlobalNode>
-struct TopologyDfsSession {
-    DFSSearchEngine<TargetNode, GlobalNode> engine;
-};
-
-template <typename TargetNode, typename GlobalNode>
-void topology_dfs_session_destroy(TopologyDfsSession<TargetNode, GlobalNode>* p) noexcept {
-    delete p;
-}
-
-template <typename TargetNode, typename GlobalNode>
-std::unique_ptr<TopologyDfsSession<TargetNode, GlobalNode>, TopologyDfsSessionDeleter<TargetNode, GlobalNode>>
-topology_dfs_session_create_and_encode(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    ConnectionValidationMode validation_mode,
-    bool unique_shapes,
-    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
-    bool quiet_mode) {
-    auto session = std::unique_ptr<
-        TopologyDfsSession<TargetNode, GlobalNode>,
-        TopologyDfsSessionDeleter<TargetNode, GlobalNode>>(new TopologyDfsSession<TargetNode, GlobalNode>{});
-    if (!session->engine.start(
-            graph_data,
-            constraint_data,
-            validation_mode,
-            unique_shapes,
-            initial_forbidden_shape_keys,
-            quiet_mode)) {
-        return nullptr;
-    }
-    return session;
-}
-
-template <typename TargetNode, typename GlobalNode>
-bool topology_dfs_session_add_blocking_clause(
-    TopologyDfsSession<TargetNode, GlobalNode>* session, const std::vector<int>& raw_mapping) {
-    if (session == nullptr) {
-        return false;
-    }
-    return session->engine.block(raw_mapping);
-}
-
-template <typename TargetNode, typename GlobalNode>
-bool topology_dfs_session_next(TopologyDfsSession<TargetNode, GlobalNode>* session, std::vector<int>& raw_out) {
-    if (session == nullptr) {
-        raw_out.clear();
-        return false;
-    }
-    return session->engine.next(raw_out);
-}
-
 // ============================================================================
 // MappingValidator Implementation
 // ============================================================================
@@ -4033,8 +3981,7 @@ bool SatSearchEngine<TargetNode, GlobalNode>::start(
     empty_problem_ = false;
     empty_mapping_yielded_ = false;
     empty_blocked_ = false;
-    session_.reset();
-    enc_ = {};
+    backend_.reset();
     n_target_ = graph_data.n_target;
     n_global_ = graph_data.n_global;
     max_same_rank_groups_used_ = constraint_data.max_same_rank_groups_used;
@@ -4058,16 +4005,16 @@ bool SatSearchEngine<TargetNode, GlobalNode>::start(
         return true;
     }
 
-    session_ = topology_sat_session_create_and_encode(
-        TopologySatGraphView(graph_data),
-        TopologySatConstraintView(constraint_data),
-        enc_,
-        validation_mode,
-        unique_shapes,
-        initial_forbidden_shape_keys);
-    if (!session_) {
-        if (!enc_.trivial_reason.empty()) {
-            return fail(enc_.trivial_reason);
+    std::string encode_error;
+    if (!backend_.start(
+            TopologySatGraphView(graph_data),
+            TopologySatConstraintView(constraint_data),
+            validation_mode,
+            unique_shapes,
+            initial_forbidden_shape_keys,
+            &encode_error)) {
+        if (!encode_error.empty()) {
+            return fail(encode_error);
         }
         if (max_same_rank_groups_used_ > 0) {
             return fail(fmt::format(
@@ -4097,16 +4044,13 @@ bool SatSearchEngine<TargetNode, GlobalNode>::next(std::vector<int>& mapping_out
         mapping_out = {};
         return true;
     }
-    if (!session_) {
-        return false;
-    }
     std::vector<int> current;
-    if (!topology_sat_session_next(session_.get(), enc_, current)) {
-        state_.sat_solve_calls = topology_sat_session_solve_calls(session_.get());
+    if (!backend_.next(current)) {
+        state_.sat_solve_calls = backend_.solve_calls();
         return false;
     }
     install_mapping(current);
-    state_.sat_solve_calls = topology_sat_session_solve_calls(session_.get());
+    state_.sat_solve_calls = backend_.solve_calls();
     mapping_out = std::move(current);
     return true;
 }
@@ -4120,10 +4064,7 @@ bool SatSearchEngine<TargetNode, GlobalNode>::block(const std::vector<int>& mapp
         empty_blocked_ = true;
         return true;
     }
-    if (!session_) {
-        return false;
-    }
-    return topology_sat_session_add_blocking_clause(session_.get(), enc_, mapping);
+    return backend_.block(mapping);
 }
 
 template <typename TargetNode, typename GlobalNode>

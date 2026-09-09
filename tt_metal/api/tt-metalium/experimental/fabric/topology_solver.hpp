@@ -439,9 +439,9 @@ public:
     const std::vector<std::set<GlobalNode>>& get_same_rank_global_groups() const { return same_rank_global_groups_; }
 
     /**
-     * @brief Opt-in flag retained for callers; SAT occupancy packing is the HARD
-     *        set_max_same_rank_groups_used cap. If that cap is infeasible, MultiMeshSolutionEnumerator
-     *        drops it and restarts the session rather than the solver falling back internally.
+     * @brief SOFT occupancy packing: prefer occupying as few same-rank global groups as the capacity
+     *        lower bound allows. Not a hard cap; if that packing is infeasible the solve continues
+     *        without it. Used by MultiMeshSolutionEnumerator after dropping an infeasible hard cap.
      */
     void set_minimize_same_rank_groups_used(bool enable) { minimize_same_rank_groups_used_ = enable; }
     bool minimize_same_rank_groups_used() const { return minimize_same_rank_groups_used_; }
@@ -838,7 +838,8 @@ struct ConstraintIndexData {
     std::vector<std::set<size_t>> same_rank_groups;
     std::vector<size_t> target_to_group;
 
-    // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) used.
+    // Opt-in SOFT occupancy packing: SAT encodes at-most-k_floor as an optional stage and falls through
+    // if that packing is infeasible. Distinct from the HARD max_same_rank_groups_used cap.
     bool minimize_same_rank_groups_used = false;
 
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
@@ -931,6 +932,14 @@ struct TopologySatHardEncoding {
 
 /**
  * Index-only view of GraphIndexData for the SAT backend (implemented in topology_solver_sat.cpp).
+ *
+ * TODO: Remove TopologySatGraphView / TopologySatConstraintView when GraphIndexData and
+ * ConstraintIndexData have a non-template index base (or equivalent). The SAT encoder is a
+ * non-template .cpp, so it cannot take ConstraintIndexData<T,G> / GraphIndexData<T,G> directly;
+ * these views are type-erasure only. Their fields duplicate the already index-only members
+ * (ConstraintIndexData stores no TargetNode/GlobalNode). Prefer a non-template base that SAT
+ * can take, then delete both views and the duplicated is_valid_mapping. Do not template the
+ * SAT encoder (that would pull CaDiCaL into every instantiation).
  */
 struct TopologySatGraphView {
     size_t n_target = 0;
@@ -954,6 +963,7 @@ struct TopologySatGraphView {
         global_deg(g.global_deg) {}
 };
 
+/** Type-erased ConstraintIndexData for SAT; see TopologySatGraphView TODO. */
 struct TopologySatConstraintView {
     const std::vector<std::vector<size_t>>& restricted_global_indices;
     const std::vector<std::vector<size_t>>& forbidden_global_indices;
@@ -992,68 +1002,32 @@ struct TopologySatConstraintView {
     }
 };
 
-// Opaque SAT solver session — full definition is in the private
-// topology_solver_sat_session.hpp to keep CaDiCaL out of the public API.
-struct TopologySatSession;
+// Non-template SAT backend. Session/CaDiCaL state lives in Impl (topology_solver_sat.cpp), not the public API.
+class SatSearchBackend {
+public:
+    SatSearchBackend();
+    ~SatSearchBackend();
+    SatSearchBackend(SatSearchBackend&&) noexcept;
+    SatSearchBackend& operator=(SatSearchBackend&&) noexcept;
+    SatSearchBackend(const SatSearchBackend&) = delete;
+    SatSearchBackend& operator=(const SatSearchBackend&) = delete;
 
-void topology_sat_session_destroy(TopologySatSession* p) noexcept;
+    void reset();
+    bool start(
+        const TopologySatGraphView& graph_data,
+        const TopologySatConstraintView& constraint_data,
+        ConnectionValidationMode validation_mode,
+        bool unique_shapes,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+        std::string* error_out = nullptr);
+    bool next(std::vector<int>& mapping_out);
+    bool block(const std::vector<int>& mapping);
+    size_t solve_calls() const noexcept;
 
-struct TopologySatSessionDeleter {
-    void operator()(TopologySatSession* p) const noexcept { topology_sat_session_destroy(p); }
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
-
-// Creates a new SAT session. Called by SatSearchEngine::start.
-// Encodes hard constraints, host-group cap (with full packing when applicable), preferred
-// at-least-k, RELAXED channel-threshold literals, a symmetry assumption, and unique_shapes /
-// forbidden-shape blocking. On success, enc is populated and a non-null session is returned.
-// Returns nullptr if the constraint set is hard-infeasible (no encoding possible).
-std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_session_create_and_encode(
-    const TopologySatGraphView& graph_data,
-    const TopologySatConstraintView& constraint_data,
-    TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
-    bool unique_shapes = false,
-    const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {});
-
-// Appends a blocking clause for raw_mapping. Uses the session's unique_shapes flag (shape vs exact assignment).
-bool topology_sat_session_add_blocking_clause(
-    TopologySatSession* session, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping);
-
-// One incremental step: solve (with the session's symmetry hint), decode into raw_out, then block that
-// model so the next call yields a different mapping. Returns false if UNSAT or decoding fails.
-bool topology_sat_session_next(TopologySatSession* session, TopologySatHardEncoding& enc, std::vector<int>& raw_out);
-
-size_t topology_sat_session_solve_calls(const TopologySatSession* session) noexcept;
-
-// Incremental DFS enumerator with the same create / block / next shape as the SAT session above.
-// Graph and constraint objects must outlive the session.
-template <typename TargetNode, typename GlobalNode>
-struct TopologyDfsSession;
-
-template <typename TargetNode, typename GlobalNode>
-void topology_dfs_session_destroy(TopologyDfsSession<TargetNode, GlobalNode>* p) noexcept;
-
-template <typename TargetNode, typename GlobalNode>
-struct TopologyDfsSessionDeleter {
-    void operator()(TopologyDfsSession<TargetNode, GlobalNode>* p) const noexcept { topology_dfs_session_destroy(p); }
-};
-
-template <typename TargetNode, typename GlobalNode>
-std::unique_ptr<TopologyDfsSession<TargetNode, GlobalNode>, TopologyDfsSessionDeleter<TargetNode, GlobalNode>>
-topology_dfs_session_create_and_encode(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
-    bool unique_shapes = false,
-    const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {},
-    bool quiet_mode = false);
-
-template <typename TargetNode, typename GlobalNode>
-bool topology_dfs_session_add_blocking_clause(
-    TopologyDfsSession<TargetNode, GlobalNode>* session, const std::vector<int>& raw_mapping);
-
-template <typename TargetNode, typename GlobalNode>
-bool topology_dfs_session_next(TopologyDfsSession<TargetNode, GlobalNode>* session, std::vector<int>& raw_out);
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
@@ -1446,8 +1420,7 @@ private:
     size_t n_target_ = 0;
     size_t n_global_ = 0;
     size_t max_same_rank_groups_used_ = 0;
-    TopologySatHardEncoding enc_;
-    std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> session_;
+    SatSearchBackend backend_;
 
     bool fail(std::string message);
     void install_mapping(const std::vector<int>& mapping);
