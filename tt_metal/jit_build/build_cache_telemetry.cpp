@@ -6,7 +6,9 @@
 
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -53,9 +55,18 @@ struct BuildCacheTelemetryImpl {
 
     std::mutex token_registry_mutex;
     std::vector<TelemetryToken*> registered_tokens;
+
+    // Endpoints of the JIT build window, as steady_clock nanoseconds. Sentinels are ordered so
+    // that last < first means "no build activity recorded", which dump_metrics() treats as
+    // nothing to report.
+    std::atomic<int64_t> build_window_first_ns{std::numeric_limits<int64_t>::max()};
+    std::atomic<int64_t> build_window_last_ns{std::numeric_limits<int64_t>::min()};
 };
 
-BuildCacheTelemetry::BuildCacheTelemetry() { enable(); }
+BuildCacheTelemetry::BuildCacheTelemetry() {
+    enable();
+    build_window_token_ = &get_or_register_metric("jit_build_window");
+}
 
 BuildCacheTelemetry::~BuildCacheTelemetry() {
     // Dump metrics here rather than via std::atexit. The atexit handler is registered inside
@@ -188,6 +199,35 @@ uint32_t BuildCacheTelemetry::get_jit_once_dedup_count() const {
     return impl_->jit_once_dedup_count.load(std::memory_order_acquire);
 }
 
+void BuildCacheTelemetry::note_build_window(
+    std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end) {
+    if (!impl_) {
+        return;
+    }
+    const auto to_ns = [](std::chrono::steady_clock::time_point tp) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
+    };
+    const int64_t start_ns = to_ns(start);
+    const int64_t end_ns = to_ns(end);
+
+    // Concurrent builds each widen their own end of the window, so both endpoints need a
+    // read-modify-write rather than a plain store.
+    int64_t first = impl_->build_window_first_ns.load(std::memory_order_relaxed);
+    while (start_ns < first &&
+           !impl_->build_window_first_ns.compare_exchange_weak(first, start_ns, std::memory_order_relaxed)) {
+    }
+    int64_t last = impl_->build_window_last_ns.load(std::memory_order_relaxed);
+    while (end_ns > last &&
+           !impl_->build_window_last_ns.compare_exchange_weak(last, end_ns, std::memory_order_relaxed)) {
+    }
+}
+
+ScopedBuildWindow::ScopedBuildWindow() : start_(std::chrono::steady_clock::now()) {}
+
+ScopedBuildWindow::~ScopedBuildWindow() {
+    BuildCacheTelemetry::inst().note_build_window(start_, std::chrono::steady_clock::now());
+}
+
 void BuildCacheTelemetry::log_compile_summary() const {
     if (!impl_) {
         return;
@@ -248,6 +288,15 @@ void BuildCacheTelemetry::dump_metrics() const {
     }
 
     log_compile_summary();
+
+    // Collapse the window endpoints into the one sample the metric carries. Done here rather than
+    // per build so the value is the whole span, not a running maximum, and so the token is
+    // populated before the loop below reads it.
+    const int64_t first_ns = impl_->build_window_first_ns.load(std::memory_order_relaxed);
+    const int64_t last_ns = impl_->build_window_last_ns.load(std::memory_order_relaxed);
+    if (build_window_token_ != nullptr && last_ns >= first_ns) {
+        build_window_token_->record(static_cast<double>(last_ns - first_ns) / 1e6);
+    }
 
     std::lock_guard lk(impl_->token_registry_mutex);
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());

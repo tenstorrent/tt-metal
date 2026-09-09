@@ -92,6 +92,14 @@ public:
     uint32_t get_genfile_merge_count() const;
     uint32_t get_jit_once_dedup_count() const;
 
+    // Extend the process-wide JIT build window with [start, end]. The window is the wall-clock
+    // span from the earliest build entry to the latest build exit, recorded as a single sample
+    // into the "jit_build_window" metric by dump_metrics(). It is the parallelism-aware companion
+    // to the per-call build metrics: summing those over-counts when builds run on the thread pool,
+    // whereas the window is what a wall clock next to the process would show. A workload that
+    // compiles lazily in bursts folds the idle gaps between bursts into the span.
+    void note_build_window(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
+
     void log_compile_summary() const;
 
     // Return the metric stream named `name`, registering it on first use. The returned
@@ -114,6 +122,9 @@ private:
     // Name -> token index into owned_tokens_; guarded by owned_tokens_mutex_ alongside the vector.
     std::unordered_map<std::string, TelemetryToken*> tokens_by_name_;
     std::mutex owned_tokens_mutex_;
+    // Registered in the constructor so the const dump_metrics() can record the window span
+    // without registering a metric during teardown.
+    TelemetryToken* build_window_token_{nullptr};
 };
 
 // Times the scope it lives in: takes a steady_clock timestamp on construction and records the
@@ -136,6 +147,28 @@ public:
 
 private:
     TelemetryToken& token_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+// Folds the scope it lives in into the process-wide JIT build window (see
+// BuildCacheTelemetry::note_build_window). Deliberately not a ScopedTelemetryTimer with static
+// storage: such a timer would only record at process exit, so every test, inference, or idle
+// stretch after the last compile would land in the metric. This ends the window at the last
+// build instead. Contributes on every exit path from the scope, including exceptions and the
+// build-cache early returns.
+class ScopedBuildWindow {
+public:
+    ScopedBuildWindow();
+    ~ScopedBuildWindow();
+
+    ScopedBuildWindow(const ScopedBuildWindow&) = delete;
+    ScopedBuildWindow& operator=(const ScopedBuildWindow&) = delete;
+    ScopedBuildWindow(ScopedBuildWindow&&) = delete;
+    ScopedBuildWindow& operator=(ScopedBuildWindow&&) = delete;
+
+    std::chrono::steady_clock::time_point start() const { return start_; }
+
+private:
     std::chrono::steady_clock::time_point start_;
 };
 
