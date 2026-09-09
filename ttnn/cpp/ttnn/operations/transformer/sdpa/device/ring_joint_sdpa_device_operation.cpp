@@ -638,11 +638,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // slab-major addressing and would read garbage from a wrapped cache.
         TT_FATAL(
             args.has_sliding_window() && is_chunked, "circular_kv_cache requires chunked sliding-window attention");
+        // Metadata first: on that path kv_actual_isl is read on-device (host value absent), so the
+        // rotation check below would otherwise mask the real reason.
+        TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         TT_FATAL(
             has_kv_pad_rotation,
             "circular_kv_cache requires kv_actual_isl (KV-pad rotation): the wrap position is "
             "derived from the true absolute logical_n/kv_actual_isl");
-        TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         // Slab-count/geometry value checks live in validate_runtime_patched_scalars (hash-invariant
         // shapes, but kept beside the capacity check they replace).
     }
