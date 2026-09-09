@@ -107,7 +107,7 @@ void write_file(const string& path, const string& content) {
 
 // Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
 // of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
-// on the command line. Emitted for any kernel with named CT args, Metal 2.0 or legacy, blaze or not.
+// on the command line. Emitted only for the legacy map API, including Metal 2.0 kernels.
 // Returns true if a header was written.
 //
 // Written here rather than in the build step so it lands in the kernel's generated-files directory

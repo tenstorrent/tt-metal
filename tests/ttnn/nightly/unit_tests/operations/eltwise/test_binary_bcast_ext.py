@@ -181,7 +181,7 @@ def assert_inplace_binary_matches(torch_output_tensor, output_tensor, *, pcc_thr
                 f"device={output_tensor.flatten()[0]}"
             )
             return
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=4)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4)
         return
 
     # If one tensor is constant (or neither), comp_pcc falls back to allclose.

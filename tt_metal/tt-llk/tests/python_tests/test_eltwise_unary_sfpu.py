@@ -928,50 +928,28 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
-# relu_min's integer threshold, which is the last unreached branch of that kernel.
-#
-# The vInt branch of _relu_min_ re-encodes its threshold from two's complement into the
-# sign+magnitude order SFPSWAP compares in -- but only when the threshold is negative:
-#
-#     int scalar = static_cast<int>(threshold);
-#     if (scalar < 0) { scalar = -scalar; scalar = 0x80000000 | (scalar & 0x7FFFFFFF); }
-#
-# Nothing reaches that `if`. The harness's own dispatch hard-coded 5u, and no Compute API
-# entry point passes a negative integer threshold either (relu_tile_int32 passes 0, and
-# relu_min_tile_int32 routes to a different kernel entirely). So the re-encoding shipped
-# untested. Overriding the threshold via SFPU_RELU_MIN_INT_THRESHOLD is what reaches it.
-#
-# Both signs are swept, because the negation is only meaningful against a control: the
-# non-negative thresholds take the straight-through path and must keep agreeing.
-_RELU_MIN_INT_THRESHOLDS = [-1000, -5, -1, 0, 5, 1000]
+_INT32_MAX = 2**31 - 1
+
+# Both signs are swept. Every threshold reaches the vInt branch; what the negative half alone
+# reaches is the overflow-safe compare it is split on, and Wormhole's hand-built threshold
+# encoding. The negative extreme stops short of INT_MIN: CustomStrategy clamps stimuli at
+# info.min + 1, so no input could straddle it.
+_RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
 
 
 def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
-    """Values straddling *threshold*, so both sides of the clamp fire.
+    """Values straddling *threshold*, plus both ends of int32.
 
-    Built around the threshold rather than from a fixed span: at -1000 a positive-only
-    spread would sit entirely on the pass-through side and the clamp would never fire,
-    which is the same way the float domain used to be vacuous.
-
-    Negatives are required here -- max(x, -5) only clamps for x < -5 -- so unlike
-    _int_unary_stimuli_spec this cannot stay positive-only. (The positive-only rule over
-    there is about ops that are also read as unsigned, which is a different constraint.)
-
-    Negative inputs and a negative threshold matter independently, which is worth keeping
-    straight. Negative *inputs* alone are harmless: the compare orders operands as
-    sign+magnitude, but for a non-negative threshold that ordering cannot change the
-    outcome, because a negative input loses under either encoding. Only once the *threshold*
-    is negative too does the encoding of the two operands have to actually agree.
-
-    On both arches it currently does not, which is the unsupported path this sweep
-    deliberately drives and why the negative cases below are xfailed -- the mechanism
-    differs per arch and is tabulated at that marker.
-    See https://github.com/tenstorrent/tt-metal/issues/55643.
+    Built around the threshold rather than a fixed span, so the clamp actually fires for a
+    negative threshold. The range ends exercise the compare between far-apart operands.
     """
-    straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
-    # A decade either side, so the comparison is exercised well away from the boundary too.
-    spread = [float(threshold + d) for d in (-1000, -100, -10, 10, 100, 1000)]
-    return StimuliSpec.custom(values=straddle + spread, seed=0)
+    # Straddling the boundary, then a decade either side of it. Offsets that leave the
+    # stimuli range are dropped rather than folded onto its ends, which is what the thresholds
+    # at the extremes would otherwise turn most of them into.
+    offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
+    candidates = [threshold + d for d in offsets] + [-_INT32_MAX, _INT32_MAX]
+    values = sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX})
+    return StimuliSpec.custom(values=[float(v) for v in values], seed=0)
 
 
 @parametrize(
@@ -980,76 +958,20 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_relu_min_int_threshold(
-    request,
     threshold: int,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
     """relu_min on Int32 against both signs of threshold.
 
-    The negative cases are the point: they are the only inputs that reach the
-    sign+magnitude re-encoding in _relu_min_'s vInt branch. Exact integer golden, so a
-    mis-encoded threshold shows up as a wrong clamp value rather than a tolerance miss.
+    The negative half is the point, and the golden is an exact integer max, so a wrong
+    threshold shows up as a wrong clamp value rather than a tolerance miss.
 
-    The non-negative cases are the control and pass: they take the straight-through path
-    where sign+magnitude and two's complement coincide.
+    Int32 stimuli are two's complement, which is how ttnn feeds the device -- see
+    use_int32_twos_complement in test_sfpu_reduce.py. Under this file's sign-magnitude
+    default a kernel that reads Dst in the other encoding would pass instead.
     """
-    # ReluMin is hardcoded here rather than parametrized, so the guard takes it directly.
-    _skip_coverage_unsupported(MathOperation.ReluMin)
-
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
-
-    # First execution of this branch, and it does not work. Measured on n300 at
-    # thresholds -1, -5 and -1000, against stimuli straddling each:
-    #
-    #   as shipped      the threshold wins every lane, including against inputs that are
-    #                   larger than it, and is stored as the raw re-encoding: threshold -5
-    #                   returns 0x80000005 (-2147483643) rather than -5, and -1000 returns
-    #                   0x800003E8. The magnitude is right, the representation is not.
-    #   re-encode       the opposite failure -- a plain two's-complement negative threshold
-    #     removed       never wins, so every input passes through unclamped.
-    #
-    # So it is not a matter of deleting the conversion: neither representation makes SFPSWAP
-    # and the INT32_2S_COMP store agree for a negative threshold, and settling it needs the
-    # ISA semantics for that pair rather than a guess. Recorded as a non-strict xfail rather
-    # than skipped so the case still *executes* and reports XPASS the moment it is fixed.
-    #
-    # Tracked as tt-metal issue #55643. Drop this marker as part of fixing the kernel.
-    #
-    # Nothing ships on this path: no Compute API entry point passes a negative integer
-    # threshold (relu_tile_int32 passes 0, relu_min_tile_int32 routes to relu_clamp_int), and
-    # the harness itself hard-coded 5u until this test parametrized it.
-    #
-    # Both arches fail, for different reasons, and both return the *sign+magnitude* encoding
-    # of the threshold instead of its two's-complement value:
-    #
-    #   Wormhole   raw TTI. The vInt branch hand-re-encodes the threshold to sign+magnitude
-    #              for SFPSWAP, correctly, but loads the input with
-    #              InstrModLoadStore::INT32_2S_COMP, which loads raw -- so the compare comes
-    #              out against a two's-complement input. Threshold -5 returns 0x80000005.
-    #   Blackhole  plain sfpi, and no instruction mode to get wrong -- but _relu_min_impl_
-    #              reads DEST as a bare sfpi::dst_reg[0], with no .mode<DataLayout::I32>()
-    #              to request the converting layout. Dst holds int32 as sign+magnitude (see
-    #              _int_unary_stimuli_spec, which stays positive-only for exactly this
-    #              reason), so a negative threshold does not survive the round trip.
-    #              Threshold -1000 returns 0x800003E8, measured in CI on bh_p150b.
-    #
-    # Non-strict, so the case still executes and reports XPASS per arch as each is fixed.
-    if threshold < 0 and TestConfig.CHIP_ARCH in (
-        ChipArchitecture.WORMHOLE,
-        ChipArchitecture.BLACKHOLE,
-    ):
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="relu_min's vInt branch returns the sign+magnitude encoding of a "
-                "negative threshold instead of its value: Wormhole 0x80000005 for -5 "
-                "(wrong SFPLOAD instruction mode), Blackhole 0x800003E8 for -1000 (no "
-                "converting sfpi DataLayout on the DEST access). Unreached before this "
-                "test; no shipping op passes a negative integer threshold. "
-                "https://github.com/tenstorrent/tt-metal/issues/55643",
-                strict=False,
-            )
-        )
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -1061,6 +983,7 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
         input_dimensions,
         spec_A=_relu_min_int_stimuli_spec(threshold),
         relu_min_int_threshold=threshold,
+        twos_complement=True,
     )
 
 
@@ -1075,8 +998,6 @@ _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 # Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
 # zero. 2**30 keeps a large right shift working on a non-zero operand.
 _SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
-
-_INT32_MAX = 2**31 - 1
 
 
 def _shift_stimulus_values(mathop, shift_amount):
@@ -1311,6 +1232,7 @@ def eltwise_unary_sfpu(
     custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    twos_complement=False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1396,6 +1318,7 @@ def eltwise_unary_sfpu(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)

@@ -1164,7 +1164,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     experimental::ProgramRunArgs merged = experimental::MergeProgramRunArgs(std::move(part1), rest);
     experimental::SetProgramRunArgs(program, merged);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> out(2, 0);
     slow_dispatch::ReadFromL1(this->device(), node, address_1, 2 * sizeof(uint32_t), out);
