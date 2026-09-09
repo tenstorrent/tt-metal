@@ -64,6 +64,7 @@ FROM scratch AS ccache-layer
 FROM scratch AS mold-layer
 FROM scratch AS doxygen-layer
 FROM scratch AS clangbuildanalyzer-layer
+FROM scratch AS iwyu-layer
 FROM scratch AS gdb-layer
 FROM scratch AS cmake-layer
 FROM scratch AS yq-layer
@@ -247,6 +248,15 @@ RUN curl -fsSL -o /usr/local/bin/tt-smi \
     chmod a+rx /usr/local/bin/tt-smi && \
     tt-smi --version | grep -q "${TT_SMI_VERSION}"
 
+# include-what-you-use. Here rather than with the other tools in ci-build-light
+# because nothing in the build needs it: this is the first stage shared by the
+# CI test images and the dev images, which are the two consumers. It carries its
+# own copy of Clang's builtin headers, since the LLVM apt packages install only
+# versioned names and IWYU's default lookup wants a plain `clang` on PATH.
+COPY --from=iwyu-layer --link /install/ /usr/local/
+RUN test -x /usr/local/bin/include-what-you-use || \
+    { echo "ERROR: include-what-you-use not found in iwyu-layer" >&2; exit 1; }
+
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
@@ -358,10 +368,6 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # permissions verbatim. Do NOT add --chmod: it disables the --link fast path.
 COPY --from=ci-test-venv-layer --link /install/venv /opt/venv
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-# IWYU (Include What You Use) could be useful to developers.
-# Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh
-# To add: create iwyu tool target in Dockerfile.tools using install-iwyu.sh
 
 #############################################################
 # Release image

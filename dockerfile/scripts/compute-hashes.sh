@@ -54,6 +54,14 @@ curl -fsSL -o "$TMPDIR/clangbuildanalyzer.tar.gz" \
 echo "CLANGBUILDANALYZER_SHA256=$($SHA_CMD "$TMPDIR/clangbuildanalyzer.tar.gz" | cut -d' ' -f1)"
 echo ""
 
+# include-what-you-use
+IWYU_VERSION="${IWYU_VERSION:-0.24}"
+echo "Downloading include-what-you-use ${IWYU_VERSION}..."
+curl -fsSL -o "$TMPDIR/iwyu.tar.gz" \
+    "https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/${IWYU_VERSION}.tar.gz"
+echo "IWYU_SHA256=$($SHA_CMD "$TMPDIR/iwyu.tar.gz" | cut -d' ' -f1)"
+echo ""
+
 # GDB
 GDB_VERSION="${GDB_VERSION:-14.2}"
 echo "Downloading GDB ${GDB_VERSION}..."
