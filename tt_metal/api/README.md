@@ -32,9 +32,10 @@ python3 scripts/validate_api/validate_header_hygiene.py
 python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
 ```
 
-The checker also runs in pre-commit and in PR Gate on PR updates and merge-group
-checks. Its failure fails the existing `PR Gate Status` check. Draft PRs and
-destroyed merge groups follow the gate's existing skip behavior.
+The checker runs in pre-commit, which the existing `all-static-checks.yaml`
+workflow runs on PR updates and merge groups. Checker failures fail its
+`Run Pre-commit Hooks` job. The checker tests also run through pre-commit when
+files under `scripts/validate_api/` change.
 
 It checks all `.h`, `.hpp`, `.hh`, and `.hxx` files under `tt_metal/api/` for:
 

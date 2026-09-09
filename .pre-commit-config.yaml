@@ -70,6 +70,13 @@ repos:
       name: validate-metalium-header-hygiene
       entry: python3 scripts/validate_api/validate_header_hygiene.py
       language: system
+      always_run: true
+      pass_filenames: false
+    - id: test-metalium-header-hygiene
+      name: test-metalium-header-hygiene
+      entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
+      language: system
+      files: ^scripts/validate_api/
       pass_filenames: false
 - repo: local
   hooks:
