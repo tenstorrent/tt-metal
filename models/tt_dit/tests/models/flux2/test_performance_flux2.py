@@ -19,22 +19,13 @@ from .device_params import line_params_8k_flux2_perf, line_params_flux2_perf, ri
 NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3
 
-# Upper bounds in seconds, 1.5x the 1024x1024 / 50-step numbers reported in #53608 for sp=4 tp=8
-# Ring on a 4x8 galaxy -- the config the bh_sc1 e2e leg runs. denoising_steps_time and total_time
-# carry a further 25%: this galaxy measures 0.1476/step where #53608 reported 0.0957, so the 1.5x
-# denoising bound tripped outright and total_time sat only 2% above the measured value. Encoding
-# and VAE decode keep their 1.5x bounds -- both measure far under. Trailing comments carry the
-# values measured here, not the #53608 ones. These are regression tripwires, not perf targets;
-# tighten them once the ~55% per-step gap against #53608 is explained.
+# Upper bounds in seconds, 1.5x the 1024x1024 / 50-step numbers
+# These are more like regression tripwires, not a-priori determined perf targets.
 #
 # The key is (mesh shape, width, topology, sp_axis, is_fsdp), which is what it takes to name one
-# parametrization uniquely. Mesh alone -- what flux1 uses -- is not enough here: flux2 runs 6 mesh
-# configs across 4 resolutions, 1024 and 8192 differ by orders of magnitude, and four of the six
-# rows are (4, 8), differing only in topology, sp axis and FSDP. A looser key would quietly measure
-# bh_glx_linear against Ring's numbers and report a regression that is really a different config.
+# parametrization uniquely.
 #
-# Configs absent from this table are reported but not gated: of the 24 mesh x resolution
-# combinations, only the ones with a CI leg have a number worth defending.
+# Configs absent from this table are reported but we don't asssert on any perf targets.
 PERF_THRESHOLDS = {
     ((4, 8), 1024, ttnn.Topology.Ring, 0, False): {
         "total_encoding_time": 0.13,  # measured 0.0971
@@ -273,8 +264,6 @@ def test_flux2_performance(
                     step_name=step_name,
                     name=step_name,
                     value=value,
-                    # Was `target=value`, which made every run report as exactly on target and the
-                    # perf dashboard incapable of showing drift. Ungated configs still self-target.
                     target=(expected_metrics or {}).get(_STEP_TO_METRIC[step_name], value),
                 )
         benchmark_data.save_partial_run_json(

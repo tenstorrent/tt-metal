@@ -40,21 +40,16 @@ class ModelLocationGenerator(Protocol):
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, shard_prompt, device_params",
     [
-        # 2x2 is the only geometry a 4-chip Blackhole box can run, and it is the mesh the
-        # bh_quietbox_2 CI leg exercises. FSDP is on because tensor parallelism alone shards
-        # the weights across the TP axis and REPLICATES them across SP, so 64 GB of weights
-        # occupy 129 GB of the 137 GB the four chips have. Sharding on both axes puts the
-        # same weights back in 64 GB, which is what the pipeline already does at this shape.
         [(2, 2), 0, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2_transformer],
         [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, False, line_params_flux2_transformer],
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, False, line_params_flux2_transformer],
         # shard_prompt=True on 4x8. With it False the prompt is replicated across the sp axis
-        # while the spatial stream is sharded, and the joint attention in the single blocks
-        # degrades as sp grows: PCC 75.5340% at sp=4 and 68.7162% at sp=8, against 99.6968%
-        # here. sp=1 and sp=2 are unaffected in practice (Attention gates shard_prompt on
-        # sequence_parallel.factor > 1, and 2x2 measures 99.9972%), so only this row changes.
-        # True is also what the pipeline and test_performance_flux2.py use -- the configuration
-        # #53608 measured and produced correct images from. Measured on run 33801719909.
+        # while the spatial stream is sharded, and the joint attention PCC in the single blocks
+        # degrades as sp increases.
+        #
+        # In practice, for sp=1/2, PCC is not sufficiently degraded to matter, but it's terrible
+        # for sp=4 (way below PCC thresholds), which is why we _must_ set shard_prompt=True for this mesh.
+        # True is also what the pipeline and test_performance_flux2.py use.
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, True, ring_params_8k_flux2_req_exact],
     ],
     ids=[
@@ -137,15 +132,8 @@ def test_transformer(
     num_layers = torch_model.config.num_layers - skip_layers
     num_single_layers = torch_model.config.num_single_layers - skip_single_layers
 
-    # The converted-weight cache key is model/subfolder/<parallel>mesh<shape>_<dtype>[_FSDP] and
-    # carries no layer counts, so the layer-skip parametrizations would otherwise share one entry
-    # while holding different tensor sets. Whichever ran first would win: all_blocks first leaves
-    # a full tree that single_blocks reads a subset of, harmlessly, but single_blocks first leaves
-    # a 1-double/1-single tree and all_blocks then dies on "Unable to load the tensor" -- seen on
-    # run 33789514904, where four single_blocks invocations preceded all_blocks. The CI leg only
-    # avoids it because -k all_blocks happens to be ordered first, which is far too subtle a thing
-    # to rely on. Give each pruned variant its own entry, and leave the unpruned model on the
-    # plain "transformer" path so it still shares the pipeline's cache.
+    # HACK: The cache subfolder name modification is to ensure the cache contains all tensors for both the
+    # all_blocks and single_blocks test variants. Without this, we would get invalid caches for one or the other.
     cache_subfolder = (
         "transformer" if skip_layers == skip_single_layers == 0 else f"transformer_L{num_layers}_S{num_single_layers}"
     )
@@ -174,8 +162,6 @@ def test_transformer(
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,
-        # Also part of the cache key: an FSDP-sharded weight tree and a TP-only one hold
-        # different tensors, and reading one as the other fails on a missing weight.
         is_fsdp=fsdp,
     )
 
