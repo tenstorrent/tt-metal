@@ -116,14 +116,12 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Unpacker1 Write Efficiency (%) | `unpack1_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / UNPACK1_BUSY_THREAD0` | Unpacker-1 busy cycles that completed a srcB write. |
 | Unpacker Write Efficiency (%) | `unpack_write_eff_pct` | `mean of the two write efficiencies` | Combined unpacker write efficiency. |
 | Unpacker-to-Math Data Flow (%) | `unpack_to_math_flow_pct` | `mean of the srcA and srcB flows` | Combined unpacker-to-math data flow. |
-| Unpacker-to-Math Data Flow (srcA) (%) | `unpack_to_math_flow0_pct` | `SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0` | srcA buffer availability while unpacker 0 is busy. |
-| Unpacker-to-Math Data Flow (srcB) (%) | `unpack_to_math_flow1_pct` | `SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0` | srcB buffer availability while unpacker 1 is busy. |
-| SrcA Write Actual Efficiency (%) | `srca_write_eff_pct` | `SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_AVAILABLE` | Write-available cycles on which the srcA write port was not blocked. |
-| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_AVAILABLE` | Write-available cycles on which the srcB overwrite was not blocked. |
-| SrcA Write Port Blocked Rate (%) | `srca_write_port_blocked_pct` | `1 - SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_AVAILABLE` | srcA writes blocked on the write port. |
-| SrcA Write Overwrite Blocked Rate (%) | `srca_write_ovr_blocked_pct` | `1 - SRCA_WRITE_NOT_BLOCKED_OVR / SRCA_WRITE_AVAILABLE` | srcA writes blocked by overwrite protection. |
-| SrcB Write Overwrite Blocked Rate (%) | `srcb_write_ovr_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_AVAILABLE` | srcB writes blocked by overwrite protection. |
-| SrcB Write Port Blocked Rate (%) | `srcb_write_port_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE` | srcB writes blocked on the write port. |
+| Unpacker-to-Math Data Flow (srcA) (%) | `unpack_to_math_flow0_pct` | `SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0` | srcA buffer availability while unpacker 0 is busy. |
+| Unpacker-to-Math Data Flow (srcB) (%) | `unpack_to_math_flow1_pct` | `SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0` | srcB buffer availability while unpacker 1 is busy. |
+| SrcA Write Actual Efficiency (%) | `srca_write_eff_pct` | `SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ` | Write-available cycles on which the srcA write port was not blocked. |
+| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_REQ` | Write-available cycles on which the srcB overwrite was not blocked. |
+| SrcA Write Overwrite Blocked Rate (%) | `srca_write_ovr_blocked_pct` | `1 - SRCA_WRITE_NOT_BLOCKED_OVR / SRCA_WRITE_REQ` | srcA writes blocked by overwrite protection. |
+| SrcB Write Port Blocked Rate (%) | `srcb_write_port_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ` | srcB writes blocked on the write port. |
 | Unpacker0 T1 Share (%) | `unpack0_thread1_share_pct` | `UNPACK0_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-0 busy cycles driven by the math thread. |
 | Unpacker1 T1 Share (%) | `unpack1_thread1_share_pct` | `UNPACK1_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-1 busy cycles driven by the math thread. |
 | SrcA Write Even-TID Share (%) | `srca_write_even_tid_share_pct` | `SRCA_WRITE_TID_EVEN / (even + odd writes)` | srcA writes from even thread ids (the counter tests thread-id bit 0, lane 0). |
@@ -134,14 +132,12 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
 | Packer Utilization (%) | `pack_utilization_pct` | `PACKER_BUSY / pack cycles` | Fraction of cycles any packer engine was busy. |
-| Packer Efficiency (%) | `pack_dest_eff_pct` | `PACKER_DEST_READ_AVAILABLE / PACKER_BUSY` | Packer busy cycles with dest data available to read. N/A when the packer is idle. |
-| Pack Dest Grant Efficiency (%) | `pack_dest_grant_eff_pct` | `DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE` | Dest read requests that were granted. |
-| Dest Read Backpressure (%) | `dest_read_backpressure_pct` | `1 - DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE` | Dest reads waiting on the grant. |
+| Packer Efficiency (%) | `pack_dest_eff_pct` | `PACKER0_DEST_READ_REQ / PACKER_BUSY` | Packer busy cycles with dest data available to read. N/A when the packer is idle. |
+| Pack Dest Grant Efficiency (%) | `pack_dest_grant_eff_pct` | `DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ` | Dest read requests that were granted. |
 | Packer Engine 0 Util (%) | `packer0_util_pct` | `PACKER_BUSY_0 / pack cycles` | Per-engine packer 0. Wormhole only; N/A on Blackhole. |
 | Packer Engine 1 Util (%) | `packer1_util_pct` | `PACKER_BUSY_1 / pack cycles` | Per-engine packer 1. Wormhole only; N/A on Blackhole. |
 | Packer Engine 2 Util (%) | `packer2_util_pct` | `PACKER_BUSY_2 / pack cycles` | Per-engine packer 2. Wormhole only; N/A on Blackhole. |
-| Packer Engine 3 Util (%) | `packer3_util_pct` | `PACKER_BUSY / pack cycles` | Wormhole only: engine 3 is the aggregate counter there; Blackhole's single packer is `pack_utilization_pct`. |
-| Packer Load Imbalance (%) | `packer_load_imbalance_pct` | `(max - min) / max over active packer engines` | N/A unless at least two engines were active. |
+| Packer Load Imbalance (%) | `packer_load_imbalance_pct` | `(max - min) / max over the four packer engine counters` | Wormhole only: N/A unless all four engine counters were captured; an idle engine counts as 100% imbalance. |
 
 ### Pipeline handoff
 
@@ -202,7 +198,7 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
 | L1 Unpacker Port Util (%) | `l1_unpacker_util_pct` | `L1_0_UNPACKER_0 / l1 cycles` | Unpacker-0 L1 port utilization. |
-| L1 Port 1 Util (%) | `l1_port1_util_pct` | `L1_0_UNPACKER_1_ECC_PACK1 / l1 cycles` | L1_0 port 1: pack1+ECC on Wormhole, unpacker1+ECC on Blackhole. |
+| L1 Port 1 Util (%) | `l1_port1_util_pct` | `port 1 requests / l1 cycles` | L1_0 port 1 requests are L1_0_UNPACKER_1_ECC_PACK1 on Wormhole (pack1+ECC) and L1_0_UNPACKER_1_ECC on Blackhole (unpacker1+ECC). |
 | L1 Packer Port 8 Util (%) | `l1_packer_port8_util_pct` | `L1_1_TDMA_PACKER_2 (Wormhole) or L1_1_PACKER_IF_0 (Blackhole) / l1 cycles` | L1_1 port 8, the packer's L1 write interface (interface 0 on Blackhole). |
 | L1 TDMA Bundle Util (%) | `l1_tdma_bundle_util_pct` | `mean over the two L1_0_TDMA_BUNDLE ports / l1 cycles` | RISC and TRISC TDMA bundle traffic. |
 | L1 Unpacker1 Ext Util (%) | `l1_unpacker1_ext_util_pct` | `mean over unpacker 1's extended read ports (L1_1 ports 9-11; plus L1_2 ports 16-19 on Blackhole)` | On Blackhole these ports also carry the packer L1-to-L1 read. |
@@ -219,9 +215,9 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | NOC Ring 1 Incoming Util (%) | `noc_ring1_in_util_pct` | `mean over L1_1_NOC_RING1_INCOMING_0/1 / l1 cycles` | Primary ring-1 incoming channels only. |
 | NOC Ring 0 Grant Efficiency (%) | `noc_ring0_grant_eff_pct` | `sum of ring-0 grant counters / sum of ring-0 request counters` | Ring-0 requests that were granted. |
 | Unpacker L1 Efficiency (ratio) | `unpacker_l1_eff_ratio` | `L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0` | UNBOUNDED ratio (cross-domain); above 1 = ample L1 bandwidth for the unpacker. |
-| Packer L1 Efficiency (ratio) | `packer_l1_eff_ratio` | `L1_0_PORT1_GRANT / PACKER_BUSY` | UNBOUNDED ratio; only meaningful on Wormhole, where port 1 carries pack1 traffic. |
+| Packer L1 Efficiency (ratio) | `packer_l1_eff_ratio` | `L1_0_PORT1_GRANT / PACKER_BUSY` | UNBOUNDED ratio; Wormhole only, where port 1 carries pack1 traffic. N/A on Blackhole (port 1 is an unpacker there). |
 | L1 Unpacker Backpressure (%) | `l1_unpacker_backpressure_pct` | `1 - L1_0_UNPACKER_0_GRANT / L1_0_UNPACKER_0` | Unpacker-0 requests waiting on the L1 arbiter. |
-| L1 Port 1 Backpressure (%) | `l1_port1_backpressure_pct` | `1 - L1_0_PORT1_GRANT / L1_0_UNPACKER_1_ECC_PACK1` | Port-1 requests waiting on the L1 arbiter. |
+| L1 Port 1 Backpressure (%) | `l1_port1_backpressure_pct` | `1 - port 1 grants / port 1 requests` | Port-1 requests waiting on the L1 arbiter; the request and grant counters are the per-architecture pair named under L1 Port 1 Util. |
 | NOC Ring 0 Outgoing Backpressure (%) | `noc_ring0_out_backpressure_pct` | `1 - grants / requests over the primary ring-0 outgoing pair` | L1 not ready for outgoing ring-0 traffic. |
 | NOC Ring 0 Incoming Backpressure (%) | `noc_ring0_in_backpressure_pct` | `1 - grants / requests over the primary ring-0 incoming pair` | L1 not ready for incoming ring-0 traffic. |
 | NOC Ring 1 Outgoing Backpressure (%) | `noc_ring1_out_backpressure_pct` | `1 - grants / requests over the primary ring-1 outgoing pair` | L1 not ready for outgoing ring-1 traffic. |

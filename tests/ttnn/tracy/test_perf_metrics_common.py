@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from pathlib import Path
 
 import pytest
 from tracy import perf_metrics_common as mc
@@ -217,7 +218,6 @@ def test_port1_side_of_the_read_write_split_follows_the_arch():
 
 def test_shipped_counter_type_table_matches_the_header():
     import json
-    from pathlib import Path
 
     shipped = json.loads((Path(mc.__file__).with_name("perf_counter_type_names.json")).read_text())
     assert {int(k): v for k, v in shipped.items()} == mc.perf_counter_type_names()
@@ -242,8 +242,7 @@ def test_l1_grant_ratios_stay_bounded_when_ready_exceeds_requests():
 
 
 def test_tech_report_catalogue_matches_metric_labels_exactly():
-    # The tech report is the single human-readable catalogue: every engine metric has exactly one
-    # row, no row is stale, and the label in the row is the engine's label.
+    # One catalogue row per engine metric, no stale rows, labels identical to the engine's.
     report = (Path(__file__).resolve().parents[3] / "tech_reports" / "PerfCounters" / "perf-counters.md").read_text()
     catalogue = {}
     for label_unit, key in re.findall(r"^\| (.+?) \| `([a-z0-9_]+)` \| `", report, re.M):

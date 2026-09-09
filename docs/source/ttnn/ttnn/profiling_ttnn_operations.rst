@@ -169,7 +169,7 @@ The profiler generates the standard ops performance CSV at ``generated/profiler/
 
 **Derived Metrics Reference**
 
-Derived metrics are computed per operation and per core, then aggregated to Min, Median, Max, and Avg columns across the cores of each operation in the CSV and console output. The formulas live in one shared module, ``tools/tracy/perf_metrics_common.py`` (also used by the tt-llk test harness), and the complete catalogue of all 106 metrics, grouped by topic with formulas and notes, is in the `PerfCounters tech report <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/PerfCounters/perf-counters.md#derived-metrics-reference>`_.
+Derived metrics are computed per operation and per core, then aggregated to Min, Median, Max, and Avg columns across the cores of each operation in the CSV and console output. The formulas live in one shared module, ``tools/tracy/perf_metrics_common.py`` (also used by the tt-llk test harness), and the complete catalogue of metrics, grouped by topic with formulas and notes, is in the `PerfCounters tech report <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/PerfCounters/perf-counters.md#derived-metrics-reference>`_.
 
 Two metric families appear in the output:
 
