@@ -36,8 +36,9 @@ or algorithm question:
 2. **The two recurrent state matmuls run on 4 of 110 cores.** 17% of the step,
    6.8x recoverable by changing the program class.
 3. **The active-slot mask is applied by blending the whole recurrent state**,
-   three broadcast ops plus two 213 us mask reshapes that the per-layer
-   harnesses never run, because they pass no mask. 8% of the step.
+   three broadcast ops over it plus a mask reshape the profile puts at 213 us —
+   none of which the per-layer harnesses run, because they pass no mask.
+   6% of the step.
 
 And the handoff's missing 114 ms was not a fourth thing: it was the wrong
 baseline row. See below.
@@ -231,10 +232,11 @@ movement op.
 
 `decay = 1` and `beta = 0` make the recurrence the exact identity for that row
 instead: `delta` is zero so the rank-1 update is zero, and the decay multiply is
-by one. Both are still `[1, 1, batch, heads]` when the gate is applied, so it is
-two ops on a single tile. Inactive rows still produce discarded outputs, which is
-what the previous code contracted for as well ("inactive rows keep their old
-state while still producing (discarded) outputs").
+by one. Both are still `[1, 1, batch, heads]` when the gate is applied — one
+tile — so it is two ops there plus one cheaper reshape of the mask. Inactive
+rows still produce discarded outputs, which is what the previous code contracted
+for as well ("inactive rows keep their old state while still producing
+(discarded) outputs").
 
 Measured alone, at 8 layers: 31.57 -> 29.72 ms, i.e. 0.28 ms per GDN layer,
 **13.5 ms across 48** — consistent with the 0.38 ms/layer gap between the layer
