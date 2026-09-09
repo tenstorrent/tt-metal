@@ -1074,55 +1074,45 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         }
     }
 
-    // Check if we have enough valid weight to satisfy min_count
     if (valid_weight < min_count) {
-        std::ostringstream oss;
-        oss << "Cardinality constraint incompatible with existing required constraints.\n";
-        oss << "  Required: at least " << min_count << " (weighted) pair(s) must be satisfied\n";
-        oss << "  Valid weight (compatible with required constraints): " << valid_weight << "\n";
-        oss << "  Invalid pairs (conflict with required constraints): " << invalid_pairs.size() << "\n";
-
-        if (!invalid_pairs.empty()) {
-            oss << "  Invalid pairs:\n";
-            for (const auto& [target, global] : invalid_pairs) {
-                auto valid_it = valid_mappings_.find(target);
-                if (valid_it != valid_mappings_.end() && !valid_it->second.empty()) {
-                    std::string valid_list;
-                    bool first = true;
-                    for (const auto& valid_global : valid_it->second) {
-                        if (!first) {
-                            valid_list += ", ";
-                        }
-                        first = false;
-                        valid_list += fmt::format("{}", valid_global);
-                    }
-                    oss << fmt::format("    - ({}, {}): {} is not in valid mappings for {} (valid: {})\n",
-                        fmt::format("{}", target), fmt::format("{}", global),
-                        fmt::format("{}", global), fmt::format("{}", target), valid_list);
-                } else if (valid_it != valid_mappings_.end()) {
-                    oss << fmt::format("    - ({}, {}): {} has no valid mappings (overconstrained)\n",
-                        fmt::format("{}", target), fmt::format("{}", global), fmt::format("{}", target));
-                } else {
-                    oss << fmt::format("    - ({}, {}): {} has required constraints that exclude {}\n",
-                        fmt::format("{}", target), fmt::format("{}", global),
-                        fmt::format("{}", target), fmt::format("{}", global));
-                }
-            }
+        if (quiet_mode_) {
+            log_debug(
+                tt::LogFabric,
+                "Cardinality constraint incompatible with required mappings: min_count={} valid_weight={} "
+                "invalid_pairs={}",
+                min_count,
+                valid_weight,
+                invalid_pairs.size());
+        } else {
+            log_info(
+                tt::LogFabric,
+                "Cardinality constraint incompatible with required mappings: min_count={} valid_weight={} "
+                "invalid_pairs={}",
+                min_count,
+                valid_weight,
+                invalid_pairs.size());
         }
-
-        log_info(tt::LogFabric, "{}", oss.str());
         return false;
     }
 
-    // Informational: some pairs were filtered but the constraint is still satisfiable (not an error).
     if (!invalid_pairs.empty()) {
-        log_debug(
-            tt::LogFabric,
-            "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
-            "but constraint is still satisfiable with {} remaining valid weight (min_count: {})",
-            invalid_pairs.size(),
-            valid_weight,
-            min_count);
+        if (quiet_mode_) {
+            log_debug(
+                tt::LogFabric,
+                "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
+                "but constraint is still satisfiable with {} remaining valid weight (min_count: {})",
+                invalid_pairs.size(),
+                valid_weight,
+                min_count);
+        } else {
+            log_info(
+                tt::LogFabric,
+                "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
+                "but constraint is still satisfiable with {} remaining valid weight (min_count: {})",
+                invalid_pairs.size(),
+                valid_weight,
+                min_count);
+        }
     }
 
     CardinalityConstraintEntry entry;
@@ -1185,42 +1175,34 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraint
         const auto& entry = cardinality_constraints_[i];
 
         size_t valid_weight = 0;
-        std::set<std::pair<TargetNode, GlobalNode>> invalid_pairs;
-
+        size_t invalid_pairs = 0;
         for (const auto& mapping_pair : entry.mapping_pairs) {
             const auto& [target_node, global_node] = mapping_pair;
             if (is_valid_mapping(target_node, global_node)) {
                 valid_weight += 1;
             } else {
-                invalid_pairs.insert(mapping_pair);
+                ++invalid_pairs;
             }
         }
 
         if (valid_weight < entry.min_count) {
-            std::ostringstream oss;
-            oss << "Cardinality constraint " << (i + 1) << " is unsatisfiable with current required constraints.\n";
-            oss << "  Required: at least " << entry.min_count << " (weighted) pair(s) must be satisfied\n";
-            oss << "  Valid weight (compatible with required constraints): " << valid_weight << "\n";
-            oss << "  Invalid pairs: " << invalid_pairs.size() << "\n";
-
-            if (!invalid_pairs.empty()) {
-                oss << "  Invalid pairs:\n";
-                for (const auto& [target, global] : invalid_pairs) {
-                    auto valid_it = valid_mappings_.find(target);
-                    if (valid_it != valid_mappings_.end() && !valid_it->second.empty()) {
-                        oss << fmt::format("    - ({}, {}): {} is not in valid mappings for {}\n",
-                            fmt::format("{}", target), fmt::format("{}", global),
-                            fmt::format("{}", global), fmt::format("{}", target));
-                    } else {
-                        oss << fmt::format("    - ({}, {}): {} has no valid mappings\n",
-                            fmt::format("{}", target), fmt::format("{}", global),
-                            fmt::format("{}", target));
-                    }
-                }
+            if (quiet_mode_) {
+                log_debug(
+                    tt::LogFabric,
+                    "Cardinality constraint {} unsatisfiable: min_count={} valid_weight={} invalid_pairs={}",
+                    i + 1,
+                    entry.min_count,
+                    valid_weight,
+                    invalid_pairs);
+            } else {
+                log_info(
+                    tt::LogFabric,
+                    "Cardinality constraint {} unsatisfiable: min_count={} valid_weight={} invalid_pairs={}",
+                    i + 1,
+                    entry.min_count,
+                    valid_weight,
+                    invalid_pairs);
             }
-
-            // Log info message instead of throwing
-            log_info(tt::LogFabric, "{}", oss.str());
             return false;
         }
     }
