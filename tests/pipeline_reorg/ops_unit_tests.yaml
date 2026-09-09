@@ -47,6 +47,25 @@
   team: ttnn
   category: matmul
 
+# Keep the host gtest subprocess ahead of any Python device fixture.
+# The ops workflow downloads the build artifact containing unit_tests_ttnn.
+- name: ttnn multicast helper tests
+  cmd: >-
+    scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_prepared_host.py -xv --timeout=300 &&
+    scripts/run_safe_pytest.sh
+    tests/ttnn/unit_tests/kernel_lib/test_mcast_family.py
+    tests/ttnn/unit_tests/kernel_lib/test_mcast_prepared_device.py
+    tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py
+    -xv --timeout=300
+  skus:
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  category: fused
+
 - name: ttnn nightly fused tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:

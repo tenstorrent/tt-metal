@@ -86,11 +86,12 @@ def test_alternating_prepared_payload(device, noc, caller_managed, width, sender
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
+@pytest.mark.parametrize("caller_managed", [False, True], ids=["guard", "caller-managed"])
 @pytest.mark.parametrize(
     "width,senders,rotating", [(1, [0], False), (2, [0], False), (2, [2], False), (2, [0, 2], True)]
 )
-def test_prepared_control(device, noc, counter, width, senders, rotating):
-    _run(device, width, senders, rotating, noc, counter, True, False, False)
+def test_prepared_control(device, noc, counter, caller_managed, width, senders, rotating):
+    _run(device, width, senders, rotating, noc, counter, True, False, caller_managed)
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -105,3 +106,12 @@ def test_mixed_local_only_sender_turn(device, noc, control):
     # The helper-wide remote flag is true, but core 0's own sender turn is LocalCopy.
     # Flag is intentional: the known rotating Counter early-return issue is mock-only.
     _run(device, 1, [0, 1], True, noc, False, control, True, True)
+
+
+@pytest.mark.parametrize("noc", [0, 1])
+@pytest.mark.parametrize("counter", [False, True])
+@pytest.mark.parametrize("control", [False, True])
+@pytest.mark.parametrize("width", [1, 2])
+def test_single_sender_rotating_config(device, noc, counter, control, width):
+    # The public rotating wrapper config with one sender now resolves to a fixed group.
+    _run(device, width, [0], True, noc, counter, control, True, False)

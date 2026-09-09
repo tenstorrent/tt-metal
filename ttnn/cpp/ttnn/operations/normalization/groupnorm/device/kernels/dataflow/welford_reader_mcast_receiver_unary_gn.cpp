@@ -6,18 +6,19 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
-#include "noc_parameters.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
+#ifdef GN_DISTRIBUTED_AG
     constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
     constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
-
+#endif
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
     constexpr uint32_t num_groups = num_batch_group / num_batches;
@@ -40,13 +41,17 @@ void kernel_main() {
     constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
+#ifndef GN_DISTRIBUTED_AG
+    constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+#endif
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
-
+#ifdef GN_DISTRIBUTED_AG
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
+#endif
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -64,9 +69,18 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
 
+#ifdef GN_DISTRIBUTED_AG
     const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+#else
+    constexpr uint32_t operation_rt_args_end = 5;
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+        reduction_mcast_args;
+
+    const Noc noc;
+    auto reduction_pipe = reduction_mcast_args.receiver(noc);
+#endif
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -184,12 +198,7 @@ void kernel_main() {
             p_global_vars[0] = local_result.variance;
 
 #ifndef GN_DISTRIBUTED_AG
-            // Signal to sender that our partial data is ready
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-
-            // Wait for sender to signal that it has sent the global data
-            reduce_sender_sem.wait(VALID);
-            reduce_sender_sem.set(INVALID);
+            reduction_pipe.receive();
 #endif
 
             local_means_ptr += local_stride_per_group;

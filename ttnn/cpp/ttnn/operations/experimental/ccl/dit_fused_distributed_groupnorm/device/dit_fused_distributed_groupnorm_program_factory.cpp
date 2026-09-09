@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -444,6 +445,17 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t arrival_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
     const uint32_t go_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
 
+    const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    std::optional<ttnn::kernel_lib::host::McastFamily> reduction_family;
+    if (!use_mux) {
+        reduction_family.emplace(ttnn::prim::make_group_norm_mcast_family(
+            device,
+            mcast_groups,
+            ttnn::kernel_lib::host::McastConfig{
+                .noc = reader_noc,
+                .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}}));
+    }
+
     // Kernels are the stock welford GroupNorm kernels plus the shared fused-norm CCL forwarder. The
     // only fused-specific behaviour lives behind GN_DISTRIBUTED_AG in the two reader kernels; the
     // compute/writer kernels are used verbatim. At ring_size == 1 the define is not set, so the
@@ -459,9 +471,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     // ------------------------------------------------------------------------
     // Reader compile-time args. Named args mirror the stock welford GN reader exactly; the
-    // TensorAccessor blocks stay positional. The master appends the stats-DRAM accessor after
-    // src0 (the stock reader only declares src0, so the extra block is inert unless
-    // GN_DISTRIBUTED_AG is set).
+    // TensorAccessor blocks stay positional. The distributed master appends the stats-DRAM
+    // accessor after src0. Local readers append the output accessor and multicast helper arguments.
     // ------------------------------------------------------------------------
     const std::unordered_map<std::string, uint32_t> reader_named_ct = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
@@ -521,7 +532,10 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     }
     std::vector<uint32_t> sender_reader_ct;
     TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
-    TensorAccessorArgs(use_mux ? stats_dram_buffer : input_tensor.buffer()).append_to(sender_reader_ct);
+    TensorAccessorArgs(use_mux ? stats_dram_buffer : output_tensor.buffer()).append_to(sender_reader_ct);
+    if (!use_mux) {
+        reduction_family->append_compile_time_args_to(sender_reader_ct, /*pre_handshake=*/false);
+    }
 
     KernelHandle sender_reader_kernel_id = CreateKernel(
         program,
@@ -534,6 +548,10 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     if (has_receivers) {
         std::vector<uint32_t> receiver_reader_ct;
         TensorAccessorArgs(input_tensor.buffer()).append_to(receiver_reader_ct);
+        if (!use_mux) {
+            TensorAccessorArgs(output_tensor.buffer()).append_to(receiver_reader_ct);
+            reduction_family->append_compile_time_args_to(receiver_reader_ct, /*pre_handshake=*/true);
+        }
         receiver_reader_kernel_id = CreateKernel(
             program,
             gn_kernel_base + "dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
@@ -683,8 +701,6 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         out_ready_sem_bank_addr = args.multi_device_global_semaphore.at(0).address();
     }
 
-    const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-
     CoreCoord forwarder_virtual = {};
     if (use_mux) {
         forwarder_virtual = mesh_device->worker_core_from_logical_core(forwarder_cores[0]);
@@ -707,6 +723,18 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
             if (j == 0) {  // mcast-group master (sender reader + fabric)
                 sender_cores_out.push_back(core);
+                if (!use_mux) {
+                    std::vector<uint32_t> rt = {input_addr, output_addr, in0_start_id, out_tile_start_id, Wt};
+                    for (const auto& peer : group) {
+                        rt.push_back(device->worker_core_from_logical_core(peer).x);
+                    }
+                    for (const auto& peer : group) {
+                        rt.push_back(device->worker_core_from_logical_core(peer).y);
+                    }
+                    reduction_family->append_runtime_args_to(rt, core);
+                    SetRuntimeArgs(program, sender_reader_kernel_id, core, rt);
+                    continue;
+                }
                 std::vector<CoreCoord> mcast_group_first;
                 std::vector<CoreCoord> mcast_group_mid(group);
                 std::vector<CoreCoord> mcast_group_last;
@@ -795,15 +823,14 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                 SetRuntimeArgs(program, sender_reader_kernel_id, core, rt);
             } else {  // receiver reader
                 receiver_cores_out.push_back(core);
-                CoreCoord sender_virtual = device->worker_core_from_logical_core(group.front());
-                std::vector<uint32_t> rt = {
-                    input_addr,
-                    output_addr,
-                    in0_start_id,
-                    out_tile_start_id,
-                    Wt,
-                    static_cast<uint32_t>(sender_virtual.x),
-                    static_cast<uint32_t>(sender_virtual.y)};
+                std::vector<uint32_t> rt = {input_addr, output_addr, in0_start_id, out_tile_start_id, Wt};
+                if (use_mux) {
+                    const CoreCoord sender_virtual = device->worker_core_from_logical_core(group.front());
+                    rt.push_back(static_cast<uint32_t>(sender_virtual.x));
+                    rt.push_back(static_cast<uint32_t>(sender_virtual.y));
+                } else {
+                    reduction_family->append_runtime_args_to(rt, core);
+                }
                 SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
             }
         }

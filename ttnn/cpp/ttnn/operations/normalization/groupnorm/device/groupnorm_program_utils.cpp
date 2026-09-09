@@ -15,9 +15,9 @@
 namespace ttnn::prim {
 
 uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
-    const float sc = 1.0f / std::sqrt(
-                                static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) /
-                                static_cast<float>(padded_hw));
+    const float sc =
+        1.0f /
+        std::sqrt(static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
     return std::bit_cast<uint32_t>(sc);
 }
 
@@ -163,59 +163,23 @@ int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     return 1;
 }
 
-bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords) {
-    if (core_coords.empty()) {
-        return true;
-    }
-
-    int min_x = std::numeric_limits<int>::max();
-    int max_x = std::numeric_limits<int>::min();
-    int min_y = std::numeric_limits<int>::max();
-    int max_y = std::numeric_limits<int>::min();
-
-    for (const auto& coord : core_coords) {
-        min_x = std::min(min_x, static_cast<int>(coord.x));
-        max_x = std::max(max_x, static_cast<int>(coord.x));
-        min_y = std::min(min_y, static_cast<int>(coord.y));
-        max_y = std::max(max_y, static_cast<int>(coord.y));
-    }
-
-    return ((max_x - min_x + 1) * (max_y - min_y + 1)) == static_cast<int>(core_coords.size());
-}
-
-void split_and_form_rectangle_grids(
-    std::vector<tt::tt_metal::CoreCoord>& group,
-    std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,
-    std::vector<tt::tt_metal::CoreCoord>& mcast_group_mid,
-    std::vector<tt::tt_metal::CoreCoord>& mcast_group_last) {
-    size_t remove_front = 0;
-    size_t remove_back = 0;
-    size_t min_total_removal = group.size();
-
-    for (size_t front = 0; front <= group.size(); ++front) {
-        for (size_t back = 0; front + back <= group.size(); ++back) {
-            if (is_rectangle_grid(std::vector<tt::tt_metal::CoreCoord>(group.begin() + front, group.end() - back))) {
-                size_t total_removal = front + back;
-                if (total_removal < min_total_removal) {
-                    min_total_removal = total_removal;
-                    remove_front = front;
-                    remove_back = back;
-                }
-            }
+kernel_lib::host::McastFamily make_group_norm_mcast_family(
+    tt::tt_metal::IDevice* device,
+    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& groups,
+    const kernel_lib::host::McastConfig& config) {
+    std::vector<kernel_lib::host::McastGroup> reduction_groups;
+    reduction_groups.reserve(groups.size());
+    for (const auto& group : groups) {
+        TT_FATAL(!group.empty(), "GroupNorm reduction group must not be empty");
+        std::vector<tt::tt_metal::CoreRange> receivers;
+        receivers.reserve(group.size());
+        for (const auto& core : group) {
+            receivers.emplace_back(core, core);
         }
+        reduction_groups.emplace_back(
+            tt::tt_metal::CoreRangeSet(std::move(receivers)), std::vector<tt::tt_metal::CoreCoord>{group.front()});
     }
-
-    // Pop and push the front outliers
-    for (size_t i = 0; i < remove_front; ++i) {
-        mcast_group_first.push_back(mcast_group_mid.front());
-        mcast_group_mid.erase(mcast_group_mid.begin());
-    }
-
-    // Pop and push the back outliers
-    for (size_t i = 0; i < remove_back; ++i) {
-        mcast_group_last.push_back(mcast_group_mid.back());
-        mcast_group_mid.pop_back();
-    }
+    return kernel_lib::host::McastFamily(device, std::move(reduction_groups), config);
 }
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width) {
