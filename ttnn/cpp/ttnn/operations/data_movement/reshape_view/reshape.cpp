@@ -592,8 +592,6 @@ ttnn::Tensor reshape_via_codegen(
 
 }  // namespace
 
-}  // namespace ttnn::operations::data_movement
-
 namespace {
 
 enum class ReshapeRouteMode { kAuto, kForceNative, kForceCodegen };
@@ -744,6 +742,8 @@ ttnn::Tensor reshape_dispatch(
 }
 
 }  // namespace
+
+}  // namespace ttnn::operations::data_movement
 
 // Free function implementations
 ttnn::Tensor ttnn::reshape(
