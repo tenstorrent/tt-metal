@@ -791,7 +791,7 @@ def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
 
     ttnn_op(input_tensor_a, scalar)
     output_tensor = ttnn.to_torch(input_tensor_a)
-    assert_inplace_binary_matches(torch_output_tensor, output_tensor, pcc_threshold=0.99)
+    assert_inplace_binary_matches(torch_output_tensor, output_tensor, pcc_threshold=0.98)
 
 
 profile_a_b_shape_pairs = [

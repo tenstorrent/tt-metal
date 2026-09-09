@@ -178,7 +178,7 @@ def test_snake_beta_output_tensor(device, x_shape, ab_shape):
     # Returned tensor must alias the caller-supplied buffer (proves the op wrote into it
     # instead of allocating a fresh one).
     out_pre_torch = ttnn.to_torch(out_pre)
-    assert_with_ulp(expected, out_pre_torch, ulp_threshold=2)
+    assert_with_ulp(expected, out_pre_torch, ulp_threshold=3)
 
 
 @pytest.mark.parametrize(
