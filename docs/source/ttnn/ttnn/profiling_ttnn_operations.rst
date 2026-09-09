@@ -163,7 +163,7 @@ Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 clien
 
 With ``--perf-counter-multipass`` a request is split into passes (at most three groups and one L1 bank per pass) and ``all`` expands to the architecture's full group set.
 
-**Quasar**: each NEO has its own ``fpu``, ``pack``, ``unpack`` and ``instrn`` units and DM0 reads all four NEOs, so every metric is reported per NEO (the ``risc_type`` of a counter row is ``QUASAR_NEO<n>``). Quasar has no L1 counter groups; ``all`` maps to ``fpu,pack,unpack,instrn``. The l1_client event counter is one CSR behind a subport/event mux, routed per run with ``TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=<subport*8 + event>`` (37 subports, 8 events); its metric is named after the selection (see *Quasar-Only Metrics*).
+**Quasar**: each NEO has its own ``fpu``, ``pack``, ``unpack`` and ``instrn`` units and DM0 reads all four NEOs, so every metric is reported per NEO (the ``risc_type`` of a counter row is ``QUASAR_NEO<n>``). Quasar has no L1 counter groups; ``all`` maps to ``fpu,pack,unpack,instrn``. The l1_client event counter is one CSR behind a subport/event mux, routed per run with ``TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=<subport*8 + event>`` (37 subports, 8 events); its metric is named after the selection (see *Per-class, per-unpacker and Quasar-only metrics* below).
 
 **Output**
 
@@ -193,12 +193,6 @@ The per-class instruction availability, per-unpacker busy and issue-ready metric
 - **FPU SFPU Overlap (%)**: ``max(0, FPU_COUNTER + SFPU_COUNTER - MATH_COUNTER) / ref_cnt``, the cycles both units were busy at once (``MATH_COUNTER`` counts fpu-or-sfpu cycles).
 - **T0..T3 Instrn Per Issue-Ready Cycle** (ratio): ``THREAD_INSTRUCTIONS_<t> / max(1, ref_cnt - THREAD_STALLS_<t>)``, instructions issued per cycle the thread was not stalled.
 - **L1_CLIENT_<PORT>_<EVENT> Rate (%)**: the l1_client counter selected for the run over the wall-clock span of the capture window, named after the selection (e.g. ``L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP Rate``). Carry events (``*_CARRY`` other than ``PENDING_REQS``) pulse once per four lane events, so their rates are scaled by 4. The column is dynamic and appears after the fixed perf counter columns. Events 1-3 count per SBank of the port rather than per lane (so THCON aliases TRISC SBank 0), and the pending-request carry is left raw because its divisor differs per port.
-
-*Composite Metrics*
-
-- **Stall Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
-- **Compute-to-Unpack Ratio (%)**: MATH_COUNTER / unpack busy. >100% = compute-bound, <100% = memory-bound.
-- **T0/T1/T2 Instrn Issue Rate (%)**: Instructions issued per cycle per thread (``THREAD_INSTRUCTIONS_N / ref_cnt``).
 
 **Architecture Differences**
 
