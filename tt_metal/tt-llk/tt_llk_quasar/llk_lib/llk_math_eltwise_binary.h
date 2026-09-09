@@ -13,6 +13,23 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 /**
+ * @brief Dest/Src occupancy of one face for FPU eltwise binary.
+ *
+ * Pack dest is sparse below 8-row faces: each face occupies an ELTWISE_MATH_ROWS slot
+ * (see _llk_pack_). Using the raw face_r_dim here makes MOP_OUTER_LOOP = 0 for 1x32/2x32.
+ */
+inline std::uint32_t _eltwise_binary_rows_per_face_(const ckernel::TensorShape& tensor_shape)
+{
+    const std::uint32_t face_r_dim = static_cast<std::uint32_t>(tensor_shape.face_r_dim);
+    return (face_r_dim < ELTWISE_MATH_ROWS) ? ELTWISE_MATH_ROWS : face_r_dim;
+}
+
+inline std::uint32_t _eltwise_binary_dest_rows_per_tile_(const ckernel::TensorShape& tensor_shape)
+{
+    return static_cast<std::uint32_t>(tensor_shape.total_num_faces()) * _eltwise_binary_rows_per_face_(tensor_shape);
+}
+
+/**
  * @brief Build the encoded FPU instruction (ELWADD/ELWSUB/ELWMUL) for the given binary op type.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
@@ -100,7 +117,7 @@ template <
 inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     const std::uint32_t rows_per_mop_run =
-        (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? tensor_shape.face_r_dim : (tensor_shape.total_num_faces() * tensor_shape.face_r_dim);
+        (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? _eltwise_binary_rows_per_face_(tensor_shape) : _eltwise_binary_dest_rows_per_tile_(tensor_shape);
     constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     // For reuse_dest + Elwmul we need dest accumulation (dest = old_dest + srcA*srcB) ; LoFi alone sets EN_DST_ACC=0.
@@ -109,7 +126,8 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
     constexpr std::uint8_t addrmod_fid    = high_fidelity ? ADDR_MOD_2 : ADDR_MOD_0;
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, addrmod_fid>(EN_DST_ACC);
 
-    const std::uint32_t MOP_OUTER_LOOP     = (rows_per_mop_run >> rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t MOP_OUTER_LOOP = (rows_per_mop_run >> rows_log2(ELTWISE_MATH_ROWS));
+    LLK_ASSERT(MOP_OUTER_LOOP > 0, "eltwise binary MOP outer loop must be non-zero");
     constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
 
     const std::uint32_t eltwise_binary_op_clr_valid =
@@ -142,10 +160,11 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
-    const std::uint32_t total_num_rows_per_tile = tensor_shape.total_num_faces() * tensor_shape.face_r_dim;
+    const std::uint32_t total_num_rows_per_tile = _eltwise_binary_dest_rows_per_tile_(tensor_shape);
     const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS));
-    constexpr std::uint32_t MOP_INNER_LOOP      = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
-    constexpr bool high_fidelity                = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    LLK_ASSERT(REPLAY_BUF_LEN > 0, "eltwise binary direct-index replay length must be non-zero");
+    constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr bool high_fidelity           = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
 
@@ -298,6 +317,8 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
         addr_mod_t {}.set(ADDR_MOD_3);
     }
 
+    _set_tile_shape_idx_gpr_(_eltwise_binary_dest_rows_per_tile_(tensor_shape));
+
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -319,7 +340,7 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape, const bool clear_in_fp32_mode = false)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
