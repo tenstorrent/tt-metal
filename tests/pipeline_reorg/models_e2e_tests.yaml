@@ -949,43 +949,22 @@
   team: models
 
 # ── FLUX.2 (TT-DiT) ────────────────────────────────────────────────
-# bh_sc1 only, deliberately. The perf test always traces (trace_warmup=True, traced=True), and
-# on 4 chips the bh_qb row cannot run either way: with dynamic_load=False the encoder OOMs part
-# way through weight conversion with DRAM ~99% full, and dynamic_load=True needs the
-# release_traces() fix on branch stisi/flux2-qb2 (92919ba7f5d), because a trace bakes its
-# weights' device addresses and dynamic_load evicts them. The 4x8 galaxy rows need neither: 32
-# chips hold the whole pipeline resident. They also run Ring topology, the path the
-# ColParallelLinear addcmul bug does not affect. Add a bh_quietbox_2 leg once that fix lands.
-# Confirmed on run 33889272485: bh_qb (2,2), 1024x1024, PASS, 92.3s/image, 31m cold (most of
-# which was the one-time converted-weight build now cached on the mount). Viable only since
-# #55364 -- the perf test's bh_qb row is dynamic_load=True + trace_warmup, which OOMs or replays
-# freed weights without that fix.
 - name: TT-DiT Flux.2-dev e2e tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
-    # Both select the one (2,2) row a 4-chip box matches (the perf rows carry
-    # require_exact_physical_num_devices; the pipeline rows skip 8/32-device configs by count),
-    # at 1024x1024 -- resolutions run to 8192. Both run, and the leg fails if either did; they
-    # share the 2x2 converted-weight cache so the second is warm.
     status=0
-    # Perf: measures throughput and asserts the PERF_THRESHOLDS. Confirmed on run 33889272485
-    # (PASS, 92.3s/image).
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
       -k "bh_qb and 1024x1024" || status=1
-    # Pipeline: the real generate path (create_pipeline -> denoise -> decode -> save). A smoke
-    # test, no PCC assert. Confirmed on run 33910468525 (PASS, saved a 1024x1024 image).
+    # smoke test only.
     pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k 2x2 || status=1
     exit $status
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      # 75 min. The two tests share the 2x2 converted-weight cache, so only the first pays the
-      # one-time build (persisted on the mount); measured cold, perf was 31m and pipeline 28m.
-      # Above the sum of the pytest --timeouts (70 min) so a hang fails cleanly.
       timeout: 75
       tier: 1
       release_ready: false
@@ -993,20 +972,8 @@
   team: models
 
 - name: TT-DiT Flux.2-dev multihost e2e tests
-  # BLOCKED as of run 33690418331: the FLUX.2-dev snapshot pre-staged on this SKU's
-  # /mnt/models/huggingface is incomplete -- it has transformer, text_encoder, tokenizer and vae
-  # (the unit leg passes on all of them) but no scheduler/. The pipeline needs the scheduler, HF
-  # tries to mkdir the subfolder to fetch it, and the mount is read-only for the job's user:
-  #   PermissionError: [Errno 13] Permission denied:
-  #   '/mnt/models/huggingface/hub/models--black-forest-labs--FLUX.2-dev/snapshots/<sha>/scheduler'
-  # The unit leg survives the same read-only mount -- it only logs "Could not cache non-existence
-  # of file" warnings -- because everything it needs is already there. Fix is to complete the
-  # staged snapshot, then set HF_HUB_OFFLINE=1 here as the LTX-2.3 bh_sc1 legs do; that is a
-  # mount-owner task, not a code change.
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
-    # scheduler/ is missing from the staged snapshot (see above), so the hub is still needed --
-    # and cannot help while the mount is read-only. Switch to HF_HUB_OFFLINE=1 once staged.
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
@@ -1014,10 +981,6 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    # One config, one resolution. require_exact_physical_num_devices leaves all four 4x8 rows
-    # eligible on a galaxy, so the mesh id is still needed here to pick the headline Ring config;
-    # 1024x1024 matches what the Flux.1 legs measure and keeps the other three resolutions
-    # (up to 8192) out of a nightly.
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 4200 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
         -k "bh_glx_ring_sp0tp1_nofsdp and 1024x1024"
@@ -1025,7 +988,6 @@
   model_family: Flux
   skus:
     bh_sc1:
-      # First-run allowance: FLUX.2-dev is not staged on this mount. Recalibrate after one run.
       timeout: 75
       tier: 1
       release_ready: false
