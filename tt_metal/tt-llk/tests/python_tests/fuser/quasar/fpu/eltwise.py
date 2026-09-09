@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.eltwise import eltwise_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from helpers.llk_params import (
@@ -19,8 +19,7 @@ from helpers.llk_params import (
 
 class EltwiseFpu(Fpu):
     granularity = InvocationGranularity.TILE
-
-    per_call_golden = True
+    golden_fn = staticmethod(eltwise_golden)
 
     def __init__(self, operation: MathOperation):
         if not operation in MathOperation.get_fpu_binary_operations():
@@ -35,19 +34,6 @@ class EltwiseFpu(Fpu):
             "llk_math_eltwise_binary.h",
             "llk_math_eltwise_binary_broadcast.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        tensor_dst: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.eltwise_golden(
-            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
-        )
 
     def init(
         self,

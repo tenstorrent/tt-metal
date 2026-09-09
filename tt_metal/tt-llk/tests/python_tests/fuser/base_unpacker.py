@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TYPE_CHECKING, List, Tuple
-
-import torch
+from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
@@ -12,19 +10,19 @@ if TYPE_CHECKING:
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
-from .golden import Golden
+from .golden.state import OutputLayout
 from .indexing import InvocationGranularity
 
 
-class Unpacker(Golden):
+class Unpacker:
     """Base class for fused test unpacker code generators.
 
     Subclasses represent specific unpack operations (e.g. UnpackerA, MatmulUnpacker, etc.)
     and override methods to emit the C++ LLK calls that configure and
-    drive the Unpack thread, plus a Python golden function for test validation.
+    drive the Unpack thread.
 
     The lifecycle called by the pipeline is:
-        init() -> loop.unpack_loop() [which calls unpack()] -> uninit()
+        init() -> planned calls to unpack() -> uninit()
 
     Set `granularity` to the number of tiles one call covers, to control
     the tile iteration pattern used by the unpack phases.
@@ -37,9 +35,7 @@ class Unpacker(Golden):
         2. Set `granularity` to the tiles one call covers
         3. Override get_headers() with the required LLK header files
         4. Override init(), unpack(), uninit() to emit the C++ LLK calls
-        5. Override golden() to compute the expected unpack transformation,
-           calling self.tilize_golden() / self.transpose_golden() /
-           self.broadcast_golden() as needed
+        5. Bind the corresponding callable from fuser.golden.unpack
         6. Override perf_set_valid() / perf_clear_valid() for perf isolation
     """
 
@@ -47,27 +43,7 @@ class Unpacker(Golden):
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
 
-    per_call_golden: bool = False
-
-    def supports_per_call(self, node) -> bool:
-        return self.per_call_golden and (
-            self.granularity == InvocationGranularity.TILE
-            or getattr(node, "custom", False)
-        )
-
-    def golden_call(
-        self,
-        call,
-        inputs,
-        srcs,
-        compute_unit: "FpuNode",
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> None:
-        srcs.push(
-            inputs.tile_a(call.in0),
-            inputs.tile_b(call.in1),
-        )
+    output_layout = OutputLayout.ROW_MAJOR
 
     def init(
         self,
@@ -76,13 +52,7 @@ class Unpacker(Golden):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that initializes the unpacker.
-
-        Called once per block before the unpack loop begins. Override to emit
-        the _llk_unpack_*_init_<>() call with the appropriate parameters
-
-        Skipped during PACK_ISOLATE and MATH_ISOLATE perf runs.
-        """
+        """Return C++ code that initializes the unpacker before the tile loop."""
         return ""
 
     def unpack(
@@ -92,13 +62,8 @@ class Unpacker(Golden):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that unpacks a single tile (or tile group).
-
-        Called for each planned invocation. Use block.tile_id_global
-        for the L1 buffer index and block.tile_id_block for the dest register index.
-        Override to emit the _llk_unpack_*_<>() call that moves data from L1 into
-        source register files.
-        """
+        """Return C++ code for one planned unpack call (L1 index in
+        block.tile_id_global, dest index in block.tile_id_block)."""
         return ""
 
     def uninit(
@@ -108,13 +73,7 @@ class Unpacker(Golden):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that tears down the unpacker after the tile loop.
-
-        Called once per block after the unpack loop completes. Override to emit
-        the _llk_unpack_*_uninit_() call that restores unpacker state.
-
-        Skipped during PACK_ISOLATE and MATH_ISOLATE perf runs.
-        """
+        """Return C++ code that tears down the unpacker after the tile loop."""
         return ""
 
     def perf_set_valid(
@@ -146,29 +105,5 @@ class Unpacker(Golden):
         return ""
 
     def get_headers(self) -> List[str]:
-        """Return the list of C++ LLK header filenames required by this unpacker.
-
-        These headers are #included in the generated test source file. Override to
-        return the headers that declare the _llk_unpack_*_ functions used by init(),
-        unpack(), and uninit().
-        """
+        """Return the LLK header filenames that declare this unpacker's generated calls."""
         return []
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-        compute_unit: "FpuNode" = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Compute the golden unpack transformation in Python.
-
-        Returns (tensor_a, tensor_b) after applying the unpack transforms
-        (transpose, broadcast, tilize, etc.). Set an output tensor to None
-        to indicate that operand is unused by downstream math.
-
-        Called by FpuNode.golden() before the math golden. The returned tensors
-        become the math unit's inputs.
-        """
-        return tensor_a, tensor_b

@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TYPE_CHECKING, Tuple
-
-import torch
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
@@ -155,37 +153,6 @@ class FpuNode:
         if config.skip_math_init:
             return ""
         return self.fpu.uninit(operation, config, self, block)
-
-    def golden(
-        self,
-        input_tensor_a,
-        input_tensor_b,
-        tensor_a,
-        tensor_b,
-        tensor_dst,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.unpacker is not None and self.src_a is not None:
-            unpacked_tensor_a, unpacked_tensor_b = self.unpacker.golden(
-                input_tensor_a, input_tensor_b, operation, config, self
-            )
-
-            if unpacked_tensor_a is not None:
-                tensor_a = unpacked_tensor_a
-
-            if unpacked_tensor_b is not None:
-                tensor_b = unpacked_tensor_b
-
-        tensor_a, tensor_b, tensor_dst = self.fpu.golden(
-            tensor_a, tensor_b, tensor_dst, operation, config, self
-        )
-
-        return (
-            tensor_a,
-            tensor_b,
-            tensor_dst.reshape(operation.max_output_dimensions),
-        )
 
     def __str__(self):
         unpacker = (

@@ -4,19 +4,17 @@
 
 from typing import List, Tuple
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unpack_a import unpack_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
 from helpers.llk_params import (
-    BroadcastType,
     DestAccumulation,
     EltwiseBinaryReuseDestType,
-    UnpackToDest,
 )
 
 
@@ -48,37 +46,7 @@ def _unp_sel(compute_unit: FpuNode) -> str:
 
 class UnpackerA(Unpacker):
     granularity = InvocationGranularity.ROW
-
-    per_call_golden = True
-
-    def supports_per_call(self, node) -> bool:
-        return super().supports_per_call(node) and (
-            node.unpack_to_dest == UnpackToDest.No
-        )
-
-    def golden_call(
-        self,
-        call,
-        inputs,
-        srcs,
-        compute_unit: FpuNode,
-        operation: L1Operation,
-        config: GlobalConfig,
-    ) -> None:
-        tile = inputs.tile_a(call.in0)
-        if compute_unit.broadcast_type != BroadcastType.None_:
-            tile_a, tile_b = None, self.broadcast_tile_golden(
-                tile, operation, compute_unit, compute_unit.src_a
-            )
-        else:
-            tile_a, tile_b = (
-                self.transpose_tile_golden(tile, config, operation, compute_unit),
-                None,
-            )
-        tile_a, tile_b = self.reuse_dest_golden(
-            tile_a, tile_b, config, operation, compute_unit
-        )
-        srcs.push(tile_a, tile_b)
+    golden_fn = staticmethod(unpack_a_golden)
 
     per_block_init = True
 
@@ -95,22 +63,6 @@ class UnpackerA(Unpacker):
             "llk_unpack_unary_operand.h",
             "llk_math_common.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tensor_a = self.transpose_golden(tensor_a, config, operation, compute_unit)
-
-        tensor_a, tensor_b = self.reuse_dest_golden(
-            tensor_a, tensor_b, config, operation, compute_unit
-        )
-
-        return tensor_a, tensor_b
 
     def _perf_valid_args(
         self,

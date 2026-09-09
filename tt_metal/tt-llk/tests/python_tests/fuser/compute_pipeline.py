@@ -5,8 +5,6 @@
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Dict, List, Tuple, Union
 
-import torch
-
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
@@ -25,22 +23,20 @@ from .base_sfpu import Sfpu
 from .base_unpacker import Unpacker
 from .block_data import BlockData
 from .fpu_node import FpuNode
-from .golden_state import (
+from .golden.state import (
     DestBank,
+    GoldenState,
     Inputs,
     OperandTiles,
-    OutputTiles,
-    SourceRegisters,
+    OutputLayout,
+    finalize_output,
     tile_dimensions,
 )
 from .indexing import (
     BANK_VAR,
     DEST_SLOTS,
     INDEX_NAMES,
-    TILE_X,
-    TILE_Y,
     BlockRegion,
-    InvocationGranularity,
     Level,
     LoopPlan,
     SlotIndex,
@@ -80,8 +76,6 @@ class ComputePipeline:
             getattr(node, "loop_spec", None) is not None
             for node in math_nodes + pack_nodes
         )
-        for node in math_nodes + pack_nodes:
-            node.custom = self.custom_op
 
     def _get_pack_nodes(self) -> List[PackNode]:
         return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
@@ -116,7 +110,7 @@ class ComputePipeline:
 
         slots = dict(plan.slots)
         origins = dict(plan.origins)
-        declared = {lv.var for lv in plan.bank_levels + plan._golden_levels}
+        declared = {lv.var for lv in plan.bank_levels + plan.call_levels}
         template_lens = [
             len(v)
             for s, v in slot_overrides.items()
@@ -158,9 +152,7 @@ class ComputePipeline:
         else:
             slots = ["dest"]
 
-        is_custom = getattr(node, "loop_spec", None) is not None
-        base_gran = InvocationGranularity.TILE if is_custom else granularity
-        plan = default_plan(region, base_gran, slots, row_tiles)
+        plan = default_plan(region, granularity, slots, row_tiles)
         overrides = {}
 
         if role == "sfpu":
@@ -187,12 +179,6 @@ class ComputePipeline:
         if overrides:
             plan = replace(plan, slots={**plan.slots, **overrides})
 
-        if is_custom:
-            plan = replace(
-                plan,
-                golden_levels=plan.call_levels,
-                call_levels=self._natural_levels(granularity, region),
-            )
         return self._apply_loop_spec(plan, node.loop_spec)
 
     @staticmethod
@@ -201,17 +187,6 @@ class ComputePipeline:
         if config.dest_acc == DestAccumulation.Yes:
             faces //= 2
         return faces // operation.tile_shape.total_num_faces()
-
-    @staticmethod
-    def _natural_levels(granularity, region):
-        if granularity == InvocationGranularity.TILE:
-            return (
-                Level(TILE_X, region.block_tiles_x),
-                Level(TILE_Y, region.block_tiles_y),
-            )
-        if granularity == InvocationGranularity.ROW:
-            return (Level(TILE_Y, region.block_tiles_y),)
-        return ()
 
     def _planned(
         self, operation: "L1Operation", config: "GlobalConfig"
@@ -253,44 +228,24 @@ class ComputePipeline:
                 tile_id_block="0",
             )
             plans: Dict[Tuple[int, str], LoopPlan] = {}
+
+            def add_plan(node, role, unit):
+                plans[(id(node), role)] = self._plan_node(
+                    node, role, region, unit.granularity, row_tiles
+                )
+
             for node in self.math_nodes:
                 if isinstance(node, SfpuNode):
-                    plans[(id(node), "sfpu")] = self._plan_node(
-                        node,
-                        "sfpu",
-                        region,
-                        node.sfpu.granularity,
-                        row_tiles,
-                    )
-                    continue
-                if node.unpacker is not None:
-                    plans[(id(node), "unpack")] = self._plan_node(
-                        node,
-                        "unpack",
-                        region,
-                        node.unpacker.granularity,
-                        row_tiles,
-                    )
-                plans[(id(node), "math")] = self._plan_node(
-                    node, "math", region, node.fpu.granularity, row_tiles
-                )
+                    add_plan(node, "sfpu", node.sfpu)
+                else:
+                    if node.unpacker is not None:
+                        add_plan(node, "unpack", node.unpacker)
+                    add_plan(node, "math", node.fpu)
             for node in self.pack_nodes:
                 if isinstance(node, SfpuNode):
-                    plans[(id(node), "sfpu")] = self._plan_node(
-                        node,
-                        "sfpu",
-                        region,
-                        node.sfpu.granularity,
-                        row_tiles,
-                    )
-                    continue
-                plans[(id(node), "pack")] = self._plan_node(
-                    node,
-                    "pack",
-                    region,
-                    node.packer.granularity,
-                    row_tiles,
-                )
+                    add_plan(node, "sfpu", node.sfpu)
+                else:
+                    add_plan(node, "pack", node.packer)
             bank_levels = region.bank_levels
             if self.custom_op:
                 bank_levels = (Level(BANK_VAR, self._num_banks(plans), 1),)
@@ -617,23 +572,17 @@ class ComputePipeline:
 
         return code
 
-    def _supports_per_call(self) -> bool:
-        for node in self.math_nodes:
-            if isinstance(node, SfpuNode):
-                if not node.sfpu.supports_per_call(node):
-                    return False
-                continue
-            if node.unpacker is not None and not node.unpacker.supports_per_call(node):
-                return False
-            if not node.fpu.supports_per_call(node):
-                return False
-        for node in self.pack_nodes:
-            if isinstance(node, SfpuNode):
-                if not node.sfpu.supports_per_call(node):
-                    return False
-            elif not node.packer.supports_per_call(node):
-                return False
-        return True
+    def _output_layout(self, node: PackNode) -> OutputLayout:
+        if node.packer.output_layout != OutputLayout.ROW_MAJOR:
+            return node.packer.output_layout
+        for math_node in self.math_nodes:
+            if (
+                isinstance(math_node, FpuNode)
+                and math_node.unpacker is not None
+                and math_node.unpacker.output_layout != OutputLayout.ROW_MAJOR
+            ):
+                return math_node.unpacker.output_layout
+        return OutputLayout.ROW_MAJOR
 
     @staticmethod
     def _golden_source(operand, golden_type):
@@ -650,7 +599,7 @@ class ComputePipeline:
         else:
             operand._master_golden = result
 
-    def _per_call_golden(
+    def golden(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
@@ -658,7 +607,9 @@ class ComputePipeline:
     ):
         tile_dims = tile_dimensions(operation.tile_shape)
         pack_nodes = self._get_pack_nodes()
-        outputs = {id(node): OutputTiles(node.output) for node in pack_nodes}
+        layouts = {id(node): self._output_layout(node) for node in pack_nodes}
+        buffers = {id(node): {} for node in pack_nodes}
+        relu_configs = {}
         config.sentinel.configure_golden(
             config, operation, output_format=pack_nodes[0].output.data_format
         )
@@ -680,119 +631,51 @@ class ComputePipeline:
                 size = (
                     dest_tiles if dest_tiles is not None else planned.region.block_tiles
                 )
-                dest = DestBank(size, tile_dims, dest_dtype)
+                state = GoldenState(
+                    DestBank(
+                        size,
+                        tile_dims,
+                        operation.tile_shape.total_num_faces(),
+                        dest_dtype,
+                        planned.region.block_tiles_x,
+                        planned.region.block_tiles_y,
+                    ),
+                    relu_configs,
+                )
+
+                def run(node, role, golden_fn):
+                    for call in planned.plan(node, role).calls(bank):
+                        golden_fn(call, state, node, operation, config)
+
                 for node in self.math_nodes:
                     config.sentinel.configure_golden(config, operation, node)
                     if isinstance(node, SfpuNode):
-                        for call in planned.plan(node, "sfpu").calls(bank):
-                            node.sfpu.golden_call(call, dest, node, operation, config)
+                        run(node, "sfpu", node.sfpu.golden_fn)
                         continue
-                    srcs = SourceRegisters()
-                    if node.unpacker is not None:
-                        inputs = Inputs(
-                            views.get((id(node), "a")), views.get((id(node), "b"))
+                    state.begin_fpu(
+                        Inputs(
+                            views.get((id(node), "a")),
+                            views.get((id(node), "b")),
+                            planned.region.block_tiles_x,
+                            planned.region.block_tiles_y,
                         )
-                        for call in planned.plan(node, "unpack").calls(bank):
-                            node.unpacker.golden_call(
-                                call, inputs, srcs, node, operation, config
-                            )
-                    for call in planned.plan(node, "math").calls(bank):
-                        node.fpu.golden_call(call, srcs, dest, node, operation, config)
+                    )
+                    if node.unpacker is not None:
+                        run(node, "unpack", node.unpacker.golden_fn)
+                    run(node, "math", node.fpu.golden_fn)
                 for node in self.pack_nodes:
                     if isinstance(node, SfpuNode):
-                        for call in planned.plan(node, "sfpu").calls(bank):
-                            node.sfpu.golden_call(call, dest, node, operation, config)
+                        run(node, "sfpu", node.sfpu.golden_fn)
                         continue
                     config.sentinel.configure_golden(
                         config, operation, output_format=node.output.data_format
                     )
-                    for call in planned.plan(node, "pack").calls(bank):
-                        node.packer.golden_call(
-                            call, dest, outputs[id(node)], node, operation, config
-                        )
+                    state.output = buffers[id(node)]
+                    run(node, "pack", node.packer.golden_fn)
 
         for node in pack_nodes:
-            self._store_golden(node.output, outputs[id(node)].finish(), golden_type)
-
-    def golden(
-        self,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-        golden_type: GoldenType,
-    ):
-        if self._supports_per_call():
-            return self._per_call_golden(operation, config, golden_type)
-
-        first_fpu = next(
-            (
-                op
-                for op in self.math_nodes
-                if isinstance(op, FpuNode) and op.src_a is not None
-            ),
-            None,
-        )
-        if first_fpu is not None:
-            tensor_a = torch.zeros(first_fpu.src_a.dimensions)
-            tensor_b = torch.zeros(
-                first_fpu.src_b.dimensions
-                if first_fpu.src_b is not None
-                else first_fpu.src_a.dimensions
-            )
-        else:
-            tensor_a = torch.zeros(operation.max_output_dimensions)
-            tensor_b = torch.zeros(operation.max_output_dimensions)
-        tensor_dst = torch.zeros(operation.max_output_dimensions)
-        for op in self.math_nodes:
-            config.sentinel.configure_golden(config, operation, op)
-            if isinstance(op, FpuNode) and op.src_a is not None:
-                input_tensor_a = (
-                    op.src_a.raw_data
-                    if golden_type == GoldenType.L1_GOLDEN
-                    else op.src_a.master_golden
-                )
-                input_tensor_b = (
-                    (
-                        op.src_b.raw_data
-                        if golden_type == GoldenType.L1_GOLDEN
-                        else op.src_b.master_golden
-                    )
-                    if op.src_b is not None
-                    else None
-                )
-            else:
-                input_tensor_a = None
-                input_tensor_b = None
-            tensor_a, tensor_b, tensor_dst = op.golden(
-                input_tensor_a,
-                input_tensor_b,
-                tensor_a,
-                tensor_b,
-                tensor_dst,
-                operation,
-                config,
-            )
-
-        for pack_node in self.pack_nodes:
-            if isinstance(pack_node, SfpuNode):
-                tensor_a, tensor_b, tensor_dst = pack_node.golden(
-                    None, None, tensor_a, tensor_b, tensor_dst, operation, config
-                )
-                continue
-
-            config.sentinel.configure_golden(
-                config, operation, output_format=pack_node.output.data_format
-            )
-
-            dimensions = pack_node.output.dimensions
-            cropped = tensor_dst.reshape(operation.max_output_dimensions)[
-                : dimensions[0], : dimensions[1]
-            ]
-            result = pack_node.golden(cropped, operation, config)
-
-            if golden_type == GoldenType.L1_GOLDEN:
-                pack_node.output.l1_golden = result
-            else:
-                pack_node.output._master_golden = result
+            result = finalize_output(layouts[id(node)], buffers[id(node)], node.output)
+            self._store_golden(node.output, result, golden_type)
 
     def __str__(self):
         result = "Math:"

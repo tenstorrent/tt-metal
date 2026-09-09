@@ -7,6 +7,7 @@ from typing import List
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.sub_bcast_col_custom import sub_bcast_col_custom_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from helpers.llk_params import MathOperation
@@ -20,6 +21,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
 
     def __init__(self):
         super().__init__(MathOperation.Elwsub)
+        self.golden_fn = sub_bcast_col_custom_golden
 
     def get_headers(self) -> List[str]:
         return [

@@ -4,24 +4,21 @@
 
 from typing import TYPE_CHECKING, List
 
-import torch
-
 if TYPE_CHECKING:
     from .block_data import BlockData
     from .fuser_config import GlobalConfig
     from .l1_operation import L1Operation
     from .sfpu_node import SfpuNode
 
-from .golden import Golden
 from .indexing import InvocationGranularity
 
 
-class Sfpu(Golden):
+class Sfpu:
     """Base class for fused test SFPU code generators.
 
     Subclasses represent specific SFPU operations (e.g. UnarySfpu, BinarySfpu)
     and override methods to emit the C++ LLK calls that configure and drive the
-    SFPU Unit, plus a Python golden function for test validation.
+    SFPU Unit.
 
     Unlike Fpu, SFPU operates on dest register data that was already computed
     by a prior FPU stage or loaded via datacopy. It has no unpacker — SfpuNode
@@ -36,31 +33,11 @@ class Sfpu(Golden):
         1. Subclass Sfpu
         2. Override get_headers() with the required LLK header files
         3. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        4. Override golden() to compute the expected SFPU result, calling
-           self.unary_sfpu_golden() or self.binary_sfpu_golden() as needed
+        4. Bind the corresponding callable from fuser.golden.sfpu
     """
 
     granularity = InvocationGranularity.BLOCK
-
     input_count = 1
-
-    per_call_golden: bool = False
-
-    def supports_per_call(self, node) -> bool:
-        return self.per_call_golden and (
-            self.granularity == InvocationGranularity.TILE
-            or getattr(node, "custom", False)
-        )
-
-    def golden_call(
-        self,
-        call,
-        dest,
-        compute_unit: "SfpuNode",
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> None:
-        raise NotImplementedError
 
     def init(
         self,
@@ -69,11 +46,7 @@ class Sfpu(Golden):
         compute_unit: "SfpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that initializes the SFPU before calculation.
-
-        Called once per block. Override to emit the
-        _llk_math_eltwise_*_sfpu_init_<>() call.
-        """
+        """Return C++ code that initializes the SFPU before calculation."""
         return ""
 
     def calculate(
@@ -83,11 +56,7 @@ class Sfpu(Golden):
         compute_unit: "SfpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that performs the SFPU operation.
-
-        Called once per block between init() and uninit().
-        Override to emit the sfpu calls.
-        """
+        """Return C++ code that performs one planned SFPU call."""
         return ""
 
     def uninit(
@@ -97,38 +66,11 @@ class Sfpu(Golden):
         compute_unit: "SfpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that tears down the SFPU after calculation.
-
-        Called once per block after calculate(). Override if the SFPU
-        requires explicit cleanup.
-        """
+        """Return C++ code that tears down the SFPU after calculation."""
         return ""
 
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-        compute_unit: "SfpuNode",
-        batch_dims: tuple,
-        batch_tile_cnt: int,
-    ) -> torch.Tensor:
-        """Compute the golden SFPU result in Python.
-
-        Operates on tilized dest data per block. batch_dims and batch_tile_cnt
-        describe the current block's tile layout. Returns the transformed tensor.
-
-        Called by SfpuNode.golden() on each block of the tilized dest tensor.
-        """
-        return tensor
-
     def get_headers(self) -> List[str]:
-        """Return the list of C++ LLK header filenames required by this SFPU.
-
-        These headers are #included in the generated test source file.
-        Override to return the headers that declare the SFPU functions
-        used by init(), calculate() and uninit().
-        """
+        """Return headers that declare this SFPU's generated calls."""
         return []
 
     def __str__(self) -> str:

@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.datacopy import datacopy_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.quasar.unpacker.unpack_a import (
@@ -19,8 +19,7 @@ from fuser.quasar.unpacker.unpack_a import (
 
 class DatacopyFpu(Fpu):
     granularity = InvocationGranularity.ROW
-
-    per_call_golden = True
+    golden_fn = staticmethod(datacopy_golden)
 
     per_block_init = True
 
@@ -29,19 +28,6 @@ class DatacopyFpu(Fpu):
             "llk_math_common.h",
             "llk_math_eltwise_unary_datacopy.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        tensor_dst: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.datacopy_golden(
-            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
-        )
 
     def init(
         self,

@@ -4,10 +4,10 @@
 
 from typing import List
 
-import torch
 from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.sfpu.unary import unary_golden
 from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
@@ -17,6 +17,8 @@ from helpers.llk_params import (
 
 
 class UnarySfpu(Sfpu):
+    golden_fn = staticmethod(unary_golden)
+
     def __init__(
         self,
         operation: MathOperation,
@@ -41,19 +43,6 @@ class UnarySfpu(Sfpu):
             "llk_math_eltwise_unary_sfpu.h",
             "sfpu_operations_quasar.h",
         ]
-
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: SfpuNode,
-        batch_dims: tuple,
-        batch_tile_cnt: int,
-    ) -> torch.Tensor:
-        return self.unary_sfpu_golden(
-            tensor, config, operation, compute_unit, batch_dims
-        )
 
     def init(
         self,

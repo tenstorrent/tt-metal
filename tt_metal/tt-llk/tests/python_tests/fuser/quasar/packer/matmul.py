@@ -6,6 +6,7 @@ from typing import List
 
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.pack.matmul import pack_matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
@@ -17,6 +18,7 @@ from .packer import Packer
 class MatmulPacker(Packer):
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
+    golden_fn = staticmethod(pack_matmul_golden)
 
     def get_headers(self) -> List[str]:
         return [
