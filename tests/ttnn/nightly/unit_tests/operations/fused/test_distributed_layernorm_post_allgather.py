@@ -37,6 +37,7 @@ def run_layernorm_part_2(
     device,
     gamma_beta_dtype,
     fp32_enabled=False,
+    use_welford=False,
 ):
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -54,19 +55,25 @@ def run_layernorm_part_2(
     beta = torch.rand(inp_shape[-1]) * 2 - 1
     gamma_chunked = gamma.chunk(n_devices, dim=-1)
     beta_chunked = beta.chunk(n_devices, dim=-1)
-    # Get per-chunk mean and mean(x^2)
+    # The Welford post factory expects [mean, variance] pairs; the standard
+    # factory expects [sum(x^2), sum(x)] pairs.
     inp_chunked = canon_inp.chunk(n_devices, dim=-1)
-    mean = [x.sum(dim=-1, keepdim=True) for x in inp_chunked]
-    meanx2 = [x.pow(2).sum(dim=-1, keepdim=True) for x in inp_chunked]
+    if use_welford:
+        assert not is_rmsnorm
+        first_stats = [x.mean(dim=-1, keepdim=True) for x in inp_chunked]
+        second_stats = [x.var(dim=-1, keepdim=True, unbiased=False) for x in inp_chunked]
+    else:
+        first_stats = [x.pow(2).sum(dim=-1, keepdim=True) for x in inp_chunked]
+        second_stats = [x.sum(dim=-1, keepdim=True) for x in inp_chunked]
 
     stats_tiles = torch.zeros(inp_shape[:-1] + (32 * n_devices * tile_cols_per_device,))
-    for idx, (m, mm) in enumerate(zip(mean, meanx2)):
-        mm_idx = idx * tile_cols_per_device * 32
-        stats_tiles[..., mm_idx : mm_idx + 1] = mm
+    for idx, (first, second) in enumerate(zip(first_stats, second_stats)):
+        first_idx = idx * tile_cols_per_device * 32
+        stats_tiles[..., first_idx : first_idx + 1] = first
 
         if not is_rmsnorm:
-            m_idx = mm_idx + 32  # next tile is m
-            stats_tiles[..., m_idx : m_idx + 1] = m
+            second_idx = first_idx + 32
+            stats_tiles[..., second_idx : second_idx + 1] = second
 
     epsilon = 1e-5
     # reference layernorm
@@ -128,6 +135,7 @@ def run_layernorm_part_2(
                 bias=tt_beta,
                 compute_kernel_config=kernel_config,
                 dtype=output_dtype,
+                program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford),
             )
 
         tt_lnp2_out_cpu = tt2torch_tensor(tt_lnp2_out)
@@ -211,6 +219,26 @@ def test_layernorm_part_2_with_program_cache(
         fp32_enabled=fp32_enabled,
         gamma_beta_dtype=gamma_beta_dtype,
     )
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128), (2, 1, 64, 256)], ids=["small", "batched"])
+@pytest.mark.parametrize("n_devices", [1, 4], ids=["one_stats_pair", "four_stats_pairs"])
+def test_layer_norm_post_all_gather_welford_with_program_cache(device, input_dtype, inp_shape, n_devices):
+    """Exercise the Welford factory and shared reader using locally constructed mean/variance tiles."""
+    device.clear_program_cache()
+    run_layernorm_part_2(
+        inp_shape,
+        n_devices,
+        False,
+        input_dtype,
+        input_dtype,
+        device,
+        gamma_beta_dtype=input_dtype,
+        fp32_enabled=True,
+        use_welford=True,
+    )
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.parametrize(

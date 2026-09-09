@@ -77,7 +77,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     const uint32_t NC = a.physical_volume() / HW;
     // Logical (un-padded) width is used for the normalization scaler so that
     // non-tile-aligned widths normalise by the true N, not the tile-padded N.
-    const uint32_t logical_W = a.logical_shape()[-1];
 
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
@@ -290,9 +289,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
     }
-    // Reader uses this compile-time reduction width to generate the AVG scaler tile.
-    const uint32_t reduce_factor = logical_W * num_devices;
-
     // RMSNorm is rejected together with Welford before the factory runs, so only the Welford
     // compute kernel is reachable here; the buffer set and argument schema below are its.
     const auto* compute_kernel_file =
@@ -386,14 +382,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
-             {"reduce_factor", reduce_factor}},
+             {"Wt", Wt}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
-    // its own scaling and never reads it. The reader is then the buffer's only toucher, so it takes
-    // both endpoint roles.
+    // Welford derives its own scaling, so the shared reader must not decode an
+    // auxiliary recipe. Keep the unused shared binding as a reader self-loop.
+    reader.compiler_options.defines.emplace("USE_WELFORD", "1");
     bind_self_loop(reader, POSTWF_REDUCE, "reduce");
     if (gamma.has_value()) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
