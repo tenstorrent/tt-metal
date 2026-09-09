@@ -85,9 +85,6 @@ inline void _relu_max_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     VectorType v_threshold;
-    // Only the integer path reads this; the sign of the threshold picks the overflow-safe
-    // compare in _relu_min_impl_.
-    bool threshold_is_negative = false;
     if constexpr (std::is_same_v<T, float>)
     {
         static_assert(
