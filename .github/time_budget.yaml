@@ -193,13 +193,14 @@ shield:
     bh_p150: 60
   demo:
     bh_sc4: 50
+    bh_sc1: 75
 
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 235
+    cpu_medium: 270
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -407,7 +408,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 488
+    bh_sc1: 500
     bh_sc1_high_power: 166
     wh_n150: 500
     wh_n150_civ2: 300

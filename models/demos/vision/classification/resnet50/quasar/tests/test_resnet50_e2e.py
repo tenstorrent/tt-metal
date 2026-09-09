@@ -75,7 +75,7 @@ def test_resnet50_e2e(device, use_pretrained_weight, model_location_generator):
             use_pretrained_weight=use_pretrained_weight,
             model_location_generator=model_location_generator,
         )
-        tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+        tt_inputs_host, input_mem_config = test_infra.setup_input(device)
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         dev_out = test_infra.run()  # full network -> [1, 1, 1, 1000]-ish logits on device
 

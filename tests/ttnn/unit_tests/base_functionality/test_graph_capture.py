@@ -545,6 +545,7 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
         )
 
     try:
+        test_conv(device)
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
         test_conv(device)
         ttnn.graph.end_graph_capture()
