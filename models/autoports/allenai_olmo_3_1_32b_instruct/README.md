@@ -30,3 +30,16 @@ vLLM: `EXTRA_MODELS_DIR=models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bund
 tt-model-manager: `tt-model package --container models/autoports/allenai_olmo_3_1_32b_instruct/tt-model.yaml`.
 
 Bring-up evidence: `doc/` (per stage), pipeline: `~/olmo3-bringup` on the author's QB2.
+
+## Known limitations (bring-up 2026-09-09)
+
+- Decode is validated at `max_batch_size` 1 and 32 (token accuracy 95.0% / 99.8% top-1/top-5 vs HF at both); a model
+  built for max batch 8 degrades over decode steps on a single P150 (root cause not yet isolated — not the SDPA op,
+  not the QK-norm). Keep `max_num_seqs: 32` in the manifest profiles.
+- One P150: 16k single-chunk prefill (sliding-window layers cannot use chunked prefill); 32k does not fit next to the
+  weights. KV pool capped at 48k tokens (`Olmo3ForCausalLM.get_max_tokens_all_users`). Host-side sampling: the
+  device-sampling buffers make the decode MLP circular buffers clash with L1 on one chip.
+- The decode SDPA runs with the op's auto program config and an interleaved Q: tt_transformers' explicit (8,8) config
+  hangs (auto chunks) or mis-attends past ~500 tokens (explicit chunks) for 40/8 heads on Blackhole.
+- p300 (a direct 1x2 mesh) can only be booted on a physical P300; on a QuietBox-2 the P300 shape was validated as a
+  (1,2) submesh of the 1x4 parent (`TT_MESH_PARENT_SHAPE=1x4`).

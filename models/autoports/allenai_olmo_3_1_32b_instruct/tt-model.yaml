@@ -38,7 +38,7 @@ serve:
     tool_parser: olmo3                                            # <function_calls>name(kwargs)</function_calls>
   additional_config:
     tt:
-      trace_region_size: 60000000                                 # VALIDATED by stage 06/07 (placeholder)
+      trace_region_size: 160000000                                # one decode trace variant measured at 68.7 MB on P150 (stage 07)
       # sample_on_device_mode is set per profile: on ONE chip the device-sampling buffers push the decode MLP's
       # circular buffers into an L1 clash (bring-up 2026-09-09), so p150 samples on the host.
   env:
@@ -49,14 +49,14 @@ serve_profiles:
     description: Single Blackhole chip (TP1), bfp4 MLP; 16k context. Widest compatibility.
     hardware: p150
     mesh_device: P150
-    max_num_seqs: 8
+    max_num_seqs: 32                                              # decode is validated at batch 1 and 32; other max batch sizes degrade (see README)
     max_model_len: 16384                                          # VALIDATED by stage 04 (32k does not fit one 32 GB chip)
     env: {TT_METAL_VISIBLE_DEVICES: "0"}
   - name: p300
     description: One p300 board, both chips (TP2); 64k context. Needs a P300 host (2 chips); on a QuietBox-2 use p300x2.
     hardware: p300
     mesh_device: P300
-    max_num_seqs: 16
+    max_num_seqs: 32
     max_model_len: 65536
     additional_config: {tt: {fabric_config: FABRIC_1D, sample_on_device_mode: all}}
   - name: p300x2

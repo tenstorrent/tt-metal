@@ -1,0 +1,47 @@
+{
+ "p150": {
+  "performance": {
+   "top1": 95.0,
+   "top5": 99.8,
+   "tok_s_user": 12.18,
+   "ttft_ms": 460.97
+  },
+  "accuracy": {
+   "top1": 96.8,
+   "top5": 99.8,
+   "tok_s_user": 10.41,
+   "ttft_ms": 485.45,
+   "error": null
+  }
+ },
+ "p300": {
+  "performance": {
+   "top1": 95.8,
+   "top5": 99.8,
+   "tok_s_user": 16.77,
+   "ttft_ms": 299.77
+  },
+  "accuracy": {
+   "top1": 97.2,
+   "top5": 99.8,
+   "tok_s_user": 15.01,
+   "ttft_ms": 316.25,
+   "error": null
+  }
+ },
+ "p300x2": {
+  "performance": {
+   "top1": 95.2,
+   "top5": 99.8,
+   "tok_s_user": 25.17,
+   "ttft_ms": 177.05
+  },
+  "accuracy": {
+   "top1": 97.2,
+   "top5": 99.8,
+   "tok_s_user": 23.1,
+   "ttft_ms": 179.54,
+   "error": null
+  }
+ }
+}

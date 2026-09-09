@@ -933,6 +933,11 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
+        if sdpa_decode_prog_cfg is None and q_heads_1BQD.is_sharded():
+            # Auto-configured flash-decode (models with sdpa_decode_use_default_program_config): the op's default
+            # path expects an interleaved Q; with the height-sharded decode Q only user 0 attends correctly and the
+            # other users' KV state drifts step by step (OLMo-3 bring-up, BH). Tiny tensor: [1, B, heads, head_dim].
+            q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, ttnn.DRAM_MEMORY_CONFIG)
         if page_table is not None:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
