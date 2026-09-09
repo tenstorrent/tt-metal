@@ -65,7 +65,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters P
      {PerfCounterType::SRCB_WRITE_TID_ODD, 266}}};
 constexpr std::size_t NUM_UNPACK_COUNTERS = 18;
 
-// TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18, 12-14 and 17 tied on A0.
+// TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18; request slices 12-17 are tied to 0 on A0
+// and the live pack-side grants are slices 11, 15 and 16.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::PACKER0_DEST_READ_REQ, 11},
      {PerfCounterType::PACKER_BUSY, 18},

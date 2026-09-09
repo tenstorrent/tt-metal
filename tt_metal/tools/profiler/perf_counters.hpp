@@ -509,6 +509,10 @@ constexpr std::uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
 static_assert(
     QUASAR_L1_CLIENT_SEL < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS,
     "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event, below 296");
+static_assert(QUASAR_L1_CLIENT_SEL % QUASAR_L1_CLIENT_NUM_EVENTS != 0, "l1_client event 0 is unused in the RTL");
+static_assert(
+    !(QUASAR_L1_CLIENT_SEL / QUASAR_L1_CLIENT_NUM_EVENTS == 4 && QUASAR_L1_CLIENT_SEL % QUASAR_L1_CLIENT_NUM_EVENTS <= 3),
+    "THCON events 1-3 read the TRISC port's SBank 0 counters; select them through sub-port 0");
 static_assert(
     QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS == QUASAR_L1_CLIENT_NUM_SELECTIONS,
     "host copy of the l1_client selection count is stale");

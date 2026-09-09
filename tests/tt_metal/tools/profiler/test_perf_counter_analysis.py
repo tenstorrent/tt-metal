@@ -75,7 +75,7 @@ QUASAR_CAPTURE_TYPES = (
         "SRCA_STALL_MATH",
     ]
     + [f"THREAD_INSTRUCTIONS_{t}" for t in range(4)]
-    + ["L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP"]
+    + ["L1_CLIENT_UNPACK0_IF0_SBANK3_SBANK_POP"]
 )
 
 # Display names follow the engine's families: "Thread N Stall Rate", "<CLASS> Instrn Avail Rate TN",
@@ -94,7 +94,7 @@ QUASAR_EXPECTED_METRICS = [
     "Math Src Data Ready Rate",
     "FPU SFPU Overlap",
     "T3 Instrn Per Issue-Ready Cycle",
-    "L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP Rate",
+    "L1_CLIENT_UNPACK0_IF0_SBANK3_SBANK_POP Rate",
 ]
 
 
@@ -136,12 +136,13 @@ def test_counter_type_names_match_enum():
 
 
 def test_l1_client_labels_cover_all_subport_ranges():
-    assert quasar_l1_client_label(0) == "L1_CLIENT_TRISC0_UNUSED"
+    assert quasar_l1_client_label(0) == "L1_CLIENT_INVALID_0"  # event 0 reads 0 in the RTL
     assert quasar_l1_client_label(3 * 8 + 5) == "L1_CLIENT_TRISC3_FLEX_WORK_CARRY"
+    assert quasar_l1_client_label(4 * 8 + 1) == "L1_CLIENT_INVALID_33"  # THCON SBank events alias TRISC SBank 0
     assert quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_ORDER_FIFO_ACTIVE"
-    assert quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP"
-    assert quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK2_IF0_LANE3_ISSUE_WORK_CARRY"
-    assert quasar_l1_client_label(25 * 8 + 2) == "L1_CLIENT_PACK0_IF0_LANE0_ISSUE_STALL_CARRY"
+    assert quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP"
+    assert quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK2_IF0_SBANK3_ISSUE_WORK_CARRY"
+    assert quasar_l1_client_label(25 * 8 + 2) == "L1_CLIENT_PACK0_IF0_SBANK0_ISSUE_STALL_CARRY"
     assert quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK1_IF0_LANE3_PENDING_REQS_CARRY"
 
 
@@ -224,17 +225,25 @@ def test_l1_client_carry_rates_scale_by_lane_count():
             "value": 100,
             "ref cnt": 10000,
         }
-        for name in ("L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP", "L1_CLIENT_UNPACK0_IF0_LANE0_ISSUE_STALL_CARRY")
+        for name in (
+            "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP",
+            "L1_CLIENT_UNPACK0_IF0_SBANK0_ISSUE_STALL_CARRY",
+            "L1_CLIENT_UNPACK0_IF0_LANE0_PENDING_REQS_CARRY",
+        )
     ]
     df = pd.DataFrame(rows)
     per_op = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
-    pop = list(per_op["L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP Rate"]["avg"].values())[0]
-    carry = list(per_op["L1_CLIENT_UNPACK0_IF0_LANE0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
-    assert abs(pop - 1.0) < 1e-9 and abs(carry - 4.0) < 1e-9, (pop, carry)
-    agg, _ = compute_device_only_metrics(df, "quasar")
-    pop = list(agg["L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP Rate"]["avg"].values())[0]
-    carry = list(agg["L1_CLIENT_UNPACK0_IF0_LANE0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
-    assert abs(pop - 1.0) < 1e-9 and abs(carry - 4.0) < 1e-9, (pop, carry)
+    pop = list(per_op["L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP Rate"]["avg"].values())[0]
+    carry = list(per_op["L1_CLIENT_UNPACK0_IF0_SBANK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
+    pending = list(per_op["L1_CLIENT_UNPACK0_IF0_LANE0_PENDING_REQS_CARRY Mean Outstanding"]["avg"].values())[0]
+    assert abs(pop - 1.0) < 1e-9 and abs(carry - 1.0) < 1e-9 and abs(pending - 0.64) < 1e-9, (pop, carry, pending)
+    agg, rows = compute_device_only_metrics(df, "quasar")
+    pop = list(agg["L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP Rate"]["avg"].values())[0]
+    carry = list(agg["L1_CLIENT_UNPACK0_IF0_SBANK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
+    assert abs(pop - 1.0) < 1e-9 and abs(carry - 1.0) < 1e-9, (pop, carry)
+    # the pending-request metric is a ratio column, the others percent columns
+    assert "L1_CLIENT_UNPACK0_IF0_LANE0_PENDING_REQS_CARRY Mean Outstanding Avg (ratio)" in rows[0]
+    assert "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP Rate Avg (%)" in rows[0]
 
 
 def test_absent_l1_noc_counters_give_nan_not_zero():
@@ -267,9 +276,9 @@ def test_extract_labels_neo_and_l1_client_selection():
         ]
     )
     assert list(df["risc_type"]) == ["QUASAR_NEO2", "QUASAR_NEO2", "BRISC"]
-    assert list(df["counter type"]) == ["FPU_COUNTER", "L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP", "FPU_COUNTER"]
+    assert list(df["counter type"]) == ["FPU_COUNTER", "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP", "FPU_COUNTER"]
     per_op = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
-    rate = per_op["L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP Rate"]["avg"][(7, 0)]
+    rate = per_op["L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP Rate"]["avg"][(7, 0)]
     assert rate == pytest.approx(250 / 5000 * 100)
 
 

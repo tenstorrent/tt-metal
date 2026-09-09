@@ -141,11 +141,12 @@ _LEGACY_AVG_GRID_COLUMNS = {
 }
 # Re-exported for other consumers (process_ops_logs) so the classification stays single-sourced.
 RATIO_LABELS = _mc.RATIO_LABELS
+is_ratio_label = _mc.is_ratio_label
 
 
 def _metric_suffix(label):
     """Display unit for a metric's columns: ' (ratio)' for the unbounded ratio family, else ' (%)'."""
-    return " (ratio)" if label in RATIO_LABELS else " (%)"
+    return " (ratio)" if _mc.is_ratio_label(label) else " (%)"
 
 
 def _build_perf_counter_csv_headers():
@@ -283,17 +284,19 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
     ratio_metrics = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     pct_metrics = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
-    # Quasar l1_client rates are named after the run's selection; pick them up from the frame.
-    _l1_client_suffix = " Avg (%)"
-    pct_metrics += sorted(
-        col[: -len(_l1_client_suffix)]
-        for col in metrics_df.columns
-        if str(col).startswith(_mc.L1_CLIENT_PREFIX) and str(col).endswith(_l1_client_suffix)
-    )
+    # Quasar l1_client metrics are named after the run's selection; pick them up from the frame.
+    for _suffix, _family in ((" Avg (%)", pct_metrics), (" Avg (ratio)", ratio_metrics)):
+        _family.extend(
+            sorted(
+                col[: -len(_suffix)]
+                for col in metrics_df.columns
+                if str(col).startswith(_mc.L1_CLIENT_PREFIX) and str(col).endswith(_suffix)
+            )
+        )
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
     for base_metric in pct_metrics + ratio_metrics:
-        is_ratio = base_metric in RATIO_LABELS
+        is_ratio = _mc.is_ratio_label(base_metric)
         suffix = " (ratio)" if is_ratio else " (%)"
         unit = "" if is_ratio else "%"
 
@@ -379,10 +382,11 @@ def compute_device_only_metrics(
                         stat
                     ]
 
-    # Quasar's l1_client rates are named after the run's selection, so they are appended from the data.
+    # Quasar's l1_client metrics are named after the run's selection, so they are appended from the data.
     _ratio_metric_names = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     _pct_metric_names = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
-    _pct_metric_names += sorted(label for label in agg_metrics if str(label).startswith(_mc.L1_CLIENT_PREFIX))
+    for label in sorted(label for label in agg_metrics if str(label).startswith(_mc.L1_CLIENT_PREFIX)):
+        (_ratio_metric_names if _mc.is_ratio_label(label) else _pct_metric_names).append(label)
 
     eff_summary_rows: List[Dict] = []
     first_stat = next(iter(agg_metrics.values()), {}).get("min", {})

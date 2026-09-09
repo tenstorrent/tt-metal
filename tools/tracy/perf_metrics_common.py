@@ -498,17 +498,28 @@ def compute_metrics(v: CounterView) -> dict:
         return _gated_rate("INSTRN_THREAD", f"{cls}_INSTRN_AVAILABLE_{t}", instrn_cycles)
 
     # A stall reason's rate is over the INSTRN bank's cycles; its share is its part of every reason
-    # captured, so it needs at least two of them to mean anything.
-    _reasons_present = [c for c in STALL_REASON_COUNTERS.values() if v.has(c)]
-    _reason_total = sum(v.count("INSTRN_THREAD", c) for c in _reasons_present)
+    # captured, so it needs at least two of them to mean anything. DVALID_STALL_MATH is srcA-or-srcB not
+    # valid and contains SRCA_STALL_MATH, so the share basis carries the derived srcB part instead of it.
+    _reason_counts = {c: v.count("INSTRN_THREAD", c) for c in STALL_REASON_COUNTERS.values() if v.has(c)}
+    _srcb_stall_math = (
+        max(0.0, _reason_counts["DVALID_STALL_MATH"] - _reason_counts["SRCA_STALL_MATH"])
+        if strict(v, "DVALID_STALL_MATH", "SRCA_STALL_MATH")
+        else None
+    )
+    _share_basis = {c: n for c, n in _reason_counts.items() if c != "DVALID_STALL_MATH"}
+    if _srcb_stall_math is not None:
+        _share_basis["SRCB_STALL_MATH"] = _srcb_stall_math
+    _reason_total = sum(_share_basis.values())
 
     def _reason_rate(c):
         return _gated_rate("INSTRN_THREAD", c, instrn_cycles)
 
     def _reason_share(c):
-        if not v.has(c) or len(_reasons_present) < 2:
+        if c not in _share_basis or len(_share_basis) < 2:
             return None
-        return safe_div(v.count("INSTRN_THREAD", c), _reason_total)
+        return safe_div(_share_basis[c], _reason_total)
+
+    srcb_stall_math = safe_div(_srcb_stall_math, instrn_cycles) if _srcb_stall_math is not None else None
 
     def _unpack_busy(u, t):
         return _gated_rate("TDMA_UNPACK", f"UNPACK{u}_BUSY_THREAD{t}", unpack_cycles)
@@ -691,6 +702,7 @@ def compute_metrics(v: CounterView) -> dict:
         "srca_stall_unpack_pct": pct(_reason_rate("SRCA_STALL_UNPACK")),
         "dvalid_stall_math_pct": pct(_reason_rate("DVALID_STALL_MATH")),
         "srca_stall_math_pct": pct(_reason_rate("SRCA_STALL_MATH")),
+        "srcb_stall_math_pct": pct(srcb_stall_math),
         "tile_counter_stall_pack_share_pct": pct(_reason_share("TILE_COUNTER_STALL_PACK")),
         "tile_counter_stall_unpack_share_pct": pct(_reason_share("TILE_COUNTER_STALL_UNPACK")),
         "srcs_stall_pack_share_pct": pct(_reason_share("SRCS_STALL_PACK")),
@@ -704,8 +716,8 @@ def compute_metrics(v: CounterView) -> dict:
         "fpu_data_hazard_stall_share_pct": pct(_reason_share("FPU_DATA_HAZARD_STALL")),
         "srcb_stall_unpack_share_pct": pct(_reason_share("SRCB_STALL_UNPACK")),
         "srca_stall_unpack_share_pct": pct(_reason_share("SRCA_STALL_UNPACK")),
-        "dvalid_stall_math_share_pct": pct(_reason_share("DVALID_STALL_MATH")),
         "srca_stall_math_share_pct": pct(_reason_share("SRCA_STALL_MATH")),
+        "srcb_stall_math_share_pct": pct(_reason_share("SRCB_STALL_MATH")),
         # Unpacker busy per unpacker and thread
         "unpack0_busy_t0_pct": pct(_unpack_busy(0, 0)),
         "unpack1_busy_t0_pct": pct(_unpack_busy(1, 0)),
@@ -862,8 +874,9 @@ METRIC_LABELS = {
     "fpu_data_hazard_stall_pct": "FPU Data Hazard Stall Rate",
     "srcb_stall_unpack_pct": "SrcB Stall Unpack Rate",
     "srca_stall_unpack_pct": "SrcA Stall Unpack Rate",
-    "dvalid_stall_math_pct": "DValid Stall Math Rate",
+    "dvalid_stall_math_pct": "Src Valid Stall Math Rate",
     "srca_stall_math_pct": "SrcA Stall Math Rate",
+    "srcb_stall_math_pct": "SrcB Stall Math Rate",
     "tile_counter_stall_pack_share_pct": "Tile Counter Stall Pack Share",
     "tile_counter_stall_unpack_share_pct": "Tile Counter Stall Unpack Share",
     "srcs_stall_pack_share_pct": "Srcs Stall Pack Share",
@@ -877,8 +890,8 @@ METRIC_LABELS = {
     "fpu_data_hazard_stall_share_pct": "FPU Data Hazard Stall Share",
     "srcb_stall_unpack_share_pct": "SrcB Stall Unpack Share",
     "srca_stall_unpack_share_pct": "SrcA Stall Unpack Share",
-    "dvalid_stall_math_share_pct": "DValid Stall Math Share",
     "srca_stall_math_share_pct": "SrcA Stall Math Share",
+    "srcb_stall_math_share_pct": "SrcB Stall Math Share",
     "unpack0_busy_t0_pct": "Unpacker0 Busy T0 Util",
     "unpack1_busy_t0_pct": "Unpacker1 Busy T0 Util",
     "unpack2_busy_t0_pct": "Unpacker2 Busy T0 Util",
@@ -916,58 +929,95 @@ QUASAR_L1_CLIENT_EVENT_NAMES = (
 )
 
 
+# Events 1-3 are per SBank of the whole port (the RTL indexes them with the sub-port number modulo the SBank count).
+QUASAR_L1_CLIENT_SBANK_EVENTS = (1, 2, 3)
+
+
+def quasar_l1_client_selection_is_valid(sel) -> bool:
+    """False for selections that cannot carry data: out of range, event 0 (unused, reads 0 in the RTL), and the THCON
+    sub-port's events 1-3 (the TRISC port's SBank 0 counters, which sub-port 0 already exposes)."""
+    sel = int(sel)
+    if not 0 <= sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * 8:
+        return False
+    subport, event = divmod(sel, 8)
+    return event != 0 and not (subport == 4 and event in QUASAR_L1_CLIENT_SBANK_EVENTS)
+
+
 def quasar_l1_client_label(sel) -> str:
     """Counter name for an l1_client selection (subport*8 + event). Subports (t6_l1_client_map.sv): 0-3 TRISC, 4 THCON,
     5-24 unpacker reads (3 unpackers x 2 interfaces x 4 lanes, unpacker 2 has interface 0 only), 25-36 packer writes
-    (packer 0 interfaces 0-1, packer 1 interface 0). Events 1-3 count per SBank of the port, so THCON aliases TRISC SBank 0.
+    (packer 0 interfaces 0-1, packer 1 interface 0). Events 1-3 name the SBank of the port instead of the sub-port.
     """
     sel = int(sel)
-    if not 0 <= sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * 8:
+    if not quasar_l1_client_selection_is_valid(sel):
         return f"{L1_CLIENT_PREFIX}INVALID_{sel}"
     subport, event = divmod(sel, 8)
+    per_sbank = event in QUASAR_L1_CLIENT_SBANK_EVENTS
     if subport < 4:
-        port = f"TRISC{subport}"
+        port = f"TRISC_SBANK{subport}" if per_sbank else f"TRISC{subport}"
     elif subport == 4:
         port = "THCON"
-    elif subport < 25:
-        unit, rest = divmod(subport - 5, 8)
-        interface, lane = divmod(rest, 4)
-        port = f"UNPACK{unit}_IF{interface}_LANE{lane}"
     else:
-        unit, rest = divmod(subport - 25, 8)
+        unit_name, base = ("UNPACK", 5) if subport < 25 else ("PACK", 25)
+        unit, rest = divmod(subport - base, 8)
         interface, lane = divmod(rest, 4)
-        port = f"PACK{unit}_IF{interface}_LANE{lane}"
+        port = f"{unit_name}{unit}_IF{interface}_" + (f"SBANK{lane}" if per_sbank else f"LANE{lane}")
     return f"{L1_CLIENT_PREFIX}{port}_{QUASAR_L1_CLIENT_EVENT_NAMES[event]}"
 
 
+def l1_client_pending_reqs_divisor(counter_name: str) -> float:
+    """Outstanding-request cycles per PENDING_REQS_CARRY pulse: 2^clog2(3 * RSP_BUF_D), 128 on packer 0's two
+    interfaces (24-deep response buffer) and 64 on every other sub-port."""
+    port = str(counter_name)[len(L1_CLIENT_PREFIX) :].split("_")
+    return 128.0 if port[0] == "PACK0" and port[1] in ("IF0", "IF1") else 64.0
+
+
+def l1_client_is_ratio(counter_name_or_label: str) -> bool:
+    """The pending-request carry reports mean outstanding requests, an unbounded ratio; every other event is a rate."""
+    return "PENDING_REQS_CARRY" in str(counter_name_or_label).upper()
+
+
 def l1_client_metric_key(counter_name: str) -> str:
-    """Metric key of an l1_client counter's rate; lower-case so it sits in the _pct family."""
-    return f"{counter_name.lower()}_pct"
+    """Metric key of an l1_client counter: lower-case name plus the family suffix (_ratio for the pending carry)."""
+    return f"{counter_name.lower()}_ratio" if l1_client_is_ratio(counter_name) else f"{counter_name.lower()}_pct"
 
 
 def l1_client_metric_label(counter_name: str) -> str:
-    """Display name of an l1_client counter's rate: the counter name itself plus ' Rate'."""
-    return f"{counter_name} Rate"
+    """Display name of an l1_client metric: the counter name plus ' Rate', or ' Mean Outstanding' for the pending carry."""
+    return f"{counter_name} Mean Outstanding" if l1_client_is_ratio(counter_name) else f"{counter_name} Rate"
+
+
+def is_ratio_label(label: str) -> bool:
+    """Whether a display label belongs to the unbounded ratio family (static RATIO_LABELS or the pending-request carry)."""
+    return label in RATIO_LABELS or (str(label).startswith(L1_CLIENT_PREFIX) and l1_client_is_ratio(label))
 
 
 def metric_label(key: str) -> str:
     """Display name for a metric key: METRIC_LABELS, or the dynamic l1_client family, else the key itself."""
     if key in METRIC_LABELS:
         return METRIC_LABELS[key]
-    if key.startswith(L1_CLIENT_PREFIX.lower()) and key.endswith("_pct"):
-        return l1_client_metric_label(key[: -len("_pct")].upper())
+    if key.startswith(L1_CLIENT_PREFIX.lower()):
+        for suffix in ("_pct", "_ratio"):
+            if key.endswith(suffix):
+                return l1_client_metric_label(key[: -len(suffix)].upper())
     return key
 
 
 def compute_l1_client_metrics(v: CounterView, counter_names) -> dict:
-    """Per-run rate of every l1_client counter present over the capture's wall-clock span (the CSR has no reference
-    counter). Carry events pulse once per four lane events and are scaled up; the pending-request carry stays raw."""
+    """Per-run value of every l1_client counter present over the capture's wall-clock span (the CSR has no reference
+    counter). SBANK_POP and ORDER_FIFO_ACTIVE are cycle indicators; the ISSUE/FLEX carries fire once per four lane
+    events, so carry / cycles is the mean per-lane fraction (bounded); the pending-request carry times its divisor
+    over cycles is the mean number of outstanding requests (a ratio)."""
     cycles = v.cycles("L1_CLIENT")
     out = {}
     for name in sorted(set(counter_names)):
         if not str(name).startswith(L1_CLIENT_PREFIX) or not v.has(name):
             continue
-        scale = 4.0 if name.endswith("_CARRY") and "PENDING" not in name else 1.0
         rate = safe_div(v.count("L1_CLIENT", name), cycles)
-        out[l1_client_metric_key(name)] = pct(rate * scale) if rate is not None else None
+        if rate is None:
+            out[l1_client_metric_key(name)] = None
+        elif l1_client_is_ratio(name):
+            out[l1_client_metric_key(name)] = rate * l1_client_pending_reqs_divisor(name)
+        else:
+            out[l1_client_metric_key(name)] = pct(rate)
     return out

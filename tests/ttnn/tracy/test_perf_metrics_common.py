@@ -290,10 +290,13 @@ def test_stall_reason_shares_need_two_reasons():
     out = mc.compute_metrics(_View({"SRCA_STALL_MATH": 300.0, "DEST_STALL_PACK": 100.0}))
     assert out["srca_stall_math_share_pct"] == 75.0
     assert out["dest_stall_pack_share_pct"] == 25.0
-    # Every reason has a rate and a share in the vocabulary; the fifteen match the Quasar INSTRN readout.
+    # Every reason has a rate; the fifteen match the Quasar INSTRN readout. Shares exist for every reason except the
+    # src-valid total, which the share basis carries as its srcA and srcB parts.
     assert len(mc.STALL_REASON_COUNTERS) == 15
     for stem in mc.STALL_REASON_COUNTERS:
-        assert f"{stem}_pct" in mc.METRIC_LABELS and f"{stem}_share_pct" in mc.METRIC_LABELS
+        assert f"{stem}_pct" in mc.METRIC_LABELS
+        assert (f"{stem}_share_pct" in mc.METRIC_LABELS) == (stem != "dvalid_stall_math")
+    assert "srcb_stall_math_pct" in mc.METRIC_LABELS and "srcb_stall_math_share_pct" in mc.METRIC_LABELS
 
 
 def test_fpu_sfpu_overlap_and_thread1_write_shares():
@@ -316,16 +319,28 @@ def test_fpu_sfpu_overlap_and_thread1_write_shares():
 
 
 def test_l1_client_rates_are_dynamic_and_round_trip_their_labels():
-    names = ["L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP", "L1_CLIENT_UNPACK0_IF0_LANE0_ISSUE_STALL_CARRY"]
+    names = [
+        "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP",
+        "L1_CLIENT_UNPACK0_IF0_SBANK0_ISSUE_STALL_CARRY",
+        "L1_CLIENT_PACK0_IF1_LANE2_PENDING_REQS_CARRY",
+        "L1_CLIENT_TRISC2_PENDING_REQS_CARRY",
+    ]
     view = _View({n: 100.0 for n in names}, cycles=10000.0)
     out = mc.compute_l1_client_metrics(view, names + ["FPU_COUNTER"])
     assert out == {
-        "l1_client_unpack0_if0_lane0_sbank_pop_pct": 1.0,
-        "l1_client_unpack0_if0_lane0_issue_stall_carry_pct": 4.0,  # carries pulse once per four lanes
+        "l1_client_unpack0_if0_sbank0_sbank_pop_pct": 1.0,
+        # a carry pulses once per four lane events: carry / cycles is the mean per-lane fraction, bounded
+        "l1_client_unpack0_if0_sbank0_issue_stall_carry_pct": 1.0,
+        # pending-request carries report mean outstanding requests: one pulse per 128 request-cycles on packer 0's
+        # interfaces, per 64 everywhere else
+        "l1_client_pack0_if1_lane2_pending_reqs_carry_ratio": 1.28,
+        "l1_client_trisc2_pending_reqs_carry_ratio": 0.64,
     }
     for key in out:
-        assert mc.metric_label(key).endswith(" Rate")
-        assert mc.metric_label(key)[: -len(" Rate")] in names
+        label = mc.metric_label(key)
+        tail = " Mean Outstanding" if key.endswith("_ratio") else " Rate"
+        assert label.endswith(tail) and label[: -len(tail)] in names, label
+        assert mc.is_ratio_label(label) == key.endswith("_ratio")
     assert mc.metric_label("fpu_utilization_pct") == "FPU Util"
     # Nothing dynamic leaks into the static vocabulary the CSV headers and the LLK gate derive from.
     assert not any(k.startswith("l1_client_") for k in mc.METRIC_LABELS)
@@ -333,9 +348,32 @@ def test_l1_client_rates_are_dynamic_and_round_trip_their_labels():
 
 
 def test_l1_client_labels_cover_every_subport_range():
-    assert mc.quasar_l1_client_label(0) == "L1_CLIENT_TRISC0_UNUSED"
+    # event 0 is unused in the RTL; THCON events 1-3 are the TRISC port's SBank 0 counters (sub-port 0 exposes them)
+    assert mc.quasar_l1_client_label(0) == "L1_CLIENT_INVALID_0"
+    assert mc.quasar_l1_client_label(4 * 8 + 2) == "L1_CLIENT_INVALID_34"
     assert mc.quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_ORDER_FIFO_ACTIVE"
-    assert mc.quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP"
-    assert mc.quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK2_IF0_LANE3_ISSUE_WORK_CARRY"
+    assert mc.quasar_l1_client_label(1 * 8 + 1) == "L1_CLIENT_TRISC_SBANK1_SBANK_POP"
+    assert mc.quasar_l1_client_label(1 * 8 + 5) == "L1_CLIENT_TRISC1_FLEX_WORK_CARRY"
+    assert mc.quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP"
+    assert mc.quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK2_IF0_SBANK3_ISSUE_WORK_CARRY"
+    assert mc.quasar_l1_client_label(24 * 8 + 4) == "L1_CLIENT_UNPACK2_IF0_LANE3_FLEX_STALL_CARRY"
     assert mc.quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK1_IF0_LANE3_PENDING_REQS_CARRY"
     assert mc.quasar_l1_client_label(37 * 8) == "L1_CLIENT_INVALID_296"
+    valid = [sel for sel in range(37 * 8) if mc.quasar_l1_client_selection_is_valid(sel)]
+    assert len(valid) == 37 * 7 - 3
+    assert len({mc.quasar_l1_client_label(sel) for sel in valid}) == len(valid)
+
+
+def test_src_valid_stall_splits_into_srca_and_srcb_once():
+    out = mc.compute_metrics(
+        _View({"DVALID_STALL_MATH": 300.0, "SRCA_STALL_MATH": 100.0, "DEST_STALL_MATH": 100.0}, cycles=1000.0)
+    )
+    assert out["dvalid_stall_math_pct"] == 30.0
+    assert out["srca_stall_math_pct"] == 10.0
+    assert out["srcb_stall_math_pct"] == 20.0
+    # the share basis holds srcA, srcB and dest: 100 + 200 + 100
+    assert out["srca_stall_math_share_pct"] == 25.0
+    assert out["srcb_stall_math_share_pct"] == 50.0
+    assert out["dest_stall_math_share_pct"] == 25.0
+    assert "dvalid_stall_math_share_pct" not in out
+    assert mc.compute_metrics(_View({"DVALID_STALL_MATH": 300.0}, cycles=1000.0))["srcb_stall_math_pct"] is None

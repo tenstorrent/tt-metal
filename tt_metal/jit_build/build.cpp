@@ -150,6 +150,14 @@ static std::string quasar_l1_client_defines(const tt::llrt::RunTimeOptions& rtop
         "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} out of range; it encodes subport*8 + event with 37 subports and 8 "
         "events",
         sel);
+    const int subport = sel / 8;
+    const int event = sel % 8;
+    TT_FATAL(event != 0, "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={}: event 0 is unused in the L1 RTL and reads 0", sel);
+    TT_FATAL(
+        !(subport == 4 && event <= 3),
+        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={}: THCON events 1-3 are the TRISC port's SBank 0 counters, already "
+        "exposed by selections 1-3",
+        sel);
     std::string defines = "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(sel) + " ";
     return defines;
 }
