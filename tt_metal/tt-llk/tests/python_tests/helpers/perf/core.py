@@ -32,6 +32,7 @@ from .schema import (
     LOOP_FACTOR_COLUMN,
     MARKER,
     MEAN,
+    NON_RENDEZVOUS_MARKERS,
     STD,
     TEXT_SIZE_PREFIX,
     TILE_CNT_COLUMN,
@@ -687,6 +688,65 @@ def combine_perf_reports():
     _prune_runs(output_dir.parent, _keep_runs(), output_dir)
 
 
+def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
+    """No thread may open a phase before every thread has closed the previous one.
+
+    Perf kernels open every zone through START_PERF_MEASURE, whose entry rendezvous lines the
+    phases (INIT, TILE_LOOP) up across threads; a zone opened with bare ZONE_SCOPED skips it and
+    its window then covers time that belongs to the neighbouring phase. This is a property of
+    how the perf kernels are written, not of the profiler, so it lives here and runs once per run.
+
+    Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
+    Quasar has no entry rendezvous yet.
+    """
+    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+        return
+    # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
+    zones = profiler_data.zones().frame()
+    if zones.empty:
+        return
+    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
+    # Identity is the name: marker_id is a per-callsite hash, different on every thread.
+    span = (
+        zones.groupby([MARKER, "thread"])
+        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
+        .reset_index()
+    )
+    wrappers = set()
+    for _, group in span.groupby("thread"):
+        rows = group.to_dict("records")
+        for a in rows:
+            for b in rows:
+                if (
+                    a is not b
+                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
+                ):
+                    wrappers.add(a[MARKER])
+    phases = (
+        span[~span[MARKER].isin(wrappers)]
+        .groupby(MARKER)
+        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
+        .sort_values("first_open")
+        .reset_index()
+    )
+    prev = None
+    for row in phases.itertuples(index=False):
+        if (
+            prev is not None
+            and row.marker not in NON_RENDEZVOUS_MARKERS
+            and prev.last_close > row.first_open
+        ):
+            raise AssertionError(
+                f"Zones overlap across threads: the last {prev.marker} closed at "
+                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
+                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"cover time belonging to the other phase. The usual cause is a kernel opening "
+                f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
+                f"supplies the cross-thread rendezvous at zone entry."
+            )
+        prev = row
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -934,6 +994,7 @@ class PerfConfig(TestConfig):
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
+                assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
