@@ -606,8 +606,6 @@
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
-      # 10 (was 5): the first run after GEMMA4_WEIGHT_CACHE_MESH_ONLY=1 cold-builds the mesh-qualified
-      # cache on the rw lfc mount; later runs are warm again.
       timeout: 10
       tier: 3
       release_ready: false
