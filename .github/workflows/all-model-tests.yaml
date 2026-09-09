@@ -118,6 +118,7 @@ jobs:
       has-t3-e2e: ${{ steps.check.outputs.has-t3-e2e }}
       has-vllm-tests: ${{ steps.check.outputs.has-vllm-tests }}
       has-any-tests: ${{ steps.check.outputs.has-any-tests }}
+      has-image-consumer: ${{ steps.check.outputs.has-image-consumer }}
     steps:
       - name: Checkout test definitions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -249,6 +250,9 @@ jobs:
           github_output = os.environ.get("GITHUB_OUTPUT", "")
           results = {}
           any_tests = False
+          # Test types whose legs consume bake-env-dev-full.outputs.image.
+          IMAGE_CONSUMER_TYPES = ("unit", "e2e")
+          has_image_consumer = False
 
           for test_type, path in test_files.items():
               if not os.path.exists(path):
@@ -279,6 +283,14 @@ jobs:
                   # Only count toward any_tests if the user actually selected this tier and test type
                   if found and tier in enabled_tiers and test_type in enabled_test_types:
                       any_tests = True
+                  # ...and toward has-image-consumer only for the test types wired to
+                  # the prebuilt env image. any_tests is too weak a gate for the bake:
+                  # it also counts sweep and vLLM, which stay on the artifact path, so a
+                  # sweep-only dispatch would build and push an image nothing pulls.
+                  # Add a type here when its legs start taking prebuilt-image.
+                  if (found and tier in enabled_tiers and test_type in enabled_test_types
+                          and test_type in IMAGE_CONSUMER_TYPES):
+                      has_image_consumer = True
 
           # vLLM Model Tests: single pipeline. Not tier-gated on scheduled/standalone
           # runs, but all-model-tests forwards a single selected tier to the vLLM impl
@@ -309,6 +321,7 @@ jobs:
               any_tests = True
 
           results["has-any-tests"] = "true" if any_tests else "false"
+          results["has-image-consumer"] = "true" if has_image_consumer else "false"
 
           if github_output:
               with open(github_output, "a") as f:
@@ -364,21 +377,15 @@ jobs:
   # e2e; the dev base is the same image docker-image resolves to, so the image path
   # and the fallback path agree.
   #
-  # The if: is the disjunction of those six jobs' own conditions, so the bake is
-  # skipped when none of them will run. build-artifact alone is too weak a gate:
-  # has-any-tests also counts the sweep and vLLM legs, which take the artifact path,
-  # so a sweep-only dispatch would otherwise checkout, build and push an image that
-  # nothing pulls. Extend this when a new consumer is wired, or it will fall back to
-  # the artifact path for no reason.
+  # has-image-consumer, not has-any-tests: the latter also counts the sweep and vLLM
+  # legs, which stay on the artifact path, so a sweep-only dispatch would otherwise
+  # checkout, build and push an image nothing pulls. preflight computes it from the
+  # same tier and test-type selection the six consumers gate on, so the two cannot
+  # disagree; see IMAGE_CONSUMER_TYPES there when wiring a new consumer.
   bake-env-dev-full:
     needs: [build-artifact, preflight]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
-     ((inputs.run-unit-tests && ((inputs.tier-1 && needs.preflight.outputs.has-t1-unit == 'true') ||
-                                 (inputs.tier-2 && needs.preflight.outputs.has-t2-unit == 'true') ||
-                                 (inputs.tier-3 && needs.preflight.outputs.has-t3-unit == 'true'))) ||
-      (inputs.run-e2e-tests  && ((inputs.tier-1 && needs.preflight.outputs.has-t1-e2e == 'true') ||
-                                 (inputs.tier-2 && needs.preflight.outputs.has-t2-e2e == 'true') ||
-                                 (inputs.tier-3 && needs.preflight.outputs.has-t3-e2e == 'true')))) }}
+     needs.preflight.outputs.has-image-consumer == 'true' }}
     uses: ./.github/workflows/build-prebuilt-tests-image.yaml
     permissions:
       contents: read
