@@ -176,10 +176,16 @@ void kernel_main() {
             // retile_block — the face-walking block operation. Assembles this
             // block's output tiles IN PLACE in cb_output_tiles out of the input
             // tiles' faces, one `retile_copy_unit` run per NoC read.
-            constexpr uint32_t in_face_h = (in_tile_h < kFaceWidth) ? in_tile_h : kFaceWidth;
+            // `in_tile_h` is 0 on the ROW_MAJOR path, and `kernel_main` is not a
+            // template, so the DISCARDED branch of an `if constexpr` is still
+            // type-checked: every divisor below has to stay a valid constant
+            // expression there too. Degenerating to the output's own geometry
+            // makes this whole (dead) instantiation the identity re-lay.
+            constexpr uint32_t src_tile_h = (in_tile_h > 0) ? in_tile_h : tile_h;
+            constexpr uint32_t in_face_h = (src_tile_h < kFaceWidth) ? src_tile_h : kFaceWidth;
             constexpr uint32_t out_face_h = (tile_h < kFaceWidth) ? tile_h : kFaceWidth;
             // retile_copy_unit(in_tile_h, tile_h), mirrored from the host.
-            constexpr uint32_t unit_rows = (in_tile_h < tile_h) ? in_tile_h : tile_h;
+            constexpr uint32_t unit_rows = (src_tile_h < tile_h) ? src_tile_h : tile_h;
             constexpr uint32_t unit_cols = (in_face_h == out_face_h) ? kTileWidth : kFaceWidth;
             constexpr uint32_t unit_bytes = unit_rows * unit_cols * elem_size;
             constexpr uint32_t unit_rows_per_tile = tile_h / unit_rows;
@@ -210,8 +216,8 @@ void kernel_main() {
                     for (uint32_t ur = 0; ur < unit_rows_per_tile; ++ur) {
                         const uint32_t out_row_local = ur * unit_rows;
                         const uint32_t src_row = row_in_image + out_row_local;
-                        const uint32_t in_tile_row_in_image = src_row / in_tile_h;
-                        const uint32_t in_row_local = src_row - in_tile_row_in_image * in_tile_h;
+                        const uint32_t in_tile_row_in_image = src_row / src_tile_h;
+                        const uint32_t in_row_local = src_row - in_tile_row_in_image * src_tile_h;
                         const uint32_t in_page =
                             (image * in_tile_rows_per_image + in_tile_row_in_image) * tensor_col_tiles + tile_col;
                         for (uint32_t uc = 0; uc < unit_cols_per_tile; ++uc) {
