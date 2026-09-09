@@ -38,8 +38,9 @@ serve:
     tool_parser: olmo3                                            # <function_calls>name(kwargs)</function_calls>
   additional_config:
     tt:
-      sample_on_device_mode: all
       trace_region_size: 60000000                                 # VALIDATED by stage 06/07 (placeholder)
+      # sample_on_device_mode is set per profile: on ONE chip the device-sampling buffers push the decode MLP's
+      # circular buffers into an L1 clash (bring-up 2026-09-09), so p150 samples on the host.
   env:
     TT_METAL_OPERATION_TIMEOUT_SECONDS: "120.0"
 
@@ -57,14 +58,14 @@ serve_profiles:
     mesh_device: P300
     max_num_seqs: 16
     max_model_len: 65536
-    additional_config: {tt: {fabric_config: FABRIC_1D}}
+    additional_config: {tt: {fabric_config: FABRIC_1D, sample_on_device_mode: all}}
   - name: p300x2
     description: Two p300 boards / QuietBox 2, 4 chips (TP4); 64k context, 32 users.
     hardware: p300x2
     mesh_device: P300x2
     max_num_seqs: 32
     max_model_len: 65536
-    additional_config: {tt: {fabric_config: FABRIC_1D_RING}}
+    additional_config: {tt: {fabric_config: FABRIC_1D_RING, sample_on_device_mode: all}}
 default_profile: p150
 
 verify:
