@@ -74,7 +74,7 @@ auto compute_program_hash(
     const typename device_operation_t::tensor_args_t& tensor_args) {
     if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
         ZoneScopedN("Compute custom program hash");
-        // Fold type_hash so distinct ops cannot alias on a custom-hash collision (issue #45821).
+        // Fold type_hash so distinct ops cannot alias on a custom-hash collision
         return ttsl::hash::hash_objects_with_default_seed(
             ttsl::hash::type_hash<device_operation_t>,
             device_operation_t::compute_program_hash(operation_attributes, tensor_args));

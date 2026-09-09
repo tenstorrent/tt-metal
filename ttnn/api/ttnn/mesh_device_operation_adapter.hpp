@@ -251,7 +251,7 @@ public:
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            // Fold type_hash so distinct ops cannot alias on a custom-hash collision (issue #45821).
+            // Fold type_hash so distinct ops cannot alias on a custom-hash collision
             return ttsl::hash::hash_objects_with_default_seed(
                 ttsl::hash::type_hash<DeviceOperation>, DeviceOperation::compute_program_hash(attrs, tensor_args));
         } else {

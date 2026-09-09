@@ -687,7 +687,7 @@ std::size_t hash<RelativeCoreCoord>::operator()(const RelativeCoreCoord& o) cons
 }
 
 std::size_t hash<CoreRange>::operator()(const CoreRange& core_range) const {
-    // Hash x/y, not CoreCoord: UMD's std::hash<CoreCoord> is x ^ (y << 1) (issue #45821).
+    // Hash x/y, not CoreCoord: UMD's std::hash<CoreCoord> is x ^ (y << 1)
     std::size_t seed = 0;
     ttsl::hash::hash_combine(seed, core_range.start_coord.x);
     ttsl::hash::hash_combine(seed, core_range.start_coord.y);
