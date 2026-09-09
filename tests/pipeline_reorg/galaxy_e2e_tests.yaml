@@ -45,7 +45,7 @@
       timeout: 15
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_2x4_3_mesh.textproto
     bh_galaxy:
-      timeout: 20
+      timeout: 10
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x4_2x4_3_mesh.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
@@ -60,7 +60,7 @@
       timeout: 15
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_2x8_2x4_3_mesh.textproto
     bh_galaxy:
-      timeout: 20
+      timeout: 10
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_2x8_2x4_3_mesh.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
