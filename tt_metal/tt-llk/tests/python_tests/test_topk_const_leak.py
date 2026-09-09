@@ -1,22 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression test: the rank-stamped TopK merge must not leak the SFPU's shared -1.0f.
+"""Regression test: the rank-stamped TopK merge must not change the SFPU's shared -1.0f (LREG11).
 
-The merge programs a lo16 clear mask into a programmable constant register and never
-restores it. If that register is LREG11 (which sfpi::vConstNeg1 aliases and firmware
-loads once at boot), every later bare read of -1.0f in the same device session is
-corrupted. The kernel poisons with one merge, then probes with x - 1 computed against
-that constant.
-
-``unstable`` keeps the merge but compiles the mask write out, so it isolates the leak to
-the stamping branch rather than to "a merge ran". ``rank_stamped`` is the variant under
-test. Both must pass. Observed on Blackhole p100a before the fix: 1024/1024 elements
-came back +inf.
+The kernel probes x - 1 against LCONST_neg1 on a fresh tile before the merge and again after
+it; the two results must agree bit for bit, whatever LREG11 held at kernel start. ``unstable``
+keeps the merge but compiles the mask write out; ``rank_stamped`` is the variant under test.
+Blackhole additionally checks the reference probe equals x - 1 exactly.
 """
 
 import torch
 from conftest import skip_for_quasar
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -89,39 +84,43 @@ def test_topk_const_leak(formats, poison):
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=1,
+            tile_count_res=2,
         ),
         unpack_to_dest=False,
         # Pinned: rank-stamped static_asserts on 32-bit DEST.
         dest_acc=DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
+    res_from_L1 = configuration.run().result[: 2 * ELEMENTS_PER_TILE]
     torch_format = format_dict[formats.output_format]
 
-    # Golden: the probe's own arithmetic, in fp32 off the same stimuli.
-    golden = (src_A.flatten().to(torch.float32) - 1.0)[:ELEMENTS_PER_TILE]
-
-    device = torch.tensor(res_from_L1, dtype=torch_format).flatten()
-    golden = golden.to(torch_format).flatten()
+    reference = torch.tensor(
+        res_from_L1[:ELEMENTS_PER_TILE], dtype=torch_format
+    ).flatten()
+    after = torch.tensor(res_from_L1[ELEMENTS_PER_TILE:], dtype=torch_format).flatten()
 
     # Non-finite first: it is this defect's signature and deserves its own message.
-    nonfinite = ~torch.isfinite(device)
-    nonfinite_count = int(nonfinite.sum().item())
+    nonfinite_count = int((~torch.isfinite(after)).sum().item())
     assert nonfinite_count == 0, (
-        f"{nonfinite_count} of {ELEMENTS_PER_TILE} probe elements are non-finite "
-        f"(poison={poison}): the shared -1.0f constant no longer holds -1.0f after "
-        f"the merge. The 'unstable' variant runs the identical probe and passes."
+        f"{nonfinite_count} of {ELEMENTS_PER_TILE} probe elements are non-finite after the merge "
+        f"(poison={poison}): the shared -1.0f constant no longer holds -1.0f."
     )
 
-    assert passed_test(
-        golden,
-        device,
-        formats.output_format,
-        custom_atol=STRICT_ATOL,
-        custom_rtol=STRICT_RTOL,
-        print_errors=True,
-    ), (
-        f"the 'x - 1' probe returned wrong finite values with poison={poison}. "
-        f"x - 1 is exact in bfloat16 here, so this is a bit-for-bit comparison."
+    assert torch.equal(reference, after), (
+        f"the 'x - 1' probe changed across the merge (poison={poison}): the merge wrote the "
+        f"shared -1.0f register. Before {reference[:8].tolist()}, after {after[:8].tolist()}."
     )
+
+    if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        # x - 1 is exact in bfloat16 over [1.0, 2.0], so this is a bit-for-bit comparison.
+        golden = (src_A.flatten().to(torch.float32) - 1.0)[:ELEMENTS_PER_TILE].to(
+            torch_format
+        )
+        assert passed_test(
+            golden,
+            reference,
+            formats.output_format,
+            custom_atol=STRICT_ATOL,
+            custom_rtol=STRICT_RTOL,
+            print_errors=True,
+        ), "the reference 'x - 1' probe does not read -1.0f from LCONST_neg1"
