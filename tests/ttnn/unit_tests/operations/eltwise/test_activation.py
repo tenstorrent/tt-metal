@@ -258,6 +258,39 @@ def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
 
 
+def test_softplus_fp32_overflow(device):
+    """Regression test for #55798: softplus in float32 returned inf/NaN for large-negative inputs.
+
+    softplus_exp_negative on Blackhole/Wormhole passes an unclamped z to the Hacker's-Delight
+    round-to-nearest helper (valid only for |z| <= 2^22), so the exponent overflowed and the
+    new_exp > 0 flush-to-zero guard was bypassed. The fix clamps z to -126.5 before rounding.
+
+    softplus(-a) = log(1 + exp(-a)) -> 0 for large a; the result must be finite and close to 0.
+    """
+    extreme_values = [
+        -1e7,
+        -1e8,
+        -1e10,
+        -float(2**119),
+        -float(2**125),
+        -float(2**126),
+    ]
+    torch_input = torch.tensor([extreme_values], dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.softplus(input_tensor, beta=1.0, threshold=20.0)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    # No inf/NaN — the core regression
+    assert torch.isfinite(output_tensor).all(), f"softplus produced non-finite values: {output_tensor}"
+
+    # Compare with reference (torch handles this correctly)
+    golden = torch.nn.functional.softplus(torch_input, beta=1.0, threshold=20.0)
+    assert_allclose(output_tensor, golden, atol=1e-3, rtol=1e-3)
+
+
 def test_tanhshrink_ulp(device):
     """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
 
