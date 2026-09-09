@@ -37,6 +37,25 @@ struct TridRing {
         }
     }
 
+    // Raw-address variant for L1-to-L1 pulls (no TensorAccessor page math). Unlike read(), this
+    // ring may be interleaved with unrelated plain reads on the same RISC (e.g. the worker
+    // writer's Q loads between kreq services), so the tagged issue must restore trid 0 -- a
+    // leaked trid would mislabel those reads and corrupt the ring's drain accounting.
+    FORCE_INLINE void read_addr(uint64_t src_noc_addr, uint32_t dst_l1_addr, uint32_t bytes) {
+        if constexpr (K_TRID_RING == 0) {
+            noc_async_read(src_noc_addr, dst_l1_addr, bytes, noc.get_noc_id());
+        } else {
+            const uint32_t trid = (issued % TRID_MOD) + 1;
+            if (issued >= K_TRID_RING) {
+                experimental::async_read_barrier_with_trid(noc, trid);
+            }
+            experimental::set_read_trid(noc, trid);
+            noc_async_read(src_noc_addr, dst_l1_addr, bytes, noc.get_noc_id());
+            experimental::set_read_trid(noc, 0);
+            ++issued;
+        }
+    }
+
     FORCE_INLINE void drain() {
         if constexpr (K_TRID_RING == 0) {
             noc.async_read_barrier();

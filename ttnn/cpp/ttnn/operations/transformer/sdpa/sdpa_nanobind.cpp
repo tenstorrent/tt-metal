@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
+#include "vsa_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -458,6 +459,71 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none());
+
+    ttnn::bind_function<"vsa_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        VSA (video sparse attention) fine-stage block-sparse attention, Blackhole single-chip, non-causal.
+        Per (head, 64-token query tile), attends exactly the KV blocks named in that row of `indices`, with
+        online softmax numerically equivalent to dense SDPA under the same block mask. -1 (0xFFFFFFFF)
+        sentinels mask a contiguous row tail; key columns >= that block's entry in `block_counts` are masked
+        to -inf (ragged, zero-padded VSA tiles). RoPE and QK-norm are applied upstream. The kernel has no
+        SP/mesh logic: the index list is the whole contract.
+
+        Args:
+            q (ttnn.Tensor):            [1, H, S, d] bf16 TILE, head-major; S a multiple of 64.
+            k (ttnn.Tensor):            [1, H, T, d] bf16 | bfloat8_b TILE; T a multiple of block_size.
+            v (ttnn.Tensor):            [1, H, T, d] bf16 | bfloat8_b TILE.
+            indices (ttnn.Tensor):      [1, H, S/64, W] uint32 global block ids, ROW_MAJOR, sentinel tail;
+                                        W >= T/block_size (pad W with sentinels for DRAM row alignment).
+                                        Each row must contain a valid block; valid ids must be < T/block_size.
+            block_counts (ttnn.Tensor): [1, 1, 1, W] uint32 valid tokens per block, in (0, block_size].
+
+        Keyword args:
+            scale (float, optional): defaults to d to the power of -0.5.
+            block_size (int): VSA block size in tokens; defaults to 64 (the (4,4,4) cube). Must be a multiple
+                of 64 and divide T.
+            k_chunk_blocks (int): the k-chunk multiplier m >= 1. The reader gathers a row's next m listed
+                blocks into one contiguous L1 chunk; compute does one QK matmul and one softmax-rescale per
+                chunk. A row whose valid block count is not a multiple of m ends with a partial chunk.
+                Results are identical for every m; defaults to 1.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            list_len (int): raw-selection mode (streaming only): consume only the first list_len entries of
+                each indices row (the coarse stage's top-k output as-is). 0 = the whole width.
+            exempt_ids (list[int]): raw-selection mode: block ids every row attends in addition to its list.
+            dense_row_mask (ttnn.Tensor, optional): raw-selection mode: [1, 1, 1, words] uint32 ROW_MAJOR
+                bitmask over this device's q-tile rows; a set bit makes that row (every head) attend every
+                real block, ignoring its indices row. words*4 must be a multiple of 32.
+            distributed (bool): distributed-window kernel (every core of a head group fetches a slice of each
+                KV window; rows gather from peers' L1; rows dealt by static cost). dense_row_hint (list[int]):
+                q-tile rows that may be dense on some shard, weighted as dense in the dealing.
+            coarse_slots_shift, coarse_real_per_shard (int): raw-selection mode: the indices use a padded
+                per-shard numbering (2**shift slots per SP shard, only coarse_real_per_shard real); the
+                kernel maps id b to b - (b >> shift) * (2**shift - real). 0 = ids are real.
+
+        Returns:
+            ttnn.Tensor: [1, H, S, d] TILE, dtype = q.
+        )doc",
+        &ttnn::transformer::vsa_sdpa,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("block_counts").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("block_size") = 64,
+        nb::arg("k_chunk_blocks") = 1,
+        nb::arg("streaming") = true,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("list_len") = 0,
+        nb::arg("exempt_ids") = std::vector<uint32_t>{},
+        nb::arg("dense_row_mask") = nb::none(),
+        nb::arg("coarse_slots_shift") = 0,
+        nb::arg("coarse_real_per_shard") = 0,
+        nb::arg("distributed") = false,
+        nb::arg("dense_row_hint") = std::vector<uint32_t>{},
+        nb::arg("stream_order") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
