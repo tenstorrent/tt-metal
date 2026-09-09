@@ -115,8 +115,8 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore SFPLOAD_INS
 inline void _relu_min_impl_(const int iterations)
 {
     static_assert(
-        SFPLOAD_INSTR_MOD == InstrModLoadStore::DEFAULT || SFPLOAD_INSTR_MOD == InstrModLoadStore::INT32,
-        "SFPLOAD_INSTR_MOD must be DEFAULT (fp32 datapath) or INT32 (integer datapath)");
+        SFPLOAD_INSTR_MOD == InstrModLoadStore::DEFAULT || SFPLOAD_INSTR_MOD == InstrModLoadStore::INT32_2S_COMP,
+        "SFPLOAD_INSTR_MOD must be DEFAULT (fp32 datapath) or INT32_2S_COMP (integer datapath)");
 
     for (int d = 0; d < iterations; d++)
     {
@@ -139,12 +139,11 @@ inline void _relu_min_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     // The load/store mode the branches below encode the threshold for. Only the integer
-    // datapath needs a non-default mode -- INT32, the non-converting one, for the reason
-    // spelled out in the vInt branch -- and which branch runs is fixed by <T, VectorType>,
+    // datapath needs a non-default mode, and which branch runs is fixed by <T, VectorType>,
     // so this is a compile-time constant rather than a variable the branches assign -- see
     // the note on _relu_min_impl_'s SFPLOAD_INSTR_MOD parameter.
     constexpr InstrModLoadStore SFPLOAD_INSTR_MOD =
-        (std::is_same_v<T, std::uint32_t> && std::is_same_v<VectorType, sfpi::vInt>) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+        (std::is_same_v<T, std::uint32_t> && std::is_same_v<VectorType, sfpi::vInt>) ? InstrModLoadStore::INT32_2S_COMP : InstrModLoadStore::DEFAULT;
 
     // Invariant every branch below must uphold: leave the threshold in LREG2, in the encoding
     // SFPLOAD_INSTR_MOD selects. A branch that sets only a local vector compiles clean and then
@@ -161,12 +160,10 @@ inline void _relu_min_(T threshold)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
-            // SFPSWAP orders its operands as sign+magnitude and DEST already holds int32 in
-            // that form, so the load and store use InstrModLoadStore::INT32, the mode that
-            // leaves the bits alone -- INT32_2S_COMP is the converting one, despite being the
-            // name that sounds otherwise. The threshold does not arrive through a load and so
-            // passes through no mode at all, which is why it is re-encoded by hand here to
-            // match, and why that is scoped to the integer branch.
+            // SFPSWAP orders its operands as sign+magnitude, and INT32_2S_COMP is the load
+            // mode that converts a two's-complement DEST word into that form. The threshold
+            // does not arrive through a load, so it is re-encoded by hand here to match --
+            // scoped to this branch, since on a float the same bits mean something else.
             constexpr std::uint32_t SIGN_MAG_SIGN_BIT      = 0x80000000u;
             constexpr std::uint32_t SIGN_MAG_MAX_MAGNITUDE = 0x7FFFFFFFu;
 
