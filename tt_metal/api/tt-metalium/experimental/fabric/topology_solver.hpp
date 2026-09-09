@@ -675,19 +675,19 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
  * @brief Solve topology mapping using constraint satisfaction
  *
  * Stateless function that performs constraint satisfaction search to find a valid
- * mapping from target graph to global graph. Enforces required constraints first,
- * then optimizes for preferred constraints. In RELAXED mode, the search also favors
- * embeddings that better match target edge channel counts on the physical graph
- * (more capacity satisfied is preferred over less), without requiring explicit
- * preferred constraints for that behavior.
+ * mapping from target graph to global graph. Implemented as `solve_topology_mapping_n`
+ * with `max_solutions = 1`. Enforces required constraints first, then optimizes for
+ * preferred constraints. In RELAXED mode, if the caller did not set any preferred
+ * mappings, highest-degree global nodes are added as preferred so the engines sit on
+ * the fattest remaining chips.
  *
  * @tparam TargetNode The type used to identify nodes in the target graph (must be explicitly specified)
  * @tparam GlobalNode The type used to identify nodes in the global graph (must be explicitly specified)
  * @param target_graph The target graph (subgraph pattern to find)
  * @param global_graph The global graph (larger host graph that contains the target)
  * @param constraints The mapping constraints to satisfy
- * @param connection_validation_mode STRICT fails on insufficient channels; RELAXED allows them but still prefers
- *        stronger channel alignment among feasible mappings (default: RELAXED)
+ * @param connection_validation_mode STRICT fails on insufficient channels; RELAXED allows them and, when no
+ *        preferred mappings were given, prefers highest-degree global nodes (default: RELAXED)
  * @param quiet_mode If true, log errors at debug level instead of error level (useful for auto-discovery)
  * @param solver_engine Auto uses TT_TOPOLOGY_SOLVER_ENGINE; Dfs/Sat force that backend regardless of env.
  * @return MappingResult containing success status, bidirectional mappings, and warnings

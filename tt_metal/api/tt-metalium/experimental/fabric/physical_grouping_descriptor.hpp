@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -103,6 +104,44 @@ struct GroupingInfo {
 struct PsdPlacement {
     std::unordered_set<tt::tt_metal::AsicID> asics;
     std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
+};
+
+// Wall-clock and search counters for one adjacency-guided placement DFS.
+//
+// Each expanded search node rebuilds a candidate pool (next_step_pool), which runs a fresh
+// topology-solver enumeration against the remaining physical graph. Those inner calls dominate
+// runtime; these fields exist so that looping can be timed and improved from the placement side.
+struct PlacementSolveStats {
+    bool success = false;
+    std::size_t meshes_total = 0;
+    std::size_t meshes_placed = 0;
+
+    // Outer adjacency-guided DFS
+    std::size_t adjacency_nodes_expanded = 0;  ///< Search nodes that committed a candidate
+    std::size_t next_step_pool_calls = 0;      ///< Candidate-pool builds (one per mesh considered)
+    std::size_t candidates_generated = 0;      ///< Successful inner mappings turned into candidates
+
+    // Inner topology-solver enumerations invoked from the placement DFS
+    std::size_t inner_solver_calls = 0;
+    std::size_t inner_solver_sat_calls = 0;  ///< Auto backend chose SAT (n_target * n_global threshold)
+    std::size_t inner_solver_dfs_calls = 0;
+    std::size_t inner_solutions_found = 0;
+    std::size_t inner_dfs_visits = 0;  ///< MappingResult::stats.dfs_calls summed over DFS-backend calls
+    std::size_t inner_dfs_backtracks = 0;
+    std::size_t inner_dfs_memoization_hits = 0;
+
+    std::chrono::microseconds total_elapsed{};
+    std::chrono::microseconds next_step_pool_elapsed{};
+    std::chrono::microseconds inner_solver_elapsed{};
+    std::chrono::microseconds sat_elapsed{};
+    std::chrono::microseconds dfs_elapsed{};
+
+    std::chrono::microseconds slowest_inner_elapsed{};
+    std::size_t slowest_inner_n_target = 0;
+    std::size_t slowest_inner_n_global = 0;
+    bool slowest_inner_used_sat = false;
+
+    std::string to_string() const;
 };
 
 // Type aliases for valid groupings map structure
@@ -269,17 +308,20 @@ public:
     //
     // node_budget caps how many DFS search nodes the placement search expands before stopping.
     // 0 means no limit. Non-zero values are mainly for tests and guarding against runaway search.
+    // stats_out, when non-null, is filled with timings and SAT/DFS counters for this solve.
     std::vector<PsdPlacement> solve_adjacency_guided_placement(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t node_budget = 0) const;
+        std::size_t node_budget = 0,
+        PlacementSolveStats* stats_out = nullptr) const;
 
     std::vector<PsdPlacement> solve_adjacency_guided_placement(
         const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t node_budget = 0) const;
+        std::size_t node_budget = 0,
+        PlacementSolveStats* stats_out = nullptr) const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled

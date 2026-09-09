@@ -1080,6 +1080,7 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         } else {
             invalid_pairs.push_back(mapping_pair);
         }
+        total_weight += weight;
     }
 
     if (valid_weight < min_count) {
@@ -1216,6 +1217,38 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraint
     }
 
     return true;
+}
+
+// RELAXED with no caller-supplied preferred set: sit on the highest-degree global nodes (neighbor-list
+// size, including parallel links). Same idea as adjacency-guided placement's seed-mesh preferred chips.
+// Callers that already set preferred mappings are left alone so those are not intersected away.
+template <typename TargetNode, typename GlobalNode>
+void add_relaxed_highest_degree_preferred_constraints(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    MappingConstraints<TargetNode, GlobalNode>& constraints) {
+    if (!constraints.get_preferred_mappings().empty()) {
+        return;
+    }
+    std::size_t best_weight = 0;
+    for (const GlobalNode& node : global_graph.get_nodes()) {
+        best_weight = std::max(best_weight, global_graph.get_neighbors(node).size());
+    }
+    if (best_weight == 0) {
+        return;
+    }
+    std::set<GlobalNode> preferred_nodes;
+    for (const GlobalNode& node : global_graph.get_nodes()) {
+        if (global_graph.get_neighbors(node).size() == best_weight) {
+            preferred_nodes.insert(node);
+        }
+    }
+    if (preferred_nodes.empty()) {
+        return;
+    }
+    for (const TargetNode& node : target_graph.get_nodes()) {
+        constraints.add_preferred_constraint(node, preferred_nodes);
+    }
 }
 
 // solve_topology_mapping template implementation

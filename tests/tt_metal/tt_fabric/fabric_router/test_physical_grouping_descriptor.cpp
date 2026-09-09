@@ -11,6 +11,8 @@
 #include <set>
 #include <unordered_set>
 #include <sstream>
+#include <fstream>
+#include <chrono>
 #include <cstdlib>
 
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
@@ -2624,6 +2626,9 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMeshNodeT
     constexpr size_t kMgdNodeCount = 16;  // single_pod_4x4 is a 4x4 mesh => 16 logical chips (row-major 0..15)
     size_t groupings_with_pinning = 0;
     for (const auto& grouping : committed_groupings) {
+        if (grouping.name == "M0") {
+            continue;  // MGD fallback is unpinned; PGD entries carry the match pinning
+        }
         ASSERT_FALSE(grouping.mesh_node_to_asic_position.empty())
             << "Committed PGD grouping '" << grouping.name << "' should carry logical chip_id -> ASIC position pinning";
         const auto& pinning = grouping.mesh_node_to_asic_position;
@@ -2705,6 +2710,9 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinn
         << "PGD matching should succeed with many-to-many MGD pinnings";
 
     for (const auto& grouping : with_pinnings.at("MESH").at("M0")) {
+        if (grouping.name == "M0") {
+            continue;  // MGD fallback is unpinned; PGD entries carry the match pinning
+        }
         ASSERT_FALSE(grouping.mesh_node_to_asic_position.empty())
             << "PGD-derived layout pinning must be populated for '" << grouping.name << "'";
         EXPECT_EQ(grouping.mesh_node_to_asic_position.size(), 16u)
@@ -2816,6 +2824,112 @@ std::set<uint64_t> chips_in(const std::vector<std::set<uint64_t>>& footprints) {
         chips.insert(footprint.begin(), footprint.end());
     }
     return chips;
+}
+
+std::string unspecified_mesh_pgd(std::size_t rows, std::size_t cols) {
+    std::ostringstream out;
+    out << "groupings {\n  name: \"" << rows << "x" << cols << "_Mesh\"\n  preset_type: MESH\n  instances: [\n";
+    const std::size_t n = rows * cols;
+    for (std::size_t i = 0; i < n; ++i) {
+        out << "    { id: " << i << " location { asic_location: ASIC_LOCATION_UNSPECIFIED } }";
+        out << (i + 1 < n ? ",\n" : "\n");
+    }
+    out << "  ]\n  row_major_mesh {\n    dims: [" << rows << ", " << cols << "]\n  }\n}\n";
+    return out.str();
+}
+
+std::string mesh_grid_mgd(
+    std::size_t mesh_rows, std::size_t mesh_cols, std::size_t fabric_rows, std::size_t fabric_cols) {
+    std::ostringstream out;
+    out << "mesh_descriptors {\n"
+        << "  name: \"M\"\n  arch: WORMHOLE_B0\n"
+        << "  device_topology { dims: [ " << mesh_rows << ", " << mesh_cols << " ] dim_types: [ LINE, LINE ] }\n"
+        << "  host_topology   { dims: [ 1, 1 ] }\n"
+        << "  channels { count: 2 policy: STRICT }\n"
+        << "}\n\n"
+        << "graph_descriptors {\n  name: \"G0\"\n  type: \"FABRIC\"\n";
+    const std::size_t n = fabric_rows * fabric_cols;
+    for (std::size_t i = 0; i < n; ++i) {
+        out << "  instances { mesh { mesh_descriptor: \"M\" mesh_id: " << i << " } }\n";
+    }
+    auto mesh_id = [fabric_cols](std::size_t r, std::size_t c) { return r * fabric_cols + c; };
+    for (std::size_t r = 0; r < fabric_rows; ++r) {
+        for (std::size_t c = 0; c < fabric_cols; ++c) {
+            if (c + 1 < fabric_cols) {
+                out << "  connections {\n"
+                    << "    nodes { mesh { mesh_descriptor: \"M\" mesh_id: " << mesh_id(r, c) << " } }\n"
+                    << "    nodes { mesh { mesh_descriptor: \"M\" mesh_id: " << mesh_id(r, c + 1) << " } }\n"
+                    << "    channels { count: 2 policy: RELAXED }\n"
+                    << "  }\n";
+            }
+            if (r + 1 < fabric_rows) {
+                out << "  connections {\n"
+                    << "    nodes { mesh { mesh_descriptor: \"M\" mesh_id: " << mesh_id(r, c) << " } }\n"
+                    << "    nodes { mesh { mesh_descriptor: \"M\" mesh_id: " << mesh_id(r + 1, c) << " } }\n"
+                    << "    channels { count: 2 policy: RELAXED }\n"
+                    << "  }\n";
+            }
+        }
+    }
+    out << "}\n\ntop_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }\n";
+    return out.str();
+}
+
+std::string grid_psd(std::size_t rows, std::size_t cols) {
+    std::ostringstream out;
+    out << "target_device_type: 0\nsystem_graph {\n  asic_connectivity_graph {\n    host_name: \"host0\"\n";
+    auto asic_id = [cols](std::size_t r, std::size_t c) { return 100 + r * cols + c; };
+    auto emit_link = [&](std::size_t dst, int chan0) {
+        out << "        asic_connections {\n          dst_asic_id: " << dst << "\n";
+        for (int i = 0; i < 2; ++i) {
+            out << "          eth_connections {\n            src_chan: " << (chan0 + i)
+                << "\n            dst_chan: " << (chan0 + i) << "\n            is_local: true\n          }\n";
+        }
+        out << "        }\n";
+    };
+    for (std::size_t r = 0; r < rows; ++r) {
+        for (std::size_t c = 0; c < cols; ++c) {
+            out << "    asic_topologies {\n      asic_id: " << asic_id(r, c) << "\n      topology {\n";
+            if (c > 0) {
+                emit_link(asic_id(r, c - 1), 0);
+            }
+            if (c + 1 < cols) {
+                emit_link(asic_id(r, c + 1), 0);
+            }
+            if (r > 0) {
+                emit_link(asic_id(r - 1, c), 2);
+            }
+            if (r + 1 < rows) {
+                emit_link(asic_id(r + 1, c), 2);
+            }
+            out << "      }\n    }\n";
+        }
+    }
+    out << "  }\n}\n";
+    for (std::size_t r = 0; r < rows; ++r) {
+        for (std::size_t c = 0; c < cols; ++c) {
+            const auto id = asic_id(r, c);
+            out << "asic_descriptors {\n  asic_id: " << id
+                << "\n  asic_descriptor {\n    tray_id: 0\n    asic_location: " << (c % 8)
+                << "\n    board_type: 1\n    unique_id: " << id << "\n    host_name: \"host0\"\n  }\n}\n";
+        }
+    }
+    out << "host_to_rank {\n  host_name: \"host0\"\n  rank: 0\n}\nethernet_firmware_version {\n  major: 1\n  minor: "
+           "0\n  patch: 0\n}\n";
+    return out.str();
+}
+
+tt::tt_metal::PhysicalSystemDescriptor load_psd_from_text(const std::string& text) {
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("pgd_placement_strain_" +
+                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".textproto");
+    {
+        std::ofstream out(path);
+        out << text;
+    }
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(path.string());
+    std::filesystem::remove(path);
+    return psd;
 }
 
 }  // namespace
@@ -3037,8 +3151,17 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingDfsPlacesAndMapsWhereOldPacki
 
     // ----- old path: find_all_in_psd, packing each shape independently -----
 
+    // PGD shapes only. The variant list also carries the MGD grouping as a fallback, which is named
+    // after the mesh and has no PGD grouping behind it for find_all_in_psd to flatten. The packer only
+    // ever saw PGD shapes, and this half of the test is about what packing one of them produces.
     const auto pack_shape = [&](const std::string& mesh_name) {
-        return pgd.find_all_in_psd(valid_groupings.at("MESH").at(mesh_name), psd);
+        std::vector<GroupingInfo> pgd_shapes;
+        for (const auto& grouping : valid_groupings.at("MESH").at(mesh_name)) {
+            if (grouping.name != mesh_name) {
+                pgd_shapes.push_back(grouping);
+            }
+        }
+        return pgd.find_all_in_psd(pgd_shapes, psd);
     };
     const auto a_pool = pack_shape("A");
     const auto b_pool = pack_shape("B");
@@ -3150,8 +3273,8 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingFailsWhenRingCannotClose) {
 //
 // The pair below differs only in the PGD, so the committed grouping name isolates that decision:
 //
-//   PGD grouping places  ->  committed "1x2_Mesh_flat"  (the PGD grouping)
-//   PGD grouping cannot  ->  committed "M0"             (the MGD fallback)
+//   PGD grouping places  ->  committed "1x2_Mesh_flat" first, then "M0" as fallback
+//   PGD grouping cannot  ->  committed "M0" only          (the MGD fallback)
 //
 // Both run on test_4asic_2mesh.textproto (100 == 101, 102 == 103) with a single 1x2 mesh.
 // ---------------------------------------------------------------------------------------------
@@ -3647,11 +3770,17 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
     // get valid groupings
     // The committed grouping's name is what separates the two paths: a committed PGD grouping keeps
     // its own flattened name, while the MGD fallback grouping is named after the mesh instance.
+    // PGD is first (preferred); MGD is appended last when it also embeds, so the list is not a
+    // replacement of one by the other.
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
     const auto& committed = valid_groupings.at("MESH").at("M0");
-    ASSERT_EQ(committed.size(), 1u);
-    EXPECT_EQ(committed.front().name, "1x2_Mesh_flat")
-        << "the PGD grouping embeds into the PSD, so it should be committed rather than dropped";
+    std::vector<std::string> committed_names;
+    for (const auto& grouping : committed) {
+        committed_names.push_back(grouping.name);
+    }
+    EXPECT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_flat", "M0"))
+        << "the PGD grouping embeds into the PSD, so it should be committed first, with the MGD "
+           "grouping offered last as fallback";
 
     // Whichever path commits, the grouping carries the shape as its own adjacency graph, and that
     // is what placement then has to embed: two nodes, joined.
@@ -3682,9 +3811,56 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
         << "the mesh must sit on one of the two linked pairs";
 }
 
-// The downgrade above only triggers when the PGD grouping cannot be embedded at all. This is the
-// case it misses: a grouping that embeds fine on its own but cannot serve every mesh instance that
-// shares it.
+// Both groupings embed, so the list has PGD then MGD. Placement must still take the PGD seating.
+// The pinned grouping only fits on {100,101}; the MGD 1x2 would also accept {101,102} or
+// {102,103}. If the fallback were tried first, the mesh could land on a pair the PGD never asked
+// for. The pinning map is how we tell which variant actually won: PGD carries one, MGD does not.
+TEST(AdjacencyGuidedPlacement, PlaceableMgdFallbackDoesNotOutrankPgd) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_to_one_pair.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    const auto& committed = valid_groupings.at("MESH").at("M0");
+    std::vector<std::string> committed_names;
+    for (const auto& grouping : committed) {
+        committed_names.push_back(grouping.name);
+    }
+    ASSERT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_OnePair_flat", "M0"))
+        << "both must be on the list, PGD first, or this is not a priority test";
+
+    // build logical
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // place, and build the flat ASIC adjacency
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 1u) << "the single mesh should place";
+    EXPECT_FALSE(placements.front().mesh_node_to_asic_position.empty())
+        << "the PGD grouping carries pinning and must win; an empty map means the MGD fallback was used";
+    EXPECT_THAT(footprints_of(placements), ::testing::ElementsAre(std::set<uint64_t>{100, 101}))
+        << "the pinned PGD pair, not an MGD seating on {101,102} or {102,103}";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+    EXPECT_THAT(mapped_footprints(mapping), ::testing::ElementsAre(std::set<uint64_t>{100, 101}))
+        << "the mapper should keep the mesh on the PGD-pinned pair";
+}
+
+// PlaceableMgdFallbackDoesNotOutrankPgd is the single-mesh control: PGD wins when it can cover the
+// mesh. This is the case that control misses: a grouping that embeds fine on its own but cannot
+// serve every mesh instance that shares it.
 //
 //   mesh-level graph (linked MGD)        physical graph (4-chip line)
 //
@@ -3701,18 +3877,9 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
 // fails outright. The MGD's own unpinned 1x2 grouping would have placed them on {100,101} and
 // {102,103}, which is what LinkedMeshesPlaceAdjacentlyOnLine shows on this very PSD.
 //
-// The matcher never gets there. Its pre-commit check calls enumerate_distinct_placements_for_grouping
-// with empty constraints, so it asks only "does this shape fit somewhere on the PSD", with nothing
-// else placed and no seam to satisfy. The pinned grouping answers yes, gets committed, and the
-// fallback is skipped -- committed_pgd_matches is already true by the time the search discovers the
-// grouping cannot cover both instances.
-//
-// TODO: this test asserts the behaviour we want and currently fails. The fix belongs in
-// get_valid_groupings_for_mgd: when a committed PGD grouping cannot cover every instance that shares
-// it, the MGD grouping should be offered alongside it rather than skipped. The search already walks
-// the grouping variants for a mesh in next_step_pool, so with both on the list it can seat one
-// instance on the pinned grouping and fall back to the MGD grouping for the other -- which is why
-// the check at the end of this test wants two entries, not a replacement.
+// The matcher used to skip the fallback once any PGD grouping placed once. It now offers the MGD
+// grouping last whenever that grouping also embeds, so the search can seat one instance on the pinned
+// pair and the other on the unpinned 1x2. Two entries, not a replacement.
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotCoverEveryInstanceShouldDowngrade) {
     // build pgd
     PhysicalGroupingDescriptor pgd{std::filesystem::path(
@@ -3770,6 +3937,42 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotCoverEveryInstanceShouldDown
         EXPECT_THAT(grouping.adjacency_graph.get_neighbors(0u), ::testing::ElementsAre(1u));
         EXPECT_THAT(grouping.adjacency_graph.get_neighbors(1u), ::testing::ElementsAre(0u));
     }
+}
+
+// Strain the adjacency-guided DFS: many meshes, so next_step_pool (and the inner topology-solver
+// enumeration it loops) runs once per search node. Auto picks SAT when n_target * n_global >= 512
+// and DFS otherwise, so a 4x4 mesh on an 8x8 system starts on SAT and finishes on DFS as occupancy
+// shrinks. Stats are the thing to watch when changing the looping.
+TEST(AdjacencyGuidedPlacement, StrainManyMeshesReportsDfsStats) {
+    auto run_case = [](std::size_t mesh_rows,
+                       std::size_t mesh_cols,
+                       std::size_t fabric_rows,
+                       std::size_t fabric_cols,
+                       const char* label) {
+        PhysicalGroupingDescriptor pgd{unspecified_mesh_pgd(mesh_rows, mesh_cols)};
+        MeshGraphDescriptor mgd{mesh_grid_mgd(mesh_rows, mesh_cols, fabric_rows, fabric_cols)};
+        auto psd = load_psd_from_text(grid_psd(mesh_rows * fabric_rows, mesh_cols * fabric_cols));
+
+        const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+        ASSERT_TRUE(valid_groupings.contains("MESH")) << label;
+
+        PlacementSolveStats stats;
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+
+        const std::size_t expected_meshes = fabric_rows * fabric_cols;
+        EXPECT_EQ(placements.size(), expected_meshes) << label << "\n" << stats.to_string();
+        EXPECT_TRUE(stats.success) << label << "\n" << stats.to_string();
+        EXPECT_EQ(stats.meshes_placed, expected_meshes) << label;
+        EXPECT_GE(stats.next_step_pool_calls, expected_meshes) << label << "\n" << stats.to_string();
+        EXPECT_GE(stats.inner_solver_calls, expected_meshes) << label << "\n" << stats.to_string();
+        EXPECT_GT(stats.total_elapsed.count(), 0) << label;
+    };
+
+    // 8 linked 2x2 meshes on a 4x8 chip grid: 4 * remaining_chips < 512, so the inner calls stay on DFS.
+    run_case(2, 2, 2, 4, "8x 2x2 meshes on 4x8");
+    // 4 linked 4x4 meshes on an 8x8 chip grid: first inner call is 16*64 >= 512 (SAT), last is 16*16 (DFS).
+    run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
