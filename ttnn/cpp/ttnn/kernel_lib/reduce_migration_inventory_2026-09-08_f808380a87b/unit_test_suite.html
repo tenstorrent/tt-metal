@@ -163,6 +163,7 @@ tr:has(:target) { background: #ddf3e9; }
 <p><strong>Pytest collection: 18,452 parametrized cases; 0 groups failed collection.</strong> Cases include upstream skip/xfail marks, host validation and reference-only checks within the selected operation suites. The executed/pass count will depend on architecture, available devices, environment opt-ins and filters. Some tests also contain internal shape loops, which are one pytest case, not one case per loop iteration.</p>
 <p>Collection used the checkout's default pytest target, <code>wormhole_b0</code>. Parameter expansion can differ on another architecture or with different environment/filter settings.</p>
 <p><a href="unit_test_suite.json">Manifest</a> · <a href="unit_test_suite.csv">Every selected test and its case count</a> · <a href="unit_test_collection.json">Collection results by source</a></p>
+<p>The counts in this report describe the base inventory at the commit above. The migration since added <b>16 test definitions</b> and <b>408 collected cases</b>, so the runner's current manifest holds <b>1,000 definitions and 18,860 known cases</b>; <a href="unit_test_suite.json">unit_test_suite.json</a> records the delta in <code>migration_regressions</code> and is what <code>scripts/run_reduce_migration_tests.py</code> reads.</p>
 <h2 id="run-the-suite">Run the suite</h2>
 <p>From the repository root:</p>
 <pre><code class="language-bash">python scripts/run_reduce_migration_tests.py

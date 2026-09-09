@@ -81,7 +81,7 @@ Collected 77 cases across 77 groups with 0 failed groups. No on-device test bodi
 
 ### SM001 — C++ reductions
 
-Lane: `common`. Primary kernels: `S099`, `DF055`.
+Lane: `common`. Kernels: `S099`, `DF055`.
 
 BF16 tiled [64,64], mean over H: interleaved H transpose reader and reduce.cpp.
 
@@ -91,7 +91,7 @@ tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.MeanReduceH
 
 ### SM002 — C++ reductions
 
-Lane: `common`. Primary kernels: `DF053`.
+Lane: `common`. Kernels: `DF053`.
 
 BF16 tiled [64,64], mean over W: universal reduce reader (compute already covered).
 
@@ -101,7 +101,7 @@ tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.MeanReduceW
 
 ### SM003 — C++ reductions
 
-Lane: `common`. Primary kernels: `S102`, `DF052`.
+Lane: `common`. Kernels: `S102`, `DF052`.
 
 ROW_MAJOR [1,1,64,64], sum W: row-major reduce compute and reader.
 
@@ -111,7 +111,7 @@ tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.RowMajorSumW
 
 ### SM004 — C++ reductions
 
-Lane: `common`. Primary kernels: `S105`, `DF057`.
+Lane: `common`. Kernels: `S105`, `DF057`.
 
 32 users, width 64, top-k=1: deterministic sampled indices. Sampling still runs its MAX/SUM softmax helpers.
 
@@ -121,7 +121,7 @@ tests/ttnn/unit_tests/gtests/test_reduction.cpp::ReductionSmoke.SamplingGreedyTo
 
 ### SM005 — C++ normalization
 
-Lane: `common`. Primary kernels: `S079`, `DF035`.
+Lane: `common`. Kernels: `S079`, `DF035`.
 
 TILE [1,1,32,64], two groups, 1x1 core grid, legacy (non-Welford) groupnorm.
 
@@ -131,7 +131,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.GroupNor
 
 ### SM006 — GroupNorm sharded formats
 
-Lane: `common`. Primary kernels: `S080`, `DF036`.
+Lane: `common`. Kernels: `S080`, `DF036`.
 
 ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 destination accumulation. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.
 
@@ -141,7 +141,7 @@ tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_shard
 
 ### SM007 — C++ normalization
 
-Lane: `common`. Primary kernels: `DF037`.
+Lane: `common`. Kernels: `DF037`.
 
 Tiled BF16 [1,1,32,64], no gamma/beta: ordinary interleaved layernorm reader.
 
@@ -151,7 +151,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.LayerNor
 
 ### SM008 — C++ normalization
 
-Lane: `common`. Primary kernels: `DF039`.
+Lane: `common`. Kernels: `DF039`.
 
 Tiled BF16 [1,1,32,64], ROW_MAJOR gamma/beta: rm_gb interleaved reader.
 
@@ -161,7 +161,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.LayerNor
 
 ### SM009 — C++ normalization
 
-Lane: `common`. Primary kernels: `S083`, `DF040`.
+Lane: `common`. Kernels: `S083`, `DF040`.
 
 Tiled BF16 [1,1,32,64], WIDTH_SHARDED 1x1, use_welford defaults false, no ROW_MAJOR weights.
 
@@ -171,7 +171,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.LayerNor
 
 ### SM010 — C++ normalization
 
-Lane: `common`. Primary kernels: `S087`, `DF045`.
+Lane: `common`. Kernels: `S087`, `DF045`.
 
 One device, tiled [1,1,32,64]: layernorm pre-all-gather statistics, two tiles wide.
 
@@ -181,7 +181,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.Distribu
 
 ### SM011 — C++ normalization
 
-Lane: `common`. Primary kernels: `S090`, `S091`, `DF044`.
+Lane: `common`. Kernels: `S090`, `S091`, `DF044`.
 
 One-device pre/post RMSNorm pipeline [1,1,32,64], num_devices=1; post uses metal2 compute.
 
@@ -191,7 +191,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.Distribu
 
 ### SM012 — C++ normalization
 
-Lane: `common`. Primary kernels: `S088`, `DF043`.
+Lane: `common`. Kernels: `S088`, `DF043`.
 
 One device, [1,1,32,64], use_2d_core_grid=true: 2D pre-all-gather worker and merge code.
 
@@ -201,7 +201,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.Distribu
 
 ### SM013 — C++ normalization
 
-Lane: `common`. Primary kernels: `S093`, `DF046`.
+Lane: `common`. Kernels: `S093`, `DF046`.
 
 Tiled [1,1,32,32], last-dimension stable attention softmax.
 
@@ -211,7 +211,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.SoftmaxI
 
 ### SM014 — C++ normalization
 
-Lane: `common`. Primary kernels: `S095`, `DF048`.
+Lane: `common`. Kernels: `S095`, `DF048`.
 
 Tiled [1,1,32,32], one BLOCK_SHARDED core, no mask: ordinary sharded reader.
 
@@ -221,7 +221,7 @@ tests/ttnn/unit_tests/gtests/test_normalization.cpp::NormalizationSmoke.SoftmaxS
 
 ### SM015 — generic reductions
 
-Lane: `common`. Primary kernels: `DF054`.
+Lane: `common`. Kernels: `DF054`.
 
 BF16 [8,1,64,2048], WIDTH_SHARDED input/output: sharded input-column transpose reader.
 
@@ -231,7 +231,7 @@ tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py::test_sharded_
 
 ### SM016 — generic reductions
 
-Lane: `common`. Primary kernels: `DF051`.
+Lane: `common`. Kernels: `DF051`.
 
 Matched HEIGHT_SHARDED input/output on a 2x4 core grid, int32 MAX W: sharded reader with REDUCE_SCALER=1; only dataflow coverage is claimed.
 
@@ -241,7 +241,7 @@ tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py::test_reduce_
 
 ### SM017 — MoE reduction
 
-Lane: `common`. Primary kernels: `S104`, `DF056`.
+Lane: `common`. Kernels: `S104`, `DF056`.
 
 Smallest existing MoE numerical shape: [1,1,32,64], eight experts, two selected.
 
@@ -251,7 +251,7 @@ tests/ttnn/unit_tests/operations/reduce/test_moe.py::test_moe[N=1-C=1-H=32-W=64-
 
 ### SM018 — DeepSeek grouped gate
 
-Lane: `common`. Primary kernels: `S051`, `DF020`.
+Lane: `common`. Kernels: `S051`, `DF020`.
 
 Existing minimal grouped-gate numerical configuration.
 
@@ -261,7 +261,7 @@ tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py
 
 ### SM019 — SSM sum reduction
 
-Lane: `common`. Primary kernels: `S052`, `DF021`.
+Lane: `common`. Kernels: `S052`, `DF021`.
 
 BF16 H=32, W=1024, latent_size=32, DRAM input/output.
 
@@ -271,7 +271,7 @@ tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm
 
 ### SM020 — Moreh clip_grad_norm
 
-Lane: `common`. Primary kernels: `S056`, `DP002`.
+Lane: `common`. Kernels: `S056`, `DP002`.
 
 Smallest existing clip-grad case, p=2, max_norm=2; step1 plus subsequent steps are checked. Contains two internal repetitions.
 
@@ -281,7 +281,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py::tes
 
 ### SM021 — Moreh dot
 
-Lane: `common`. Primary kernels: `S057`, `DF025`.
+Lane: `common`. Kernels: `S057`, `DF025`.
 
 One aligned BF16 tile row, dot length 32.
 
@@ -291,7 +291,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py::test_moreh_dot
 
 ### SM022 — Moreh group_norm
 
-Lane: `common`. Primary kernels: `S059`, `DP004`.
+Lane: `common`. Kernels: `S059`, `DP004`.
 
 Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.
 
@@ -301,7 +301,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_b
 
 ### SM023 — Moreh group_norm
 
-Lane: `common`. Primary kernels: `S058`, `DP003`.
+Lane: `common`. Kernels: `S058`, `DP003`.
 
 Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.
 
@@ -311,7 +311,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_b
 
 ### SM024 — Moreh group_norm
 
-Lane: `common`. Primary kernels: `S060`, `S062`, `DP005`, `DP007`.
+Lane: `common`. Kernels: `S060`, `S062`, `DP005`, `DP007`.
 
 Small groupnorm backward, all gradients enabled: gamma/beta kernel plus small input-grad kernel.
 
@@ -321,7 +321,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_mo
 
 ### SM025 — Moreh group_norm
 
-Lane: `common`. Primary kernels: `S061`, `DP006`.
+Lane: `common`. Kernels: `S061`, `DP006`.
 
 Dedicated large groupnorm backward case; input gradient only, H=W=500.
 
@@ -331,7 +331,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py::test_mo
 
 ### SM026 — Moreh layer_norm
 
-Lane: `common`. Primary kernels: `DP009`.
+Lane: `common`. Kernels: `DP009`.
 
 Layernorm small reader; [1,20], one normalized dimension.
 
@@ -341,7 +341,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_mo
 
 ### SM027 — Moreh layer_norm
 
-Lane: `common`. Primary kernels: `DP008`.
+Lane: `common`. Kernels: `DP008`.
 
 Layernorm large reader: all four dimensions normalized, 512 inner tiles exceed resident buffers.
 
@@ -351,7 +351,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_mo
 
 ### SM028 — Moreh layer_norm
 
-Lane: `wormhole`. Primary kernels: `DP010`, `DP012`.
+Lane: `wormhole`. Kernels: `DP010`, `DP012`.
 
 Layernorm backward with width normalization and affine gradients; exercises the parameter H reduction and small input-gradient kernel.
 
@@ -361,7 +361,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_mo
 
 ### SM029 — Moreh layer_norm
 
-Lane: `wormhole`. Primary kernels: `DP011`.
+Lane: `wormhole`. Kernels: `DP011`.
 
 Dedicated layernorm large backward [1,2,500,1000]; input gradient, two normalized dimensions.
 
@@ -371,7 +371,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py::test_mo
 
 ### SM030 — Moreh linear
 
-Lane: `common`. Primary kernels: `S063`, `DF026`.
+Lane: `common`. Kernels: `S063`, `DF026`.
 
 Bias gradient with width 30: reduce H.
 
@@ -381,7 +381,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py::test_moreh_
 
 ### SM031 — Moreh linear
 
-Lane: `common`. Primary kernels: `S064`, `DP013`.
+Lane: `common`. Kernels: `S064`, `DP013`.
 
 Scalar bias gradient: reduce H and W.
 
@@ -391,7 +391,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py::test_moreh_
 
 ### SM032 — Moreh mean
 
-Lane: `common`. Primary kernels: `S065`, `DF027`.
+Lane: `common`. Kernels: `S065`, `DF027`.
 
 BF16 [17,22], dim=0 (height), keepdim=true.
 
@@ -401,7 +401,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py::test_moreh_me
 
 ### SM033 — Moreh norm
 
-Lane: `common`. Primary kernels: `S068`, `DP014`.
+Lane: `common`. Kernels: `S068`, `DP014`.
 
 BF16 rank-2 [32,32], p=0.0, dim=0. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.
 
@@ -411,7 +411,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_no
 
 ### SM034 — Moreh norm
 
-Lane: `common`. Primary kernels: `S069`, `DP015`.
+Lane: `common`. Kernels: `S069`, `DP015`.
 
 BF16 rank-2 [32,32], p=0.0, dim=1. Upstream IDs N/C mean dim 0/1 here, therefore H/W; ord_other kernel.
 
@@ -421,7 +421,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py::test_moreh_no
 
 ### SM035 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S070`, `DF028`.
+Lane: `common`. Kernels: `S070`, `DF028`.
 
 Explicit Moreh softmax strategy SMALL_H, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.
 
@@ -431,7 +431,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM036 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S071`, `DF029`.
+Lane: `common`. Kernels: `S071`, `DF029`.
 
 Explicit Moreh softmax strategy LARGE_H, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.
 
@@ -441,7 +441,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM037 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S072`, `DF030`.
+Lane: `common`. Kernels: `S072`, `DF030`.
 
 Explicit Moreh softmax strategy SMALL_W, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.
 
@@ -451,7 +451,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM038 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S073`, `DF031`.
+Lane: `common`. Kernels: `S073`, `DF031`.
 
 Explicit Moreh softmax strategy LARGE_W, BF16 [32,32]. The explicit strategy reaches large kernels without a large tensor.
 
@@ -461,7 +461,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM039 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S074`, `DP017`.
+Lane: `common`. Kernels: `S074`, `DP017`.
 
 Explicit Moreh softmax backward strategy SMALL_H, BF16 [32,32].
 
@@ -471,7 +471,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM040 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S075`, `DP016`.
+Lane: `common`. Kernels: `S075`, `DP016`.
 
 Explicit Moreh softmax backward strategy LARGE_H, BF16 [32,32].
 
@@ -481,7 +481,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM041 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S076`, `DF032`.
+Lane: `common`. Kernels: `S076`, `DF032`.
 
 Explicit Moreh softmax backward strategy SMALL_W, BF16 [32,32].
 
@@ -491,7 +491,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM042 — Moreh softmax
 
-Lane: `common`. Primary kernels: `S077`, `DF033`.
+Lane: `common`. Kernels: `S077`, `DF033`.
 
 Explicit Moreh softmax backward strategy LARGE_W, BF16 [32,32].
 
@@ -501,7 +501,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softm
 
 ### SM043 — Moreh sum
 
-Lane: `common`. Primary kernels: `S078`, `DF034`.
+Lane: `common`. Kernels: `S078`, `DF034`.
 
 BF16 [3,2,319,319], dim=2: Moreh height sum compute/reader.
 
@@ -511,7 +511,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum
 
 ### SM044 — layer norm / RMS norm
 
-Lane: `common`. Primary kernels: `DF042`.
+Lane: `common`. Kernels: `DF042`.
 
 Sharded layernorm with ROW_MAJOR gamma/beta and legacy compute selects rm_gb writer.
 
@@ -521,7 +521,7 @@ tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_no
 
 ### SM045 — layer norm / RMS norm
 
-Lane: `common`. Primary kernels: `S085`, `DF041`.
+Lane: `common`. Kernels: `S085`, `DF041`.
 
 One physical device simulates four partitions; sharded layernorm PRE_ALL_GATHER selects pre-all-gather compute/writer.
 
@@ -531,7 +531,7 @@ tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py::te
 
 ### SM046 — layer norm / RMS norm
 
-Lane: `common`. Primary kernels: `DF038`.
+Lane: `common`. Kernels: `DF038`.
 
 FP32 tiled input with TILE gamma/beta, W padded to 4096: >2 MiB resident buffer demand forces the large-tensor reader; legacy compute.
 
@@ -541,7 +541,7 @@ tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm
 
 ### SM047 — softmax
 
-Lane: `common`. Primary kernels: `S094`, `DF047`.
+Lane: `common`. Kernels: `S094`, `DF047`.
 
 Width 637 tiles: resident stable-softmax buffers exceed 90% of L1; dedicated large-kernel numerical test.
 
@@ -551,7 +551,7 @@ tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_softmax_large_non_d
 
 ### SM048 — softmax
 
-Lane: `common`. Primary kernels: `DF050`.
+Lane: `common`. Kernels: `DF050`.
 
 Sharded softmax with ROW_MAJOR attention mask selects the row-major-mask reader.
 
@@ -561,7 +561,7 @@ tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py::test_sca
 
 ### SM049 — model operation unit tests
 
-Lane: `wormhole`. Primary kernels: `DF049`.
+Lane: `wormhole`. Kernels: `DF049`.
 
 Single-device Falcon operation test, seq=64; calls scale_causal_mask_hw_dims_softmax_in_place with tiled mask.
 
@@ -571,7 +571,7 @@ models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py::test_Falco
 
 ### SM050 — indexer score
 
-Lane: `blackhole`. Primary kernels: `S039`, `DF009`.
+Lane: `blackhole`. Kernels: `S039`, `DF009`.
 
 Indexer block-pool fallback, one group and 16 blocks per unit (>8), reaches the reduce-helper branch.
 
@@ -581,7 +581,7 @@ tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer
 
 ### SM051 — KDA recurrence preparation
 
-Lane: `blackhole`. Primary kernels: `S040`, `DP001`.
+Lane: `blackhole`. Kernels: `S040`, `DP001`.
 
 Small KDA contract case: 2 heads, 4 chunks, K=32,V=64; output and determinism checked.
 
@@ -591,7 +591,7 @@ tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_rec
 
 ### SM052 — KDA gated RMS norm
 
-Lane: `blackhole`. Primary kernels: `S041`, `DF010`.
+Lane: `blackhole`. Kernels: `S041`, `DF010`.
 
 Basic BF16 gated RMSNorm numerical case.
 
@@ -601,7 +601,7 @@ tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms
 
 ### SM053 — fused distributed RMS norm
 
-Lane: `common`. Primary kernels: `S054`, `S055`, `DF023`, `DF024`.
+Lane: `common`. Kernels: `S054`, `S055`, `DF023`, `DF024`.
 
 Single-device simulated distributed RMSNorm, one head, sequence 128, hidden 1024, pre/post fusion.
 
@@ -611,7 +611,7 @@ tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rms
 
 ### SM054 — DiT distributed layer norm
 
-Lane: `common`. Primary kernels: `DF022`.
+Lane: `common`. Kernels: `DF022`.
 
 Single-device DiT layernorm pipeline, TP=1, sequence 512, width 2048, no affine.
 
@@ -621,7 +621,7 @@ tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layer
 
 ### SM055 — kernel library examples
 
-Lane: `common`. Primary kernels: `S108`, `DF065`.
+Lane: `common`. Kernels: `S108`, `DF065`.
 
 Inline reduce+reciprocal correctness scenario; two fixed tile counts, fused/unfused variants.
 
@@ -633,7 +633,7 @@ Pinned environment: `CF_SCENARIOS=reduce_recip`.
 
 ### SM056 — kernel library examples
 
-Lane: `common`. Primary kernels: `S109`, `DF066`.
+Lane: `common`. Kernels: `S109`, `DF066`.
 
 Inline helper variant, row reduction, BF16 accumulation; four fixed tile counts.
 
@@ -645,7 +645,7 @@ Pinned environment: `RA_VARIANTS=helper`, `RA_DIMS=row`, `RA_ACCUMS=bf16`.
 
 ### SM057 — kernel library examples
 
-Lane: `common`. Primary kernels: `S111`, `DF067`.
+Lane: `common`. Kernels: `S111`, `DF067`.
 
 Inline reduce_fold method, BF16 input/accumulation, positive inputs; six fixed tile counts.
 
@@ -657,7 +657,7 @@ Pinned environment: `RRA_METHODS=reduce_fold`, `RRA_PRECISIONS=bf16-bf16`, `RRA_
 
 ### SM058 — toy variance
 
-Lane: `common`. Primary kernels: `S113`, `DF068`.
+Lane: `common`. Kernels: `S113`, `DF068`.
 
 Interleaved toy variance, aligned width 256.
 
@@ -667,7 +667,7 @@ tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py::test_toy_var
 
 ### SM059 — toy variance
 
-Lane: `common`. Primary kernels: `S114`, `DF069`.
+Lane: `common`. Kernels: `S114`, `DF069`.
 
 Sharded toy variance, two cores on one device, width 64 (one tile per core).
 
@@ -677,7 +677,7 @@ tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py::test_toy_var
 
 ### SM060 — SDPA prefill / chunked
 
-Lane: `common`. Primary kernels: `DF063`.
+Lane: `common`. Kernels: `DF063`.
 
 Standard SDPA, small causal BF16 sequence 256, head_dim 32; numerical check includes attention sink.
 
@@ -687,7 +687,7 @@ tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_with_atten
 
 ### SM061 — SDPA / MLA decode
 
-Lane: `common`. Primary kernels: `DF064`.
+Lane: `common`. Kernels: `DF064`.
 
 Decode SDPA, batch 4, sequence 1024, head_dim128, 8x4 grid, sliding window128.
 
@@ -697,7 +697,7 @@ tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_slid
 
 ### SM062 — joint SDPA
 
-Lane: `common`. Primary kernels: `DF059`.
+Lane: `common`. Kernels: `DF059`.
 
 Smallest joint SDPA shape: sequence15 + joint19, one head and one batch.
 
@@ -707,7 +707,7 @@ tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py::test_joint_sdp
 
 ### SM063 — sparse SDPA
 
-Lane: `blackhole`. Primary kernels: `DF062`.
+Lane: `blackhole`. Kernels: `DF062`.
 
 Single-chunk sparse SDPA with all indices valid; PCC against a golden reference.
 
@@ -717,7 +717,7 @@ tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_pcc_
 
 ### SM064 — sparse SDPA MSA
 
-Lane: `blackhole`. Primary kernels: `DF061`.
+Lane: `blackhole`. Kernels: `DF061`.
 
 Native MSA sparse SDPA random selection, H=16,S=8,topk=16; compares device output with golden.
 
@@ -727,7 +727,7 @@ tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_p
 
 ### SM065 — Quasar model per-op tests
 
-Lane: `quasar`. Primary kernels: `DF018`.
+Lane: `quasar`. Kernels: `DF018`.
 
 Quasar SDPA per-op numerical case, seq128, batch1.
 
@@ -737,7 +737,7 @@ models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attentio
 
 ### SM066 — Quasar model per-op tests
 
-Lane: `quasar`. Primary kernels: `DF019`.
+Lane: `quasar`. Kernels: `DF019`.
 
 Quasar decode SDPA per-op numerical case, batch1, KV capacity256.
 
@@ -747,7 +747,7 @@ models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attentio
 
 ### SM067 — UDM interleaved reduction
 
-Lane: `fabric-1x4`. Primary kernels: `DF002`.
+Lane: `fabric-1x4`. Kernels: `DF002`.
 
 Small interleaved UDM width reduction.
 
@@ -757,7 +757,7 @@ tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interl
 
 ### SM068 — UDM sharded reduction
 
-Lane: `fabric-1x4`. Primary kernels: `DF003`, `DF004`.
+Lane: `fabric-1x4`. Kernels: `DF003`, `DF004`.
 
 Small sharded UDM width reduction instantiates sender and receiver kernels.
 
@@ -767,7 +767,7 @@ tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp::MeshD
 
 ### SM069 — RMS all-gather
 
-Lane: `wormhole-n300`. Primary kernels: `S035`, `DF007`.
+Lane: `wormhole-n300`. Kernels: `S035`, `DF007`.
 
 Fused RMS all-gather on N300, two devices, BF16, no residual add; smallest existing numeric case.
 
@@ -777,7 +777,7 @@ tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300[silico
 
 ### SM070 — attention-residual gather softmax
 
-Lane: `blackhole-2x4`. Primary kernels: `S036`, `DF008`.
+Lane: `blackhole-2x4`. Kernels: `S036`, `DF008`.
 
 Plain AttnRes read, the smallest existing 2x4 fabric arm; 640 tokens per chip.
 
@@ -787,7 +787,7 @@ tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py::t
 
 ### SM071 — DiT fused distributed RMS norm
 
-Lane: `galaxy`. Primary kernels: `S034`, `DF006`.
+Lane: `galaxy`. Kernels: `S034`, `DF006`.
 
 WAN whole-row RMSNorm, TP=1, prompt length512, width5120. TP1 uses the drain-only writer; TP2 uses the all-gather worker writer.
 
@@ -799,7 +799,7 @@ Pinned environment: `CORR_ONLY=cross_k_prompt_L512`, `CORR_DET_REPEATS=0`.
 
 ### SM072 — DiT fused distributed RMS norm
 
-Lane: `galaxy`. Primary kernels: `DF005`.
+Lane: `galaxy`. Kernels: `DF005`.
 
 WAN whole-row RMSNorm, TP=2, prompt length512, width5120. TP1 uses the drain-only writer; TP2 uses the all-gather worker writer.
 
@@ -811,7 +811,7 @@ Pinned environment: `CORR_ONLY=cross_k_prompt_L512`, `CORR_DET_REPEATS=0`.
 
 ### SM073 — ring joint SDPA
 
-Lane: `wormhole-t3k`. Primary kernels: `DF060`.
+Lane: `wormhole-t3k`. Kernels: `DF060`.
 
 Existing numerical multi-batch ring-joint SDPA case on T3K.
 
@@ -821,7 +821,7 @@ tests/nightly/t3000/ccl/test_ring_joint_attention.py::test_ring_joint_sdpa_multi
 
 ### SM074 — experimental ring joint SDPA
 
-Lane: `blackhole-galaxy`. Primary kernels: `DF058`.
+Lane: `blackhole-galaxy`. Kernels: `DF058`.
 
 Smallest fixed experimental ring-joint SDPA case: 1x4 submesh, sequence8960,10heads; five numerical iterations.
 
@@ -831,7 +831,7 @@ models/tt_dit/tests/unit/test_exp_ring_joint_attention.py::test_exp_ring_joint_s
 
 ### SM075 — BGE model-local SDPA
 
-Lane: `wormhole`. Primary kernels: `DF001`.
+Lane: `wormhole`. Kernels: `DF001`.
 
 Small standard SDPA with two query heads and 128 KV tokens.
 
@@ -841,7 +841,7 @@ tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py:
 
 ### SM076 — distributed Welford layer norm
 
-Lane: `common`. Primary kernels: `DF044`.
+Lane: `common`. Kernels: `DF044` (primary case SM011).
 
 One-device Welford post-all-gather with hand-built mean/variance, BF16 input and weights, FP32 destination; exercises the shared reader without an auxiliary recipe.
 
@@ -851,7 +851,7 @@ tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_a
 
 ### SM077 — distributed RMS norm
 
-Lane: `common`. Primary kernels: `S090`, `DF044`.
+Lane: `common`. Kernels: `S090` (primary case SM011), `DF044` (primary case SM011).
 
 One-device RMSNorm post-all-gather with BF16 input/weights, FP32 statistics and destination; guards the planned auxiliary buffer unpack format.
 
