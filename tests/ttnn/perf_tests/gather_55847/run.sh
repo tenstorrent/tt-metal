@@ -7,13 +7,23 @@ final=cf8684d95bd01f0f3cb3bed53163ff78690ed62c
 base=89e1256c982a5b4739d173bcc446c8c748a44b40
 evidence="$PWD/generated/test_reports/gather_55847"
 mkdir -p "$evidence"
-cp tests/ttnn/perf_tests/gather_55847/{bench.py,watchdog.py,exact_existing.py} "$evidence/"
+cp tests/ttnn/perf_tests/gather_55847/{bench.py,watchdog.py,exact_existing.py,native_compare.py} "$evidence/"
 git fetch origin "$final" "$base"
 git checkout --detach "$final"
 tt-smi -s > "$evidence/hardware.json"
 git rev-parse HEAD > "$evidence/tested-head.txt"
 export TT_METAL_OPERATION_TIMEOUT_SECONDS=30
 export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000
+if [[ "$mode" == native ]]; then
+    for pass in final-a final-b; do
+        python3 "$evidence/watchdog.py" "$evidence/$pass-host.log" 1800 \
+            python3 "$evidence/native_compare.py" --label "$pass" --output "$evidence/$pass-host.json"
+        python3 "$evidence/watchdog.py" "$evidence/$pass-device.log" 1800 \
+            python3 -m tracy -r -p -o "$evidence/$pass-profile" \
+            "$evidence/native_compare.py" --label "$pass" --profile --output "$evidence/$pass-profile-host.json"
+    done
+    exit
+fi
 if [[ "$mode" == accuracy || "$mode" == exact ]]; then
     python3 "$evidence/watchdog.py" "$evidence/invalid.log" 900 \
         python3 -m pytest -xv --timeout=90 \

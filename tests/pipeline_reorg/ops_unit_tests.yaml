@@ -30,3 +30,14 @@
   owner_id: U05ACKAJTHS
   team: ttnn
   category: gather_exact
+
+- name: gather-55847-native-comparison
+  cmd: bash tests/ttnn/perf_tests/gather_55847/run.sh native
+  skus:
+    wh_n150_civ2:
+      timeout: 90
+    bh_p150b_civ2:
+      timeout: 90
+  owner_id: U05ACKAJTHS
+  team: ttnn
+  category: gather_native
