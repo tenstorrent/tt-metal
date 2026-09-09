@@ -37,6 +37,7 @@ def create_tt_model(
     model_path=None,
     prefill_chunk_size=None,
     ring_kv_caches=None,
+    force_rebuild=False,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -93,12 +94,14 @@ def create_tt_model(
         n_layers=model_args.num_hidden_layers,
         mesh_shape=_worker_mesh,
         build_variant={
+            "prefill_cache_layout": 1,
+            "global_projection": "qk",
             "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
         },
     )
     loaded_real_weights = False
     if state_dict is None:
-        if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
+        if not force_rebuild and num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
             state_dict = build_cached_state_dict(
                 cache_dir, args=model_args, build_variant=cache_identity["build_variant"]

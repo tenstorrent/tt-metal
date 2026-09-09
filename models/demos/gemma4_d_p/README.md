@@ -31,7 +31,7 @@ pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_per
 
 Both tests support chunk sizes 4096, 8192, 16384, and 32768. A CP-local chunk must cover the 1024-token sliding window, so 4096 skips on 8×4. Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
 
-Cache filenames and `GEMMA4_*` environment settings are preserved. Existing compatible Galaxy weight caches can be reused. For a cold cache, set `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1`; `GEMMA4_WEIGHT_CACHE_MESH_ONLY=1` disables the legacy unqualified cache fallback. Offline text input also needs the demo's cached corpus.
+Global layers use tied QK projection; sliding layers use QKV. Weight caches are separated by dtype and mesh geometry. A valid completion marker permits cache-only loading; otherwise weights are loaded from the checkpoint. Set `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1` to force checkpoint loading. Offline text input also needs the demo's cached corpus.
 
 ## Model and cache interfaces
 
@@ -40,7 +40,7 @@ Cache filenames and `GEMMA4_*` environment settings are preserved. Existing comp
 - `tt/runners/kv_caches.py::allocate_ring_kv_caches` allocates one durable cache per semantic layer. Global layers store 640 channels (`Krot128 | V512`); local layers store separate 256-channel K and V caches.
 - `tt/runners/kv_chunk_table.py::build_kv_chunk_address_table` exposes those same cache buffers for CP8/TP4 migration. It uses the shared migration utilities under `models/demos/common/prefill`.
 
-Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. Last-token logits are computed separately with `process_logits_after_prefill_trace`.
+Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. Last-token logits are computed separately with `process_logits_after_prefill_trace`.
 
 ## Host verification
 

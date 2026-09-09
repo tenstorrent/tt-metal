@@ -18,14 +18,6 @@ from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 _RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
 
 
-def _weight_cache_dir_populated(path: Path) -> bool:
-    """True if ``path`` already holds cached tensorbins (non-empty tree)."""
-    try:
-        return path.is_dir() and any(path.iterdir())
-    except OSError:
-        return False
-
-
 def _writable_cache_mirror(preferred: Path) -> Path:
     """Writable mirror for a preferred cache dir on RO mounts (CI MLPerf :ro)."""
     root = Path(os.environ.get("TT_METAL_HOME") or os.environ.get("HOME") or "/tmp")
@@ -61,36 +53,6 @@ def _ensure_cache_dir(path: Path) -> Path:
         )
         alt.mkdir(parents=True, exist_ok=True)
         return alt
-
-
-def _resolve_mesh_qualified_weight_cache(model_cache_path: Path, dtype_str: str, shape) -> Path:
-    """Mesh-qualified cache dir, with warm legacy fallback for CI.
-
-    Multi-device layouts must not share a single ``tensor_cache_{dtype}`` across
-    different mesh geometries (``as_tensor`` reloads tensorbins as-is). Prefer
-    ``tensor_cache_{dtype}_mesh{RxC}``.
-
-    When that directory is empty but the legacy (unqualified) cache is already
-    populated — typical on CI MLPerf after this path change — reuse legacy so
-    e2e does not cold-rebuild a full 31B under a 10–25 min SKU step timeout.
-    Force the mesh path (and a rebuild) with ``GEMMA4_WEIGHT_CACHE_MESH_ONLY=1``.
-    """
-    legacy = model_cache_path / f"tensor_cache_{dtype_str}"
-    mesh = model_cache_path / (f"tensor_cache_{dtype_str}_mesh" + "x".join(str(d) for d in shape))
-    mesh_only = os.environ.get("GEMMA4_WEIGHT_CACHE_MESH_ONLY", "0").lower() in ("1", "true", "yes")
-    if not mesh_only and _weight_cache_dir_populated(legacy) and not _weight_cache_dir_populated(mesh):
-        logger.warning(
-            "Gemma4 weight cache: mesh-qualified dir {} is empty; reusing legacy {}. "
-            "Set GEMMA4_WEIGHT_CACHE_MESH_ONLY=1 to rebuild into the mesh path "
-            "(required if legacy was built for a different MeshShape).",
-            mesh,
-            legacy,
-        )
-        return legacy
-    # Prefer an already-populated mesh dir without mkdir (RO-safe).
-    if _weight_cache_dir_populated(mesh):
-        return mesh
-    return _ensure_cache_dir(mesh)
 
 
 def validate_31b_config(config):
@@ -297,18 +259,12 @@ class Gemma4ModelArgs:
         return _ensure_cache_dir(cache_dir)
 
     def weight_cache_path(self, dtype, mesh_shape=None):
-        """Return weight cache path for the model.
-
-        Multi-device layouts are qualified by mesh geometry. ``ttnn.as_tensor``
-        reloads tensorbins as-is and ignores ``mesh_mapper``, so a TP=4 cache
-        built on ``MeshShape([2,4])`` must not be reused on ``[1,4]`` (QB2).
-        See ``_resolve_mesh_qualified_weight_cache`` for CI legacy fallback.
-        """
+        """Return the weight cache directory for this dtype and Galaxy mesh geometry."""
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = dtype_to_str(dtype)
         shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
-        if shape is not None and shape[0] * shape[1] > 1:
-            return _resolve_mesh_qualified_weight_cache(self.model_cache_path, dtype_str, shape)
-        cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
-        return _ensure_cache_dir(cache_path)
+        if shape is None:
+            raise ValueError("Mesh shape must be initialized before requesting a weight cache path")
+        mesh_suffix = "x".join(str(d) for d in shape)
+        return _ensure_cache_dir(self.model_cache_path / f"tensor_cache_{dtype_str}_mesh{mesh_suffix}")

@@ -147,14 +147,6 @@ class CCLManager:
         # slot and prefix length are properties of the chunk, not the layer, so all 60
         # layers read the same two tensors and the host updates them once per chunk.
         self._ring_metadata = None
-        # Set by a traced caller to the full context length. logical_n sizes the ring
-        # gather at create time and is re-patched per dispatch; a trace does neither, so
-        # a per-chunk value would freeze the gather at the capturing chunk's prefix.
-        # GEMMA4_RING_LOGICAL_N forces the host logical_n to a fixed value. Used as a
-        # probe: on the metadata path the readers derive logical_nt on-device from
-        # kv_actual_isl, so a deliberately wrong host value must NOT change results.
-        _forced = os.environ.get("GEMMA4_RING_LOGICAL_N")
-        self.ring_logical_n_override = int(_forced) if _forced else None
 
     def _scalar_metadata_tensor(self, value):
         """1-element uint32 replicated DRAM tensor holding one per-chunk scalar.

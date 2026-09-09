@@ -73,7 +73,8 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
     from models.demos.gemma4_d_p.config import MeshConfig
     from models.demos.gemma4_d_p.tt import attention
 
-    cache = object()
+    tensor = SimpleNamespace(shape=(1, 1, 32768, 512))
+    cache = SimpleNamespace(kv=tensor) if is_global else (tensor, tensor)
     monkeypatch.setattr(attention, "load_attention_weights", lambda **_: SimpleNamespace(is_global=is_global))
     allocate = Mock(side_effect=AssertionError("external caches must not allocate replacements or tail pools"))
     monkeypatch.setattr(attention, "init_ring_kv_cache", allocate)
@@ -92,12 +93,10 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
     allocate.assert_not_called()
 
 
-@pytest.mark.parametrize("cached_qk", [False, True])
-def test_global_projection_loads_only_selected_weight(monkeypatch, cached_qk):
+@pytest.mark.parametrize("is_global", [False, True])
+def test_projection_loads_only_required_weight(monkeypatch, is_global):
     from models.demos.gemma4_d_p.tt.attention import weights
 
-    monkeypatch.setenv("GEMMA4_TIED_QKV", "1")
-    monkeypatch.setattr(weights, "_cached_tensor_exists", lambda _: cached_qk)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda _: None)
     loaded = []
 
@@ -114,11 +113,11 @@ def test_global_projection_loads_only_selected_weight(monkeypatch, cached_qk):
         row_parallel=lambda _: None,
     )
     config = SimpleNamespace(
-        use_kv_tying=True, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
+        use_kv_tying=is_global, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
     )
     result = weights.load_attention_weights(object(), config, {}, mesh_config, tensor_cache_path="/tmp/weights")
-    assert (result.wqk is not None) == cached_qk
-    assert (result.wqkv is not None) != cached_qk
+    assert (result.wqk is not None) == is_global
+    assert (result.wqkv is not None) != is_global
     assert len([name for name in loaded if "/wqk" in name]) == 1
 
 

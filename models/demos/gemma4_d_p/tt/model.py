@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -201,6 +202,7 @@ class Gemma4Model:
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.prefill_chunk_size = prefill_chunk_size
+        self.ring_cache_max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
@@ -333,7 +335,7 @@ class Gemma4Model:
                 attention_dtype=attention_dtype,
                 tensor_cache_path=tensor_cache_path,
                 mesh_config=mesh_config,
-                max_seq_len=max_seq_len,
+                max_seq_len=self.ring_cache_max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 ring_kv_cache=(ring_kv_caches[i] if ring_kv_caches is not None else None),
             )

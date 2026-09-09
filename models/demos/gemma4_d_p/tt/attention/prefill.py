@@ -4,7 +4,6 @@
 """Context-parallel attention over durable ring KV caches."""
 
 import ttnn
-from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
@@ -14,7 +13,6 @@ from .operations import (
     apply_qkv_projection,
     concat_heads,
     prefill_short_lived_memcfg,
-    qkv_projection_is_tied,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
@@ -48,7 +46,7 @@ def prefill_forward(
         raise ValueError("Galaxy prefill requires a ring KV cache")
     tp = mesh_config.tp
     chunk_offset = int(chunk_start_idx)
-    kv_tied = qkv_projection_is_tied(weights, weights.is_global)
+    kv_tied = weights.is_global
     xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
@@ -68,7 +66,7 @@ def prefill_forward(
 
     packed_global_ring = weights.is_global and isinstance(ring_kv_cache, PackedRingKVCache)
     packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
-    if weights.is_global and kv_tied:
+    if weights.is_global:
         # The tied projection is one semantic KV value. Normalize it once without
         # gamma: this entire 512-wide result is V. K branches from this value;
         # packed-only serving transforms just its active rotary quarter below.
@@ -119,8 +117,6 @@ def prefill_forward(
             k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
         )
         k_unrotated.deallocate(True)
-    seq_len = tt_q.shape[-2]
-    cp = cp_degree(mesh_config)
     sliding_window = config.sliding_window
     if packed_global_ring:
         packed_q = tt_q
@@ -164,7 +160,7 @@ def prefill_forward(
         packer_l1_acc=False,
     )
     num_local_kv_heads_ring = tt_v.shape[1]
-    ring_logical_n = getattr(ccl_manager, "ring_logical_n_override", None) or (chunk_offset + seq_len * cp)
+    ring_logical_n = ring_max_seq_len
     if packed_global_ring:
         tt_sdpa = ring_packed_prefill_attention(
             packed_q,

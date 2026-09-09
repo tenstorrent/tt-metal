@@ -36,11 +36,6 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config)
 
 
-def qkv_projection_is_tied(weights: AttentionWeights, kv_tied: bool = False) -> bool:
-    """Whether the requested narrow Q+K projection is available."""
-    return kv_tied and weights.wqk is not None
-
-
 def split_qkv_heads_prefill(
     xqkv_fused,
     config,

@@ -58,6 +58,11 @@ def _allocate_migration_ring_cache(mesh_device, shape, dtype, row_dim):
     return cache
 
 
+def ring_cache_capacity(max_seq_len, prefill_chunk_size):
+    """Reserve two chunks so sliding SDPA always selects its chunked implementation."""
+    return max(max_seq_len, 2 * prefill_chunk_size)
+
+
 def ring_cache_seq_len(max_seq_len, cp):
     """Per-rank cache sequence length. Each rank stores 1/cp of every chunk."""
     assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
@@ -303,9 +308,9 @@ def ring_prefill_attention(
 ):
     """Attend this rank's Q shard over the whole cached prefix, via the CP ring.
 
-    ``logical_n`` is the total valid prefix including this chunk; ``kv_actual_global``
-    is the prefix before it. Together they tell the op how much of the cache is real,
-    so the not-yet-written tail is masked rather than read as data.
+    ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
+    the valid prefix on each replay; ``kv_actual_global`` is the prefix before
+    this chunk when metadata is updated here.
 
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.

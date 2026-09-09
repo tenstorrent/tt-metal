@@ -10,7 +10,11 @@ from dataclasses import dataclass
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 from models.demos.gemma4_d_p.tt.attention import Gemma4AttentionConfig
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+    init_packed_ring_kv_cache,
+    init_ring_kv_cache,
+    ring_cache_capacity,
+)
 
 
 @dataclass
@@ -46,6 +50,7 @@ def allocate_ring_kv_caches(
     *,
     num_users: int,
     max_seq_len: int,
+    prefill_chunk_size: int = 8192,
     num_layers: int | None = None,
     cache_dtype=ttnn.bfloat8_b,
 ) -> Gemma4KvCaches:
@@ -55,6 +60,7 @@ def allocate_ring_kv_caches(
         raise ValueError(f"num_users and num_layers must be positive, got {num_users}, {num_layers}")
     if mesh_config.prefill.sp <= 1:
         raise ValueError("migration-ready Gemma 4 caches require context parallel prefill")
+    max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
     layer_types = tuple(hf_config.layer_types[:num_layers])
     caches = []
     for layer_idx, layer_type in enumerate(layer_types):

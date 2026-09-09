@@ -18,7 +18,6 @@ from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
-from models.demos.gemma4_d_p.utils.partial_weights import load_cache_completion_state
 
 try:
     from tracy import signpost
@@ -47,53 +46,6 @@ def _load_full_weights():
 
 
 # ── Weight loading from the tensor cache ──────────────────────────────────────
-
-
-def _cache_root(model_path, mesh_shape):
-    """Absolute path of the tensor cache directory for this model, dtype, and mesh."""
-    args = Gemma4ModelArgs()
-    args.model_cache_path = Gemma4ModelArgs.resolve_model_cache_path(model_path)
-    return str(args.weight_cache_path(MODEL_DTYPE, mesh_shape=mesh_shape))
-
-
-def _require_cache(cache_root, tp, num_layers):
-    """Skip with actionable instructions unless the tensor cache looks usable.
-
-    Without this, a cold or wrong-TP cache surfaces as ``ttnn.as_tensor`` calling
-    ``from_torch(None)`` deep inside weight loading, which is an opaque crash.
-    """
-    if _load_full_weights():
-        return
-
-    missing = []
-    if not os.path.isdir(cache_root):
-        missing.append(cache_root)
-    else:
-        if not os.path.isdir(os.path.join(cache_root, f"layer_{num_layers - 1}")):
-            missing.append(f"layer_{num_layers - 1}/")
-        if not os.path.isdir(os.path.join(cache_root, "final_norm")):
-            missing.append("final_norm/")
-        entries = os.listdir(cache_root)
-        if not any(e.startswith(f"embed_tokens.weight_tp{tp}_") for e in entries):
-            missing.append(f"embed_tokens.weight_tp{tp}_*")
-        if not any(e.startswith(f"lm_head.weight_tp{tp}_") for e in entries):
-            missing.append(f"lm_head.weight_tp{tp}_*")
-
-    if missing:
-        pytest.skip(
-            f"Tensor cache at {cache_root} is incomplete for TP={tp} (missing: {', '.join(missing)}). "
-            f"Populate it by running any full-weight Gemma4 entry point on this mesh, or rerun "
-            f"with GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1 to load weights from the checkpoint "
-            f"(and write the cache)."
-        )
-
-
-def _cache_completion_state(model_path):
-    """State dict handed to the model: cache-completion keys, or None for a full load."""
-    if _load_full_weights():
-        logger.info("GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1 — loading the full host state dict")
-        return None
-    return load_cache_completion_state(model_path)
 
 
 def _mesh_config(mesh_device):
@@ -230,10 +182,8 @@ def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
     context_len = context_len or chunk_size
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
 
-    cache_root = _cache_root(model_path, mesh_device.shape)
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
-    _require_cache(cache_root, tp, num_layers)
 
     logger.info(f"Creating Gemma4 ({num_layers} layers, TP={tp}, max_seq_len={max_seq_len})...")
     t0 = time.time()
@@ -242,7 +192,7 @@ def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
         max_batch_size=1,
         max_seq_len=max_seq_len,
         dtype=MODEL_DTYPE,
-        state_dict=_cache_completion_state(model_path),
+        force_rebuild=_load_full_weights(),
         model_path=model_path,
         mesh_config=mesh_config,
         prefill_chunk_size=chunk_size,
