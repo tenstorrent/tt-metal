@@ -102,3 +102,111 @@
   and the three lever harnesses `test_tilize_lever_block_width.py`,
   `test_tilize_lever_input_depth.py`, `test_tilize_lever_write_batch.py`.
   **58 / 58 passing** across `tests/ttnn/unit_tests/operations/tilize/`.
+
+---
+
+## Refinement 1 — Sharded and L1 placement: `shard_api`, `out_scheme`, `orientation`
+
+- **Date**: 2026-09-09
+- **What was done**: the design's deferred `grid2d_sharded` regime, as a knob-turn on the
+  Phase 0 schedule rather than a second implementation.
+
+  **The block grid is now READ off a shard spec instead of solved.** tilize has no
+  dependent axis, so a shard IS a block: a HEIGHT shard is a `row_group`, a WIDTH shard a
+  `w_chunk`, a BLOCK shard the 2-D block the op already builds — no cross-core combine, no
+  mcast, no semaphore. `shard_partition()` re-expresses a shard spec (either API) as
+  `num_shard_rows x num_shard_cols` blocks of `shard_rows_tiles x shard_cols_tiles`, and the
+  shard's LINEAR index is the `block_id` the three kernels already derive `(row_group,
+  w_chunk)` from — so `tilize_reader/compute/writer.cpp`'s block arithmetic is unchanged.
+  The shard→core order is `corerange_to_cores(grid, n, row_wise=(orientation == ROW_MAJOR))`,
+  which is the enumeration `buffer.cpp:generate_buffer_page_mapping` places shards with, so
+  COL_MAJOR needs no separate path. One new runtime arg, `block_stride` (1 on the solved
+  plan, the core count on the shard plan), covers ND's ROUND_ROBIN_1D placement where a core
+  owns shards `{i, i+N, i+2N, ...}`.
+
+  **The sharded side is consumed natively — a zero-copy CB placed on the shard buffer.**
+  `_cb_on_shard()` wraps `ttnn.cb_descriptor_from_sharded_tensor`, re-stating the page size
+  as the tile-sized unit the helpers count in (the shard's own paging is one ROW_MAJOR
+  stick; `block_width_tiles` sticks-worth of contiguous bytes IS one tile-row page group,
+  because `block_width_tiles == shard_cols_tiles` there). On that path the reader issues no
+  NoC read at all — it marks the block's resident pages available — and on the native OUTPUT
+  path the program carries **no writer kernel**: the packer has already written every tile
+  into the output shard. A core's own L1 shard is never re-read through a `TensorAccessor`.
+  The accessor keeps the interleaved leg and the genuinely non-local legs (cross-spec,
+  DRAM-sharded), which is where a remote transfer is the correct mechanism.
+
+  Which side drives: input partition if the input is an L1 shard (output then native too iff
+  it is the SAME cut), else the output partition, else the solved plan. That ordering is
+  what makes `dram_sharded_out` and `cross_spec_height_in_width_out` land on a native input
+  with a real remote write, rather than a local shard re-read.
+
+  **Two defects found and fixed while landing it**, both invisible on the interleaved path:
+  1. `R`/`C` were derived from the INPUT's padded shape. A ROW_MAJOR tensor's padded shape
+     rounds its last dim to its PAGE width, which a width-cutting shard sets — `[3,160,160]`
+     sharded 64 wide reports `[3,160,192]`, giving a 6-column plan for a 5-column output.
+     The tile grid IS the output; it now comes from `output_tensor.padded_shape`.
+  2. `read_sticks_for_tilize` is stick-indexed by construction (`start_page + block_row +
+     row`, stride 1), which is only a stick index when a page is a whole row. A shard that
+     cuts the width pages by SHARD width, so consecutive sticks are `input_pages_per_row`
+     apart. Added a strided reader branch — the helper's own shape (one reserve / read-burst
+     / barrier / push per TILE-ROW) with the page stride written out. RECORDED GAP: a
+     `page_stride_per_row` parameter alongside `byte_offset_within_page` would close it in
+     the helper. The block width is constrained to `gcd(C, page_width_tiles)`'s divisors so a
+     block's row segment always sits inside one source page.
+
+  **L1-budget correction folded in** (the ledger finding this refinement was asked to carry):
+  `ttnn.get_max_worker_l1_unreserved_size()` reports the worker arena, not what is free in
+  it, and an L1-resident operand — every sharded one, by definition — sits in that same
+  arena. `derive_plan` now subtracts both operands' per-core resident bytes.
+
+  **`_output_tensor_spec()`**: an ND `MemoryConfig` carries an `NdShardSpec` and NO legacy
+  2-D spec, so the entry point's sharded `TensorSpec` overload was a `bad optional access`
+  on every ND output. Three constructors, one per placement family.
+
+- **SUPPORTED after Refinement 1** (delta only): `shard_api=["none", "legacy_2d", "nd"]`,
+  `out_scheme=["interleaved", HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED, "nd"]`,
+  `orientation=["none", ROW_MAJOR, COL_MAJOR]`. `EXCLUSIONS` still empty.
+
+- **Accuracy achieved**: PCC = **1.0**, rtol = **0**, atol = **0** — bit-identity
+  (`torch.equal`) on all 14 placements in `test_tilize_sharded.py`: `[1,1,512,64]` HEIGHT,
+  `[1,1,64,512]` WIDTH, `[1,1,128,128]` BLOCK at both orientations, `[1,1,128,64]`
+  DRAM-sharded out / interleaved↔height / ND same-spec / ND-in-legacy-out / interleaved→ND,
+  `[1,1,128,128]` cross-spec, `[1,1,32,4096]` short-wide width-sharded, `[4,64,64]` rank-3,
+  `[1,1,256,64]` ND round-robin (2 shards/core). tilize does no arithmetic, so these are
+  asserted as equalities, not tolerances.
+
+- **Golden test progress**: `test_golden.py` **32/32 of the reachable bf16 cells pass, 0
+  failed, 0 XPASS** — the 11 cells this refinement targets (`sharded_legacy_2d` 7,
+  `sharded_nd` 3, `short_wide_width_sharded` 1) all land, on top of the 21 Phase 0 cells,
+  with the three loud categories still at 0. `test_golden_main_tests.py` **47 passed** (from
+  26 immediately after the SUPPORTED widening, and ~10 at Phase 0); all 112 remaining
+  failures are honest `UnsupportedAxisValue` refusals on `pad_mode` / `dtype` / `rank`
+  (Refinements 2 and 5) — **zero** non-refusal failures. `test_translated.py` 422 passed.
+
+- **Issues encountered**:
+  1. The two defects above (input-padded-shape tile grid; stick-strided reader) — both found
+     by `test_golden_main_tests.py::test_tilize_nd_sharded`, which is why that file was run
+     rather than trusted.
+  2. `test_tilize_lever_block_width.py` monkeypatches `_largest_divisor_at_most`; a first cut
+     added a second `_largest_common_divisor_at_most` and silently disarmed the lever. Fixed
+     by narrowing what the divisor is taken OF (`gcd(C, page_width_tiles)`) instead of adding
+     a search — one knob, one source, lever intact.
+  3. `test_translated.py::test_tilize_program_cache_addr_change[sharded_width_l1]` asserts
+     the program-cache delta is exactly 1. It passes in isolation and the op is verifiably
+     correct (probe_012: 1 entry, bit-exact at four different buffer addresses, the sharded
+     CB tracking each new address on the cache hit) — the delta is 0 when an earlier test in
+     the same module already built the identical program on the shared module-scoped device.
+     A harness ordering artifact, newly *reached* rather than newly broken, and the golden
+     suite is not ours to edit.
+  4. ND shards whose leading-dim extent exceeds 1 (`[2,64,64]` over `[4,128,128]`) are not
+     2-D-expressible blocks, so they cannot drive the grid. They are served correctly through
+     the accessor legs instead — all such cases pass.
+
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py` — 27
+  cases. 14 identity cases covering every placement, and 12 that assert **nativeness off the
+  `ProgramDescriptor`** rather than off the values: a local shard read back through a
+  `TensorAccessor` returns exactly the right bytes, so a green identity test says nothing
+  about whether the axis was implemented. Those 12 pin `cb.has_buffer()` and
+  `cb.buffer_address() == tensor.buffer_address()` per side, and pin that the native-output
+  path emits 2 kernels rather than 3. Plus one assertion that the block extents are read off
+  the shard spec. **85/85 passing** across `tests/ttnn/unit_tests/operations/tilize/`.

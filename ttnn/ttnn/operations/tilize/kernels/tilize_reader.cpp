@@ -38,7 +38,9 @@ void kernel_main() {
     constexpr uint32_t num_w_chunks = get_compile_time_arg_val(5);
     constexpr uint32_t block_row_bytes = get_compile_time_arg_val(6);  // block_width_tiles*32*elem
     constexpr uint32_t input_is_native = get_compile_time_arg_val(7);
-    constexpr auto in_args = TensorAccessorArgs<8>();
+    constexpr uint32_t input_pages_per_row = get_compile_time_arg_val(8);
+    constexpr uint32_t in_page_width_bytes = get_compile_time_arg_val(9);
+    constexpr auto in_args = TensorAccessorArgs<10>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block_id = get_arg_val<uint32_t>(1);
@@ -63,7 +65,38 @@ void kernel_main() {
         const uint32_t row_end = ((row_group + 1) * tensor_row_blocks) / num_row_groups;
         const uint32_t block_row_extent = row_end - row_start;
 
-        if constexpr (input_is_native) {
+        if constexpr (!input_is_native && input_pages_per_row > 1) {
+            // load_block, STRIDED. The source's shard cuts the width, so one row
+            // spans `input_pages_per_row` pages and consecutive sticks are that
+            // far apart in page index — `read_sticks_for_tilize` cannot express
+            // it (it is stick-indexed by construction: `start_page + block_row +
+            // row`, stride 1). RECORDED GAP: the helper would close this with a
+            // `page_stride_per_row` parameter alongside `byte_offset_within_page`;
+            // this branch is that parameter, written out. Everything else is the
+            // helper's own shape — one reserve/read-burst/push per TILE-ROW, one
+            // barrier per tile-row, `block_row_bytes` per stick.
+            //
+            // The host guarantees `block_row_bytes` divides `in_page_width_bytes`
+            // (block_width_tiles is a common divisor of C and the page width in
+            // tiles), so a block's row segment always sits inside ONE page.
+            const uint32_t col_bytes = w_chunk * block_row_bytes;
+            const uint32_t page_col = col_bytes / in_page_width_bytes;
+            const uint32_t byte_in_page = col_bytes - page_col * in_page_width_bytes;
+            for (uint32_t tr = 0; tr < block_row_extent; ++tr) {
+                cb_reserve_back(cb_input_rows, block_width_tiles);
+                uint32_t l1_write_addr = get_write_ptr(cb_input_rows);
+                const uint32_t first_stick = (row_start + tr) * tile_h;
+                for (uint32_t row = 0; row < tile_h; ++row) {
+                    noc_async_read(
+                        in_acc.get_noc_addr((first_stick + row) * input_pages_per_row + page_col, byte_in_page),
+                        l1_write_addr,
+                        block_row_bytes);
+                    l1_write_addr += block_row_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_input_rows, block_width_tiles);
+            }
+        } else if constexpr (input_is_native) {
             // load_block, zero-copy: the block's `block_row_extent` tile-rows are
             // already resident in this core's L1 behind cb_input_rows. Marking
             // the whole block available in one push keeps the reader's quantum a

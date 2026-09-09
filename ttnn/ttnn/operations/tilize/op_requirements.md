@@ -81,7 +81,7 @@ tilize(
 
 ---
 
-### [ ] Refinement 1 — Sharded and L1 placement: `shard_api`, `out_scheme`, `orientation`
+### [x] Refinement 1 — Sharded and L1 placement: `shard_api`, `out_scheme`, `orientation`
 
 **Goal**: add `"legacy_2d"` and `"nd"` to `SUPPORTED["shard_api"]`, `HEIGHT_SHARDED` /
 `WIDTH_SHARDED` / `BLOCK_SHARDED` / `"nd"` to `SUPPORTED["out_scheme"]`, and
@@ -141,6 +141,29 @@ mechanics you need are named here instead:
 the sharded side is consumed through a CB placed on the shard buffer (verifiable in
 the `ProgramDescriptor`, not just in the test result); the golden suite's three loud
 categories stay at 0; and Phase 0's 249 cells still pass.
+
+**Outcome**: DONE. All three axes carry their TARGET values; all 11 targeted golden
+cells pass (`test_golden.py`: 32 passed, 0 failed, 0 XPASS — 21 Phase 0 + 11 new);
+`test_golden_main_tests.py` went 26 → 47 passing with **zero** non-refusal failures
+left. The block grid is read off the shard spec (`shard_partition()`), the shard's
+linear index IS the existing `block_id`, and the native side's CB is placed on the
+shard buffer — asserted against the `ProgramDescriptor` in
+`test_tilize_sharded.py::test_sharded_side_is_zero_copy`, not inferred from values.
+The native-output path emits no writer kernel at all.
+
+Two things were found that a sharded call exposes and an interleaved one cannot:
+`R`/`C` must come from the OUTPUT's padded shape (a ROW_MAJOR tensor's padded shape
+rounds to its PAGE width, which a width-cutting shard sets), and
+`read_sticks_for_tilize` cannot address a source whose row spans several pages — a
+strided reader branch closes that, with the helper gap recorded (a
+`page_stride_per_row` parameter would close it upstream). The l1_ledger budget
+correction is folded in: `get_max_worker_l1_unreserved_size()` is the arena, not the
+free space, so both operands' resident L1 is now subtracted.
+
+Not implemented, and correct through the accessor legs rather than natively: ND
+shards whose leading-dim extent exceeds 1 (`[2,64,64]` over `[4,128,128]`) are not
+2-D-expressible blocks and so cannot drive the grid. `low_l1` is inert on the
+shard-driven plan — the shard, not `W_CAP`, fixes the block extent.
 
 ---
 

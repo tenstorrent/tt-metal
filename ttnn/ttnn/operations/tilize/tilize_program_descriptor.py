@@ -156,6 +156,10 @@ class TilizePlan:
         # buffer, so that side does no NoC access at all.
         "input_native",
         "output_native",
+        # How the ROW_MAJOR source pages a row (1 = a page IS a row). > 1 puts
+        # the reader on its strided branch.
+        "input_pages_per_row",
+        "in_page_width_bytes",
     )
 
     def __init__(self, **kw):
@@ -360,16 +364,27 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
     num_cores = int(grid.x) * int(grid.y)
 
     tile_h = int(output_tensor.tile.tile_shape[0])
+    # `shape` is the INPUT's page grid (what the reader addresses); `out_shape`
+    # is the OUTPUT's tile grid (what the block plan is cut on).
     shape = list(input_tensor.padded_shape)
+    out_shape = list(output_tensor.padded_shape)
 
     # Geometry: R is per-image and folds the leading dims. NEVER
     # floor(num_images * H / tile_h) -- [8,1,249,2048] is the case that differs.
+    #
+    # Read off the OUTPUT's padded shape, not the input's. The tile grid IS the
+    # output, and the two shapes are NOT interchangeable once a shard is in play:
+    # a ROW_MAJOR tensor's padded shape rounds its last dim up to its PAGE width,
+    # which a width-cutting shard sets (`[3,160,160]` sharded 64 wide reports
+    # `[3,160,192]`), while a TILE tensor rounds to the tile. Taking C from the
+    # input there yields 6 columns for a 5-column output — measured as the
+    # `test_tilize_nd_sharded` value mismatch.
     num_images = 1
-    for d in shape[:-2]:
+    for d in out_shape[:-2]:
         num_images *= int(d)
-    rows_per_image = math.ceil(int(shape[-2]) / tile_h)
+    rows_per_image = math.ceil(int(out_shape[-2]) / tile_h)
     tensor_row_blocks = num_images * rows_per_image  # R
-    tensor_col_tiles = math.ceil(int(shape[-1]) / TILE_WIDTH)  # C
+    tensor_col_tiles = math.ceil(int(out_shape[-1]) / TILE_WIDTH)  # C
 
     # Page bytes. tb_in is one tile's worth of ROW-MAJOR bytes; tb_out is one
     # whole output tile page, read off the buffer so block-float / tiny-tile
@@ -377,14 +392,40 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
     in_page_bytes = tile_h * TILE_WIDTH * input_tensor.element_size()
     out_page_bytes = output_tensor.buffer_page_size()
 
+    # --- how the ROW_MAJOR source is PAGED --------------------------------
+    # A stick-indexed read (`start_page + row`) is only a stick index when a page
+    # IS a whole row — true for interleaved ROW_MAJOR and for a HEIGHT-sharded
+    # one. A shard that cuts the width pages by SHARD width instead, so one row
+    # spans `input_pages_per_row` pages and consecutive sticks are that far
+    # apart. Native consumption sidesteps it entirely (no read at all); where
+    # native is unavailable the reader takes its strided branch, for which the
+    # block's row segment must sit inside a single source page.
+    in_page_width_elems = int(input_tensor.buffer_page_size()) // input_tensor.element_size()
+    input_pages_per_row = max(1, math.ceil(int(shape[-1]) / max(1, in_page_width_elems)))
+
     # --- who fixes the block grid: a shard spec, or the L1 solve? ---------
     # tilize has no dependent axis, so a shard is already a block. When one side
     # is L1-sharded its OWN partition is used verbatim and its CB is placed on
     # its buffer (zero-copy); the other side falls back to the accessor. Both
     # sides go native only when the two partitions are the SAME cut, which is
     # what makes a same-spec call touch the NoC not at all.
+    def _partition_tiles_the_grid(part):
+        """A partition can only DRIVE the plan if its shards tile the output grid
+        exactly. A shard whose last column is part page-padding (a ROW_MAJOR
+        tensor cut 64 wide across a 160-wide row) covers more tile columns than
+        the output has, so it is a placement the accessor still serves but the
+        block grid cannot be read off."""
+        return part is not None and (
+            part.num_shard_rows * part.shard_rows_tiles == tensor_row_blocks
+            and part.num_shard_cols * part.shard_cols_tiles == tensor_col_tiles
+        )
+
     in_partition = shard_partition(input_tensor, tile_h)
     out_partition = shard_partition(output_tensor, tile_h)
+    if not _partition_tiles_the_grid(in_partition):
+        in_partition = None
+    if not _partition_tiles_the_grid(out_partition):
+        out_partition = None
     partition = None
     input_native = False
     output_native = False
@@ -394,22 +435,19 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
     elif out_partition is not None and out_partition.is_l1:
         partition, output_native = out_partition, True
 
-    # The accessor's stick indexing (`start_page + row`) is only a stick index
-    # when a page IS a whole row. That holds for interleaved ROW_MAJOR and for a
-    # HEIGHT-sharded one; a WIDTH/BLOCK-sharded ROW_MAJOR input pages by SHARD
-    # width, so reading it through the accessor would silently address the wrong
-    # sticks. Native consumption is the answer, and this only fires when native
-    # is unavailable (a ragged or DRAM-resident input shard).
-    if (
-        input_tensor.is_sharded()
-        and not input_native
-        and int(input_tensor.buffer_page_size()) != int(shape[-1]) * input_tensor.element_size()
-    ):
+    if partition is not None and partition is out_partition and input_pages_per_row > 1:
+        # The output shard would fix a block width the strided read cannot honour
+        # (see below): a block row segment has to sit inside ONE source page, and
+        # only the solved plan is free to choose a width that does. Correctness
+        # over the output's zero-copy, in a mix (sub-row-paged non-native input +
+        # L1-sharded output on a different cut) no test in the suite reaches.
+        partition, output_native = None, False
+
+    if not input_native and input_pages_per_row > 1 and in_page_width_elems % TILE_WIDTH:
         raise RuntimeError(
-            "tilize: input is sharded by width and cannot be consumed natively "
-            f"(page {input_tensor.buffer_page_size()} B is not a whole {shape[-1]}-element row); "
-            "a width/block-sharded ROW_MAJOR input must be L1-resident with a "
-            "tile-aligned, evenly-dividing shard"
+            f"tilize: input's ROW_MAJOR page is {in_page_width_elems} elements, which is neither a "
+            f"whole {shape[-1]}-element row nor a whole number of {TILE_WIDTH}-element tiles; the "
+            "block's row segment cannot be addressed within one source page"
         )
 
     # --- L1 budget. The arena minus what the OPERANDS already hold ---------
@@ -487,7 +525,15 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
         # A divisor (rather than a ceil) is what removes the ragged column tail —
         # see this module's docstring for the mechanism cap that forces it.
         width_limit = min(w_cap, tensor_col_tiles // num_w_chunks_target)
-        block_width_tiles = _largest_divisor_at_most(tensor_col_tiles, width_limit)
+        # On a sub-row-paged source the width must ALSO divide the page width in
+        # tiles, so `w_chunk * block_row_bytes` lands at a page boundary plus an
+        # offset that leaves the whole segment inside that page. Expressed by
+        # narrowing what the divisor is taken OF — gcd(C, page width) — so the
+        # search itself stays the single `_largest_divisor_at_most` knob, and
+        # degenerates to C exactly when a page is a whole row.
+        page_width_tiles = in_page_width_elems // TILE_WIDTH if input_pages_per_row > 1 else tensor_col_tiles
+        width_source = math.gcd(tensor_col_tiles, page_width_tiles)
+        block_width_tiles = _largest_divisor_at_most(width_source, width_limit)
         num_w_chunks = tensor_col_tiles // block_width_tiles  # exact, no tail
 
         num_row_groups = min(tensor_row_blocks, max(1, math.ceil(num_cores / num_w_chunks)))
@@ -539,6 +585,8 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid) -> TilizePla
         fp32_dest_acc_en=(input_tensor.dtype == ttnn.float32),
         input_native=input_native,
         output_native=output_native,
+        input_pages_per_row=input_pages_per_row,
+        in_page_width_bytes=in_page_width_elems * input_tensor.element_size(),
     )
     _PLAN_CACHE[key] = plan
     return plan
@@ -641,6 +689,8 @@ def create_program_descriptor(
         plan.num_w_chunks,
         plan.block_row_bytes,
         int(plan.input_native),
+        plan.input_pages_per_row,
+        plan.in_page_width_bytes,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
