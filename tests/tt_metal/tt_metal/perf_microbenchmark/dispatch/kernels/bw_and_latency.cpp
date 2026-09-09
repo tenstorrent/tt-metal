@@ -42,9 +42,9 @@ void kernel_main() {
             noc_async_write(NOC_MEM_ADDR, noc_write_addr, page_size);
 #endif
 #elif READ_ONE_PACKET
-            noc_async_read_one_packet(noc_addr, read_ptr, page_size);
+            noc_async_read_one_packet_pcie(noc_addr, read_ptr, page_size);
 #else
-            noc_async_read(noc_addr, read_ptr, page_size);
+            noc_async_read_pcie(noc_addr, read_ptr, page_size);
 #endif
 
 #if LATENCY
