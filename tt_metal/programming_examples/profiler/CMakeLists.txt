@@ -13,4 +13,13 @@ set(PROFILER_EXAMPLES_SRCS
 
 CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 
-add_custom_target(profiler_examples DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
+# Built separately: its binary lands in programming_examples/ itself, where tests/ttnn/tracy/test_streaming_profiler.py
+# looks for it, not under the profiler/ subdirectory CREATE_PGM_EXAMPLES_EXE uses.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
+
+add_custom_target(
+    profiler_examples
+    DEPENDS
+        ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
+        test_streaming_profiler_zones
+)
