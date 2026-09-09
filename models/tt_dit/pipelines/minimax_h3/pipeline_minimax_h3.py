@@ -119,7 +119,17 @@ from .packing_ref2va import (
     build_ref2va_presentation,
     sample_reference_video_frames,
 )
-from .policy import MINIMAX_H3_MAX_TEXT_TOKENS, served_envelope
+from .policy import (
+    MINIMAX_H3_DEFAULT_ASPECT_RATIO,
+    MINIMAX_H3_DURATIONS_S,
+    MINIMAX_H3_MAX_TEXT_TOKENS,
+    MINIMAX_H3_REF2VA_PRESENTATION_LADDER,
+    MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
+    served_canvases,
+    served_envelope,
+    served_reference_image_sizes,
+    served_reference_video_canvases,
+)
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
 
@@ -468,6 +478,9 @@ class MiniMaxH3Pipeline:
         # Forces `_select_bucket` onto one rung regardless of the request's natural rung; `warmup`
         # uses it to walk the ladder with a single representative request.
         self._force_bucket: int | None = None
+        # Forces the ref2va encoder pad onto one presentation rung; warmup walks the encoder ladder
+        # the same way `_force_bucket` walks the denoise ladder.
+        self._force_prompt_pad: int | None = None
         # Persistent device buffers whose shapes are request-independent (the arena caps, or literal
         # constants), the LTX / Flux2 pattern taken one step further: a ttnn trace bakes its inputs'
         # addresses AND replay rewrites every address the capture touched, so every buffer that must
@@ -941,6 +954,12 @@ class MiniMaxH3Pipeline:
                     )
             video_block_token_counts = [int(grid[1]) * int(grid[2]) // merge for grid in video_grids]
 
+        prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        if not prompt_ids:
+            raise ValueError("prompt tokenized to zero tokens")
+        if len(prompt_ids) > MINIMAX_H3_MAX_TEXT_TOKENS:
+            raise ValueError(f"prompt is {len(prompt_ids)} tokens, over the {MINIMAX_H3_MAX_TEXT_TOKENS}-token budget")
+
         token_ids, token_tags = build_ref2va_presentation(
             tokenizer, prompt, references, image_token_counts, video_block_token_counts
         )
@@ -1066,9 +1085,26 @@ class MiniMaxH3Pipeline:
         # model's internal pad a no-op; the pad rows ride the causal tail (real rows never attend
         # forward into them) and are sliced off the returned embeds below. Token 0 is an ordinary
         # vocab entry, so the pad cannot extend a vision run.
+        # ref2va pads to the next presentation rung instead of the next sp*TILE multiple, so the
+        # encoder compiles a handful of lengths rather than every aligned size up to caps.prompt.
         true_seq_len = seq_len
         sp_alignment = self.sp_factor * ttnn.TILE_SIZE
-        if self.sp_factor > 1 and seq_len % sp_alignment:
+        if self.task == "ref2va" and self.sp_factor > 1:
+            target = self._force_prompt_pad
+            if target is None:
+                target = select_bucket(seq_len, MINIMAX_H3_REF2VA_PRESENTATION_LADDER)
+            elif target not in MINIMAX_H3_REF2VA_PRESENTATION_LADDER:
+                raise ValueError(
+                    f"forced prompt pad {target} is not in the presentation ladder "
+                    f"{MINIMAX_H3_REF2VA_PRESENTATION_LADDER}"
+                )
+            elif seq_len > target:
+                raise ValueError(f"forced prompt pad {target} is smaller than the presentation {seq_len}")
+            if seq_len < target:
+                input_ids = torch.nn.functional.pad(input_ids, (0, target - seq_len))
+                type_ids = torch.nn.functional.pad(type_ids, (0, target - seq_len))
+                seq_len = target
+        elif self.sp_factor > 1 and seq_len % sp_alignment:
             seq_len = ((seq_len + sp_alignment - 1) // sp_alignment) * sp_alignment
             input_ids = torch.nn.functional.pad(input_ids, (0, seq_len - true_seq_len))
             type_ids = torch.nn.functional.pad(type_ids, (0, seq_len - true_seq_len))
@@ -1783,9 +1819,9 @@ class MiniMaxH3Pipeline:
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
 
-        `reference_resize_mode` applies to ref2va image references only: `match` (default)
-        area-matches the target canvas without upscaling, `max` caps the short edge at 2048
-        without upscaling, `diffusers` is Hugging Face Diffusers' always-2048-short-edge policy.
+        `reference_resize_mode` applies to ref2va image references only. The served mode is
+        `match` (area-match the target canvas, upscaling included); `max` and `diffusers` stay
+        for REPL/tests and the served request path rejects them.
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
@@ -1956,6 +1992,11 @@ class MiniMaxH3Pipeline:
         resolved shapes, and it is the *first* draw off the request generator, ahead of the video and
         audio noise.
         """
+        if reference_resize_mode != MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE:
+            raise ValueError(
+                f"served ref2va resize mode is {MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE!r}, "
+                f"got {reference_resize_mode!r}"
+            )
         # 1. Setup. The canvas comes from the request, never from a reference: references do not bind
         # the generated geometry, which is the property that makes them cost extra rows rather than
         # change the output shape.
@@ -2297,8 +2338,10 @@ class MiniMaxH3Pipeline:
             if not self.trace_denoise:
                 return
             # ref2va loads different weights and a different prompt cap, so its encoder envelope is
-            # not the one this walk compiles.
-            if self.task != "ref2va":
+            # not the one the t2va walk compiles.
+            if self.task == "ref2va":
+                self._warm_ref2va_prompt_encoder_envelope()
+            else:
                 self._warm_prompt_encoder_envelope()
             capture_rungs = sorted(fitted, reverse=True)
             if host:
@@ -2406,6 +2449,82 @@ class MiniMaxH3Pipeline:
 
         self._host_log(
             f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
+        )
+
+    def _warm_ref2va_prompt_encoder_envelope(self) -> None:
+        """Compile every prompt-encoding program a served ref2va request can reach, strictly before
+        trace capture. Encoder programs are keyed by padded presentation length, tower patch total
+        and per-run slice shape; the walk covers each distinct key once. Replicated meshes do not
+        bucket the presentation, so there is no envelope to warm there.
+        """
+        if self.sp_factor <= 1:
+            return
+
+        prompt = self._filler_prompt(1)
+        before = self.mesh_device.num_program_cache_entries()
+
+        def gray(size: tuple[int, int]) -> Image.Image:
+            height, width = size
+            return Image.new("RGB", (width, height), (127, 127, 127))
+
+        def image_ref(size: tuple[int, int]) -> MiniMaxH3PreparedReference:
+            return MiniMaxH3PreparedReference(kind="image", image=gray(size))
+
+        def video_ref(num_frames: int, size: tuple[int, int]) -> MiniMaxH3PreparedReference:
+            height, width = size
+            return MiniMaxH3PreparedReference(
+                kind="video", frames=np.full((num_frames, height, width, 3), 127, dtype=np.uint8)
+            )
+
+        def run(label: str, references: list[MiniMaxH3PreparedReference], *, pad_to: int | None = None) -> None:
+            unit_before = self.mesh_device.num_program_cache_entries()
+            self._force_prompt_pad = pad_to
+            try:
+                embeds, _ = self.encode_prompt(prompt, references=references)
+            finally:
+                self._force_prompt_pad = None
+            if pad_to is not None:
+                assert (
+                    embeds.shape[1] == pad_to
+                ), f"forced pad landed on {embeds.shape[1]}, expected presentation rung {pad_to}"
+            ttnn.deallocate(embeds)
+            self._host_log(
+                f"warmed prompt encoder for {label}: "
+                f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
+            )
+
+        pad_canvas = min(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
+        pad_size = min(served_reference_image_sizes(*pad_canvas), key=lambda size: size[0] * size[1])
+        for rung in MINIMAX_H3_REF2VA_PRESENTATION_LADDER:
+            run(f"presentation rung {rung}", [image_ref(pad_size)], pad_to=rung)
+
+        for canvas, size in served_envelope(self.task):
+            run(f"1 image at {size[1]}x{size[0]} (canvas {canvas[1]}x{canvas[0]})", [image_ref(size)])
+
+        max_canvas = max(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
+        run("2 images at max canvas", [image_ref(max_canvas) for _ in range(2)])
+        run(
+            "9 images at max canvas",
+            [image_ref(max_canvas) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)],
+        )
+
+        # A reference video resolves to the canvas of its own aspect, so it reaches per-run slice
+        # shapes no image geometry can; the frame count only moves the presentation length (a rung),
+        # so a minimal clip compiles the shape.
+        short_clip = align_num_frames(1)
+        for size in served_reference_video_canvases():
+            run(f"1 video at {size[1]}x{size[0]}", [video_ref(short_clip, size)])
+
+        video_canvas = resolve_canvas_size(*MINIMAX_H3_DEFAULT_ASPECT_RATIO)
+        for duration_s in (MINIMAX_H3_DURATIONS_S[0], MINIMAX_H3_DURATIONS_S[-1]):
+            frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            run(f"1 video {duration_s}s at {video_canvas[1]}x{video_canvas[0]}", [video_ref(frames, video_canvas)])
+        clip = align_num_frames(round(5 * MINIMAX_H3_FPS))
+        run("3 videos totaling 15s", [video_ref(clip, video_canvas) for _ in range(3)])
+
+        self._host_log(
+            f"ref2va prompt encoder envelope warmed: "
+            f"+{self.mesh_device.num_program_cache_entries() - before} programs"
         )
 
     def _rung_captured(self, rung: int) -> bool:
