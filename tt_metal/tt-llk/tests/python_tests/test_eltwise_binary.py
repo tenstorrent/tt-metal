@@ -33,10 +33,10 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
     EN_DEST_REUSE,
-    INPUT_OUTPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -49,6 +49,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, SUPPORTED_TILE_SIZES, get_tile_params
 from helpers.tile_shape import construct_tile_shape
@@ -78,17 +79,6 @@ INT8_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
 
 def _unique_dimensions(dimensions):
     return [list(dim) for dim in dict.fromkeys(tuple(dim) for dim in dimensions)]
-
-
-def _matrix_dimensions(input_dimensions, output_dimensions, tile_dimensions):
-    """Identify matrix orientation as tile rows/columns in perf reports."""
-    tile_rows, tile_cols = tile_dimensions
-    return INPUT_OUTPUT_DIMENSIONS(
-        input_rt_dim=input_dimensions[0] // tile_rows,
-        input_ct_dim=input_dimensions[1] // tile_cols,
-        output_rt_dim=output_dimensions[0] // tile_rows,
-        output_ct_dim=output_dimensions[1] // tile_cols,
-    )
 
 
 def _effective_dest_acc(dest_acc, formats):
@@ -147,6 +137,38 @@ def get_eltwise_binary_perf_input_dimensions(
     dest_acc, dest_sync, formats, tile_dimensions
 ):
     return _dest_full_dimensions(dest_acc, dest_sync, formats, tile_dimensions)
+
+
+def get_eltwise_binary_acc_to_dest(input_dimensions, tile_dimensions):
+    """Enable pairwise destination accumulation when at least two tiles exist."""
+    tile_rows, tile_cols = tile_dimensions
+    tile_count = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
+    return [False, True] if tile_count >= 2 and tile_count % 2 == 0 else [False]
+
+
+def _accumulated_output_dimensions(
+    input_dimensions, tile_dimensions, num_tiles_per_accumulation
+):
+    if num_tiles_per_accumulation == 1:
+        return input_dimensions
+
+    tile_rows, tile_cols = tile_dimensions
+    input_rt = input_dimensions[0] // tile_rows
+    input_ct = input_dimensions[1] // tile_cols
+    if input_rt % num_tiles_per_accumulation == 0:
+        return [
+            input_dimensions[0] // num_tiles_per_accumulation,
+            input_dimensions[1],
+        ]
+    if input_ct % num_tiles_per_accumulation == 0:
+        return [
+            input_dimensions[0],
+            input_dimensions[1] // num_tiles_per_accumulation,
+        ]
+    raise ValueError(
+        f"Input dimensions {input_dimensions} contain a tile count that cannot "
+        f"be grouped by {num_tiles_per_accumulation}"
+    )
 
 
 def _get_valid_formats(dest_acc):
@@ -237,6 +259,7 @@ def _run_eltwise_binary_test(
     transpose_srca,
     input_dimensions,
     tile_dimensions,
+    acc_to_dest,
     *,
     int8_inputs=False,
     is_perf=False,
@@ -253,6 +276,11 @@ def _run_eltwise_binary_test(
     tile_rows, tile_cols = tile_dimensions
     tile_cnt_A = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
     tile_cnt_B = tile_cnt_A
+    num_tiles_per_accumulation = 2 if acc_to_dest else 1
+    tile_cnt_output = tile_cnt_A // num_tiles_per_accumulation
+    output_dimensions = _accumulated_output_dimensions(
+        input_dimensions, tile_dimensions, num_tiles_per_accumulation
+    )
 
     # Generate stimuli with correct face dimensions for smaller tiles
     src_A, _, src_B, _ = generate_stimuli(
@@ -276,10 +304,11 @@ def _run_eltwise_binary_test(
         dest_sync,
         effective_dest_acc,
         formats,
-        input_dimensions,
+        output_dimensions,
         tile_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
+    input_num_tiles_in_block = num_tiles_in_block * num_tiles_per_accumulation
 
     binary_golden = get_golden_generator(EltwiseBinaryGolden)
 
@@ -366,6 +395,10 @@ def _run_eltwise_binary_test(
         math_fidelity,
         input_format=golden_input_format_A,
         input_format_B=golden_input_format_B,
+        acc_to_dest=acc_to_dest,
+        tile_shape=construct_tile_shape(tuple(tile_dimensions)),
+        num_tiles_per_accumulation=num_tiles_per_accumulation,
+        dest_acc=effective_dest_acc,
     )
 
     if is_perf and perf_report is None:
@@ -382,15 +415,20 @@ def _run_eltwise_binary_test(
             MATH_OP(mathop=math_op),
             DEST_SYNC(dest_sync),
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
+            ACC_TO_DEST(acc_to_dest),
         ],
         "runtimes": [
-            _matrix_dimensions(input_dimensions, input_dimensions, tile_dimensions),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
             UNPACK_TRANS_FACES(transpose_srca),
             UNPACK_TRANS_WITHIN_FACE(transpose_srca),
             TILE_COUNT(tile_cnt_A),
             NUM_TILES_IN_BLOCK(
                 num_tiles_in_block,
-                input_num_tiles_in_block=num_tiles_in_block,
+                input_num_tiles_in_block=input_num_tiles_in_block,
                 output_num_tiles_in_block=num_tiles_in_block,
             ),
             NUM_BLOCKS(
@@ -411,7 +449,7 @@ def _run_eltwise_binary_test(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+            tile_count_res=tile_cnt_output,
             num_faces=num_faces,
             face_r_dim=face_r_dim,
             tile_dimensions=tile_dimensions,
@@ -471,6 +509,7 @@ def _run_eltwise_binary_test(
         tile_dimensions,
         existing_dimensions=[[256, 32]],
     ),
+    acc_to_dest=get_eltwise_binary_acc_to_dest,
 )
 def test_eltwise_binary(
     dest_acc,
@@ -483,6 +522,7 @@ def test_eltwise_binary(
     transpose_srca,
     input_dimensions,
     tile_dimensions,
+    acc_to_dest,
 ):
     _run_eltwise_binary_test(
         dest_acc,
@@ -495,6 +535,7 @@ def test_eltwise_binary(
         transpose_srca,
         input_dimensions,
         tile_dimensions,
+        acc_to_dest,
     )
 
 
@@ -522,6 +563,7 @@ def test_eltwise_binary(
         tile_dimensions,
         existing_dimensions=[[32, 32], [64, 32], [32, 64], [256, 32]],
     ),
+    acc_to_dest=get_eltwise_binary_acc_to_dest,
 )
 def test_eltwise_binary_bfp4_b(
     dest_acc,
@@ -534,6 +576,7 @@ def test_eltwise_binary_bfp4_b(
     math_op,
     input_dimensions,
     tile_dimensions,
+    acc_to_dest,
 ):
     return _run_eltwise_binary_test(
         dest_acc,
@@ -546,6 +589,7 @@ def test_eltwise_binary_bfp4_b(
         transpose_srca,
         input_dimensions,
         tile_dimensions,
+        acc_to_dest,
     )
 
 
@@ -825,7 +869,22 @@ def get_dest_reuse_perf_output_dimensions(
             input_dimensions,
         )
     }
-    return [output for output in perf_outputs if tuple(output) in functional_outputs]
+    valid_outputs = [
+        output for output in perf_outputs if tuple(output) in functional_outputs
+    ]
+    if len(valid_outputs) <= 1:
+        return valid_outputs
+
+    tile_rows, tile_cols = tile_dimensions
+    input_rt = input_dimensions[0] // tile_rows
+    input_ct = input_dimensions[1] // tile_cols
+    prefer_tall = input_rt >= input_ct
+    preferred = [
+        output
+        for output in valid_outputs
+        if ((output[0] // tile_rows) >= (output[1] // tile_cols)) == prefer_tall
+    ]
+    return preferred[:1] if preferred else valid_outputs[:1]
 
 
 def _run_eltwise_binary_dest_reuse_test(
@@ -872,9 +931,14 @@ def _run_eltwise_binary_dest_reuse_test(
             DEST_SYNC(dest_sync),
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
+            ACC_TO_DEST(False),
         ],
         "runtimes": [
-            _matrix_dimensions(input_dimensions, output_dimensions, tile_dimensions),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             NUM_TILES_IN_BLOCK(
@@ -1001,6 +1065,7 @@ def test_eltwise_binary_dest_reuse(
         tile_dimensions,
         existing_dimensions=[[32, 32], [512, 32]],
     ),
+    acc_to_dest=get_eltwise_binary_acc_to_dest,
 )
 def test_eltwise_binary_int8_format(
     dest_acc,
@@ -1013,6 +1078,7 @@ def test_eltwise_binary_int8_format(
     math_op,
     input_dimensions,
     tile_dimensions,
+    acc_to_dest,
 ):
     return _run_eltwise_binary_test(
         dest_acc,
@@ -1025,5 +1091,6 @@ def test_eltwise_binary_int8_format(
         transpose_srca,
         input_dimensions,
         tile_dimensions,
+        acc_to_dest,
         int8_inputs=True,
     )

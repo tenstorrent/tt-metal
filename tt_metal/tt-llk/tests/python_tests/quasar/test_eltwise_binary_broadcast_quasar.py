@@ -45,10 +45,14 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 TILE_ELEMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 FACE_ELEMS = 16 * 16
+BINARY_BROADCAST_TILE_DIMENSIONS = [
+    [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+]
 
 BINARY_BROADCAST_FORMATS = input_output_formats(
     [
@@ -72,6 +76,11 @@ def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
+def binary_broadcast_acc_to_dest_modes():
+    # The broadcast math path does not implement grouped destination accumulation.
+    return [False]
+
+
 def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
@@ -80,44 +89,50 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def binary_broadcast_math_fidelities(format, mathop):
+def binary_broadcast_math_fidelities(format, math_op):
     if format.input_format == DataFormat.Int8:
         return [MathFidelity.LoFi]
-    return get_valid_math_fidelities(format, mathop)
+    return get_valid_math_fidelities(format, math_op)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    mathop=[
+    math_op=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
-        formats, mathop
+    math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
+        formats, math_op
     ),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
-    dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    unpack_to_dest=[False],
+    tile_dimensions=BINARY_BROADCAST_TILE_DIMENSIONS,
     input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
-            dest_acc, dest_sync_mode
+        lambda dest_acc, dest_sync, tile_dimensions: generate_unary_input_dimensions(
+            dest_acc, dest_sync, construct_tile_shape(tile_dimensions)
         )
     ),
+    acc_to_dest=binary_broadcast_acc_to_dest_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_eltwise_binary_broadcast_quasar(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     broadcast_type,
     math_fidelity,
     implied_math_format,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
+    tile_dimensions,
     input_dimensions,
+    acc_to_dest,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -158,13 +173,14 @@ def test_eltwise_binary_broadcast_quasar(
         else formats.input_format
     )
     golden_tensor = generate_golden(
-        mathop,
+        math_op,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
         math_fidelity,
         input_format=input_format,
         input_format_B=input_format_B,
+        acc_to_dest=acc_to_dest,
     )
 
     if is_perf and perf_report is None:
@@ -175,10 +191,10 @@ def test_eltwise_binary_broadcast_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
@@ -198,7 +214,7 @@ def test_eltwise_binary_broadcast_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=4,
         ),
-        "unpack_to_dest": False,
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }

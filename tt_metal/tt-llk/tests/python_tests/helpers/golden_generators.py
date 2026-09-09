@@ -3658,6 +3658,7 @@ class EltwiseBinaryGolden(FidelityMasking):
         acc_to_dest=False,
         tile_shape=None,
         num_tiles_per_accumulation=1,
+        dest_acc=DestAccumulation.No,
     ):
         if tile_shape is None:
             tile_shape = construct_tile_shape()
@@ -3689,9 +3690,13 @@ class EltwiseBinaryGolden(FidelityMasking):
         # so multi-tile accumulation rounds the same way as HW.
         out_is_mx = data_format.is_mx_format()
         hw_dest_dtype = (
-            torch.float16
-            if (out_is_mx and input_format == DataFormat.Float16)
-            else torch.bfloat16
+            torch.float32
+            if dest_acc == DestAccumulation.Yes
+            else (
+                torch.float16
+                if (out_is_mx and input_format == DataFormat.Float16)
+                else torch.bfloat16
+            )
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
