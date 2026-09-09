@@ -314,7 +314,7 @@ def decode_forward(
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
             paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
-                block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+                block_size=effective_block_size(k_cache, config.head_dim),
                 num_kv_heads=sdpa_num_local_kv_heads,
             ),
             **paged_modulo_kwargs,

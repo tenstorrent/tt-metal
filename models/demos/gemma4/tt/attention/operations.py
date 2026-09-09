@@ -296,7 +296,7 @@ def chunked_prefill_sdpa(
     # shape, so the non-shared (Option A) path takes the op's legacy branch unchanged.
     paged_cache_geometry = None
     if num_kv_heads is not None:
-        eff_bs = effective_block_size(k_cache, head_dim, num_kv_heads)
+        eff_bs = effective_block_size(k_cache, head_dim)
         cache_block_size = k_cache.padded_shape[2]
         cache_num_kv_heads = k_cache.padded_shape[1]
         if eff_bs != cache_block_size or num_kv_heads != cache_num_kv_heads:

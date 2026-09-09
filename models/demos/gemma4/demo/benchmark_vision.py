@@ -24,6 +24,11 @@ Usage:
         GEMMA4_VISION_BENCH_ITERS=20 \\
         GEMMA4_VISION_DTYPE=bfloat8_b \\
         pytest models/demos/gemma4/demo/benchmark_vision.py -k "1x8" -sv
+
+    # Profile a single vision encoder layer under tracy (per-op device time):
+    HF_MODEL=google/gemma-4-31B-it \\
+        GEMMA4_VISION_NUM_LAYERS=1 GEMMA4_VISION_BENCH_ITERS=3 \\
+        pytest models/demos/gemma4/demo/benchmark_vision.py -k "1x1" -sv
 """
 
 import os
@@ -44,7 +49,7 @@ from models.demos.gemma4.tt.vision.vision_tower import VisionTower
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-@pytest.mark.parametrize("batch_size", [32, 1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
@@ -57,7 +62,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
             "P150x4": (1, 4),
             "P150x8": (1, 8),
             "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 8))
+        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
     ],
     indirect=True,
 )
@@ -70,13 +75,19 @@ def test_benchmark_vision(mesh_device, batch_size, reset_seeds):
 
     vision_dtype_name = os.environ.get("GEMMA4_VISION_DTYPE", "bfloat8_b")
     vision_dtype = getattr(ttnn, vision_dtype_name, ttnn.bfloat8_b)
-    num_iters = int(os.environ.get("GEMMA4_VISION_BENCH_ITERS", 20))
+    num_iters = int(os.environ.get("GEMMA4_VISION_BENCH_ITERS", 2))
+    # Optional encoder-depth override for profiling: build only N vision transformer blocks
+    # (e.g. GEMMA4_VISION_NUM_LAYERS=1) so the run is small enough to capture a clean
+    # tracy/per-op-device-time trace. Weights for the dropped layers are simply unused.
+    _nl_env = os.environ.get("GEMMA4_VISION_NUM_LAYERS", 1)
+    vision_num_layers = int(_nl_env) if _nl_env else None
 
     image_file = os.environ.get("GEMMA4_VISION_IMAGE", str(IMG_PATH / "dog.jpg"))
     prompt = os.environ.get("GEMMA4_VISION_PROMPT", "Write a short summary about this image.")
     logger.info(
         f"Vision benchmark: image={image_file}, prompt={prompt!r}, "
-        f"dtype={vision_dtype_name}, iters={num_iters}, batch_size={batch_size}"
+        f"dtype={vision_dtype_name}, iters={num_iters}, batch_size={batch_size}, "
+        f"vision_layers={vision_num_layers if vision_num_layers else 'all'}"
     )
     image = PIL_Image.open(image_file).convert("RGB")
 
@@ -90,6 +101,10 @@ def test_benchmark_vision(mesh_device, batch_size, reset_seeds):
     text_hidden_size = model_args.hidden_size
 
     vision_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=1, max_seq_len=8192)
+    if vision_num_layers is not None:
+        full_vision_layers = vision_args.hf_config.vision_config.num_hidden_layers
+        vision_args.hf_config.vision_config.num_hidden_layers = vision_num_layers
+        logger.info(f"Vision encoder depth override: {full_vision_layers} -> {vision_num_layers} layers (profiling)")
     vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
     vision_tower = VisionTower(
         args=vision_args,

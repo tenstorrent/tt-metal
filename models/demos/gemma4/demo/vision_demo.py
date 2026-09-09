@@ -69,11 +69,13 @@ def create_tt_page_table(batch_size, paged_attention_config: PagedAttentionConfi
 
 
 def _host_sample(logits, temperature, top_p):
-    """Greedy argmax (temperature==0) or top-p sampling on host."""
+    """Sample next tokens on host. Greedy argmax for temperature==0, else top-p.
+
+    logits: torch.Tensor shaped [B, vocab] or [B, 1, vocab].
+    Returns: torch.LongTensor [B, 1] (one token per user, batch-correct).
+    """
     if logits.dim() == 3:
         logits = logits[:, -1, :]
-    if logits.dim() == 2:
-        logits = logits.unsqueeze(0) if logits.shape[0] != 1 else logits
     if not temperature or temperature <= 0:
         return logits.argmax(dim=-1, keepdim=True)
     probs = torch.softmax(logits.float() / temperature, dim=-1)
@@ -167,7 +169,12 @@ def test_demo_vision(mesh_device, batch_size, reset_seeds, is_ci_env):
     input_ids, pixel_values, image_position_ids = encode_multimodal(prompt, image, processor)
     prompt_len = int(input_ids.shape[1])
     per_user_ctx = prompt_len + max_generated_tokens
-    page_max_num_blocks = math.ceil(batch_size * per_user_ctx / block_size)
+    # Size PER USER first (ceil), then scale by batch — rounding the total first and
+    # re-dividing by batch (ceil(B*ctx/blk) then //B) drops a block per user when ctx isn't
+    # a multiple of block_size, and the decode overflows its page-table columns mid-run
+    # (e.g. ctx=407 needs 7 blocks but //32 gives 6 -> hang at current_pos=384).
+    blocks_per_user = math.ceil(per_user_ctx / block_size)
+    page_max_num_blocks = batch_size * blocks_per_user
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks)
     # Bounded sliding KV: full (unbounded) by default; auto-fall back to bounded above
     # 64k context so the 50 sliding layers cap at the 1024-token window (only the 10

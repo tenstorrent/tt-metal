@@ -34,6 +34,12 @@ from models.tt_transformers.tt.generator import (
     _pad_or_create_page_table,
 )
 from models.tt_transformers.tt.model_config import determine_device_name
+from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
+from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.gemma4.tt.vision.vision_tower import VisionTower
+from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
+from models.tt_transformers.tt.ccl import TT_CCL
 
 # ── Vision tower weight conversion (HF -> Meta, per-block RoPE) ─────────────
 # Replicated from models/demos/gemma4/tests/unit/test_vision_attention.py so
@@ -1086,6 +1092,13 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         super().__init__(*args, **kwargs)
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
+        # Multimodal components (None for text-only builds). ``is_multimodal`` gates the
+        # vision path (encode_vision / prefill_forward_multimodal / warmup_vision).
+        self.vision_tower = vision_tower
+        self.embed_vision = embed_vision
+        self.image_token_id = image_token_id
+        self.pad_token_id = pad_token_id
+        self.is_multimodal = vision_tower is not None and embed_vision is not None
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         """Warmup tokens with *unique* per-user page-table rows.
@@ -1471,8 +1484,19 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             ttnn.synchronize_device(self.mesh_device)
             if hasattr(pooled_tt, "deallocate"):
                 pooled_tt.deallocate(True)
-            # Gather the sharded projection to host -> [1, chunk, output_length, text_hidden].
-            projected_host = ttnn.to_torch(projected_tt)
+            # Gather the projected tensor to host -> [1, chunk, output_length, text_hidden].
+            # DP sharded it along the batch dim (dim 1) across the mesh, so concatenate the
+            # shards back along dim 1. When NOT DP the tensor is replicated (same on every
+            # device), so take one device's copy via get_device_tensors (mirrors the gemma4
+            # vision unit tests).
+            if dp:
+                projected_host = ttnn.to_torch(
+                    projected_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)
+                )
+            elif is_mesh:
+                projected_host = ttnn.to_torch(ttnn.get_device_tensors(projected_tt)[0])
+            else:
+                projected_host = ttnn.to_torch(projected_tt)
             if hasattr(projected_tt, "deallocate"):
                 projected_tt.deallocate(True)
             # mask: [chunk, output_length] host (True = valid). Strip padded soft tokens per user.
@@ -1550,7 +1574,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             logger.info(f"Vision encoder prefill: {vision_prefill_ms:.1f} ms")
         else:
             # Precomputed embeds (batched demo): vision already timed by encode_vision_batch.
-            _ = time.perf_counter() - _vision_t0
+            vision_prefill_ms = time.perf_counter() - _vision_t0
         num_valid = int(image_embeds_tt.shape[0])
         text_hidden = int(image_embeds_tt.shape[1])
 
