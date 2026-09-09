@@ -34,8 +34,14 @@ namespace tt::tt_metal::experimental {
 //
 // Runtime arguments for Programs created from a ProgramSpec must be configured
 // through SetProgramRunArgs or UpdateProgramRunArgs, not the legacy host APIs.
+//
+// defer_compile: build the Program but SKIP the trailing compile + allocation step,
+// returning an uncompiled Program. See the note on MakeMeshWorkloadFromSpecs below.
 Program MakeProgramFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& spec,
+    bool skip_validation = false,
+    bool defer_compile = false);
 
 // Create a MeshWorkload object from a set of region-mapped ProgramSpecs
 // (This will become a constructor for the MeshWorkload class)
@@ -45,10 +51,21 @@ Program MakeProgramFromSpec(
 // PRE-CONDITION: If skip_validation is true, the caller guarantees that
 // the ProgramSpecs satisfy all semantic validation requirements.
 //
+// defer_compile: build the programs but SKIP the trailing
+// MeshWorkloadImpl::compile step, returning an UNCOMPILED, UNFINALIZED
+// MeshWorkload. This exists for callers that only want the Programs
+// materialized so their kernels can be JIT-compiled later, in bulk and in
+// parallel (see ttnn::up_front_compile). Setting run args on the result is
+// still legal — SetProgramRunArgs is order-agnostic with respect to allocation.
+//
+// PRE-CONDITION: a deferred MeshWorkload MUST NOT be enqueued or otherwise
+// treated as dispatch-ready until it has been compiled. The intended consumers
+// are compile-only paths that discard the workload afterwards.
 distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
     distributed::MeshDevice& mesh_device,
     const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
-    bool skip_validation = false);
+    bool skip_validation = false,
+    bool defer_compile = false);
 
 // Create a MeshWorkload object from single ProgramSpec,
 // to be applied mesh-wide (SPMD)
@@ -59,8 +76,12 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
 // PRE-CONDITION: If skip_validation is true, the caller guarantees that
 // the ProgramSpec satisfies all semantic validation requirements.
 //
+// defer_compile: see MakeMeshWorkloadFromSpecs above.
 distributed::MeshWorkload MakeMeshWorkloadFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& program_spec,
+    bool skip_validation = false,
+    bool defer_compile = false);
 
 // Configure the arguments (mutable parameters) of an existing Program
 // (This will become a member function for the Program class)
