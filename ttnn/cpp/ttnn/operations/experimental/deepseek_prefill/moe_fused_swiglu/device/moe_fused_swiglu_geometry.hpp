@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -89,7 +90,7 @@ inline constexpr uint32_t SEM_HROW_FREE = 15;
 inline constexpr uint32_t SEM_COUNT = 16;
 inline constexpr uint32_t NUM_DEVICE_SEMAPHORES = 16;
 
-enum class FormatKey : uint8_t { Bfp8, Bf16, Weight, Out, U32, XIn, Acc };
+enum class FormatKey : uint8_t { Bfp8, Bf16, Weight, Out, U32, XIn, AccGate, AccUp };
 
 struct CbView {
     uint32_t index;
@@ -112,9 +113,13 @@ struct ScatterPlan {
 // Experiment knobs, read from the environment by Knobs::from_env() so an A/B needs no rebuild.
 // Every default reproduces the shipped constants above.
 struct Knobs {
-    // gate/up partials (CB_GATE_ACC/CB_UP_ACC) and the reduce-scatter landing CBs
-    // (CB_GATHER_*) in bf16 instead of bfp8. MOE_FUSED_SWIGLU_ACC_BF16=1
+    // GATE partials (CB_GATE_ACC) and their reduce-scatter landing CB (CB_GATHER_GATE) in bf16
+    // instead of bfp8. MOE_FUSED_SWIGLU_ACC_BF16=1. The gate sum feeds SiLU, which is convex over
+    // most of its range, so accumulator noise there becomes a systematic gain; the up sum is only
+    // multiplied, so its noise averages out. That asymmetry is why the two paths are separate knobs.
     bool acc_bf16 = false;
+    // UP partials (CB_UP_ACC / CB_GATHER_UP). Follows acc_bf16 unless set. MOE_FUSED_SWIGLU_ACC_UP_BF16
+    std::optional<bool> acc_up_bf16;
     // 1, not the constant's 2: the second resident-x slot measured as free to drop at every M (the
     // row-major prefetch lands in cb_x_in, and the reader reaches the next block's multicast only
     // after its own phase 2), and it is 244 KB -- what pays for the bf16 intermediates.
@@ -228,8 +233,10 @@ public:
     uint32_t x_stick;
     uint32_t out_tile;
     Knobs knobs;
-    bool acc_bf16;
-    uint32_t acc_tile;
+    bool acc_bf16;     // gate partials + gate landing in bf16
+    bool acc_up_bf16;  // up partials + up landing in bf16
+    uint32_t acc_gate_tile;
+    uint32_t acc_up_tile;
     bool enable_phase_alias;
     bool x_is_rm;
     uint32_t l1_budget;

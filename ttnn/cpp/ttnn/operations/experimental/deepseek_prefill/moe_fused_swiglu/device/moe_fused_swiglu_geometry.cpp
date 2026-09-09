@@ -12,6 +12,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <cstdlib>
+#include <initializer_list>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry {
 namespace {
@@ -83,6 +84,9 @@ uint32_t env_u32(const char* name, uint32_t fallback) {
 Knobs Knobs::from_env() {
     Knobs knobs;
     knobs.acc_bf16 = env_u32("MOE_FUSED_SWIGLU_ACC_BF16", knobs.acc_bf16 ? 1u : 0u) != 0;
+    if (const char* up = std::getenv("MOE_FUSED_SWIGLU_ACC_UP_BF16"); up != nullptr && *up != '\0') {
+        knobs.acc_up_bf16 = std::strtoul(up, nullptr, 10) != 0;
+    }
     knobs.depth_x = env_u32("MOE_FUSED_SWIGLU_DEPTH_X", knobs.depth_x);
     knobs.depth_h = env_u32("MOE_FUSED_SWIGLU_DEPTH_H", knobs.depth_h);
     knobs.hack_ahead = env_u32("MOE_FUSED_SWIGLU_HACK_AHEAD", knobs.hack_ahead);
@@ -129,7 +133,9 @@ Blocking::Blocking(
     out_tile(out_tile_ == 0 ? bfp8_tile_ : out_tile_),
     knobs(knobs_),
     acc_bf16(knobs_.acc_bf16),
-    acc_tile(knobs_.acc_bf16 ? bf16_tile_ : bfp8_tile_),
+    acc_up_bf16(knobs_.acc_up_bf16.value_or(knobs_.acc_bf16)),
+    acc_gate_tile(acc_bf16 ? bf16_tile_ : bfp8_tile_),
+    acc_up_tile(acc_up_bf16 ? bf16_tile_ : bfp8_tile_),
     enable_phase_alias(enable_phase_alias_),
     x_is_rm(x_is_rm_),
     l1_budget(l1_budget_) {
@@ -247,6 +253,15 @@ Blocking::Blocking(
         depth_h = 2;
         hack_ahead = std::max(1u, std::min(knobs.hack_ahead, depth_h - 1));
     }
+    // Precision rung, after every perf rung: keep the UP partials in bfp8 when bf16 on both paths
+    // does not fit. The gate path is the one that matters -- its sum feeds SiLU -- and at 7168x3072
+    // (DSV4 Pro) / 6144x3072 (MiniMax M3) the bfp8 layout already sits within 43 KB of the budget,
+    // so the second bf16 pair (+138 KB) has nothing left to displace. Dropping it also lets
+    // cb_up_acc share cb_h's allocation (cb_allocations), which is what brings those shapes in.
+    if (acc_up_bf16 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
+        acc_up_bf16 = false;
+        acc_up_tile = bfp8_tile;
+    }
     wd_split = wd_resident && depth_wd == hgroups ? std::min(8u, knobs.wd_split_eighths) : 0;
     if (wd_split != 0 && hgroups > NOC_MAX_TRANSACTION_ID) {
         wd_split = 0;
@@ -348,14 +363,14 @@ std::vector<CbView> Blocking::cb_layout(
         {CB_H, depth_h * h_fast, bfp8_tile, FormatKey::Bfp8},
         {CB_IDX_SCRATCH, 1, idx_page, FormatKey::U32},
         {CB_COUNTS_SCRATCH, 1, counts_page, FormatKey::U32},
-        {CB_GATHER_GATE, gather_pages, acc_tile, FormatKey::Acc},
-        {CB_GATHER_UP, gather_pages, acc_tile, FormatKey::Acc},
+        {CB_GATHER_GATE, gather_pages, acc_gate_tile, FormatKey::AccGate},
+        {CB_GATHER_UP, gather_pages, acc_up_tile, FormatKey::AccUp},
         {CB_SLICE_GATE, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_SLICE_UP, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_SLICE, slice_pages, bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_TILES, DEPTH_OUT * out_block, output_tile, FormatKey::Out},
-        {CB_GATE_ACC, gu, acc_tile, FormatKey::Acc},
-        {CB_UP_ACC, gu, acc_tile, FormatKey::Acc},
+        {CB_GATE_ACC, gu, acc_gate_tile, FormatKey::AccGate},
+        {CB_UP_ACC, gu, acc_up_tile, FormatKey::AccUp},
         {CB_GATE_SILU, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_LOCAL, std::max(gu, h_fast), bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_INTERM, out_interm, bf16_tile, FormatKey::Bf16},
@@ -403,12 +418,48 @@ std::vector<CbAllocation> Blocking::cb_allocations(
     }
 
     std::vector<std::vector<uint32_t>> aliases{{CB_X_STAGE, CB_MAILBOX_WRITER, CB_MAILBOX_COMPUTE}};
+    // Same page size, and the shared LCM capacity must beat two separate allocations.
+    const auto alias_pays = [&](std::initializer_list<uint32_t> group) {
+        uint32_t pages = 1;
+        uint32_t separate = 0;
+        const uint32_t page_size = by_index.at(*group.begin()).page_size;
+        for (const uint32_t index : group) {
+            const auto& view = by_index.at(index);
+            if (view.page_size != page_size) {
+                return false;
+            }
+            pages = std::lcm(pages, view.pages);
+            separate += view.pages;
+        }
+        return pages < separate;
+    };
     if (aliases_enabled) {
         if (phase_cb_alias(requested_out_tile)) {
             aliases.push_back({CB_GATHER_GATE, CB_H_SLICE, CB_OUT_TILES});
         }
-        const uint32_t bf16_lcm = std::lcm(by_index.at(CB_GATE_SILU).pages, by_index.at(CB_OUT_INTERM).pages);
-        if (bf16_lcm < by_index.at(CB_GATE_SILU).pages + by_index.at(CB_OUT_INTERM).pages) {
+        bool out_interm_taken = false;
+        // The bf16-partials regimes pay for themselves with two phase-disjoint aliases. Both partners
+        // of each pair are consumed by this core's own compute, in program order, so no peer protocol
+        // is involved:
+        //  * cb_gate_acc (phase 1: packed by compute, read out by the writer's scatter, whose payload
+        //    barrier precedes the signal this core's own reduce waits for) with cb_out_interm (phase 2:
+        //    the down matmul's L1-accumulate scratch, base-addressed, never pushed).
+        //  * cb_up_acc (phase 1, same lifetime via the reader's scatter) with cb_h (phase 2: the h
+        //    rounds land only after every peer's reduce, i.e. after this core's up payload has left;
+        //    the down matmul drains them before compute packs the next block's partials). cb_h keeps
+        //    its own capacity -- the LCM is its page count -- so its base-derived landing addresses and
+        //    realignment pads are untouched.
+        // Taken only in a bf16 regime so the shipped bfp8 allocation stays byte-identical.
+        if (acc_bf16 || acc_up_bf16) {
+            if (alias_pays({CB_GATE_ACC, CB_OUT_INTERM})) {
+                aliases.push_back({CB_GATE_ACC, CB_OUT_INTERM});
+                out_interm_taken = true;
+            }
+            if (alias_pays({CB_UP_ACC, CB_H})) {
+                aliases.push_back({CB_UP_ACC, CB_H});
+            }
+        }
+        if (!out_interm_taken && alias_pays({CB_GATE_SILU, CB_OUT_INTERM})) {
             aliases.push_back({CB_GATE_SILU, CB_OUT_INTERM});
         }
     }
@@ -456,7 +507,7 @@ std::string Blocking::describe() const {
            << ", hn_pad " << hn_pad << ", gu_chunks " << gu_chunks << ", ec_max " << ec_max << ", depth_wd " << depth_wd
            << ", depth_x " << depth_x << ", depth_h " << depth_h << ", wd_split " << wd_split << ", wd_mrow "
            << (wd_mrow_rounds && wd_resident) << ", hack_ahead " << hack_ahead << ", acc "
-           << (acc_bf16 ? "bf16" : "bfp8");
+           << (acc_bf16 ? "bf16" : "bfp8") << '/' << (acc_up_bf16 ? "bf16" : "bfp8");
     return stream.str();
 }
 

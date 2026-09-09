@@ -119,9 +119,11 @@ DataFormat format_for(
     DataFormat weight_format,
     DataFormat output_format,
     DataFormat activation_format,
-    DataFormat acc_format) {
+    DataFormat acc_gate_format,
+    DataFormat acc_up_format) {
     switch (key) {
-        case geo::FormatKey::Acc: return acc_format;
+        case geo::FormatKey::AccGate: return acc_gate_format;
+        case geo::FormatKey::AccUp: return acc_up_format;
         case geo::FormatKey::Bfp8: return DataFormat::Bfp8_b;
         case geo::FormatKey::Bf16: return DataFormat::Float16_b;
         case geo::FormatKey::Weight: return weight_format;
@@ -188,7 +190,7 @@ std::vector<uint32_t> make_reader_ct(
         num_global_experts,
         weight_tile,
         bfp8_tile,
-        blocking.acc_tile,
+        blocking.acc_up_tile,  // ACC_TILE_BYTES: the reader scatters the UP partials
         geo::MAILBOX_MAGIC,
         blocking.wd_ahead,
         blocking.m_eff_min,
@@ -279,7 +281,7 @@ std::vector<uint32_t> make_writer_ct(
         operation_arguments.read_x_at_offset,
         weight_tile,
         bfp8_tile,
-        blocking.acc_tile,
+        blocking.acc_gate_tile,  // ACC_TILE_BYTES: the writer scatters the GATE partials
         output_tile,
         geo::MAILBOX_MAGIC,
         blocking.m_eff_min,
@@ -420,7 +422,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         /*enable_phase_alias_=*/true,
         activations_are_row_major,
         knobs);
-    const DataFormat acc_format = blocking.acc_bf16 ? DataFormat::Float16_b : DataFormat::Bfp8_b;
+    const DataFormat acc_gate_format = blocking.acc_bf16 ? DataFormat::Float16_b : DataFormat::Bfp8_b;
+    const DataFormat acc_up_format = blocking.acc_up_bf16 ? DataFormat::Float16_b : DataFormat::Bfp8_b;
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
@@ -467,7 +470,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         for (const auto& view : allocation.views) {
             cb_descriptor.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(view.index),
-                .data_format = format_for(view.format, weight_format, output_format, activation_format, acc_format),
+                .data_format = format_for(
+                    view.format, weight_format, output_format, activation_format, acc_gate_format, acc_up_format),
                 .page_size = view.page_size,
             });
         }

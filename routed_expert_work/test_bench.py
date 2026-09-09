@@ -173,7 +173,11 @@ def _err_metrics(ref: torch.Tensor, out: torch.Tensor):
     diff = out - ref
     rel_rms = (diff.norm() / ref.norm()).item()
     max_abs = diff.abs().max().item()
-    return {"pcc": float(pcc), "rel_rms": rel_rms, "max_abs": max_abs}
+    # Best-fit gain <out, ref> / <ref, ref>: PCC is scale-invariant and rel_rms folds bias into
+    # scatter, so a systematic scaling of the output (accumulator noise through a convex SiLU
+    # inflates E[silu(x+e)] above silu(x)) is visible only here.
+    gain = (torch.dot(out.flatten(), ref.flatten()) / torch.dot(ref.flatten(), ref.flatten())).item()
+    return {"pcc": float(pcc), "rel_rms": rel_rms, "max_abs": max_abs, "gain": gain}
 
 
 def _median_ns(device, run_fn, kernel_dir: str, iters: int):
@@ -374,7 +378,7 @@ def test_bench(device, active_tokens):
         f.write(json.dumps(record) + "\n")
 
     def fmt(d):
-        s = f"pcc={d['pcc']:.6f} rel_rms={d['rel_rms']:.5f}"
+        s = f"pcc={d['pcc']:.6f} rel_rms={d['rel_rms']:.5f} gain={d['gain']:.4f}"
         if "ns" in d:
             s += f" ns={d['ns']:.0f}"
         return s
