@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -15,8 +16,8 @@
 #include "experimental/kernel_args.h"
 
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
-    DataflowBuffer& dfb, const uint32_t num_bytes, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
+    Scratchpad<uint32_t>& pad, const uint32_t num_bytes, const uint32_t val) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad.get_base_address());
 
     // Round up so a non-4-byte-aligned tail stick is fully filled (the loop-back read consumes all num_bytes).
     const uint32_t num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
@@ -79,23 +80,23 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_in0_exp(dfb::in0);
-    DataflowBuffer dfb_pad_exp(dfb::pad);
+    Scratchpad<uint32_t> pad(scratch::pad);
     // The realignment staging buffer is bound only when the host allocated it (front padding, or
     // an unaligned padded stick). A kernel may not name a DFB it has not bound, and `if constexpr`
     // does not suppress that name lookup, so every reference to it is gated at the preprocessor.
 #ifdef PAD_ALIGN_DFB
-    DataflowBuffer dfb_pad_align_exp(dfb::pad_align);
+    Scratchpad<uint32_t> pad_align(scratch::pad_align);
 #endif
 
     const auto s = TensorAccessor(tensor::src);
     Noc noc;
 
-    const uint32_t pad_val_addr = dfb_pad_exp.get_read_ptr();
+    const uint32_t pad_val_addr = pad.get_base_address();
 #ifdef PAD_ALIGN_DFB
-    const uint32_t pad_align_addr = dfb_pad_align_exp.get_read_ptr();
+    const uint32_t pad_align_addr = pad_align.get_base_address();
 #endif
 
-    fill_pad_dfb_with_val(dfb_pad_exp, stick_size_padded, packed_pad_value);
+    fill_pad_dfb_with_val(pad, stick_size_padded, packed_pad_value);
     // The fill above is baby-RISCV stores; the per-stick loop below loop-back noc.async_read's the pad DFB as
     // its source. A baby-RISCV store can retire before its write-request lands in L1, and the RISCV core
     // and NoC are different L1 clients with no program-order guarantee between them
@@ -130,15 +131,15 @@ void kernel_main() {
             if (read_stick) {
 #ifdef PAD_ALIGN_DFB
                 if constexpr (front_padding) {
-                    uint32_t temp_addr = dfb_pad_align_exp.get_write_ptr();
+                    uint32_t temp_addr = pad_align.get_base_address();
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(dfb_pad_align_exp.get_read_ptr()),
+                        (void*)(pad_align.get_base_address()),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
-                    uint32_t temp_addr = dfb_pad_align_exp.get_write_ptr();
+                    uint32_t temp_addr = pad_align.get_base_address();
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
                     CoreLocalMem<uint32_t> dst(l1_write_addr);
