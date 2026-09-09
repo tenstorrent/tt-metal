@@ -418,7 +418,7 @@ def test_topk_sfpu(
 # payloads) that the uniform stimuli above cannot produce, checked per row against
 # an in-test golden. Both engines canonicalize before sorting: +-0 and denormals
 # -> +0.0, NaN -> same-sign infinity bits, normals and +-inf kept, ties broken
-# index-ascending (measured on Blackhole silicon).
+# index-ascending (measured on Blackhole silicon at the LLK level).
 
 _BF16_SIGN_MASK = 0x8000
 _BF16_EXP_MASK = 0x7F80
@@ -467,7 +467,8 @@ def _is_nan_bits(bits_i32):
 
 
 def _canon_bits(bits_u16):
-    """Model of the engines' pre-sort canonicalization (ttnn-level silicon):
+    """Model of the engines' pre-sort canonicalization (measured on Blackhole
+    silicon at the LLK level):
     exp==0 patterns (+-0 and all bf16 denormals) -> +0.0 (0x0000); NaN ->
     same-sign infinity bits (tying genuinely with real same-sign inf); normals
     and +-inf unchanged."""

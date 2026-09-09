@@ -70,9 +70,7 @@ _OPS_WITH_STABLE_SORT = {
     MathOperation.TopKRebuild,
 }
 
-# The defuse sweep belongs to the fused engine only. Fused rows: the local-sort row includes the
-# fuse sweep (a kernel fuses each freshly loaded pair of tiles before their local sort), merge and
-# rebuild are network-only (they run on already-packed words), defuse is timed here on its own.
+# The defuse sweep belongs to the fused engine only.
 _OPS_FUSED_ONLY = {MathOperation.TopKDefuse}
 
 

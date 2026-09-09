@@ -14,6 +14,13 @@ namespace ckernel {
 
 // Mirrors ckernel::sfpu::TopkTieOrder, which is math-TRISC only.
 enum class TopkTieOrder : std::uint8_t { Unset, Ascending, Descending };
+#ifdef TRISC_MATH
+static_assert(
+    static_cast<int>(TopkTieOrder::Unset) == static_cast<int>(ckernel::sfpu::TopkTieOrder::Unset) &&
+        static_cast<int>(TopkTieOrder::Ascending) == static_cast<int>(ckernel::sfpu::TopkTieOrder::Ascending) &&
+        static_cast<int>(TopkTieOrder::Descending) == static_cast<int>(ckernel::sfpu::TopkTieOrder::Descending),
+    "TopkTieOrder must mirror ckernel::sfpu::TopkTieOrder");
+#endif
 
 // The tie order follows the GLOBAL sort order, never a call's per-pair idir.
 constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {

@@ -1103,11 +1103,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             // so the fused local-sort row includes the fuse sweep and the re-record it forces.
             SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _topk_fuse_tile_, (true /* largest */), dst_index, vector_mode);
         }
+        if constexpr (STABLE_SORT && is_fp32_dest_acc_en && !TOPK_UINT16_IN_FP32_DEST)
+        {
+            SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, _topk_canonicalize_negzero_value_tiles_, dst_index, vector_mode);
+        }
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_phases_steps,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT, false /* RANK_STAMPED */, TopkTieOrder::Ascending),
             dst_index,
             vector_mode,
             0 /* idir */,
@@ -1138,7 +1142,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_merge,
-            (APPROX_MODE, is_fp32_dest_acc_en, false /* top_min (idir) */, STABLE_SORT, FUSED_SORT),
+            (APPROX_MODE,
+             is_fp32_dest_acc_en,
+             false /* top_min (idir) */,
+             STABLE_SORT,
+             FUSED_SORT,
+             false /* RANK_STAMPED */,
+             false /* PRE_TAGGED */,
+             TopkTieOrder::Ascending),
             dst_index,
             vector_mode,
             5 /* m_iter */,
@@ -1150,7 +1161,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_rebuild,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT, false /* RANK_STAMPED */, TopkTieOrder::Ascending),
             dst_index,
             vector_mode,
             false /* idir */,
