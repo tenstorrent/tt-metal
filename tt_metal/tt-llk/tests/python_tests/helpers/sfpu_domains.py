@@ -169,9 +169,11 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 #
 #   * **Range** — exp overflows an 8-bit exponent near x = 88.7. True in both modes, so it
 #     lives in the registry entries below.
-#   * **Accuracy** — the *approximation* overshoots the golden by ~5.7% past ~8 (measured on
-#     Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_eltwise_unary_sfpu). One mode only, so it
-#     lives in _APPROX_ACCURACY_MAX, applied by for_op() at ApproximationMode.Yes.
+#   * **Accuracy** — the *approximation* overshoots the golden past ~8 (measured on
+#     Wormhole). One mode only, so it lives in _APPROX_ACCURACY_MAX, applied by for_op() at
+#     ApproximationMode.Yes. The ceiling is what holds the approximation inside the default
+#     5% rtol: test_eltwise_unary_sfpu sweeps approximate exp with no xfail and no custom
+#     tolerance, so widening it puts those cases straight into failure.
 #
 # The registry entry serves both modes, so an accuracy bound written there also withholds
 # (16, 80] from the *accurate* path — with it the exponent-overflow region and all large-exp

@@ -342,19 +342,10 @@ _UNARY_SWEEP_ARGNAMES = (
 )
 
 
-# Approximate exp overshoots the golden by ~5.7% (peak 6.75%) once its argument passes ~8,
-# which breaches the default 5% rtol. Whether a given combination trips the bar is marginal,
-# so the affected ones are listed exhaustively rather than by predicate: a combination
-# drifting in or out of tolerance then shows up as a change here.
-_APPROX_EXP_ACCURACY_XFAIL = {
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.No),
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.Yes),
-    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-}
-
-# ...and it is a Wormhole limit: Blackhole's exp approximation holds the default 5% rtol,
-# so the xfail above is not applied there.
-_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
+# Approximate exp carried an xfail table for three Float16_b-output combinations that
+# overshot the default 5% rtol. All three hold it now, measured over eleven unseeded runs,
+# so they are swept plain. The _APPROX_ACCURACY_MAX ceiling that keeps the argument inside
+# that range stays load-bearing.
 
 
 @pytest.mark.nightly
@@ -364,7 +355,6 @@ _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
     ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in UNARY_SWEEP_PARAMS],
 )
 def test_eltwise_unary_sfpu(
-    request,
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
@@ -381,28 +371,15 @@ def test_eltwise_unary_sfpu(
 
     _skip_coverage_unsupported(mathop)
 
-    if (
-        mathop == MathOperation.Exp
-        and approx_mode == ApproximationMode.Yes
-        and (formats.input_format, formats.output_format, dest_acc)
-        in _APPROX_EXP_ACCURACY_XFAIL
-        and not (
-            _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY
-            and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        )
-    ):
-        # Marked dynamically rather than skipped so the case still executes: if the
-        # approximation tightens, this reports XPASS instead of quietly staying green.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Approximate exp exceeds the default 5% rtol above an argument "
-                "of ~8, peaking at 6.75%. See _APPROX_EXP_ACCURACY_XFAIL.",
-                strict=False,
-            )
-        )
-
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
+        # An approximation path does exist -- a 3-segment SFPLUT in calculate_tanh -- so
+        # this is an accuracy limit, not a missing kernel. It clears the default 5% rtol
+        # only on Bfp8_b and Bfp4_b outputs, where the format's own tolerance is looser.
+        pytest.skip(
+            reason="Approximate tanh is a 3-segment LUT whose error exceeds the default "
+            "5% rtol on Float16/Float16_b/Float32 outputs; it needs an approx-mode "
+            "tolerance, which CUSTOM_TOLERANCES cannot express (it is keyed on the op)."
+        )
 
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own
     # format set: the broad profile runs everything except a Float16 input or
@@ -412,20 +389,8 @@ def test_eltwise_unary_sfpu(
     else:
         _skip_bh_unless_fp32(formats, dest_acc)
 
-    # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
-    # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
-    if (
-        approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
-        and formats.input_format != DataFormat.Bfp4_b
-        and (
-            formats.input_format == DataFormat.Bfp8_b
-            or formats.output_format == DataFormat.Bfp8_b
-        )
-    ):
-        pytest.skip(
-            reason="Exp-related operations are not supported for bf8_b format in approximation mode."
-        )
+    # Exp, Exp2 and Elu in approx mode need no bf8_b guard: Bfp8_b's own rtol of 0.2
+    # absorbs the approximation error that the narrower float outputs reject.
 
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 
@@ -1172,6 +1137,22 @@ ISINF_ISNAN_MATHOPS = [
 ]
 
 
+# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path delivers both
+# NaN and -inf to the LREG as +inf, and which predicates that breaks follows from it rather
+# than being a blanket property of the pipeline: is_nan reads 0 where the golden says 1,
+# is_neg_inf reads 0 where it says 1, and is_inf reads 1 where it says 0. The other two
+# survive precisely because +inf is what arrives -- is_pos_inf is untouched, and is_finite
+# agrees by luck of the mapping, since isfinite(+inf) and isfinite(NaN) are both 0.
+#
+# Skipping the whole op list here withheld those two as well; they are swept now, so a
+# regression in the +inf path is caught on a bf16 input instead of only on Float32.
+_ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
+    MathOperation.Isinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+]
+
+
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
         # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
@@ -1202,14 +1183,17 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) doesn't preserve
-    # -inf/nan, mangling is_neg/is_nan; skip — covered by the other input cases.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
+    # +inf, which only the three predicates below can see; the rest are swept here.
+    # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
+        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
     ):
         pytest.skip(
-            reason="bf16->fp32 dest unpack does not preserve -inf/nan special values"
+            reason="bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
+            "predicate cannot be evaluated on this pipeline"
         )
 
     eltwise_unary_sfpu(
