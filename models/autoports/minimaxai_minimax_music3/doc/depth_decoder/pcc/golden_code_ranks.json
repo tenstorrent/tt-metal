@@ -1,0 +1,262 @@
+{
+  "frame_1": [
+    {
+      "head": 1,
+      "golden_code": 891,
+      "rank_in_conditional_logits": 2,
+      "in_top50": true,
+      "argmax_prob": 0.0594,
+      "golden_code_prob": 0.0456,
+      "top50_mass": 0.7034
+    },
+    {
+      "head": 2,
+      "golden_code": 145,
+      "rank_in_conditional_logits": 20,
+      "in_top50": true,
+      "argmax_prob": 0.052,
+      "golden_code_prob": 0.0117,
+      "top50_mass": 0.636
+    },
+    {
+      "head": 3,
+      "golden_code": 487,
+      "rank_in_conditional_logits": 48,
+      "in_top50": true,
+      "argmax_prob": 0.0441,
+      "golden_code_prob": 0.0049,
+      "top50_mass": 0.4599
+    },
+    {
+      "head": 4,
+      "golden_code": 956,
+      "rank_in_conditional_logits": 60,
+      "in_top50": false,
+      "argmax_prob": 0.03,
+      "golden_code_prob": 0.0039,
+      "top50_mass": 0.4758
+    },
+    {
+      "head": 5,
+      "golden_code": 986,
+      "rank_in_conditional_logits": 14,
+      "in_top50": true,
+      "argmax_prob": 0.0305,
+      "golden_code_prob": 0.0096,
+      "top50_mass": 0.4556
+    },
+    {
+      "head": 6,
+      "golden_code": 762,
+      "rank_in_conditional_logits": 5,
+      "in_top50": true,
+      "argmax_prob": 0.0287,
+      "golden_code_prob": 0.0169,
+      "top50_mass": 0.4404
+    },
+    {
+      "head": 7,
+      "golden_code": 930,
+      "rank_in_conditional_logits": 42,
+      "in_top50": true,
+      "argmax_prob": 0.0316,
+      "golden_code_prob": 0.0053,
+      "top50_mass": 0.5119
+    }
+  ],
+  "frame_2": [
+    {
+      "head": 1,
+      "golden_code": 708,
+      "rank_in_conditional_logits": 1,
+      "in_top50": true,
+      "argmax_prob": 0.1605,
+      "golden_code_prob": 0.1033,
+      "top50_mass": 0.9299
+    },
+    {
+      "head": 2,
+      "golden_code": 145,
+      "rank_in_conditional_logits": 9,
+      "in_top50": true,
+      "argmax_prob": 0.0785,
+      "golden_code_prob": 0.024,
+      "top50_mass": 0.7834
+    },
+    {
+      "head": 3,
+      "golden_code": 691,
+      "rank_in_conditional_logits": 1,
+      "in_top50": true,
+      "argmax_prob": 0.0726,
+      "golden_code_prob": 0.0542,
+      "top50_mass": 0.8227
+    },
+    {
+      "head": 4,
+      "golden_code": 623,
+      "rank_in_conditional_logits": 17,
+      "in_top50": true,
+      "argmax_prob": 0.0309,
+      "golden_code_prob": 0.0115,
+      "top50_mass": 0.5633
+    },
+    {
+      "head": 5,
+      "golden_code": 884,
+      "rank_in_conditional_logits": 20,
+      "in_top50": true,
+      "argmax_prob": 0.0236,
+      "golden_code_prob": 0.0085,
+      "top50_mass": 0.4466
+    },
+    {
+      "head": 6,
+      "golden_code": 467,
+      "rank_in_conditional_logits": 1,
+      "in_top50": true,
+      "argmax_prob": 0.0451,
+      "golden_code_prob": 0.0407,
+      "top50_mass": 0.6482
+    },
+    {
+      "head": 7,
+      "golden_code": 240,
+      "rank_in_conditional_logits": 0,
+      "in_top50": true,
+      "argmax_prob": 0.0752,
+      "golden_code_prob": 0.0752,
+      "top50_mass": 0.6547
+    }
+  ],
+  "frame_3": [
+    {
+      "head": 1,
+      "golden_code": 94,
+      "rank_in_conditional_logits": 1,
+      "in_top50": true,
+      "argmax_prob": 0.1072,
+      "golden_code_prob": 0.084,
+      "top50_mass": 0.9278
+    },
+    {
+      "head": 2,
+      "golden_code": 848,
+      "rank_in_conditional_logits": 7,
+      "in_top50": true,
+      "argmax_prob": 0.136,
+      "golden_code_prob": 0.0464,
+      "top50_mass": 0.9562
+    },
+    {
+      "head": 3,
+      "golden_code": 816,
+      "rank_in_conditional_logits": 10,
+      "in_top50": true,
+      "argmax_prob": 0.2144,
+      "golden_code_prob": 0.0287,
+      "top50_mass": 0.9196
+    },
+    {
+      "head": 4,
+      "golden_code": 607,
+      "rank_in_conditional_logits": 8,
+      "in_top50": true,
+      "argmax_prob": 0.1094,
+      "golden_code_prob": 0.0225,
+      "top50_mass": 0.7654
+    },
+    {
+      "head": 5,
+      "golden_code": 750,
+      "rank_in_conditional_logits": 44,
+      "in_top50": true,
+      "argmax_prob": 0.2317,
+      "golden_code_prob": 0.0036,
+      "top50_mass": 0.8309
+    },
+    {
+      "head": 6,
+      "golden_code": 195,
+      "rank_in_conditional_logits": 10,
+      "in_top50": true,
+      "argmax_prob": 0.0892,
+      "golden_code_prob": 0.0201,
+      "top50_mass": 0.7612
+    },
+    {
+      "head": 7,
+      "golden_code": 743,
+      "rank_in_conditional_logits": 27,
+      "in_top50": true,
+      "argmax_prob": 0.048,
+      "golden_code_prob": 0.0105,
+      "top50_mass": 0.7648
+    }
+  ],
+  "frame_4": [
+    {
+      "head": 1,
+      "golden_code": 126,
+      "rank_in_conditional_logits": 4,
+      "in_top50": true,
+      "argmax_prob": 0.2557,
+      "golden_code_prob": 0.0582,
+      "top50_mass": 0.99
+    },
+    {
+      "head": 2,
+      "golden_code": 848,
+      "rank_in_conditional_logits": 0,
+      "in_top50": true,
+      "argmax_prob": 0.2215,
+      "golden_code_prob": 0.2215,
+      "top50_mass": 0.9645
+    },
+    {
+      "head": 3,
+      "golden_code": 764,
+      "rank_in_conditional_logits": 4,
+      "in_top50": true,
+      "argmax_prob": 0.5069,
+      "golden_code_prob": 0.0343,
+      "top50_mass": 0.9766
+    },
+    {
+      "head": 4,
+      "golden_code": 156,
+      "rank_in_conditional_logits": 28,
+      "in_top50": true,
+      "argmax_prob": 0.2319,
+      "golden_code_prob": 0.006,
+      "top50_mass": 0.8808
+    },
+    {
+      "head": 5,
+      "golden_code": 985,
+      "rank_in_conditional_logits": 36,
+      "in_top50": true,
+      "argmax_prob": 0.1683,
+      "golden_code_prob": 0.0039,
+      "top50_mass": 0.9299
+    },
+    {
+      "head": 6,
+      "golden_code": 708,
+      "rank_in_conditional_logits": 42,
+      "in_top50": true,
+      "argmax_prob": 0.1536,
+      "golden_code_prob": 0.0044,
+      "top50_mass": 0.848
+    },
+    {
+      "head": 7,
+      "golden_code": 810,
+      "rank_in_conditional_logits": 34,
+      "in_top50": true,
+      "argmax_prob": 0.0648,
+      "golden_code_prob": 0.0061,
+      "top50_mass": 0.6968
+    }
+  ]
+}

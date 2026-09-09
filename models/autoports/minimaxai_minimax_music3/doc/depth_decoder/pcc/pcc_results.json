@@ -17,6 +17,9 @@
     ],
     "row0_vs_row1_golden_pcc": 0.833595571867945
   },
+  "distinct_batch_rows_traced": {
+    "bit_identical_to_eager_host_and_device_seeded": true
+  },
   "forward_steps_2": {
     "fused_heads_min_pcc": 0.9994551625362521,
     "head_pccs": [
@@ -149,9 +152,9 @@
     ]
   },
   "perf_depth_loop_per_frame": {
-    "eager_ms": 29.689494596095756,
+    "eager_ms": 29.874861100688577,
     "note": "host wall time per 7-step teacher-forced frame incl. per-step logits read-back; warmed",
-    "traced_ms": 31.345925549976528,
+    "traced_ms": 31.378587201470506,
     "traced_vs_eager_min_pcc": 1.0
   },
   "traced_frame_allocation_free": {

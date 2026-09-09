@@ -171,24 +171,41 @@ def test_golden_frame_depth_loop(depth_decoder, depth_ref, golden_frame):
 
 
 # ----------------------------------------------------------------------------- 2b. distinct batch rows
-def test_distinct_batch_rows(depth_decoder, depth_ref):
-    """Row 0 = golden frame 1, row 1 = golden frame 2: each row must reproduce ITS OWN golden depth hiddens.
-
-    Every other test feeds identical rows, which would hide a row copy / swap in the tile-aligned
-    row splits, the head split, or the one-hot selectors. Also checks per-row PCC vs the torch
-    reference for hidden and all heads.
-    """
+@pytest.fixture(scope="session")
+def distinct_frames():
+    """Row 0 = golden frame 1, row 1 = golden frame 2 (different hidden, semantic code and residual codes)."""
     root = R.reference_dir()
+    if not (root / "frame_hiddens.pt").is_file():
+        pytest.skip(f"golden reference missing under {root}")
     frame_hiddens = torch.load(root / "frame_hiddens.pt")
     codes = torch.load(root / "sampled_codes.pt")
     embed_weight = R.load_embed_weight()
     frames = [0, 1]
-    g_hidden = torch.stack([frame_hiddens[0, f, :4096] for f in frames]).float()
-    s_embed = torch.stack([embed_weight[int(codes[f, 0]) + AUDIO_CODE_OFFSET] for f in frames]).float()
-    r_codes = torch.stack([codes[f, 1:] for f in frames])  # [2, 7]
-    golden = torch.stack(
-        [frame_hiddens[0, f, 4096:].reshape(NUM_CODEBOOKS - 1, 4096) for f in frames]
-    ).float()  # [2, 7, 4096]
+    return {
+        "global_hidden": torch.stack([frame_hiddens[0, f, :4096] for f in frames]).float(),
+        "semantic_embed": torch.stack([embed_weight[int(codes[f, 0]) + AUDIO_CODE_OFFSET] for f in frames]).float(),
+        "residual_codes": torch.stack([codes[f, 1:] for f in frames]),  # [2, 7]
+        "depth_hiddens": torch.stack(
+            [frame_hiddens[0, f, 4096:].reshape(NUM_CODEBOOKS - 1, 4096) for f in frames]
+        ).float(),  # [2, 7, 4096]
+    }
+
+
+def test_distinct_batch_rows(depth_decoder, depth_ref, distinct_frames):
+    """Row 0 = golden frame 1, row 1 = golden frame 2: each row must reproduce ITS OWN golden depth hiddens.
+
+    Every other test feeds identical rows, which would hide a row copy / swap in the tile-aligned
+    row splits, the head split, or the one-hot selectors. Also checks per-row PCC vs the torch
+    reference for hidden and all heads. The traced path is checked with the same rows at the end of
+    ``test_traced_step_matches_eager_and_perf``.
+    """
+    d = distinct_frames
+    g_hidden, s_embed, r_codes, golden = (
+        d["global_hidden"],
+        d["semantic_embed"],
+        d["residual_codes"],
+        d["depth_hiddens"],
+    )
 
     ref_hiddens, ref_logits = REF.teacher_forced_depth_loop(depth_ref, g_hidden, s_embed, r_codes)
     hiddens, logits = depth_decoder.teacher_forced_loop(g_hidden, s_embed, r_codes)
@@ -238,12 +255,15 @@ def test_determinism(depth_decoder, golden_frame):
 
 
 # ----------------------------------------------------------------------------- 4. traced step vs eager + perf
-def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame, capfd):
+def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame, distinct_frames, capfd):
     """``DepthStepTrace`` (one trace per depth step) reproduces the eager loop and is timed per 7-step frame.
 
     Also asserts the frame is allocation-free after capture: tt-metal's "Allocating device buffers
-    is unsafe due to the existence of an active trace" warning must not appear (it is printed once
-    per device on the first post-capture allocation).
+    is unsafe due to the existence of an active trace" warning must not appear. tt-metal prints it
+    once per thread per process (allocator.cpp, ``thread_local static bool warning_generated``), so
+    the assertion is only meaningful if no earlier trace in this process already triggered it: keep
+    this test the only trace-creating test in the module (the distinct-row traced check lives at
+    the end of this test, after the assertion).
     """
     g = golden_frame
     eager_hiddens, eager_logits = depth_decoder.teacher_forced_loop(
@@ -303,6 +323,33 @@ def test_traced_step_matches_eager_and_perf(depth_decoder, golden_frame, capfd):
     ttnn.deallocate(dev_hidden)
     ttnn.deallocate(dev_semantic)
     _record("traced_frame_allocation_free", no_unsafe_allocation_warning=True)
+
+    # Distinct CFG rows through the traced path: the trace has its own row handling (seed padding /
+    # copies, the code-id row), so run one host-seeded and one device-seeded traced frame with the
+    # two different golden frames and require bit-identity per row with the eager loop, which
+    # test_distinct_batch_rows validated per row against the golden and the torch reference.
+    d = distinct_frames
+    eager_h, eager_l = depth_decoder.teacher_forced_loop(d["global_hidden"], d["semantic_embed"], d["residual_codes"])
+    eager_h = torch.stack([DepthDecoder.rows_to_host(h) for h in eager_h], dim=1)  # [2, 7, 4096]
+    eager_l = torch.stack([DepthDecoder.rows_to_host(l) for l in eager_l], dim=1)  # [2, 7, 1024]
+    dev_hidden = depth_decoder.rows_to_device(d["global_hidden"])
+    dev_semantic = depth_decoder.rows_to_device(d["semantic_embed"])
+    trace = DepthStepTrace(depth_decoder)
+    try:
+        for seeded_from, seeds in (
+            ("host", (d["global_hidden"], d["semantic_embed"])),
+            ("device", (dev_hidden, dev_semantic)),
+        ):
+            trace.begin_frame(*seeds)
+            for index in range(1, NUM_CODEBOOKS):
+                trace.step(index, None if index == 1 else d["residual_codes"][:, index - 2])
+                assert torch.equal(trace.logits_for(index), eager_l[:, index - 1]), (seeded_from, index)
+                assert torch.equal(trace.hidden_for(), eager_h[:, index - 1]), (seeded_from, index)
+    finally:
+        trace.release()
+    ttnn.deallocate(dev_hidden)
+    ttnn.deallocate(dev_semantic)
+    _record("distinct_batch_rows_traced", bit_identical_to_eager_host_and_device_seeded=True)
 
     # Eager counterpart.
     for _ in range(3):

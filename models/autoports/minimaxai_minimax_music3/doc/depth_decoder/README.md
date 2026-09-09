@@ -9,8 +9,13 @@ Work log for MiniMax-Music3's local LM (`MiniMaxMusic3RVQDepthDecoder`) in TTNN.
   [`../../tests/test_depth_decoder_perf.py`](../../tests/test_depth_decoder_perf.py) (Tracy-signposted, `-m slow`)
 * scripts: [`../../scripts/collect_depth_perf.sh`](../../scripts/collect_depth_perf.sh),
   [`../../scripts/trace_probe_depth.py`](../../scripts/trace_probe_depth.py)
-* measured numbers: [`pcc/pcc_results.json`](pcc/pcc_results.json), [`perf/*.json`](perf/),
-  [`tracy/{eager,traced}/perf_report.txt`](tracy/); hang evidence: [`triage/`](triage/)
+* measured numbers: [`pcc/pcc_results.json`](pcc/pcc_results.json), [`pcc/golden_code_ranks.json`](pcc/golden_code_ranks.json),
+  [`perf/*.json`](perf/), [`tracy/{eager,traced}/perf_report.{txt,csv,summary.txt}`](tracy/); hang evidence: [`triage/`](triage/)
+* committed vs local evidence: everything above is committed (the model `.gitignore` un-ignores the
+  small `perf_report.csv` and `triage/trace_probe.log` that the repo-level `*.csv` / `*.log` rules
+  would drop). Local-only (gitignored): `tracy/*/pytest.log`, `tracy/*/perf_report.console.log`,
+  `generated/gate03.log`, `generated/watcher_depth/**`, `generated/logs_depth_trace.log`; claims that
+  rest only on those (no dropped profiler markers, watcher output) are reproducible with the commands below.
 
 ## What was built
 
@@ -38,20 +43,22 @@ scatter into the sequence -> 4 layers + final norm -> gather the last step -> al
 persistent logits buffer). `begin_frame(global_hidden, semantic_embed)` takes host `[2, 4096]`
 tensors or persistent `[1, 1, 32, 4096]` device row tensors (copied with `ttnn.copy`), `step(index,
 prev_code)` replays the step trace for index 1..7 rewriting only the scatter selector, the code-id
-row and the gather selector, `logits_for(k)` reads head k back. A whole frame allocates nothing on
-device after construction (see "Trace lifetime" below). Stage 07 gets a trace-safe fixed-shape depth step.
+row and the gather selector, `logits_for(k)` reads head k back and `hidden_for()` the normed
+last-step hidden (stage 04 concatenates its row 0 into `frame_hiddens`); `release()` frees both traces
+and all persistent buffers. A whole frame allocates nothing on device after construction (see "Trace
+lifetime" below). Stage 07 gets a trace-safe fixed-shape depth step.
 
 ### Capability contract (model-specific; there is no KV cache / context length here)
 
 | claim | evidence | remaining risk |
 |---|---|---|
 | any logical depth length 1..9 (pipeline uses 2..8) is accepted; padding to 32 and the last-step read are internal | `test_forward_and_heads_vs_reference[2..8]` PCC >= 0.9994; `MAX_STEPS = 9` asserted in `forward` / selectors | length 9 is untested (never built by the pipeline; the 16-slot position table would allow up to 16) |
-| batch 2 with independent CFG rows (row 0 conditional, row 1 unconditional) | `test_distinct_batch_rows`: rows fed golden frames 1 and 2 each reproduce their own golden depth hiddens (PCC 0.99995 / 0.99994), row-0-vs-row-1 golden PCC 0.83 (so the rows really differ) | none known |
+| batch 2 with independent CFG rows (row 0 conditional, row 1 unconditional) | `test_distinct_batch_rows`: rows fed golden frames 1 and 2 each reproduce their own golden depth hiddens (PCC 0.99995 / 0.99994), row-0-vs-row-1 golden PCC 0.83 (so the rows really differ); the traced path (host- and device-seeded frames) is bit-identical to eager per row on the same inputs (`distinct_batch_rows_traced`) | none known |
 | no KV cache; every step re-runs the whole sequence exactly as the reference | `teacher_forced_loop` / `DepthStepTrace._step_graph` re-run `hidden_states(seq)` per step; golden loop PCC 0.99995 | none |
 | learned position embedding, 16 slots | pre-broadcast onto rows `b*32+s`, `s < 16`, zero beyond | none |
 | padded rows never influence real rows | zero rows stay zero through RMSNorm (0 / sqrt(eps)), causal SDPA (`is_causal=True`) hides later rows; per-length PCC and the golden loop confirm | none |
 | runtime free of host round-trips | `forward`, `hidden_states`, `teacher_forced_loop` and both traces only use device ops (the trace capture would reject a host write); reads happen only in `rows_to_host` / `logits_for` | none |
-| fixed-shape, allocation-free traced depth step | `test_traced_step_matches_eager_and_perf`: bit-identical to eager, bit-identical across frames and between host- and device-seeded frames, and no `Allocating device buffers is unsafe` warning during the traced frames (asserted via `capfd`) | callers must keep post-capture device tensors dead across replays (documented contract) |
+| fixed-shape, allocation-free traced depth step | `test_traced_step_matches_eager_and_perf`: bit-identical to eager, bit-identical across frames and between host- and device-seeded frames, and no `Allocating device buffers is unsafe` warning during the traced frames (asserted via `capfd`) | callers must keep post-capture device tensors dead across replays (documented contract); tt-metal prints the warning once per process, so the `capfd` check is only meaningful while this test is the module's first (and only) trace-creating test - documented in the test |
 
 ### Layout decision: pad to one tile, select with one-hot matmuls
 
@@ -112,7 +119,7 @@ Hardware: host `qbge-devex-02`, board `p300c`, board id `000004613193411b`, PCI 
 
 ## Evidence
 
-### Correctness (`pcc/pcc_results.json`, gate run 2026-09-09 17:36, 11 passed)
+### Correctness (`pcc/pcc_results.json`, gate run 2026-09-09 17:51, 11 passed)
 
 Reference for (1): the fp32 torch transcription loaded from the same bf16 safetensors; input = the
 reference's own projected 9-step sequence for golden frame 1 (backbone hidden, semantic-code
@@ -134,9 +141,11 @@ embedding, c1..c7), truncated to `steps`. Bar 0.995.
 reproduces the golden with PCC 1.000000, so the loop, code offsets and step alignment are right.
 The device argmax of every head equals the fp32 reference argmax (7/7); neither equals the golden
 sampled code (0/7). Classified: the pipeline samples top-k(50) from CFG-guided logits and the
-reference's conditional distributions are flat (the review's CPU check ranks the golden codes 0..60
-in the reference logits, argmax probability 3-16 %), so argmax agreement is not expected; the
-decoder-side control is the fp32 reference, which behaves identically.
+reference's conditional distributions are flat. `scripts/golden_code_rank_check.py` (CPU, fp32
+reference, `pcc/golden_code_ranks.json`): over golden frames 1-4 the golden codes rank 0..60 in the
+reference's conditional logits (25/28 within the top-50 sampling set) and the argmax probability is
+only 3-51 % (3-16 % for frame 1), so argmax agreement is not expected; the decoder-side control is the
+fp32 reference, which behaves identically (7/7 argmax matches).
 
 (2b) Distinct rows (`test_distinct_batch_rows`): row 0 = golden frame 1, row 1 = golden frame 2; each row
 vs its own golden: PCC 0.99995 / 0.99994; vs the torch reference: hidden 0.99995 / 0.99994, min head
@@ -146,17 +155,20 @@ logits 0.99983 / 0.99989; row 0 vs row 1's golden 0.83 (rows are genuinely diffe
 
 (4) Traced step vs eager: all 7 heads' logits bit-identical (PCC 1.0, max |diff| 0); a second frame
 and a device-seeded frame are bit-identical to the first (no state leaks through the persistent
-sequence buffer); no post-capture allocation warning.
+sequence buffer); no post-capture allocation warning; with the distinct rows of (2b), host- and
+device-seeded traced frames are bit-identical per row (logits and `hidden_for()`) to the eager loop.
 
 ### Performance (warmed, one 7-step teacher-forced frame, batch 2)
 
 | variant | host wall per frame | device time per frame (Tracy, sum of `Device Time` in `perf_report.csv`) | ops per frame |
 |---|---|---|---|
-| eager (`teacher_forced_loop` + 7 logits read-backs) | 29.7 ms (gate run, mean of 10) / 30.5 ms (under Tracy) | 28.69 ms | 576 |
-| traced (`DepthStepTrace`, seed replay + 7 step replays + 7 read-backs) | 31.3 ms (gate run, mean of 20) / 32.3 ms (under Tracy) | 29.53 ms | 601 |
+| eager (`teacher_forced_loop` + 7 logits read-backs) | 29.9 ms (gate run, mean of 10) / 30.5 ms (under Tracy) | 28.69 ms | 576 |
+| traced (`DepthStepTrace`, seed replay + 7 step replays + 7 read-backs) | 31.4 ms (gate run, mean of 20) / 32.3 ms (under Tracy) | 29.53 ms | 601 |
 
 Before the two layout changes below (first version of this stage, commit `dabf3050d01`): eager 35.2 ms
-wall / 34.39 ms device (450 ops), traced 37.5 ms / 35.26 ms (476 ops). The loop is device-bound
+wall / 34.39 ms device (450 ops), traced 37.4 ms / 35.26 ms (476 ops) (wall times from the first
+version's gate-style run, `generated/logs_depth_trace.log`, 17:11; device times from the committed
+`tracy/*/perf_report.txt` of that commit). The loop is device-bound
 (device time = 94-97 % of wall), so tracing does not help yet; it costs ~0.8 ms of extra copies and
 buffer rewrites. Device-time breakdown of the eager frame (`tracy/eager/perf_report.csv`):
 
@@ -213,9 +225,14 @@ fault lines.
 * **Heads fused for the traced step**: the trace computes all 7 heads (`heads_all`, 58 MB of weights,
   ~0.15 ms) because the head index changes per step; the caller slices the block it needs. The per-head
   weights are kept too for `head(k)` (58 MB duplicate, negligible).
-* **Two correctness-neutral layout changes were taken in this stage** (sharded norm, L1 head tensors)
-  because they were measured to remove ~17 % of the frame time with unchanged PCC; everything else is
-  left for stage 07.
+* **Two layout changes were taken in this stage** (sharded norm, L1 head tensors) because they were
+  measured to remove ~15 % of the frame time; every PCC bar is met with the same margin (per-value
+  shifts vs the first version are within +-0.0003, e.g. steps=2 min head logits 0.99973 -> 0.99946,
+  steps=3 0.99983 -> 0.99992), everything else is left for stage 07.
+* **Device naming**: tt-metal logs call the chip `Device 3` (UMD chip id; the same id appeared in the
+  stage-02 fabric-timeout message), while `tt-smi` lists the board id above as index 0 at PCI
+  `0000:01:00.0` and `TT_METAL_VISIBLE_DEVICES=0` selects that index. The board identity claim rests
+  on `tt-smi`'s enumeration; the UMD-id to tt-smi-index mapping was not verified further.
 
 ## Independent review
 
@@ -227,7 +244,17 @@ a README number (37.4) no log supported -> `_record` skips watcher / profiler ru
 from the final gate run; (3) batch-row independence never exercised -> `test_distinct_batch_rows`.
 Other concerns fixed: SiLU is not fused (text corrected), profiler buffers drained during warmup,
 triage evidence copied into `doc/depth_decoder/triage/`, capability-contract table added, weight
-footprint corrected, stale `_capture` comment fixed. A second review pass is recorded below.
+footprint corrected, stale `_capture` comment fixed.
+
+Second pass (on `5a0e40d38fd`): `more-work-needed` with one P2 - row independence was proven for the
+eager loop only. Fixed: the traced path now runs host- and device-seeded frames with the two distinct
+golden frames and is asserted bit-identical per row to eager (`distinct_batch_rows_traced`). Other
+concerns fixed: the "before" traced number (37.4, cited to its log), gitignored evidence files
+un-ignored / listed as local-only, placeholders removed, `release()` frees the persistent buffers,
+`hidden_for()` exposes the hidden the step trace already produced, the `cq_id` parameter dropped
+(single queue), the once-per-process nature of the allocator warning documented in the test, the
+"PCC unchanged" wording made precise, the argmax classification backed by a script + JSON, the
+`Device 3` naming explained. A third pass is recorded in the commit message of the final commit.
 
 ## Open risks / hand-off to later stages
 
@@ -242,8 +269,10 @@ footprint corrected, stale `_capture` comment fixed. A second review pass is rec
   top-k sampling; an on-device sampler is a stage-04/07 option.
 * All PCC evidence uses golden frames 1 and 2 of one clip; the bars are met with margin (>= 0.9994).
 
-## Commits
+## Commits (branch `jashan/minimax-music3`, never pushed)
 
 * `dabf3050d01` — first version: implementation, reference, tests, perf scripts, Tracy evidence, work log.
-* follow-up (this log's final state) — review fixes, seed trace, distinct-rows test, sharded norm / L1
-  heads, refreshed evidence; SHA recorded in the section below after committing.
+* `5a0e40d38fd` — first-pass review fixes: seed trace, distinct-rows test (eager), sharded norm / L1
+  heads, refreshed evidence, triage evidence in `doc/`.
+* the commit that adds this line — second-pass review fixes (traced distinct rows, doc corrections,
+  `release()` / `hidden_for()`, rank-check script); gate re-run 2026-09-09 17:51 (`11 passed`).

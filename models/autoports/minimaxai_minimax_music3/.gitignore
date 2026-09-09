@@ -1,2 +1,5 @@
 # Large run-time dumps (wav/pt/csv, Tracy CSVs, watcher logs) live here and are never committed.
 generated/
+# The repo-level .gitignore drops *.csv / *.log; keep the small evidence files the work log cites.
+!doc/depth_decoder/tracy/*/perf_report.csv
+!doc/depth_decoder/triage/trace_probe.log

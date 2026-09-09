@@ -460,10 +460,10 @@ class DepthStepTrace:
     persistent seed buffer with ``ttnn.copy`` (no allocation).
     """
 
-    def __init__(self, decoder: DepthDecoder, cq_id: int = 0):
+    def __init__(self, decoder: DepthDecoder):
         self.d = decoder
         self.dev = decoder.mesh_device
-        self.cq_id = cq_id
+        self.cq_id = 0  # single command queue; ttnn.copy (device seeding) has no queue argument
         d = decoder
         # Persistent buffers (allocated before any capture).
         self.seq = d.new_sequence()
@@ -588,9 +588,28 @@ class DepthStepTrace:
         t = DepthDecoder.rows_to_host(logits_all if logits_all is not None else self.logits_out)
         return t[:, (k - 1) * AUDIO_VOCAB_SIZE : k * AUDIO_VOCAB_SIZE]
 
+    def hidden_for(self, batch: int = LLM_BATCH) -> torch.Tensor:
+        """Host fp32 ``[batch, 4096]`` normed last-step hidden of the last replay (stage 04 concatenates row 0 into ``frame_hiddens``)."""
+        return DepthDecoder.rows_to_host(self.hidden_out, batch)
+
     def release(self):
+        """Release both traces and free the persistent device buffers."""
         for attr in ("trace_id", "seed_trace_id"):
             tid = getattr(self, attr)
             if tid is not None:
                 ttnn.release_trace(self.dev, tid)
+                setattr(self, attr, None)
+        for attr in (
+            "seq",
+            "seed_hidden",
+            "seed_semantic",
+            "scatter_buf",
+            "gather_buf",
+            "ids_buf",
+            "hidden_out",
+            "logits_out",
+        ):
+            t = getattr(self, attr, None)
+            if t is not None:
+                ttnn.deallocate(t)
                 setattr(self, attr, None)
