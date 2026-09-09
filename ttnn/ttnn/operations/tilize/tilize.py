@@ -213,8 +213,39 @@ INPUT_TAGGERS = {
 # pad_value / in_tile_height) carry "none", which is ALWAYS legal — four of the
 # Phase 0 values below ARE sentinels.
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "output_dtype": [ttnn.bfloat16],
+    # --- the numerical cartesian (Refinement 5) -----------------------------
+    # Both axes are DECLARATIONS ABOUT THE SAME ONE PATH. Nothing here forks the
+    # kernels: the input CB's `data_format` is the input tensor's dtype, the
+    # output CB's is the output tensor's, and the value-preserving cast happens
+    # at PACK time inside the same `compute_kernel_lib::tilize` call that the
+    # bfloat16 diagonal has always used. What the dtype pair selects is the
+    # COMPUTE CONFIG the datapath needs to stay value-preserving — see
+    # `is_lossless_fp32_relay` / `requires_fp32_dest_acc` /
+    # `needs_srcb_alu_format_repair` in tilize_program_descriptor.py, which are
+    # the single source of all three decisions.
+    #
+    # `bfloat8_b` / `bfloat4_b` are absent from the INPUT axis on purpose and
+    # not for lack of trying: block float has no ROW_MAJOR form (16 values share
+    # an exponent, so there is no stick to read), and the tilize helper asserts
+    # `!is_block_float_format(unpack_src_format[input])` for exactly that
+    # reason. They are legal OUTPUTS, where the packer does the compression.
+    #
+    # `fp8_e4m3` is INPUT-only for the mirror reason (no TILE form) and is
+    # arch-gated to Blackhole; it is listed because the path is dtype-generic —
+    # no kernel and no host derivation names a format — but see the changelog:
+    # it could not be exercised on the Wormhole box this landed on, where the
+    # golden suite skips all of its cells before `validate()` is reached.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3, ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8],
+    "output_dtype": [
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
+        ttnn.uint32,
+        ttnn.int32,
+        ttnn.uint16,
+        ttnn.uint8,
+    ],
     # `low_l1` is not a regime — it is a value of the `block_width_tiles` knob
     # (`W_CAP = min(W_FIT, LOW_L1_WIDTH_CAP)`), so the kernels, the CBs and the
     # block operations are byte-identical at both settings. Promoted from
@@ -335,10 +366,62 @@ SUPPORTED = {
 #
 # Neither crossing is reached by any `tile_geometry_retile` golden case (all six
 # are unpadded interleaved DRAM), so no cell moves from pass to xfail here.
+#   * retile x dtype CAST (added by Refinement 5) — same root cause as the two
+#     above, one level up: the re-tile removes the compute stage ENTIRELY (the
+#     reader assembles the output tile's bytes out of the input tiles' faces
+#     over the NoC), and a `dtype=` cast is a PACK-TIME conversion. With no
+#     packer in the pipeline there is nothing to convert with, so the no-cast
+#     diagonal is the whole of what a byte re-lay can express. `derive_plan`
+#     already asserts this rather than emitting wrong bytes; the exclusion is
+#     what turns that assert into the registry's own refusal.
+#
+# A THIRD crossing was expected here and is NOT excluded, because the mechanism
+# turned out to be repairable rather than structural. Recorded because the
+# repair is the least obvious line in the op:
+#
+#   * `uint8` was broken on Wormhole B0 (every output datum zero) by an LLK
+#     defect. `_llk_math_hw_configure_`
+#     (tt_llk_wormhole_b0/llk_lib/llk_math_common.h) writes srcA and srcB's ALU
+#     format fields as ONE word under the union of their two 4-bit masks and
+#     without `masked_data_format()`. `DataFormat::UInt8` is 30, so bit 4 of the
+#     srcA value spills into srcB's low bit: srcA lands correct (14 = Int8),
+#     srcB lands 15. UInt8 is the ONLY format in this op's matrix that both
+#     spills and reaches SrcA/SrcB — UInt32 spills too, but
+#     `_llk_unpack_tilize_init_` routes UInt32/Int32 straight to DEST, so its
+#     corrupt srcB is never read, which is why every other integer width is
+#     bit-exact. The UInt8 datacopy MOP is ELWADD (it READS the zero-filled
+#     srcB), so the mistyped field zeroes every output datum.
+#
+#     `needs_srcb_alu_format_repair` + one `reconfig_data_format_srcb` call in
+#     the compute kernel re-write that one field under a mask that drops the
+#     spill bit, and uint8 comes back BIT-EXACT. So uint8 is supported, not
+#     excluded. Blackhole does not have the defect at all (its
+#     `_llk_math_hw_configure_` never programs the Src format fields), and the
+#     repair is a no-op there, so the same code is correct on both.
+#   * block-float OUTPUT x `tile_height == 16` (added by Refinement 5) — the one
+#     cell of the tile_height x output_dtype cross that does not work, and it is
+#     a WORMHOLE B0 LLK gap at one specific tile geometry rather than anything
+#     this op chooses. `Tile` sets `partial_face = (tile_h < 32)` and
+#     `face_shape = {min(tile_h,16), 16}`, so `tile_h == 16` is the ONLY height
+#     that is `partial_face` while still having a FULL 16-row face. `llk_pack.h`
+#     branches on `partial_face && IS_BFP_FORMAT(pack_dst_format)` into a MOP
+#     written for sub-16-row faces ("addr_mod_0 will increment by 15") with
+#     `PACKCNT = 1` instead of `num_faces`, so at a full-height face the second
+#     face and its shared exponents are never packed. MEASURED: PCC collapses to
+#     ~0.01 at `tile_height=16` for both bfp targets and is 0.99997 / 0.984 at
+#     every other height (32, 8, 4, 2, 1), on four different shapes —
+#     probes/probe_038.py. Nothing on the host side reaches that MOP: the
+#     geometry IS the output tile the caller asked for.
 _RETILE_HEIGHTS = list(LEGAL_TILE_HEIGHTS)
-EXCLUSIONS = [{"in_tile_height": h, "shard_api": api} for h in _RETILE_HEIGHTS for api in ("legacy_2d", "nd")] + [
-    {"in_tile_height": h, "pad_mode": mode} for h in _RETILE_HEIGHTS for mode in ("auto", "explicit")
-]
+_BFP_OUTPUTS = [ttnn.bfloat8_b, ttnn.bfloat4_b]
+_PARTIAL_FULL_FACE_HEIGHT = 16
+_CAST_PAIRS = [(d, o) for d in SUPPORTED["dtype"] for o in SUPPORTED["output_dtype"] if d != o]
+EXCLUSIONS = (
+    [{"in_tile_height": h, "shard_api": api} for h in _RETILE_HEIGHTS for api in ("legacy_2d", "nd")]
+    + [{"in_tile_height": h, "pad_mode": mode} for h in _RETILE_HEIGHTS for mode in ("auto", "explicit")]
+    + [{"in_tile_height": h, "dtype": d, "output_dtype": o} for h in _RETILE_HEIGHTS for (d, o) in _CAST_PAIRS]
+    + [{"tile_height": _PARTIAL_FULL_FACE_HEIGHT, "output_dtype": o} for o in _BFP_OUTPUTS]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +656,7 @@ def validate(
     output_padded_shape=None,
     pad_value=None,
     tile=None,
+    compute_kernel_config=None,
 ):
     """Unconditionally-malformed requests (ValueError), then the registry
     support gate (UnsupportedAxisValue / ExcludedCell), then the
@@ -705,6 +789,7 @@ def tilize(
     output_padded_shape=None,
     pad_value=None,
     tile: "ttnn.Tile | None" = None,
+    compute_kernel_config: "ttnn.DeviceComputeKernelConfig | None" = None,
 ) -> ttnn.Tensor:
     """Re-lay `input_tensor` from ROW_MAJOR into TILE layout on device.
 
@@ -712,6 +797,14 @@ def tilize(
     output carries the input's logical shape unchanged, the input's dtype unless
     `dtype=` is given, the input's placement unless `memory_config=` is given,
     and the tile geometry `tile=` names (32x32 otherwise).
+
+    `compute_kernel_config` exposes `math_fidelity` / `math_approx_mode` /
+    `dst_full_sync_en` / `fp32_dest_acc_en`. Passing nothing reproduces the
+    op's own defaults exactly. The one field that is not a free choice is
+    `fp32_dest_acc_en`: the op ORs it with what the dtype pair REQUIRES and
+    never turns it off, because tilize is value-preserving and a 16-bit DEST at
+    an fp32 or 8-bit-integer pair returns wrong bytes rather than a cheaper
+    approximation. See `requires_fp32_dest_acc`.
     """
     validate(
         input_tensor,
@@ -721,6 +814,7 @@ def tilize(
         output_padded_shape=output_padded_shape,
         pad_value=pad_value,
         tile=tile,
+        compute_kernel_config=compute_kernel_config,
     )
 
     device = input_tensor.device()
@@ -752,5 +846,11 @@ def tilize(
         device,
     )
 
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, low_l1=low_l1, pad_value=pad_value)
+    program_descriptor = create_program_descriptor(
+        input_tensor,
+        output_tensor,
+        low_l1=low_l1,
+        pad_value=pad_value,
+        compute_kernel_config=compute_kernel_config,
+    )
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

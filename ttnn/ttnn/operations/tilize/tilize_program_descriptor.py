@@ -65,6 +65,13 @@ CB_OUTPUT_TILES = 1  # compute -> writer: whole output tile pages
 # pad row costs one DM-engine transfer instead of a RISC store loop. Allocated
 # only on the padded path (`plan.pad_active`).
 CB_PAD_ROW = 2
+# Length of the per-CB `unpack_to_dest_mode` vector. NOT the number of slots this
+# op allocates: `get_unpack_dst_formats` (jit_build/data_format.cpp) indexes it
+# against the FULL per-core CB table and TT_FATALs on anything shorter
+# ("unpack_to_dest_mode vector must have 32 elements"), so it is the hardware's
+# CB-slot count and every entry this op does not own stays `Default`.
+NUM_CB_SLOTS = 32
+assert CB_PAD_ROW < NUM_CB_SLOTS, "a CB slot must be addressable in the unpack_to_dest_mode vector"
 
 # ---------------------------------------------------------------------------
 # Named block knobs — the single source of each. None is a tensor dimension.
@@ -227,6 +234,31 @@ def _bfloat16_bits(value: float) -> int:
     return upper
 
 
+def _fp8_e4m3_bits(value: float) -> int:
+    """`value` as an OCP fp8-e4m3 (1-4-3, bias 7, no inf) bit pattern.
+
+    Written as a nearest-value search over the 256 encodings rather than as bit
+    surgery: the fill is a host-side constant computed once per program build,
+    so the exhaustive form costs nothing and cannot get the subnormal /
+    saturation edges wrong. Ties resolve to the even mantissa, matching the
+    round-to-nearest-even the packer applies to a real element.
+    """
+    value = float(value)
+    if value != value:  # NaN
+        return 0x7F
+    best, best_err = 0, None
+    for bits in range(256):
+        exp, man = (bits >> 3) & 0xF, bits & 0x7
+        if exp == 0xF and man == 0x7:
+            continue  # the NaN encoding is not a value
+        magnitude = (man / 8.0) * 2.0**-6 if exp == 0 else (1.0 + man / 8.0) * 2.0 ** (exp - 7)
+        candidate = -magnitude if bits & 0x80 else magnitude
+        err = abs(candidate - value)
+        if best_err is None or err < best_err or (err == best_err and (man & 1) == 0):
+            best, best_err = bits, err
+    return best
+
+
 def pad_fill_word(dtype, value, elem_size: int) -> int:
     """The fill as an `elem_size`-wide bit pattern in the INPUT's format.
 
@@ -245,9 +277,104 @@ def pad_fill_word(dtype, value, elem_size: int) -> int:
         return _bfloat16_bits(value)
     if dtype == ttnn.float32:
         return struct.unpack("<I", struct.pack("<f", float(value)))[0]
+    if dtype == _FP8_E4M3:
+        return _fp8_e4m3_bits(value)
     if dtype in (ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8):
         return int(value) & ((1 << (elem_size * 8)) - 1)
     raise RuntimeError(f"tilize: no pad-fill encoding for dtype {dtype}")
+
+
+# ---------------------------------------------------------------------------
+# Numerical policy — the three dtype-driven compute-config decisions
+# ---------------------------------------------------------------------------
+#
+# All three are DERIVED from (input dtype, output dtype) and none of them adds a
+# code path: the cast itself is carried by the two CBs' `data_format`s and
+# happens at pack time, exactly as it did when both sides were bfloat16. What
+# these select is the compute config the datapath needs in order to be
+# VALUE-PRESERVING at that pair.
+
+# fp8_e4m3 exists only on architectures that have it; `getattr` keeps this
+# module importable where the enum is absent rather than making fp8 a build-time
+# dependency of the whole op.
+_FP8_E4M3 = getattr(ttnn, "fp8_e4m3", None)
+
+
+def is_lossless_fp32_relay(in_dtype, out_dtype) -> bool:
+    """True when the tilize must take the SLOW (bit-exact) fp32 path.
+
+    `can_use_fast_tilize` already refuses a Float32 OUTPUT (its pack stage steps
+    DEST at bf16 stride — `tilize_helpers.inl`), so an fp32 -> fp32 relay lands
+    on the regular `tilize_init`/`tilize_block` path either way. What is NOT
+    automatic is that that path stays bit-exact: without
+    `UnpackToDestMode::UnpackToDestFp32` on the input CB the unpacker still
+    routes the datum through SrcA, which is tf32 (10 mantissa bits), and the
+    output comes back off by ~1e-3 relative. So all three of `Fp32Mode::Lossless`,
+    `fp32_dest_acc_en=true` and the `UnpackToDestFp32` tag are required together,
+    and this predicate is their single source.
+
+    This is the one case where the helper's own "prefer Fast, the downstream FPU
+    truncates anyway" advice does not apply: there IS no downstream FPU op here.
+    The tiled output IS the product, and for a byte re-lay the oracle is
+    bit-identity.
+
+    Deliberately NOT true for fp32 -> bf16/bfp: there fast tilize is available
+    and its static_assert REQUIRES `UnpackToDestMode::Default` on the input CB,
+    so tagging that cell would be a compile error (and the tf32 step is below the
+    output format's own precision anyway).
+    """
+    return in_dtype == ttnn.float32 and out_dtype == ttnn.float32
+
+
+def needs_srcb_alu_format_repair(in_dtype) -> bool:
+    """True when the math thread's SrcB ALU-format field must be re-written.
+
+    Wormhole B0 defect, mechanism named so this is not a magic flag:
+    `_llk_math_hw_configure_` (tt_llk_wormhole_b0/llk_lib/llk_math_common.h) builds
+    ONE config word as
+        (srca_format << SrcA_SHAMT) | (srcb_format << SrcB_SHAMT) | int8_math
+    and writes it under `SrcA_MASK | SrcB_MASK`, WITHOUT applying
+    `masked_data_format()`. Both fields are 4 bits. `DataFormat::UInt8` is 30, so
+    bit 4 of the SrcA value lands at the SrcB field's low bit, which the mask does
+    not confine: SrcA comes out correct (14 = Int8) but SrcB comes out 15 instead
+    of 14. The UInt8 datacopy MOP is ELWADD (it reads SrcB, which the tilize
+    unpack MOP zero-fills), so a mis-typed SrcB is enough to zero the result —
+    which is exactly what an unrepaired uint8 tilize produces.
+
+    `reconfig_data_format_srcb(cb)` re-writes the SAME field under
+    `SrcB_MASK | INT8_MASK` only, so the spill bit is masked away and the field
+    lands at 14. That is the repair, and it is a public compute-API call, not raw
+    LLK.
+
+    Scoped as narrowly as the mechanism: a format whose enum exceeds the 4-bit
+    field AND that reaches SrcA/SrcB at all. UInt32 (24) also spills, but
+    `_llk_unpack_tilize_init_` routes UInt32/Int32 straight to DEST — SrcB is
+    never read there, the corrupt field is inert, and those pairs are already
+    bit-exact, so they are deliberately left alone.
+    """
+    return in_dtype == ttnn.uint8
+
+
+def requires_fp32_dest_acc(in_dtype, out_dtype) -> bool:
+    """Whether the datapath REQUIRES fp32 DEST at this dtype pair.
+
+    Three sources, all of them the datapath's and none of them a preference:
+      * fp32 input — the value only survives DEST at 32 bits (pre-existing rule).
+      * fp32 -> fp32 — `Fp32Mode::Lossless` static_asserts `DST_ACCUM_MODE`.
+      * an Int8/UInt8 format on a Src register — the LLK asserts
+        "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest
+        mode enabled" (`llk_math_common.h`), which the SrcB repair above trips.
+
+    A user `compute_kernel_config` may turn fp32 DEST ON but never OFF (see
+    `create_program_descriptor`): tilize is value-preserving, so a config that
+    would silently truncate is a wrong answer rather than a speed/precision
+    trade the caller is entitled to make.
+    """
+    return (
+        in_dtype == ttnn.float32
+        or is_lossless_fp32_relay(in_dtype, out_dtype)
+        or needs_srcb_alu_format_repair(in_dtype)
+    )
 
 
 def _largest_divisor_at_most(n: int, limit: int) -> int:
@@ -288,7 +415,13 @@ class TilizePlan:
         # shard-driven plan, which is exactly the ROUND_ROBIN_1D placement an ND
         # spec uses and degenerates to "one block per core" for a legacy 2-D one.
         "assignment",
+        # --- numerical policy (Refinement 5). All three are derived from the
+        # (input dtype, output dtype) pair by the predicates above; none of them
+        # selects a different code path, only the compute config the datapath
+        # needs to stay value-preserving at that pair.
         "fp32_dest_acc_en",
+        "lossless_fp32",
+        "repair_srcb_alu_format",
         # Zero-copy: the named side's CB is placed ON the tensor's own shard
         # buffer, so that side does no NoC access at all.
         "input_native",
@@ -893,7 +1026,9 @@ def derive_plan(input_tensor, output_tensor, *, low_l1: bool, grid, pad_value=No
         block_row_bytes=block_width_tiles * TILE_WIDTH * input_tensor.element_size(),
         all_cores=all_cores,
         assignment=assignment,
-        fp32_dest_acc_en=(input_tensor.dtype == ttnn.float32),
+        fp32_dest_acc_en=requires_fp32_dest_acc(input_tensor.dtype, output_tensor.dtype),
+        lossless_fp32=is_lossless_fp32_relay(input_tensor.dtype, output_tensor.dtype),
+        repair_srcb_alu_format=needs_srcb_alu_format_repair(input_tensor.dtype),
         input_native=input_native,
         output_native=output_native,
         input_pages_per_row=input_pages_per_row,
@@ -939,6 +1074,7 @@ def create_program_descriptor(
     *,
     low_l1: bool = False,
     pad_value=None,
+    compute_kernel_config=None,
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()  # never a hardcoded core count
@@ -1022,6 +1158,39 @@ def create_program_descriptor(
             )
         )
 
+    # ========== Compute config ==========
+    # The user-facing `compute_kernel_config` maps 1:1 onto the descriptor for
+    # the three knobs that are the caller's to choose. `fp32_dest_acc_en` is the
+    # exception and is ORed, never overridden: at the dtype pairs where
+    # `requires_fp32_dest_acc` is true, turning DEST back down to 16 bits does
+    # not trade precision for speed — it makes a VALUE-PRESERVING op return the
+    # wrong bytes (and, on the lossless-fp32 path, fails the helper's own
+    # static_assert). Everything else is honoured verbatim.
+    #
+    # Passing nothing reproduces the pre-refinement descriptor exactly:
+    # HiFi4 / math_approx_mode=False / dst_full_sync_en=False, with
+    # fp32_dest_acc_en from the plan. `MathFidelity.Invalid` is what a bare
+    # `ttnn.WormholeComputeKernelConfig()` carries, so it maps to that default
+    # rather than being pushed at the hardware.
+    user_fidelity = getattr(compute_kernel_config, "math_fidelity", None)
+    if user_fidelity is None or user_fidelity == ttnn.MathFidelity.Invalid:
+        user_fidelity = ttnn.MathFidelity.HiFi4
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=user_fidelity,
+        math_approx_mode=bool(getattr(compute_kernel_config, "math_approx_mode", False)),
+        fp32_dest_acc_en=bool(plan.fp32_dest_acc_en or getattr(compute_kernel_config, "fp32_dest_acc_en", False)),
+        dst_full_sync_en=bool(getattr(compute_kernel_config, "dst_full_sync_en", False)),
+    )
+    # `UnpackToDestFp32` on cb_input_rows is the third leg of the lossless fp32
+    # relay (see `is_lossless_fp32_relay`): it takes the input datum straight to
+    # DEST in full fp32 instead of through SrcA's tf32. It is set ONLY there —
+    # on the fast-tilize path the helper static_asserts that this CB is
+    # `Default`, and combining the two silently corrupts the output.
+    if plan.lossless_fp32:
+        unpack_to_dest_mode = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
+        unpack_to_dest_mode[CB_INPUT_ROWS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_config.unpack_to_dest_mode = unpack_to_dest_mode
+
     # ========== Kernels ==========
     # The CT "plan" block is identical in all three kernels: each derives its
     # own view of a block from the same numbers, which is why there is no
@@ -1080,6 +1249,10 @@ def create_program_descriptor(
         # own more than one block; at one block per core its three extra
         # instantiations are dead code that still costs binary-dispatch time.
         int(COMPUTE_AMORTIZE_INIT and max(a[2] for a in plan.assignment) > 1),
+        # --- numerical policy (Refinement 5), both derived, both inert (and
+        # compiled out) at every dtype pair that does not need them.
+        int(plan.lossless_fp32),
+        int(plan.repair_srcb_alu_format),
     ]
 
     reader_rt_args = ttnn.RuntimeArgs()
@@ -1129,7 +1302,7 @@ def create_program_descriptor(
             core_ranges=plan.all_cores,
             compile_time_args=compute_ct_args,
             runtime_args=compute_rt_args,
-            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=plan.fp32_dest_acc_en),
+            config=compute_config,
         )
     )
 

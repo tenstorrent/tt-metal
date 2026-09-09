@@ -43,29 +43,34 @@
 //     kernel (one that reprograms srcA/pack) would have to turn it back on.
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-// `tilize_block`, with the two amortization knobs resolved at compile time.
-// `mode` varies per loop position, so the call site picks the instantiation.
+// `tilize_block`, with the amortization knobs and the fp32 precision mode all
+// resolved at compile time. `mode` varies per loop position, so the call site
+// picks the instantiation; every other parameter is a CT arg, so exactly one
+// instantiation of each is emitted per build.
 template <
     uint32_t block_width_tiles,
     uint32_t cb_input_rows,
     uint32_t cb_output_tiles,
     bool skip_format_reconfig,
+    bool lossless_fp32,
     compute_kernel_lib::tilize_config::InitUninitMode mode>
 ALWI void tilize_block_op(uint32_t block_row_extent) {
     using namespace compute_kernel_lib::tilize_config;
-    if constexpr (skip_format_reconfig) {
-        compute_kernel_lib::tilize<
-            block_width_tiles,
-            cb_input_rows,
-            cb_output_tiles,
-            mode,
-            WaitMode::WaitBlock,
-            ReconfigureRegisterDatatypeMode::NoReconfigure>(block_row_extent);
-    } else {
-        compute_kernel_lib::tilize<block_width_tiles, cb_input_rows, cb_output_tiles, mode>(block_row_extent);
-    }
+    constexpr auto reconfig_mode = skip_format_reconfig ? ReconfigureRegisterDatatypeMode::NoReconfigure
+                                                        : ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure;
+    // Fp32Mode is a NO-OP unless the input CB is Float32, so `Fast` is what
+    // every non-fp32 dtype gets regardless. `Lossless` is selected by the host
+    // (`is_lossless_fp32_relay`) only for the fp32 -> fp32 relay, where it is
+    // paired with fp32_dest_acc_en and UnpackToDestFp32 on cb_input_rows — the
+    // helper static_asserts all three together, so a missing leg is a compile
+    // error rather than silently-truncated output.
+    constexpr auto fp32_mode = lossless_fp32 ? Fp32Mode::Lossless : Fp32Mode::Fast;
+    compute_kernel_lib::
+        tilize<block_width_tiles, cb_input_rows, cb_output_tiles, mode, WaitMode::WaitBlock, reconfig_mode, fp32_mode>(
+            block_row_extent);
 }
 
 void kernel_main() {
@@ -84,6 +89,12 @@ void kernel_main() {
     // that growth is worth ~4% of the wall on a ~4 us kernel, which is more
     // than the amortization can ever return at one block per core.
     constexpr bool amortize_init = get_compile_time_arg_val(7) != 0;
+    // fp32 -> fp32 only; see tilize_block_op and `is_lossless_fp32_relay`.
+    constexpr bool lossless_fp32 = get_compile_time_arg_val(8) != 0;
+    // Wormhole B0 SrcB ALU-format repair for 8-bit-integer input; see
+    // `needs_srcb_alu_format_repair` in the program descriptor for the exact
+    // mechanism (a 4-bit config field the LLK's combined write spills into).
+    constexpr bool repair_srcb_alu_format = get_compile_time_arg_val(9) != 0;
 
     const uint32_t start_block_id = get_arg_val<uint32_t>(0);
     const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(1);
@@ -96,6 +107,24 @@ void kernel_main() {
     // unpack srcA/srcB from cb_input_rows and the pack format from
     // cb_output_tiles, for the whole kernel.
     compute_kernel_hw_startup(cb_input_rows, cb_output_tiles);
+
+    // ONE extra state write, on exactly one dtype, for a named hardware defect.
+    //
+    // `compute_kernel_hw_startup` programs srcA AND srcB from cb_input_rows in a
+    // single combined config write whose mask does not confine a format enum
+    // wider than the 4-bit field (`DataFormat::UInt8` == 30). srcA lands
+    // correctly; srcB lands one off. The UInt8 datacopy MOP is ELWADD, which
+    // READS srcB (the tilize unpack MOP zero-fills it), so the mistyped field
+    // is enough to zero every output datum.
+    //
+    // `reconfig_data_format_srcb` re-writes that same field alone, under a mask
+    // that drops the spill bit, so the repair is one public compute-API call and
+    // touches nothing else. It runs once per core, before any tilize call, and
+    // the helper never rewrites srcB on this path (its own srcB reconfig is
+    // guarded by `use_fast`, which is false for every integer format).
+    if constexpr (repair_srcb_alu_format) {
+        reconfig_data_format_srcb(cb_input_rows);
+    }
 
     for (uint32_t b = 0; b < num_blocks_this_core; ++b) {
         // resolve_block — the identical derivation the reader and writer run.
@@ -113,6 +142,7 @@ void kernel_main() {
                 cb_input_rows,
                 cb_output_tiles,
                 skip_format_reconfig,
+                lossless_fp32,
                 InitUninitMode::InitAndUninit>(block_row_extent);
             continue;
         }
@@ -124,6 +154,7 @@ void kernel_main() {
                 cb_input_rows,
                 cb_output_tiles,
                 skip_format_reconfig,
+                lossless_fp32,
                 InitUninitMode::InitAndUninit>(block_row_extent);
         } else if (first) {
             tilize_block_op<
@@ -131,6 +162,7 @@ void kernel_main() {
                 cb_input_rows,
                 cb_output_tiles,
                 skip_format_reconfig,
+                lossless_fp32,
                 InitUninitMode::InitOnly>(block_row_extent);
         } else if (last) {
             tilize_block_op<
@@ -138,6 +170,7 @@ void kernel_main() {
                 cb_input_rows,
                 cb_output_tiles,
                 skip_format_reconfig,
+                lossless_fp32,
                 InitUninitMode::UninitOnly>(block_row_extent);
         } else {
             tilize_block_op<
@@ -145,6 +178,7 @@ void kernel_main() {
                 cb_input_rows,
                 cb_output_tiles,
                 skip_format_reconfig,
+                lossless_fp32,
                 InitUninitMode::Neither>(block_row_extent);
         }
     }
