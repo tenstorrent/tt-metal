@@ -20,6 +20,10 @@ template <typename Dfb>
 static inline void signal_one_dfb(Dfb& dfb, uint32_t num_entries_per_producer) {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
         dfb.reserve_back(1);
+        // TEN-4746: a real packer op must sit between reserve_back's WAIT_FREE and push_back's
+        // PUSH_TILES. This kernel packs nothing (the host pre-fills each ring), so a no-write
+        // dummy pack supplies that op without touching the data.
+        ckernel::dummy_pack(dfb.get_id());
         dfb.push_back(1);
     }
     dfb.finish();
@@ -27,6 +31,11 @@ static inline void signal_one_dfb(Dfb& dfb, uint32_t num_entries_per_producer) {
 
 void kernel_main() {
     constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
+
+    // dummy_pack's PACR_STRIDE validates a pack-partition bd_table entry; compute_kernel_hw_startup
+    // is what runs llk_pack_init and programs that entry. It is a call-once API, and the entry only
+    // has to be legal (the PACR writes nothing), so one init covers all four buffers below.
+    compute_kernel_hw_startup(dfb::buf_0, dfb::buf_0);
 
     {
         DataflowBuffer dfb(dfb::buf_0);

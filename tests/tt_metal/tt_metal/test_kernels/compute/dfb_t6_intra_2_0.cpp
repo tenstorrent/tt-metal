@@ -31,21 +31,25 @@ void kernel_main() {
     std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
 #endif
 
+    // dummy_pack's PACR_STRIDE validates a pack-partition bd_table entry; compute_kernel_hw_startup
+    // is what runs llk_pack_init and programs that entry. copy_init is not needed: dummy_unpack is
+    // UNPACR_NOP and does not fetch a descriptor.
+    compute_kernel_hw_startup(dfb::out, dfb::out);
+
     for (std::uint32_t i = 0; i < entries_per_neo; ++i) {
         dfb.reserve_back(1);
+        // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back; a no-write dummy pack
+        // issues a real PACR to order push_back after reserve_back without clobbering the increments above.
+        ckernel::dummy_pack(dfb::out);
 #ifdef UCK_CHLKC_PACK
         {
+            ckernel::tensix_sync();
             volatile std::uint32_t* entry = reinterpret_cast<volatile std::uint32_t*>(dfb.get_write_ptr() << 4);
             for (std::uint32_t w = 0; w < words_per_entry; ++w) {
                 entry[w] += 1;
             }
-            // Publish these scalar stores before the credit that releases the entry to unpack.
-            asm volatile("fence w, w" ::: "memory");
         }
 #endif
-        // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back; a no-write dummy pack
-        // issues a real PACR to order push_back after reserve_back without clobbering the increments above.
-        ckernel::dummy_pack(dfb::out);
         dfb.push_back(1);
 
         dfb.wait_front(1);

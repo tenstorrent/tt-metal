@@ -20,8 +20,10 @@ void kernel_main() {
     std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
 #endif
 
+    // dummy_pack's PACR_STRIDE validates a pack-partition bd_table entry; compute_kernel_hw_startup
+    // is what runs llk_pack_init and programs that entry. copy_init is not needed: dummy_unpack is
+    // UNPACR_NOP and does not fetch a descriptor.
     compute_kernel_hw_startup(dfb::out, dfb::out);
-    copy_init(dfb::out);
 
     for (std::uint32_t i = 0; i < entries_per_neo; i++) {
         // Pack TRISC: wait for free space, increment entry in-place, post credit.

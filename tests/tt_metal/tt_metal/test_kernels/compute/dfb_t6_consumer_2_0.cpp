@@ -34,7 +34,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/kernel_thread_globals.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
@@ -46,15 +45,12 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::in);
 
     // HW requires an unpacker op between wait_front and pop_front (TEN-4746).
-    // This kernel has no output DFB, so configure unpack + pack hw against the
-    // single input DFB (matches the production compute_kernel_hw_startup(in, out);
-    // copy_init(in) shape; this is also what programs the buffer-descriptor table the UNPACR
-    // reads). dummy_unpack supplies that op without reading the ring or writing
-    // dest. The acquire_dst / release_dst pair alone balances the MATH<->PACK dest
-    // handshake (no pack_tile required, and packing into the input ring would race
-    // the producer).
+    // dummy_unpack supplies that op (UNPACR_NOP): it does not fetch a buffer descriptor, so
+    // copy_init is not needed. compute_kernel_hw_startup is still required for the dest
+    // handshake that acquire_dst / release_dst use; those balance MATH<->PACK without a
+    // pack_tile (packing into the input ring would race the producer). There is no output
+    // DFB, so both operands are the same input id.
     compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
-    copy_init(dfb.get_id());
 
 #ifdef UCK_CHLKC_UNPACK
     // UNPACK owns the read cursor, so it is the only thread that can address the
@@ -62,10 +58,7 @@ void kernel_main() {
     // and PACK holds the write cursor). One UNPACK thread per Neo, so the Neo's
     // thread id keys its slice of the digest region.
     const uint32_t words_per_entry = dfb.get_entry_size() / sizeof(uint32_t);
-    // The producer NoC-writes the ring, so read it through the uncached alias on
-    // Quasar rather than risk a stale cached line (same reason dfb_l1_uncached_*_ptr
-    // exists for TRISC reads of DM-written DFB config). MEM_L1_BASE is 0, so the
-    // alias is just a constant bias. WH/BH TRISC L1 access is not cached.
+
     volatile tt_l1_ptr uint32_t* const digests = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         result_l1_addr + get_my_thread_id() * num_entries_per_consumer * sizeof(uint32_t));
 #endif
