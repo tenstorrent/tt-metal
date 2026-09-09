@@ -485,3 +485,5 @@ ProgramDescriptor ReshapeCodegenTileProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
     return desc;
 }
+
+}  // namespace ttnn::prim

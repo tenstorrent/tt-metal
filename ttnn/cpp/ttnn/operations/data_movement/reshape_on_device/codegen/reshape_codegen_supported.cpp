@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
