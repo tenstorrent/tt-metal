@@ -13,23 +13,28 @@ run. That loop made this pipeline's API cost scale with the size of the run bein
 analyzed -- 129 requests for a 129-job merge-gate run, against the repository's shared
 15,000/hr GITHUB_TOKEN budget, ~173 times an hour.
 
-The archive names entries after job and step names, but everything downstream reads
-<job_id>.log, so entries have to be mapped back onto job ids. Two properties of the
-archive make that worth doing in Python rather than with `unzip`:
+Everything downstream reads <job_id>.log, so archive entries have to be mapped back onto
+job ids. Entry names are the job name with "/" rewritten to "_" and nothing else changed
+-- measured exact on 85/85 entries of run 34360282367 -- so that substitution is the
+primary match. Emoji and characters like "[", "]", "(" and "," survive byte-for-byte in
+the central directory; the "?" that `unzip -l` shows for them is its own display
+rendering, not archive content.
 
-  * Step names appear verbatim in entry paths, emoji included. `unzip` can fail to
-    create such a name, and because it then prompts to continue and gets no tty in CI,
-    it aborts the whole extraction and leaves a silently partial result.
-  * Entry names contain characters that are glob-special to `unzip`'s own pattern
-    matching (`[`, `]`), so selecting entries by name is unreliable.
+A normalized comparison (lowercased, everything but [a-z0-9] dropped) runs as a second
+tier in case GitHub ever changes the substitution. It is deliberately not the primary
+match: it maps distinct job names onto the same key ("a/b" and "a-b" both become "ab"),
+and a wrong match here is worse than a missing one, because it files a job's failure
+signature and runner telemetry under a different job.
 
-Reading the zip directly avoids both: names are matched in memory and the only paths
-created on disk are ones we choose.
+So any name -- at either tier -- that does not resolve to exactly one job is left
+unmapped on purpose. The caller falls back to a per-job request for those, which costs
+one request and makes misattribution impossible rather than merely unobserved.
 
-Job names are matched to entry names on an aggressively normalized form (lowercased,
-everything but [a-z0-9] dropped) because the archive flattens characters that are
-illegal in a filename -- most visibly the "/" in "<caller job> / <called job>" -- and
-guessing GitHub's exact substitution table would be a standing source of breakage.
+Reading the zip directly, rather than shelling out to `unzip`, also keeps archive-supplied
+names off the filesystem entirely: the only paths written are <job_id>.log. `unzip` can
+fail to create an entry whose name contains emoji, and having no tty to answer the
+"continue?" prompt that follows, it aborts and leaves a silently partial extraction --
+observed truncating at 46 of 85 job logs.
 """
 
 import argparse
@@ -38,62 +43,80 @@ import pathlib
 import re
 import sys
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 # Top-level archive entries are the whole-job logs, named "<ordinal>_<job name>.txt".
 # The per-job subdirectories below them hold the same content split per step.
-TOP_LEVEL_JOB_LOG = re.compile(r"^(\d+)_(?P<name>.*)\.txt$")
+TOP_LEVEL_JOB_LOG = re.compile(r"^(?P<ordinal>\d+)_(?P<name>.*)\.txt$")
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]")
+
+
+def archive_name_for(job_name: str) -> str:
+    """The entry name GitHub gives a job's log."""
+    return job_name.replace("/", "_")
 
 
 def normalize(name: str) -> str:
     return _NON_ALNUM.sub("", name.lower())
 
 
-def build_name_index(jobs: list) -> dict:
-    """normalized job name -> list of job ids, most recent id last.
+def _unique_index(jobs: list, key) -> dict:
+    """key(job name) -> job id, holding only keys that exactly one job produces.
 
-    A list rather than a single id because matrix legs can share a name; ids are handed
-    out one per matching entry so two same-named jobs land in two different files.
+    Keys claimed by more than one job are dropped rather than resolved, so an ambiguous
+    name can never be silently attributed to whichever job happened to be listed first.
     """
-    index = defaultdict(list)
+    grouped = defaultdict(list)
     for job in jobs:
         job_id = job.get("id")
         name = job.get("name")
         if job_id is None or not name:
             continue
-        index[normalize(str(name))].append(int(job_id))
-    return index
+        grouped[key(str(name))].append(int(job_id))
+    return {k: ids[0] for k, ids in grouped.items() if len(ids) == 1}
+
+
+def resolve_entries(archive: zipfile.ZipFile, jobs: list) -> dict:
+    """Archive entry name -> job id, for entries that map to exactly one job.
+
+    Both directions are checked for ambiguity: a name matching several jobs is dropped by
+    _unique_index, and a job claimed by several entries is dropped here. What survives is
+    a strict one-to-one mapping.
+    """
+    by_archive_name = _unique_index(jobs, archive_name_for)
+    by_normalized = _unique_index(jobs, normalize)
+
+    resolved = {}
+    for entry in archive.infolist():
+        if entry.is_dir() or "/" in entry.filename:
+            continue
+        matched = TOP_LEVEL_JOB_LOG.match(entry.filename)
+        if not matched:
+            continue
+        name = matched.group("name")
+
+        job_id = by_archive_name.get(name)
+        if job_id is None:
+            job_id = by_normalized.get(normalize(name))
+        if job_id is None:
+            continue
+        resolved[entry.filename] = job_id
+
+    claimed_more_than_once = {job_id for job_id, count in Counter(resolved.values()).items() if count > 1}
+    return {entry: job_id for entry, job_id in resolved.items() if job_id not in claimed_more_than_once}
 
 
 def extract(archive_path: pathlib.Path, jobs: list, logs_dir: pathlib.Path) -> int:
-    index = build_name_index(jobs)
-    written = 0
-
     with zipfile.ZipFile(archive_path) as archive:
-        for entry in archive.infolist():
-            if entry.is_dir() or "/" in entry.filename:
-                continue
-            matched = TOP_LEVEL_JOB_LOG.match(entry.filename)
-            if not matched:
-                continue
-
-            candidates = index.get(normalize(matched.group("name")))
-            if not candidates:
-                # Left for the per-job fallback in the shell script, so an unmapped
-                # entry costs one request rather than losing the log.
-                continue
-            job_id = candidates.pop(0)
-
-            # Written by us under an id we chose, so no archive-supplied name -- and no
-            # emoji or overlong path -- ever reaches the filesystem.
-            with archive.open(entry) as source, open(logs_dir / f"{job_id}.log", "wb") as target:
+        resolved = resolve_entries(archive, jobs)
+        for entry_name, job_id in resolved.items():
+            # Written under an id we chose, so no archive-supplied name -- and no emoji
+            # or overlong path -- ever reaches the filesystem.
+            with archive.open(entry_name) as source, open(logs_dir / f"{job_id}.log", "wb") as target:
                 while chunk := source.read(1024 * 1024):
                     target.write(chunk)
-            written += 1
-
-    return written
+    return len(resolved)
 
 
 def main() -> int:

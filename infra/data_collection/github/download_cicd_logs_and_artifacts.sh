@@ -22,8 +22,13 @@ download_artifacts() {
     # /artifacts listing that used to gate this call was a second (paginated) request
     # spent only to decide whether to make the first. A run with no test_reports_*
     # artifact makes this a no-op, which is the same outcome the gate produced.
-    if ! gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern 'test_reports_*' $workflow_run_id 2>/dev/null; then
-        echo "[Warning] Test reports not found for workflow run $workflow_run_id"
+    #
+    # gh's own message is kept and reported: "no artifacts match" and "rate limit
+    # exceeded" both land here, and collapsing the second into "not found" is how a
+    # throttled fetch gets mistaken for a run that simply had no test reports.
+    local download_error
+    if ! download_error=$(gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern 'test_reports_*' $workflow_run_id 2>&1 >/dev/null); then
+        echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
     fi
 }
 
@@ -87,13 +92,16 @@ get_jobs_with_pagination_fallback() {
 # 129-job merge-gate run that was 129 requests against the repository's shared
 # 15,000/hr GITHUB_TOKEN budget, and produce_data runs ~173 times an hour.
 #
-# The unpacking is a Python helper rather than `unzip` because archive entries carry
-# step names verbatim, emoji included: `unzip` can fail to create such a name, and
+# The unpacking is a Python helper rather than `unzip` because archive entries carry job
+# and step names verbatim, emoji included: `unzip` can fail to create such a name, and
 # having no tty to answer its "continue?" prompt it then aborts and leaves a silently
-# partial extraction. See extract_job_logs_from_archive.py.
+# partial extraction -- observed truncating at 46 of 85 job logs. See
+# extract_job_logs_from_archive.py, which also explains the entry-name-to-job-id mapping.
 #
-# Any job the archive does not cover is left to the per-job fallback in
-# download_logs_for_all_jobs, so a mapping miss costs one request instead of a lost log.
+# Any job the archive does not cover -- including any whose name does not resolve to
+# exactly one job, which the helper leaves unmapped on purpose -- falls through to the
+# per-job path in download_logs_for_all_jobs, so an ambiguous or missing entry costs one
+# request instead of risking a log filed under the wrong job.
 #
 # Returns non-zero if the archive could not be fetched or unpacked at all.
 download_logs_archive_for_attempt() {
@@ -114,10 +122,15 @@ download_logs_archive_for_attempt() {
 
     echo "[info] fetching the whole attempt's logs as one archive"
     # Same escape-sequence handling as the per-job path: gh >= 2.97.0 needs the flag,
-    # older images in the fleet do not have it.
-    if ! gh api --allow-escape-sequences "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/logs" > "$archive" 2>/dev/null; then
-        if ! gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/logs" > "$archive" 2>/dev/null; then
-            echo "[Warning] could not download the attempt log archive; falling back to per-job downloads"
+    # older images in the fleet do not have it. Both errors are surfaced rather than
+    # discarded -- a 403 here is the signal that the repository's hourly REST budget is
+    # gone, and silencing it turns that into an unexplained fallback.
+    local archive_error retry_error
+    if ! archive_error=$(gh api --allow-escape-sequences "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/logs" 2>&1 >"$archive"); then
+        if ! retry_error=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/logs" 2>&1 >"$archive"); then
+            echo "[Warning] could not download the attempt log archive: ${retry_error:-no reason given}"
+            echo "[Warning] first attempt (with --allow-escape-sequences) said: ${archive_error:-no reason given}"
+            echo "[Warning] falling back to per-job downloads"
             rm -rf "$tmp_dir"
             return 1
         fi
@@ -154,8 +167,10 @@ download_logs_for_all_jobs() {
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
         # The attempt archive above normally supplied this already, so only jobs it did
         # not cover cost a request here. Skipped jobs and jobs that never reached a
-        # conclusion have no log to serve, so asking for one is a guaranteed-wasted
-        # request -- on the run this was measured against, 44 of 129 jobs were skipped.
+        # conclusion have no log to serve, and asking anyway cost *two* requests each:
+        # the 404 from the first call is a non-zero exit, so the "||" retry below fires
+        # and 404s in turn. On the run this was measured against that was 44 of 129 jobs,
+        # so 88 guaranteed-wasted requests.
         if [[ ! -s generated/cicd/$workflow_run_id/logs/$job_id.log ]] &&
            [[ "$job_conclusion" != "skipped" && "$job_conclusion" != "null" && -n "$job_conclusion" ]]; then
             echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
