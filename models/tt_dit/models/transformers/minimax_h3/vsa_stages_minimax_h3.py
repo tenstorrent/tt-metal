@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -36,6 +37,9 @@ from ....utils.tensor import from_torch
 
 VSA_INDEX_SENTINEL = 0xFFFFFFFF
 _TOPK_K_MULTIPLE = 16  # ttnn.experimental.topk_large_indices wants k % 16 == 0, k in [16, 2048]
+# vsa_sdpa's raw-selection prefix is a fixed 32-entry array in the reader kernel
+# (vsa_sdpa_device_operation.cpp asserts it); above that the exempt prefix must be assembled on host.
+_MAX_RAW_EXEMPT_IDS = 32
 
 
 from dataclasses import dataclass  # noqa: E402
@@ -121,6 +125,16 @@ class MiniMaxH3VSACoarseStage:
         # pooled K^T / V gathers are tile-aligned (the CCL otherwise falls back to a broadcast+concat
         # composite, ~1.6 ms per block at 15 s). Scores/top-k then run in the padded per-shard
         # numbering (shard j, slot s -> j * slots + s); vsa_sdpa maps ids back (coarse_slots_shift).
+        # A keyframe condition (fl2va/ref2va) pushes the exempt tile count past the kernel's raw
+        # prefix, so those shapes assemble indices on host; padded pooling rides on raw selection
+        # (the kernel is what maps padded ids back), so it has to stand down together with it.
+        self.raw_selection_ok = self.n_exempt <= _MAX_RAW_EXEMPT_IDS
+        if padded_pooling and not self.raw_selection_ok:
+            logger.info(
+                f"VSA: {self.n_exempt} exempt tiles exceeds the kernel's {_MAX_RAW_EXEMPT_IDS}-id raw prefix; "
+                "falling back to host index assembly and unpadded pooling"
+            )
+            padded_pooling = False
         self.padded_pooling = padded_pooling
         self.slots_per_shard = tiles_per_shard
         if padded_pooling:

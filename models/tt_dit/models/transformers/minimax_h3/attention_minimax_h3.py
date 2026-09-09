@@ -591,8 +591,10 @@ class MiniMaxH3Attention(Module):
             use_gate = not self.gate_compress_is_zero
             # streaming kernel: raw top-k rows + exempt ids + dense-row mask (assembly done on device)
             raw = (
-                self.vsa_config.streaming and os.environ.get("VSA_RAW", "1") == "1"
-            )  # VSA_RAW=0: host assembly (debug)
+                self.vsa_config.streaming
+                and os.environ.get("VSA_RAW", "1") == "1"  # VSA_RAW=0: host assembly (debug)
+                and self.vsa_stage.raw_selection_ok  # too many exempt tiles for the kernel's prefix
+            )
             o_c, vsa_indices = self.vsa_stage(q_BHNE, k_BHNE, v_BHNE, compute_o_c=use_gate, raw_selection=raw)
             if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
                 self._dump_vsa_indices(vsa_indices)
