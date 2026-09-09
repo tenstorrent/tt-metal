@@ -32,6 +32,12 @@ bindings and auxiliary depths agreed. The branch fixes logical-width RMS
 normalization/padding, explicit empty groupnorm output, narrow SFPU H planning,
 and two previously uncompilable BGE writer branches, as recorded in the journal.
 
+Follow-up on R3: the blanket native-NONE policy also affected the newly introduced
+sharded groupnorm mean, which does not inherit the old manual accumulation's
+format setup. Additional checks on 2026-09-09 exposed this error. Its native mode
+now explicitly reconfigures inputs after masking; see
+`review_followup_groupnorm_2026-09-09.md` for reproduction and validation.
+
 Validation:
 
 - The complete available N300 sanity selection passed **61/61, no skips**, after

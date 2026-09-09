@@ -322,3 +322,34 @@ compilation evidence only. Quasar mock attempts stopped before compilation on
 existing setup/factory restrictions; Quasar and non-N300 numerical coverage
 remain unavailable. Exact logs and mock-plugin limitations are in the review
 resolution report. A fresh second review and the full regression run remain due.
+
+## Groupnorm format follow-up — 2026-09-09
+
+Additional sharded groupnorm checks exposed an error in the first review's
+blanket native-NONE correction: the new local mean follows masking and needs to
+restore its intermediate/auxiliary unpack formats. Small groups selected native
+reduction and failed, while Add groups configured their operands and passed.
+The host now requests INPUT for that first native call. See
+`review_followup_groupnorm_2026-09-09.md` for the diagnosis and exact command.
+
+At `1005cb6d975` the existing T028 selection had 25 failures and 26 passes. After
+the fix, the same 51 cases passed with no changes to their checks or tolerances
+(`reduce-migration-n9526jxz`). Native build passed
+(`/tmp/reduce-groupnorm-format-fix-build-20260909.log`). SM005/SM006 passed
+(`reduce-migration-n1bwzklv`). SM006 now uses the small BF8-mask/FP32-intermediate
+case that catches the regression; the original C++ case remains in the full
+suite. Sanity remains 75 cases, now 60 Python and 15 C++.
+
+Review round 2 was interrupted without a verdict; round 3 was stopped when these
+independent tests exposed the regression. Both incomplete transcripts are
+preserved. Another fresh Opus 5/high review and the full regression remain due.
+
+Additional Quasar evidence: a real one-chip Wormhole run of the existing ResNet
+global-pooling test passed through the migrated Quasar H factory (49 logical
+spatial values, 2048 channels). Its first two-chip attempt failed only at tensor
+readback because the test supplies no mesh composer. A temporary one-chip fixture
+selection resolved that test setup issue; no numerical check changed. See
+`generated/reduce_migration_reviews/quasar_h_wormhole_validation_20260908.md`.
+Quasar mock host planning also succeeded, but the runtime explicitly bypasses JIT
+compilation on Quasar mock devices (`tt_metal/impl/program/program.cpp`); that
+mock result supplies no Quasar compilation or numerical evidence.

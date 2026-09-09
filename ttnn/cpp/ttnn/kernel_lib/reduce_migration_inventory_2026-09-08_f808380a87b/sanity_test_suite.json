@@ -5,8 +5,8 @@
   "exact_cases": true,
   "counting": {
     "test_cases": 75,
-    "python_cases": 59,
-    "cpp_cases": 16,
+    "python_cases": 60,
+    "cpp_cases": 15,
     "kernel_entries": 144,
     "covered_kernel_entries": 130,
     "uncovered_kernel_entries": 14,
@@ -216,29 +216,28 @@
       "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:954"
     },
     {
-      "kind": "gtest",
-      "source": "tests/ttnn/unit_tests/gtests/test_normalization.cpp",
-      "family": "C++ normalization",
-      "binary": "build/test/ttnn/unit_tests_ttnn",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
+      "family": "GroupNorm sharded formats",
       "id": "SM006",
-      "full_suite_group": "T159",
+      "full_suite_group": "T028",
       "tests": [
-        "NormalizationSmoke.GroupNormShardedBlock1x1"
+        "test_group_norm_sharded_all_config[legacy-row_major-bf16-gb_bf16-N=1-C=128-H=1-W=512-num_groups=16-grid_y=1-grid_x=4]"
       ],
       "kernel_ids": [
         "S080",
         "DF036"
       ],
-      "selection": "ROW_MAJOR [1,1,32,64], one BLOCK_SHARDED core: groupnorm_sharded_v2 and its writer.",
+      "selection": "ROW_MAJOR [1,1,512,128], four HEIGHT_SHARDED cores, BF16 input/affine, BF8 mask and FP32 intermediates. Four tiles per group force native mean reduction and guard mask-to-reduce format reconfiguration.",
       "lane": "common",
-      "hardware": "One device; see the test for core-grid requirements.",
+      "hardware": "One device with at least four cores in its first row.",
       "expected_cases": 1,
       "require_pass": true,
       "factories": [
         "F081"
       ],
-      "test_line": 1040,
-      "test_evidence": "tests/ttnn/unit_tests/gtests/test_normalization.cpp:1040"
+      "test_line": 2137,
+      "test_evidence": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py:2137"
     },
     {
       "kind": "gtest",
@@ -3831,5 +3830,8 @@
       "selection": "Explicit Moreh softmax backward strategy SMALL_H, BF16 [32,32].",
       "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py:471"
     }
+  ],
+  "migration_updates": [
+    "2026-09-09: SM006 now selects the existing small sharded groupnorm BF8-mask/FP32-intermediate case that exposed the native mean format transition. The previous C++ smoke case remains in the full T159 group. Total sanity case and kernel-coverage counts are unchanged."
   ]
 }
