@@ -51,7 +51,10 @@ SELECTORS=(
   test_talker_layer_prefill_32
   test_talker_layer_prefill_64
   test_talker_layer_prefill_128
-  test_talker_layer_decode
+  # The eager-fallback decode window (test_talker_layer_decode) is deliberately NOT
+  # here: cur_pos_tensor is None on that path, which gates off the decode head split
+  # and k_keep_decode_layout, so it profiles a graph the demo never runs. The test is
+  # kept for anyone debugging the eager path; only the deployed one is reported.
   test_talker_layer_decode_traced
   test_cp_layer_prefill
   test_cp_layer_decode
@@ -85,9 +88,36 @@ if [[ $ASSEMBLE_ONLY -eq 0 ]]; then
         echo "${tot:-<have>} (cached, newer than sources)"
         continue
       fi
-      if ! python -m tracy -p -v -r -m pytest -s -q "$TEST" -k "$sel" \
-             > "$WORK/run_${sel}_$i.log" 2>&1; then
-        echo "FAILED (see $WORK/run_${sel}_$i.log)"; exit 1
+      # Bound the capture. When the profiled pytest dies early (a bad
+      # TT_MESH_GRAPH_DESC_PATH, a wedged device), tracy-capture keeps waiting on a
+      # client that already exited and the sweep hangs forever with no error — one such
+      # hang sat for 18 minutes on capture 1 of 27. A capture is ~40 s, so 8 min is a
+      # generous ceiling that still surfaces the failure as a failure.
+      # Retry once. Tracy occasionally captures nothing ("No profiling data could be
+      # captured") on a run whose pytest completed fine — one such flake at capture
+      # 26 of 27 threw away 25 good captures. The device work is deterministic; the
+      # capture tooling is not, so a single retry is worth more than a clean abort.
+      captured=0
+      for attempt in 1 2; do
+        rc=0
+        timeout --kill-after=30s 8m \
+          python -m tracy -p -v -r -m pytest -s -q "$TEST" -k "$sel" \
+          > "$WORK/run_${sel}_$i.log" 2>&1 || rc=$?
+        if [[ $rc -eq 0 ]]; then captured=1; break; fi
+        pkill -f 'tracy-capture' 2>/dev/null || true
+        sleep 5
+        [[ $attempt -eq 1 ]] && printf 'retry(rc=%s) ... ' "$rc"
+      done
+      if [[ $captured -eq 0 ]]; then
+        if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+          echo "TIMED OUT after 8m, twice (see $WORK/run_${sel}_$i.log)"
+        else
+          echo "FAILED rc=$rc, twice (see $WORK/run_${sel}_$i.log)"
+        fi
+        # Surface the cause in the sweep output instead of only in the per-run log.
+        grep -m1 -E 'TT_FATAL|RuntimeError|No profiling data|^E  +[A-Za-z]' \
+          "$WORK/run_${sel}_$i.log" | cut -c1-160 | sed 's/^/        /' || true
+        exit 1
       fi
       csv=$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | sed -n 1p)
       # A host-only window (or a failed capture) can write an empty Tracy CSV;
