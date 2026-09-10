@@ -60,7 +60,7 @@ TEST_F(UnitMeshFixture, NocRead_L1_Misaligned_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*L1 destination.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -93,7 +93,7 @@ TEST_F(UnitMeshFixture, NocWrite_L1_Misaligned_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*L1 source.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -128,7 +128,7 @@ TEST_F(UnitMeshFixture, NocRead_L1_Misaligned_Source_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*L1 source.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -163,7 +163,7 @@ TEST_F(UnitMeshFixture, NocWrite_L1_Misaligned_Dest_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*L1 destination.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -219,7 +219,7 @@ TEST_F(UnitMeshFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_dst});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*DRAM source.*must be 32-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -276,7 +276,7 @@ TEST_F(UnitMeshFixture, NocRead_DRAM_Misaligned_SanityCheck_BH) {
     SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_dst});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*DRAM source.*must be 64-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -320,7 +320,7 @@ TEST_F(UnitMeshFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_src});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*NOC Transfer Alignment.*DRAM destination.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -395,7 +395,7 @@ TEST_F(UnitMeshFixture, NocRead_DRAM_Aligned_NoViolation_WH) {
 
     // Must NOT abort. If the alignment mask regresses to something stricter than
     // 0x1F, this LaunchProgram SIGABRTs and the harness marks the test failed.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -467,7 +467,7 @@ TEST_F(UnitMeshFixture, NocRead_DRAM_Aligned_NoViolation_BH) {
 
     // Must NOT abort. If the alignment mask regresses to something stricter than
     // 0x3F, this LaunchProgram SIGABRTs and the harness marks the test failed.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     unsetenv("TT_METAL_EMULE_ASAN");
@@ -517,7 +517,7 @@ TEST_F(UnitMeshFixture, NocRead_L1_Aligned_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {base});
 
     // Must NOT abort on the alignment check.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     unsetenv("TT_METAL_EMULE_ASAN");

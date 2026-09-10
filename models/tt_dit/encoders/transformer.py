@@ -362,7 +362,7 @@ class TransformerEncoder(Module):
                 torch_prob = torch.softmax(torch_current_logits / temperature, 1)
                 torch_new_tokens = _sample(torch_prob, top_k=top_k, top_p=top_p)
 
-            new_tokens = tensor.from_torch(torch_new_tokens, dtype=tokens.dtype, device=device)
+            new_tokens = tensor.from_torch(torch_new_tokens, dtype=tokens.dtype, layout=tokens.layout, device=device)
 
             tokens = ttnn.concat([tokens, new_tokens], dim=1)
 

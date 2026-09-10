@@ -1820,10 +1820,14 @@ class Gemma4Model:
         lst = getattr(self, "_g4_retired_dev_tensors", None)
         if lst:
             for t in lst:
-                try:
-                    t.deallocate(True)
-                except Exception:
-                    pass
+                # Already-freed tensors are the benign case (the shared
+                # consumption released them); a real deallocation failure
+                # must PROPAGATE — continuing would let the next trace
+                # replay run with a retired buffer still allocated (the
+                # exact #30187 aliasing this scavenge exists to prevent).
+                if hasattr(t, "is_allocated") and not t.is_allocated():
+                    continue
+                t.deallocate(True)
             lst.clear()
 
     def _g4_retire(self, t):
