@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, List, Dict, Optional, Callable, Tuple, Optiona
 
 import ttnn
 
+
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
