@@ -216,6 +216,59 @@ TIER_TESTS = {
     "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"],
 }
 
+# Reset run between the gtest phase and the triage phase, per tier. Two reasons
+# it sits there: the triage probes open every chip read-write, so they must not
+# overlap the tests, and the tools have no SIGBUS handler — tt-kmd zaps every
+# mapping on reset, so a reset concurrent with a probe kills it outright rather
+# than being reported. A discrete reset that completes first rules both out.
+#
+# This one is deliberately bare: reset_loop() is called without snapshot_out /
+# post_reset_phases, so it takes no revalidation snapshot and therefore stays
+# out of the post-reset snapshot dedupe in run_diag(). Adding revalidation here
+# means reworking that block, which assumes a single batch of snapshot_after_*
+# phases judged by normalize_health_report() on post[-1].
+POST_TEST_RESET_PLAN = {
+    "light": [],
+    "medium": ["-glx_reset"],
+    "deploy": ["-glx_reset"],
+}
+
+# First-step triage tools, run after POST_TEST_RESET_PLAN. They live in
+# tools/scaleout/kmd_triage: host_side.sh reads host, PCIe and driver state out
+# of sysfs, device_side.sh drives the kmd_triage binary over every chip.
+#
+# Their interface, which is all this phase depends on:
+#   <script> --json <path> -o <path>
+# writes a JSON file {"checks": [{"name", "status", "details", "ip", "data"}]}
+# and a human-readable text report. Status is one of PASS/WARN/FAIL/SKIP; `ip`
+# is one of the IP_ORDER groups (an unrecognised value lands in the dashboard's
+# "other" category rather than breaking). The Phase and its rollup are built
+# here, not there, so FAIL > WARN > PASS stays computed in one place.
+#
+# host_side needs root for the kernel-log scan; device_side does not, and
+# opening the chips as root would be a needless escalation.
+#
+# Timeouts bound a wedged run. host_side is passive bash (32 lspci dumps plus a
+# kernel-log scan); device_side opens each chip and self-bounds every probe at
+# 60 s, so its budget has to cover 5 probes x 32 devices with slack.
+TRIAGE_TOOLS = {
+    "host_side": {"script": "host_side.sh", "root": True, "timeout_s": 600},
+    "device_side": {"script": "device_side.sh", "root": False, "timeout_s": 2400},
+}
+
+TIER_TRIAGE = {
+    "light": [],
+    "medium": ["host_side", "device_side"],
+    "deploy": ["host_side", "device_side"],
+}
+
+# The scripts' home, relative to the repo root.
+TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"
+
+# Override for the above, so a working copy of the scripts can be run against a
+# deployed checkout without editing anything.
+TRIAGE_DIR_ENV = "HC_TRIAGE_DIR"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Result model
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1594,6 +1647,218 @@ def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 5 — external triage tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TRIAGE_STATUSES = (PASS, WARN, FAIL, SKIP)
+
+
+def default_triage_dir() -> Path:
+    """Where the triage scripts live: in this repo, unless overridden.
+
+    They used to be cloned in at run time, so an unset env var meant the phase
+    could only SKIP. Now that they ship here, the default is the checkout this
+    file is part of and the phase runs by default.
+    """
+    raw = os.environ.get(TRIAGE_DIR_ENV, "").strip()
+    return Path(raw) if raw else default_tt_metal_path() / TRIAGE_SUBDIR
+
+
+def normalize_triage_check(payload: dict, gating: bool) -> Check:
+    """Turn one entry of the tool's JSON into a Check, defensively.
+
+    Two normalizations matter, both because the report is consumed by code that
+    doesn't know this phase exists:
+
+    * Names get a ``triage_`` prefix. CHECK_CATEGORY, EXCLUDED_CHECKS,
+      ACKNOWLEDGED_CHECKS and _find_check() in the analyzer are all keyed on the
+      bare check name with no phase qualifier, so an unprefixed ``pcie_gen``
+      from the triage scripts would silently inherit that check's routing.
+    * An unrecognised status becomes WARN. Anything outside PASS/WARN/FAIL/SKIP
+      falls through the analyzer's SEVERITY map to UNKNOWN and won't validate
+      against the CheckStatus enum, so a typo would land as a junk CSV row.
+
+    An `ip` outside IP_ORDER is folded to "other" for the same reason:
+    print_phase_summary() iterates IP_ORDER, so an unrecognised group would
+    reach the JSON and the CSV but never appear in the console summary.
+    """
+    name = str(payload.get("name") or "unnamed")
+    if not name.startswith("triage_"):
+        name = f"triage_{name}"
+    details = str(payload.get("details") or "")
+    status = str(payload.get("status") or "").upper()
+    if status not in _TRIAGE_STATUSES:
+        details = f"[unrecognised status {payload.get('status')!r}] {details}".rstrip()
+        status = WARN
+    elif status == FAIL and not gating:
+        details = f"[advisory: FAIL held at WARN, --triage-gating off] {details}".rstrip()
+        status = WARN
+    data = payload.get("data")
+    ip = str(payload.get("ip") or "other")
+    return Check(
+        name=name,
+        status=status,
+        details=details,
+        data=data if isinstance(data, dict) else {},
+        ip=ip if ip in IP_ORDER else "other",
+    )
+
+
+def run_triage(
+    triage_dir: Path | None,
+    tier: str,
+    phase: Phase,
+    dry_run: bool,
+    logs_dir: Path,
+    gating: bool,
+    tt_metal: Path | None = None,
+) -> None:
+    """Run the triage tools for this tier and fold their findings in.
+
+    Every way of not having them — tier doesn't ask for them, directory or
+    script missing — is a SKIP carrying its reason, never a failure. A SKIP with
+    a reason is the point: a check that silently vanishes reads as coverage we
+    had, and this suite has been bitten by that before (see the zero-match gtest
+    filter note in HEALTH_CHECK.md).
+
+    Tooling breakage (timeout, no JSON, the tool reporting its own failure) is a
+    WARN, not a FAIL: it says nothing about the hardware, only that we didn't get
+    a reading. Findings about the hardware come from the tools' JSON.
+    """
+    tools = TIER_TRIAGE.get(tier, [])
+    if not tools:
+        phase.add(Check(name="triage", status=SKIP, details=f"no triage tools for tier '{tier}'", ip="other"))
+        return
+    if triage_dir is None:
+        phase.add(Check(name="triage", status=SKIP, details="no triage directory given", ip="other"))
+        return
+    if not triage_dir.is_dir():
+        phase.add(Check(name="triage", status=SKIP, details=f"triage scripts absent: {triage_dir}", ip="other"))
+        return
+
+    # device_side.sh locates the kmd_triage binary under $TT_METAL_HOME. Pass
+    # the path the run was told to use rather than trusting the ambient value,
+    # which is what --tt-metal-path is for.
+    env = os.environ.copy()
+    if tt_metal is not None:
+        env["TT_METAL_HOME"] = str(tt_metal)
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    for tool in tools:
+        spec = TRIAGE_TOOLS[tool]
+        run_name = f"triage_{tool}_run"
+        script = triage_dir / spec["script"]
+        if not script.is_file():
+            phase.add(Check(name=run_name, status=SKIP, details=f"not present: {script}", ip="other"))
+            continue
+
+        json_path = logs_dir / f"triage_{tool}.json"
+        text_path = logs_dir / f"triage_{tool}.txt"
+        # A stale file from an earlier run would be read as this run's findings.
+        json_path.unlink(missing_ok=True)
+
+        cmd = ["bash", str(script), "--json", str(json_path), "-o", str(text_path)]
+        if spec["root"] and os.geteuid() != 0:
+            # -n: fail immediately rather than hang on a password prompt.
+            cmd = ["sudo", "-n"] + cmd
+
+        log(f"--- triage '{tool}' ---")
+        log(f"  cmd:  {' '.join(cmd)}")
+        log(f"  log:  {text_path}")
+
+        if dry_run:
+            print(f"  {run_name:30} (dry-run)")
+            phase.add(Check(name=run_name, status=SKIP, details=f"(dry) {' '.join(cmd)}", ip="other"))
+            continue
+
+        _emit_running(run_name)
+        t0 = time.time()
+        timed_out = False
+        try:
+            cp = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=spec["timeout_s"], cwd=str(triage_dir), env=env
+            )
+            rc, out, err = cp.returncode, cp.stdout or "", cp.stderr or ""
+        except subprocess.TimeoutExpired as e:
+            timed_out, rc = True, 124
+            out, err = _as_text(e.stdout), _as_text(e.stderr)
+        except OSError as e:
+            dt = time.time() - t0
+            _emit_result(run_name, SKIP, suffix=f"({dt:.1f}s)")
+            phase.add(Check(name=run_name, status=SKIP, details=f"could not run {script}: {e!r}", ip="other"))
+            continue
+        dt = time.time() - t0
+
+        checks: list[Check] = []
+        parse_error = ""
+        if not json_path.is_file():
+            parse_error = f"tool wrote no {json_path.name}"
+        else:
+            try:
+                payload = json.loads(json_path.read_text())
+                raw = payload.get("checks") if isinstance(payload, dict) else None
+                if isinstance(raw, list):
+                    checks = [normalize_triage_check(c, gating) for c in raw if isinstance(c, dict)]
+                else:
+                    parse_error = "JSON has no 'checks' list"
+            except (OSError, ValueError) as e:
+                parse_error = repr(e)
+
+        if timed_out:
+            status = WARN
+            details = f"timed out after {spec['timeout_s']}s; no findings collected"
+        elif parse_error:
+            status = WARN
+            # Why it produced nothing is the only useful thing left to report,
+            # and it is almost always the tool's first line of stderr (a missing
+            # binary, a permission problem). Without it the console shows only
+            # "no usable findings" and the reason sits unread in the JSON.
+            reason = next((ln.strip() for ln in err.splitlines() if ln.strip()), "")
+            details = f"rc={rc} but no usable findings ({parse_error})"
+            if reason:
+                details += f": {reason[:200]}"
+        elif rc == 3:
+            # The tools reserve 3 for "the script itself failed", as distinct
+            # from their 1/2 which are findings about the hardware.
+            status = WARN
+            details = f"tool reported its own failure (rc=3); {len(checks)} check(s) collected"
+        else:
+            status = PASS
+            details = f"rc={rc} {len(checks)} check(s)"
+        details += f" dur={dt:.1f}s log={text_path}"
+
+        _emit_result(run_name, status, suffix=f"({dt:.1f}s)")
+        phase.add(
+            Check(
+                name=run_name,
+                status=status,
+                details=details,
+                data={
+                    "command": " ".join(cmd),
+                    "rc": rc,
+                    "duration_s": dt,
+                    "timed_out": timed_out,
+                    "checks_collected": len(checks),
+                    "report_file": str(text_path),
+                    "stdout_tail": out[-2000:],
+                    "stderr_tail": err[-2000:],
+                },
+                ip="other",
+            )
+        )
+        for c in checks:
+            phase.add(c)
+
+
+def _as_text(v) -> str:
+    """TimeoutExpired carries whatever was buffered; normalize bytes-or-str."""
+    if v is None:
+        return ""
+    return v.decode(errors="replace") if isinstance(v, bytes) else str(v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1612,6 +1877,25 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
     ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
     ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
+    ap.add_argument(
+        "--skip-triage",
+        action="store_true",
+        help="Skip the post-test reset and the external triage tools entirely.",
+    )
+    ap.add_argument(
+        "--triage-dir",
+        type=Path,
+        default=default_triage_dir(),
+        help=f"Directory holding the triage scripts. Default: ${TRIAGE_DIR_ENV}, else <repo>/{TRIAGE_SUBDIR}.",
+    )
+    ap.add_argument(
+        "--triage-gating",
+        action="store_true",
+        help=(
+            "Let triage FAILs gate the run. Off by default: triage FAILs are held at WARN so a "
+            "tool still bedding in cannot ticket the fleet. Findings are recorded either way."
+        ),
+    )
     ap.add_argument(
         "--input-snapshot", type=Path, help="Use pre-captured tt-smi snapshot JSON instead of live tt-smi call."
     )
@@ -1635,13 +1919,16 @@ def run_diag(
     dry_run: bool = False,
     skip_reset: bool = False,
     skip_tests: bool = False,
+    skip_triage: bool = False,
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
     tt_metal_path: Path | None = None,
+    triage_dir: Path | None = None,
+    triage_gating: bool = False,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full diagnostic pipeline (snapshot → reset loop → gtests).
+    """Run the full diagnostic pipeline (snapshot → reset loop → gtests → triage).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -1786,6 +2073,66 @@ def run_diag(
     # tests phase prints its own per-test lines as they run — no inline summary.
     print(f"  {'tests':14} {test_phase.status:5} ({test_phase.duration_s:.1f}s)", flush=True)
 
+    # Phase 4: post-test reset. Bare — no revalidation snapshot, so it stays out
+    # of the post-reset dedupe above. Its job is to hand phase 5 a freshly reset
+    # unit and to guarantee the triage probes, which open every chip read-write,
+    # never run concurrently with the tests.
+    logs_dir = output.resolve().parent / "logs"
+    post_test_plan = [] if (skip_triage or skip_reset) else POST_TEST_RESET_PLAN.get(tier, [])
+    if post_test_plan:
+        post_reset_phase = Phase(name="post_test_reset")
+        t0 = time.time()
+        try:
+            tt_smi = resolve_tt_smi(tt_smi_path)
+            reset_loop(tt_smi, post_test_plan, post_reset_phase, dry_run)
+        except Exception as e:
+            post_reset_phase.error = repr(e)
+            post_reset_phase.add(Check(name="post_test_reset", status=FAIL, details=repr(e), ip="other"))
+        # reset_loop names every check reset_*, which report.py classifies as a
+        # reset op and drops from the verdict. That is right for the pre-test
+        # loop, where a bad reset still surfaces in the tests and the final
+        # snapshot — but nothing runs after this one, so a reset that broke
+        # enumeration here would leave no trace on the verdict. Restate the
+        # outcome under a name that counts.
+        broke = [c.name for c in post_reset_phase.checks if c.status == FAIL]
+        post_reset_phase.add(
+            Check(
+                name="post_test_reset_ok",
+                status=FAIL if broke else PASS,
+                details=(
+                    f"post-test reset left the unit degraded: {', '.join(broke)}"
+                    if broke
+                    else f"unit healthy after {' '.join(post_test_plan)}"
+                ),
+                ip="other",
+            )
+        )
+        post_reset_phase.duration_s = time.time() - t0
+        post_reset_phase.rollup()
+        report["phases"]["post_test_reset"] = asdict(post_reset_phase)
+        print(
+            f"  {'post_test_reset':14} {post_reset_phase.status:5} ({post_reset_phase.duration_s:.1f}s)",
+            flush=True,
+        )
+
+    # Phase 5: external triage tools (separate repo, cloned into the container).
+    triage_phase = Phase(name="triage")
+    t0 = time.time()
+    if skip_triage:
+        triage_phase.add(Check(name="triage", status=SKIP, details="--skip-triage", ip="other"))
+    else:
+        try:
+            run_triage(triage_dir, tier, triage_phase, dry_run, logs_dir, triage_gating, tt_metal_path)
+        except Exception as e:
+            # Never let the triage phase take the run down: a crash here is lost
+            # coverage, not a hardware finding.
+            triage_phase.error = repr(e)
+            triage_phase.add(Check(name="triage", status=WARN, details=repr(e), ip="other"))
+    triage_phase.duration_s = time.time() - t0
+    triage_phase.rollup()
+    report["phases"]["triage"] = asdict(triage_phase)
+    print_phase_summary("triage", report["phases"]["triage"])
+
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
@@ -1797,6 +2144,9 @@ def run_diag(
     else:
         report["overall_status"] = PASS
 
+    # Only the phases that write logs create this directory, and any of them can
+    # be skipped — don't lose a completed run's report to a missing parent dir.
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2))
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
@@ -1827,9 +2177,12 @@ def main() -> int:
         dry_run=args.dry_run,
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
+        skip_triage=args.skip_triage,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,
+        triage_dir=args.triage_dir,
+        triage_gating=args.triage_gating,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )

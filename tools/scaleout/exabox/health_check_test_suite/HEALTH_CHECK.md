@@ -2,8 +2,9 @@
 
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
-and invokes the `unit_tests_deployment` gtest binary. Emits a single JSON
-report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
+invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
+in the first-step triage tools. Emits a single JSON report with
+per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
 
@@ -26,11 +27,11 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 
 ## Tiers
 
-| Tier | Resets | Tests | Duration | Use when |
-|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`          | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | ~5 min  | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2      | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | ~18 min | Final deploy gate |
+| Tier | Resets | Tests | Triage | Duration | Use when |
+|---|---|---|---|---|---|
+| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | ~75 s   | Smoke check on every new unit |
+| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | ~5 min + triage | Pre-deployment validation |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | ~18 min + triage | Final deploy gate |
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -59,6 +60,113 @@ or fabric mesh mapping fails.
 The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
 `PYTESTS` in `diag_runner.py`.
 
+## Triage phase
+
+`medium` and `deploy` end with a post-test `tt-smi -glx_reset` followed by the
+first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
+sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
+node sweep). They live in `tools/scaleout/kmd_triage/`. Tables are
+`POST_TEST_RESET_PLAN`, `TRIAGE_TOOLS` and `TIER_TRIAGE` in `diag_runner.py`.
+
+**What the two tools actually check, how to run them by hand, their exit codes
+and their known gaps are documented in
+[`tools/scaleout/kmd_triage/README.md`](../../kmd_triage/README.md).** The rest
+of this section is about how the phase drives them and how their findings get
+into the report.
+
+Neither tool depends on tt_metal or UMD, which is what makes them useful when
+the runtime will not load. `device_side.sh` drives `kmd_triage`, a standalone
+binary built as a normal CMake target into `build/tools/scaleout/kmd_triage`. It
+used to be compiled at run time; it is a build artefact now, so a host running
+the health check needs no compiler, and a missing binary is reported as lost
+coverage rather than silently skipped.
+
+The reset sits between the tests and the triage for two reasons: the triage probes
+open every chip read-write, so they must not overlap the gtests, and the tools have
+no SIGBUS handler — tt-kmd zaps every mapping on reset, so a reset concurrent with a
+probe kills it outright instead of reporting cleanly. A discrete reset that completes
+first rules both out. It is a *bare* reset: no revalidation snapshot, so it stays
+clear of the post-reset snapshot dedupe (which assumes one batch of
+`snapshot_after_*` phases, judged by `normalize_health_report()` on `post[-1]`).
+
+Because `reset_loop()` names its checks `reset_*` and `report.py` classifies those
+as reset ops and drops them from the verdict, the phase adds a
+`post_test_reset_ok` check — nothing runs after this reset, so a reset that broke
+enumeration would otherwise leave no mark on the verdict.
+
+### The interface
+
+The phase drives both scripts the same way, and reads one file back:
+
+```
+<script> --json <path> -o <path>
+```
+
+```json
+{"checks": [
+  {"name": "hostside_pcie_aer", "status": "WARN",
+   "details": "u2c6 RxErr=620, u4c5 RxErr=79", "ip": "pcie", "data": {}}
+]}
+```
+
+`status` is `PASS`/`WARN`/`FAIL`/`SKIP`; `ip` is one of the `IP_ORDER` groups. The
+shape and the emitter live in `kmd_triage/triage_json.sh`, which both scripts
+source — one copy, because two would let the shape drift and the consumer would
+have no way to tell which it was looking at. The `Phase` and its rollup are built
+on ingest, not in the scripts, so FAIL > WARN > PASS stays computed in one place.
+
+Each script emits **one check per class of finding, not per device**, so the
+check names are the same on a 1-chip host and a 32-chip Galaxy; the offending
+devices go in `details` and `data`. That matters because the dashboard keys its
+routing on the check name, so a name that varied with chip count would fragment
+the history.
+
+`normalize_triage_check()` is defensive on ingest: names get a `triage_` prefix
+(`CHECK_CATEGORY`, `EXCLUDED_CHECKS` and `_find_check()` in the analyzer are
+keyed on the bare name across *all* phases, so an unprefixed `pcie_gen` would
+inherit that check's routing), an unrecognised status becomes WARN rather than an
+UNKNOWN severity in the CSV, and an unrecognised `ip` folds to `other` so it
+can't vanish from the console summary.
+
+### Failure modes are SKIP or WARN, never a silent PASS
+
+- Script absent, tier doesn't ask for it, nothing to probe → **SKIP with the
+  reason in `details`**. A check that silently disappears reads as coverage we had —
+  the same trap as the zero-match gtest filters above.
+- Timed out, wrote no JSON, or reported its own failure (`rc=3`) → **WARN**. That is
+  lost coverage, not a statement about the hardware. A missing `kmd_triage` binary
+  lands here; the tool's first line of stderr is appended to `details`, so the
+  console says *why* rather than only that nothing came back.
+- Findings from the tools' JSON → recorded as-is, except that **FAIL is held at WARN
+  unless `--triage-gating` is passed**. Deliberate while the tools bed in: on the one
+  32-chip Galaxy they were verified against, `host_side.sh` returned DEGRADED on five
+  correctable-AER findings on a unit `device_side.sh` and the rest of the suite called
+  healthy. Gating on that from day one would ticket the fleet.
+
+The text reports land in `<output_dir>/logs/triage_<tool>.txt`, so
+`collect_run_artifacts()` attaches them to the JIRA ticket with no extra wiring.
+
+### In-container caveats
+
+The health check runs unprivileged in the tt-metal image, which is fine for most of
+what these tools read — `/sys` is a real view of host sysfs, so PCIe link state, AER
+counters, BAR assignment and the driver's `tt_*` telemetry all work. The
+`kmd_triage` binary has to be in the image: `build/tools` is part of
+`ARTIFACT_PATHS` in `build-artifact.yaml` and the image copies `build/`
+wholesale, so a normal `build_metal.sh` puts it there. Three things degrade, all
+for want of a capability rather than a mount:
+
+- **Kernel-log scan** needs `CAP_SYSLOG` (or `kernel.dmesg_restrict=0` on the host).
+  Without it the tool reports `NOT CHECKED` rather than a clean log.
+- **`lspci -vvv` capability blocks** need `CAP_SYS_ADMIN` in the initial user
+  namespace; without it config-space reads are clamped to 64 bytes. AER counters are
+  unaffected — they are sysfs attributes, not config-space reads.
+- **debugfs driver mappings** are absent: the container gets a fresh `sysfs` mount,
+  which does not carry the `/sys/kernel/debug` submount.
+
+Also note `/proc/driver/tenstorrent/<N>/pids` lists *host* PIDs, which don't resolve
+in the container's PID namespace — the holder count is right, the names are not.
+
 ## Flags
 
 | Flag | Default | Purpose |
@@ -67,6 +175,9 @@ The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
+| `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
+| `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
+| `--triage-gating` | off | Let triage FAILs gate the run. Off holds them at WARN (noted in `details`); findings are recorded either way. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |
@@ -202,6 +313,14 @@ Build with either:
 ninja -C build_Release unit_tests_deployment
 ```
 
+The triage binary needs nothing extra: `tools/scaleout` is part of the default
+target, so a plain `./build_metal.sh` produces
+`build/tools/scaleout/kmd_triage`. To build just it:
+
+```bash
+ninja -C build kmd_triage
+```
+
 ## Repo layout
 
 ```
@@ -229,3 +348,19 @@ The `test_infrastructure/` harness previously lived in the `exabox-infra` repo a
 spun up a nested Docker container to run the diag suite. Now that the harness ships
 in the same image as the diag suite, `run_health_check.py` invokes `diag_runner.py`
 directly as a subprocess (see `diag_execution.py`) instead of via docker-in-docker.
+
+The triage tools are a sibling directory, next to the other compiled scaleout
+tools rather than under the health check, because the binary is a CMake target
+and the tools are useful on their own when triaging a unit by hand:
+
+```
+tools/scaleout/
+├── CMakeLists.txt      # declares the kmd_triage target
+├── sources.cmake       # KMD_TRIAGE_SRCS
+└── kmd_triage/
+    ├── README.md       # what each probe checks, standalone CLI usage, exit codes, known gaps
+    ├── kmd_triage.cpp  # the multitool: tt-kmd ioctls, libc + pthread only
+    ├── host_side.sh    # host, PCIe and driver state, from sysfs
+    ├── device_side.sh  # drives kmd_triage over every chip
+    └── triage_json.sh  # shared --json emitter, sourced by both scripts
+```
