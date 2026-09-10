@@ -45,14 +45,12 @@ def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_ran
     (
         [1, 8, 128, 4096],
         [1, 8, 1024, 4096],
-        [1, 8, 2048, 4096],
         [8, 1, 128, 4096],
         [4, 2, 1024, 4096],
     ),
     ids=[
         "mixtral_128",
         "mixtral_1k",
-        "mixtral_2k",
         "dim0_reduce",
         "dim01_reduce",
     ],

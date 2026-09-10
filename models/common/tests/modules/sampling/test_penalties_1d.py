@@ -3,10 +3,14 @@
 
 """Tests for Penalties1D module."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 import ttnn
+from models.common.modules.lazy_buffer import LazyBuffer
+from models.common.modules.sampling import penalties_1d as penalties_module
 from models.common.modules.sampling.penalties_1d import (
     Penalties1D,
     Penalties1DConfig,
@@ -786,8 +790,371 @@ class TestConfigUnitMore:
 
 
 # ==============================================================================
+# release() / cleanup contract (no device)
+# ==============================================================================
+
+# Module-owned buffer fields, in the order Penalties1D.release() walks them.
+_OWNED_BUFFER_NAMES = (
+    "prompt_mask",
+    "output_mask",
+    "output_counts",
+    "output_counts_gathered",
+    "zeros",
+    "decode_src",
+    "presence_penalties",
+    "frequency_penalties",
+    "repetition_penalties",
+    "inverse_repetition_penalties",
+)
+
+
+class _NotingError(RuntimeError):
+    """RuntimeError with an add_note() on every interpreter, so the note branch of the
+    cleanup helpers is exercised on Python 3.10 (CI) as well as 3.11+."""
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.notes = ()
+
+    def add_note(self, note):
+        self.notes = self.notes + (note,)
+
+
+def _loaded_penalties_with_fake_buffers():
+    """A Penalties1D that looks loaded: ten owned LazyBuffers and two slice tensors hold
+    fake device handles. Returns (penalties, buffers, handles-in-release-order)."""
+    buffers = {}
+    values = []
+    for name in _OWNED_BUFFER_NAMES:
+        buffer = LazyBuffer(source=torch.zeros(1))
+        value = object()
+        buffer._value = value
+        buffers[name] = buffer
+        values.append(value)
+
+    penalties = object.__new__(Penalties1D)
+    penalties.config = SimpleNamespace(**buffers)
+    penalties._slice_start = object()
+    penalties._slice_end = object()
+    values.extend((penalties._slice_start, penalties._slice_end))
+    penalties._decode_src = buffers["decode_src"]._value
+    penalties._zeros = buffers["zeros"]._value
+    penalties._device_buffers_loaded = True
+    return penalties, buffers, values
+
+
+def test_penalties_release_deallocates_owned_lazy_buffers_and_slice_tensors(monkeypatch):
+    released = []
+    monkeypatch.setattr(penalties_module.ttnn, "deallocate", released.append)
+    penalties, buffers, values = _loaded_penalties_with_fake_buffers()
+
+    penalties.release()
+    penalties.release()  # idempotent: nothing left to deallocate
+
+    assert released == values
+    assert all(buffer._value is None for buffer in buffers.values())
+    assert penalties._slice_start is None and penalties._slice_end is None
+    assert penalties._decode_src is None and penalties._zeros is None
+    assert not penalties._device_buffers_loaded
+
+
+def test_penalties_release_is_best_effort_and_retries_only_failed_buffers(monkeypatch, expect_error):
+    penalties, buffers, values = _loaded_penalties_with_fake_buffers()
+    counts_handle = buffers["output_counts"]._value
+    slice_handle = penalties._slice_start
+    counts_error = _NotingError("output_counts deallocate failed once")
+    slice_error = RuntimeError("slice_start deallocate failed once")
+    failures = {counts_handle: counts_error, slice_handle: slice_error}
+    attempts = []
+
+    def deallocate(value):
+        attempts.append(value)
+        if value in failures and attempts.count(value) == 1:
+            raise failures[value]
+
+    monkeypatch.setattr(penalties_module.ttnn, "deallocate", deallocate)
+
+    with expect_error(RuntimeError, "output_counts deallocate failed once") as caught:
+        penalties.release()
+
+    # First failure is raised; later failures ride along on it.
+    assert caught.value is counts_error
+    assert caught.value.cleanup_failures == (slice_error,)
+    assert counts_error.notes == ("cleanup also encountered 1 additional failure(s)",)
+    # Every buffer was attempted once; only the failed ones keep their handles.
+    assert attempts == values
+    assert buffers["output_counts"]._value is not None
+    assert all(buffer._value is None for name, buffer in buffers.items() if name != "output_counts")
+    assert penalties._slice_start is not None
+    assert penalties._slice_end is None
+    assert penalties._decode_src is None and penalties._zeros is None
+    assert not penalties._device_buffers_loaded
+
+    penalties.release()
+
+    # Retry touches only the two buffers that failed, and now clears them.
+    assert attempts == values + [counts_handle, slice_handle]
+    assert all(buffer._value is None for buffer in buffers.values())
+    assert penalties._slice_start is None
+
+
+def test_load_device_buffers_failure_releases_partial_state_and_attaches_cleanup_failures(monkeypatch, expect_error):
+    decode_src = LazyBuffer(source=torch.zeros(1))
+    decode_src._value = object()
+    zeros = LazyBuffer(source=torch.zeros(1))
+    zeros._value = object()
+
+    penalties = object.__new__(Penalties1D)
+    penalties.config = SimpleNamespace(
+        decode_src=decode_src,
+        zeros=zeros,
+        mesh_device=SimpleNamespace(shape=(1, 8)),
+        sub_core_grids=None,
+        is_resolved=lambda: True,
+    )
+    penalties._device_buffers_loaded = False
+
+    allocation_error = _NotingError("slice tensors failed")
+    cleanup_error = RuntimeError("zeros deallocate failed once")
+    deallocated = []
+
+    def deallocate(value):
+        deallocated.append(value)
+        if value is zeros._value and deallocated.count(value) == 1:
+            raise cleanup_error
+
+    def build_slice_tensors_and_fail():
+        raise allocation_error
+
+    monkeypatch.setattr(penalties_module.ttnn, "ShardTensor2dMesh", lambda *args, **kwargs: object())
+    monkeypatch.setattr(penalties_module.ttnn, "deallocate", deallocate)
+    monkeypatch.setattr(penalties, "_build_slice_tensors", build_slice_tensors_and_fail)
+
+    with expect_error(RuntimeError, "slice tensors failed") as caught:
+        penalties.load_device_buffers()
+
+    # The allocation failure is what propagates; the cleanup failure is attached, not raised.
+    assert caught.value is allocation_error
+    assert caught.value.cleanup_failures == (cleanup_error,)
+    assert allocation_error.notes == ("cleanup also encountered 1 failure(s)",)
+    assert not penalties._device_buffers_loaded
+    assert decode_src._value is None  # released during cleanup
+    assert zeros._value is not None  # deallocate failed once, handle retained for retry
+
+    penalties.release()
+    assert zeros._value is None
+    assert deallocated.count(decode_src._value) == 0 and len(deallocated) == 3
+
+    # A later load succeeds and repopulates the module-owned state.
+    slices = (object(), object())
+    monkeypatch.setattr(penalties, "_build_slice_tensors", lambda: slices)
+    monkeypatch.setattr(penalties_module, "_materialize", lambda buf: object())
+    penalties.load_device_buffers()
+    assert penalties._device_buffers_loaded
+    assert (penalties._slice_start, penalties._slice_end) == slices
+    assert penalties._cluster_shape == (1, 8) and penalties._num_devices == 8
+
+
+def test_cleanup_failure_helpers_tolerate_exceptions_without_add_note(expect_error):
+    """Plain exceptions (no add_note on Python 3.10) still carry cleanup_failures."""
+    primary = RuntimeError("primary")
+
+    penalties_module._attach_cleanup_failures(primary, ())
+    assert not hasattr(primary, "cleanup_failures")
+
+    penalties_module._attach_cleanup_failures(primary, (ValueError("first"),))
+    penalties_module._attach_cleanup_failures(primary, (ValueError("second"),))
+    assert [str(error) for error in primary.cleanup_failures] == ["first", "second"]
+
+    lone = RuntimeError("lone failure")
+    with expect_error(RuntimeError, "lone failure") as caught:
+        penalties_module._raise_cleanup_failures([lone])
+    assert caught.value is lone
+    assert not hasattr(lone, "cleanup_failures")
+
+    head, tail = RuntimeError("head failure"), ValueError("tail failure")
+    with expect_error(RuntimeError, "head failure") as caught:
+        penalties_module._raise_cleanup_failures([head, tail])
+    assert caught.value is head
+    assert head.cleanup_failures == (tail,)
+
+
+def test_build_slice_tensors_releases_first_slice_when_second_allocation_fails(monkeypatch, expect_error):
+    penalties = object.__new__(Penalties1D)
+    penalties.config = SimpleNamespace(vocab_size=1024, max_batch_size=32, mesh_device=object())
+    penalties._cluster_shape = (1, 8)
+    penalties._num_devices = 8
+
+    first_slice = object()
+    allocation_error = _NotingError("slice_end allocation failed")
+    cleanup_error = RuntimeError("slice_start deallocate failed")
+    host_tensors = []
+    deallocated = []
+
+    def from_torch(tensor, **_kwargs):
+        host_tensors.append(tensor)
+        if len(host_tensors) == 1:
+            return first_slice
+        raise allocation_error
+
+    def deallocate(value):
+        deallocated.append(value)
+        raise cleanup_error
+
+    monkeypatch.setattr(penalties_module.ttnn, "ShardTensor2dMesh", lambda *args, **kwargs: object())
+    monkeypatch.setattr(penalties_module.ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(penalties_module.ttnn, "deallocate", deallocate)
+
+    with expect_error(RuntimeError, "slice_end allocation failed") as caught:
+        penalties._build_slice_tensors()
+
+    assert caught.value is allocation_error
+    assert deallocated == [first_slice]  # the half-built pair is torn down before re-raising
+    assert caught.value.cleanup_failures == (cleanup_error,)
+    assert allocation_error.notes == ("cleanup also encountered 1 failure(s)",)
+    # Per-device vocab slice bounds for 1024 / 8 devices, padded batch 32.
+    assert host_tensors[0].tolist() == [v for d in range(8) for v in (0, 128 * d)]
+    assert host_tensors[1].tolist() == [v for d in range(8) for v in (32, 128 * (d + 1))]
+
+
+# ==============================================================================
 # Additional device tests: coverage for previously untested methods
 # ==============================================================================
+
+
+@pytest.mark.parametrize(
+    ("batch_height", "expected_operation"),
+    [(1, "to_layout"), (32, "tilize")],
+)
+def test_histogram_tilize_preserves_batch32_path_and_pads_smaller_batches(
+    monkeypatch,
+    batch_height,
+    expected_operation,
+):
+    """Only non-tile batch heights use the padding-aware layout conversion."""
+
+    calls = []
+    counts = SimpleNamespace(padded_shape=(batch_height, 1024))
+    result = object()
+    pen = object.__new__(Penalties1D)
+    pen._op_kwargs = {"sub_core_grids": "sub-grid"}
+    pen._use_low_perf_tilize = True
+
+    monkeypatch.setattr(
+        ttnn,
+        "tilize",
+        lambda tensor, **kwargs: calls.append(("tilize", tensor, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "to_layout",
+        lambda tensor, layout, **kwargs: calls.append(("to_layout", tensor, layout, kwargs)) or result,
+    )
+
+    assert pen._tilize_counts(counts) is result
+    if expected_operation == "tilize":
+        assert calls == [
+            (
+                "tilize",
+                counts,
+                {"sub_core_grids": "sub-grid", "use_low_perf": True},
+            )
+        ]
+    else:
+        assert calls == [
+            (
+                "to_layout",
+                counts,
+                ttnn.TILE_LAYOUT,
+                {"sub_core_grids": "sub-grid"},
+            )
+        ]
+
+
+def test_non_tile_histogram_slices_padded_views_and_preserves_logical_output(monkeypatch):
+    """Batch-1 vocab slicing uses padded aliases of caller-owned state."""
+
+    events = []
+    counts_new_rm = SimpleNamespace(name="counts-new-rm")
+    counts_new_tiled = SimpleNamespace(name="counts-new-tiled")
+    counts = SimpleNamespace(name="counts", shape=(1, 1024), padded_shape=(32, 1024))
+    counts_padded = SimpleNamespace(name="counts-padded")
+    counts_sliced = SimpleNamespace(name="counts-sliced", shape=(1, 128), padded_shape=(32, 128))
+    counts_sliced_padded = SimpleNamespace(name="counts-sliced-padded")
+    mask = object()
+    new_tokens = SimpleNamespace(deallocate=lambda: events.append("deallocate-tokens"))
+
+    pen = object.__new__(Penalties1D)
+    pen.config = SimpleNamespace(max_batch_size=1)
+    pen._zeros = object()
+    pen._op_kwargs = {}
+    pen._slice_start = object()
+    pen._slice_end = object()
+    pen._num_devices = 8
+    pen._tilize_counts = lambda tensor: events.append(("tilize", tensor)) or counts_new_tiled
+
+    monkeypatch.setattr(
+        ttnn,
+        "scatter_add",
+        lambda *args, **kwargs: events.append(("scatter", args, kwargs)) or counts_new_rm,
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "add",
+        lambda lhs, rhs, *, output_tensor, **kwargs: events.append(("add", lhs, rhs, output_tensor, kwargs))
+        or output_tensor,
+    )
+
+    def reshape(tensor, logical_shape, padded_shape, *, skip_padding_fill):
+        events.append(("reshape", tensor, logical_shape, padded_shape, skip_padding_fill))
+        if tensor is counts:
+            return counts_padded
+        assert tensor is counts_sliced
+        return counts_sliced_padded
+
+    monkeypatch.setattr(ttnn, "reshape", reshape)
+
+    def slice_tensor(tensor, start, end, *, output_tensor, slice_dim, num_devices, **kwargs):
+        events.append(("slice", tensor, start, end, output_tensor, slice_dim, num_devices, kwargs))
+        assert tensor is counts_padded
+        assert end is pen._slice_end
+        assert output_tensor is counts_sliced_padded
+        return output_tensor
+
+    monkeypatch.setattr(ttnn, "slice", slice_tensor)
+    monkeypatch.setattr(
+        ttnn,
+        "gt",
+        lambda tensor, threshold, *, output_tensor, **kwargs: events.append(
+            ("gt", tensor, threshold, output_tensor, kwargs)
+        )
+        or output_tensor,
+    )
+
+    returned_counts, returned_mask = pen._token_bin_counts_and_mask(
+        new_tokens,
+        object(),
+        counts=counts,
+        mask=mask,
+        counts_sliced=counts_sliced,
+    )
+
+    assert returned_counts is counts
+    assert returned_mask is mask
+    assert events[-1] == ("gt", counts_sliced, 0, mask, {})
+    slices = [event for event in events if isinstance(event, tuple) and event[0] == "slice"]
+    assert slices == [
+        (
+            "slice",
+            counts_padded,
+            pen._slice_start,
+            pen._slice_end,
+            counts_sliced_padded,
+            1,
+            8,
+            {},
+        )
+    ]
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
@@ -838,15 +1205,19 @@ class TestPenalties1DDeviceExtra:
     # init_prompt_penalties + _token_bin_counts_and_mask counts=None path
     # ------------------------------------------------------------------
 
+    @pytest.mark.parametrize("max_batch_size", [1, 32])
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size):
+    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size, max_batch_size):
         """init_prompt_penalties scatters prompt tokens into prompt_mask."""
-        B = 32
-        pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+        pen = Penalties1D(
+            vocab_size=vocab_size,
+            mesh_device=ttnn_mesh_device,
+            max_batch_size=max_batch_size,
+        )
         pen.load_device_buffers()
         params, accum = _make_proper_params_accum(pen)
 
-        prompt_tokens = torch.randint(0, vocab_size, (B, 10))
+        prompt_tokens = torch.randint(0, vocab_size, (max_batch_size, 10))
         pen.init_prompt_penalties(params, accum, prompt_tokens)
 
     # ------------------------------------------------------------------
@@ -907,17 +1278,21 @@ class TestPenalties1DDeviceExtra:
     # and _token_bin_counts_and_mask counts-not-None path (line 419)
     # ------------------------------------------------------------------
 
+    @pytest.mark.parametrize("max_batch_size", [1, 32])
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_update_output_tokens_standard(self, ttnn_mesh_device, vocab_size):
+    def test_update_output_tokens_standard(self, ttnn_mesh_device, vocab_size, max_batch_size):
         """update_output_tokens with standard decode-shape [1,1,1,B] (lines 290-294)."""
-        B = 32
-        pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+        pen = Penalties1D(
+            vocab_size=vocab_size,
+            mesh_device=ttnn_mesh_device,
+            max_batch_size=max_batch_size,
+        )
         pen.load_device_buffers()
         _, accum = _make_proper_params_accum(pen)
 
-        # Standard sampling output: shape[-1]=B=32, shape[-2]=1 → if-branch
+        # Standard sampling output: shape[-1]=B, shape[-2]=1 → if-branch.
         tokens_tt = ttnn.from_torch(
-            torch.randint(0, vocab_size, (1, 1, 1, B), dtype=torch.int32),
+            torch.randint(0, vocab_size, (1, 1, 1, max_batch_size), dtype=torch.int32),
             device=ttnn_mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,

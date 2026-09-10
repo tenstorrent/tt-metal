@@ -5,10 +5,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from math import nan
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from math import nan
 from loguru import logger
 
 OpDict = Dict[str, Any]
@@ -337,19 +337,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "Data Hazard Stall Rate Median (%)",
     "Data Hazard Stall Rate Max (%)",
     "Data Hazard Stall Rate Avg (%)",
-    # TDMA_UNPACK fidelity metrics
-    "Fidelity Stall Rate Min (%)",
-    "Fidelity Stall Rate Median (%)",
-    "Fidelity Stall Rate Max (%)",
-    "Fidelity Stall Rate Avg (%)",
-    "HiFi Fraction Min (%)",
-    "HiFi Fraction Median (%)",
-    "HiFi Fraction Max (%)",
-    "HiFi Fraction Avg (%)",
-    "Avg HF Cycles Per Instrn Min",
-    "Avg HF Cycles Per Instrn Median",
-    "Avg HF Cycles Per Instrn Max",
-    "Avg HF Cycles Per Instrn Avg",
     # L1 Bank 0 utilization
     "L1 Unpacker Port Util Min (%)",
     "L1 Unpacker Port Util Median (%)",
@@ -721,8 +708,6 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         # TDMA_UNPACK
         "Data Hazard Stall Rate",
         # TDMA_UNPACK fidelity
-        "Fidelity Stall Rate",
-        "HiFi Fraction",
         # L1 Bank 0
         "L1 Unpacker Port Util",
         "L1 TDMA Bundle Util",
@@ -790,7 +775,6 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
-        "Avg HF Cycles Per Instrn",
     ]
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
@@ -1054,22 +1038,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "DATA_HAZARD_STALLS_MOVD2A", "MATH_INSTRN_AVAILABLE"
         )
 
-    if has_counter("MATH_FIDELITY_STALL") and has_counter("MATH_INSTRN_AVAILABLE"):
-        per_op_stats["Fidelity Stall Rate"] = compute_ratio_metric("MATH_FIDELITY_STALL", "MATH_INSTRN_AVAILABLE")
-    if (
-        has_counter("MATH_INSTRN_HF_1_CYCLE")
-        and has_counter("MATH_INSTRN_HF_2_CYCLE")
-        and has_counter("MATH_INSTRN_HF_4_CYCLE")
-    ):
-        hf1 = get_counter_series("MATH_INSTRN_HF_1_CYCLE").fillna(0)
-        hf2 = get_counter_series("MATH_INSTRN_HF_2_CYCLE").fillna(0)
-        hf4 = get_counter_series("MATH_INSTRN_HF_4_CYCLE").fillna(0)
-        total = hf1 + hf2 + hf4
-        hifi_fraction = ((hf2 + hf4) / total * 100).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["HiFi Fraction"] = _group_to_stat_dict(hifi_fraction)
-        avg_hf = ((hf1 + 2 * hf2 + 4 * hf4) / total).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["Avg HF Cycles Per Instrn"] = _group_to_stat_dict(avg_hf)
-
     # === L1 Bank 0 ===
     if has_counter("L1_0_UNPACKER_0"):
         per_op_stats["L1 Unpacker Port Util"] = compute_util_metric("L1_0_UNPACKER_0")
@@ -1129,16 +1097,16 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
 
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
-        unstalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
+        not_stalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
         # Skip when the counter reads 0 for the whole op (would report bogus 100% stall rate).
-        if unstalled.sum() > 0:
+        if not_stalled.sum() > 0:
             avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-            ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+            ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
             per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
         avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-        unstalled = get_counter_series("AVAILABLE_MATH")
-        ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+        not_stalled = get_counter_series("AVAILABLE_MATH")
+        ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
     # Per-thread total instruction issue rates (per cycle, not %).
@@ -1534,30 +1502,6 @@ def compute_device_only_metrics(
 
     eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(_d2a_stall_rate, axis=1)
 
-    def _fidelity_stall_rate(x):
-        stall = x.get("value_MATH_FIDELITY_STALL", 0)
-        valid = x.get("value_MATH_INSTRN_AVAILABLE", 0)
-        return (stall / valid * 100) if valid > 0 else nan
-
-    eff_pivot["Fidelity Stall Rate"] = eff_pivot.apply(_fidelity_stall_rate, axis=1)
-
-    def _hifi_fraction(x):
-        h1 = x.get("value_MATH_INSTRN_HF_1_CYCLE", 0)
-        h2 = x.get("value_MATH_INSTRN_HF_2_CYCLE", 0)
-        h4 = x.get("value_MATH_INSTRN_HF_4_CYCLE", 0)
-        total = h1 + h2 + h4
-        return ((h2 + h4) / total * 100) if total > 0 else nan
-
-    def _avg_hf_cycles(x):
-        h1 = x.get("value_MATH_INSTRN_HF_1_CYCLE", 0)
-        h2 = x.get("value_MATH_INSTRN_HF_2_CYCLE", 0)
-        h4 = x.get("value_MATH_INSTRN_HF_4_CYCLE", 0)
-        total = h1 + h2 + h4
-        return ((h1 + 2 * h2 + 4 * h4) / total) if total > 0 else nan
-
-    eff_pivot["HiFi Fraction"] = eff_pivot.apply(_hifi_fraction, axis=1)
-    eff_pivot["Avg HF Cycles Per Instrn"] = eff_pivot.apply(_avg_hf_cycles, axis=1)
-
     # L1 Bank 0 metrics
     eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
         lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
@@ -1785,10 +1729,13 @@ def compute_device_only_metrics(
             safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
-    eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
-        axis=1,
-    )
+    # Different capture groups (PACK, UNPACK), so either column can be absent; a missing numerator
+    # reads as a flat 100%. Existence only, unlike the sum guard above: all-zero is a real reading.
+    if "value_AVAILABLE_MATH" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
+        eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
+            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
+            axis=1,
+        )
 
     # Per-thread total instruction issue rates (per cycle, not %).
     eff_pivot["T0 Instrn Issue Rate"] = eff_pivot.apply(
@@ -2040,8 +1987,6 @@ def compute_device_only_metrics(
         "Semaphore Full Wait T1",
         "Semaphore Full Wait T2",
         "Data Hazard Stall Rate",
-        "Fidelity Stall Rate",
-        "HiFi Fraction",
         "L1 Unpacker Port Util",
         "L1 TDMA Bundle Util",
         "NOC Ring 0 Outgoing Util",
@@ -2099,7 +2044,6 @@ def compute_device_only_metrics(
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
-        "Avg HF Cycles Per Instrn",
     ]
 
     agg_metrics: Dict[str, Dict] = {}

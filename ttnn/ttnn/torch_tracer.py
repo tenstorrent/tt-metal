@@ -492,6 +492,8 @@ def postprocess_return_value(return_value, output_tensors):
 
 
 class TracedTorchTensor(torch.Tensor):
+    # Nanobind uses the concrete type's module to select PyTorch ndarray conversions.
+    __module__ = torch.Tensor.__module__
     TRACEDTENSOR = None  # tag as an alternative to multiple inheritance
 
     @staticmethod

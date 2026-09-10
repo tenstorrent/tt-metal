@@ -23,7 +23,6 @@ from models.common.llm_runtime.prefill.postprocess import (
     without_borrowed,
 )
 from models.common.llm_runtime.prefill.result_collector import InvocationResult
-from models.common.llm_runtime.prefill.sampling_helpers import _formatted_sampling_values
 from models.common.llm_runtime.prefill.signatures import (
     PrefillTraceSignature,
     PreparedPrefill,
@@ -78,6 +77,8 @@ class PrefillCapturePlan:
     schema_fingerprint: tuple[Any, ...]
     workspace_fingerprint: tuple[Any, ...]
     refresh_fields: tuple[str, ...] = ("tokens", "page_table", "last_token", "sampling")
+    prime: Callable[[PrefillHiddenPersistentInputs], Any] | None = None
+    release_prime_output: Callable[[Any], list[BaseException]] | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class PrefillTraceHooks:
     run_hidden_body: Callable[..., Any]
     run_chunk_hidden_body: Callable[..., Any]
     release_transient: Callable[[Any], list[BaseException]]
+    trace_capture_prime_sequence_lengths: tuple[int, ...] = ()
 
 
 class PrefillTraceLifecycle:
@@ -122,6 +124,10 @@ class PrefillTraceLifecycle:
                 fill_rows=prepared.request.padded_batch_size,
             )
 
+        should_prime = (
+            prepared.request.kind == "batched"
+            and prepared.trace_signature.padded_sequence_length in self.hooks.trace_capture_prime_sequence_lengths
+        )
         return PrefillCapturePlan(
             signature=prepared.trace_signature,
             prepare_inputs=prepare_inputs,
@@ -132,6 +138,8 @@ class PrefillTraceLifecycle:
                 prepared,
                 sampling_output_rows=self.hooks.postprocessor.sampling_output_rows(prepared),
             ),
+            prime=capture if should_prime else None,
+            release_prime_output=self.hooks.release_transient if should_prime else None,
         )
 
     def refresh(
@@ -239,11 +247,12 @@ class PrefillTraceLifecycle:
             )
             position_inputs = PrefillPositionInputs(*position_values)
             kpt = self.hooks.postprocessor.make_device_kpt(
-                prepared.sampling_params,
+                self.hooks.postprocessor.prepared_sampling(prepared),
                 sampling_batch_size,
                 force_topk=prepared.sampling_path == "topk",
             )
-            if prepared.sampling_params is not None:
+            prepared_sampling = self.hooks.postprocessor.prepared_sampling(prepared)
+            if prepared_sampling is not None:
                 sampled_output = self.hooks.postprocessor.make_sampling_output(
                     self.hooks.postprocessor.sampling_output_rows(prepared)
                 )
@@ -252,9 +261,8 @@ class PrefillTraceLifecycle:
             attach_cleanup_failures(primary, failures)
             raise
         kpt_signature = None
-        if prepared.sampling_params is not None:
-            k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
-            kpt_signature = k, p, temperature
+        if prepared_sampling is not None:
+            kpt_signature = self.hooks.postprocessor.kpt_values(prepared_sampling, sampling_batch_size)
         return PrefillReplayState(
             position_inputs=position_inputs,
             kpt=kpt,

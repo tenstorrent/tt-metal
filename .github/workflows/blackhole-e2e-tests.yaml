@@ -30,6 +30,7 @@ on:
         options:
           - all
           - disaggregated_prefill
+          - kimi_k3
       test-selection:
         description: 'Select e2e tests to run: all tests, or one test id'
         required: false

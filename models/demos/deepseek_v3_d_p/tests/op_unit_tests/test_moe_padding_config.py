@@ -24,6 +24,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 # Galaxy-shaped SP=8 config (chunk_size_global 5120 -> tokens_per_chip 640) plus the existing small
 # 2x4 case for boxes that cannot host 32 chips. Keep this one-for-one: the production row owns
@@ -104,7 +105,7 @@ def _read_counts(config: ttnn.Tensor, mesh_device, sp_factor: int) -> tuple[list
 
 def _run_case(mesh_device, actual_start: int, actual_isl: int, padding_side: str = "right"):
     sp_factor = int(mesh_device.shape[0])
-    tokens_per_chip = 640
+    tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
     chunk_global = sp_factor * tokens_per_chip
 
     config = _alloc_config(mesh_device, sp_factor)
@@ -166,7 +167,7 @@ def test_moe_padding_config_one_program_across_chunks(mesh_device):
     place must change the result — together these are exactly what lets one capture replay across
     chunks. Asserts a single cached program serves a sequence of different chunks, each still correct."""
     sp_factor = int(mesh_device.shape[0])
-    tokens_per_chip = 640
+    tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
 
     config = _alloc_config(mesh_device, sp_factor)
     start_t = _meta1(mesh_device, 0)

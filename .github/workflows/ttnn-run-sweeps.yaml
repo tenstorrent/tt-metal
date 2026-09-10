@@ -510,6 +510,7 @@ on:
           - embedding_bw.embedding_bw
           - fused.layer_norm_traces
           - fused.softmax_traces
+          - indexed_fused_update_cache
           - losses.l1_loss
           - losses.mse_loss
           - matmul.full.matmul_default_block_sharded

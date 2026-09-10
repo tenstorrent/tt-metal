@@ -271,6 +271,63 @@ def test_indexed_fill_program_cache(device, variant):
             ), "cache-hit run created a new program entry instead of reusing the cached one"
 
 
+@pytest.mark.parametrize(
+    "dim",
+    [0, 3],
+    ids=["dim=0-native", "dim=3-fallback"],
+)
+def test_indexed_fill_nd_sharded_output_preserves_nd_shard_spec(device, dim):
+    B, C, H, W = 8, 1, 64, 64
+    b = 3
+    shape_a = (B, C, H, W)
+    shape_b = list(shape_a)
+    shape_b[dim] = b
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 3))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape([1, 1, 32, 32]), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    spec_a = ttnn.TensorSpec(
+        shape=shape_a,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        nd_shard_spec=nd_shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    assert (
+        spec_a.memory_config.nd_shard_spec is not None
+    ), f"input_a spec lost its ND shard spec at construction: {spec_a.memory_config}"
+
+    batch_id = torch.randint(0, shape_a[dim], (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    torch_a = torch.rand(shape_a, dtype=torch.bfloat16)
+    torch_b = torch.rand(tuple(shape_b), dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(torch_a, spec=spec_a, device=device)
+    input_tensor_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=dim)
+
+    output_mem_config = output_tensor.memory_config()
+    input_mem_config = input_tensor_a.memory_config()
+    assert output_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED, (
+        f"dim={dim}: output memory layout is {output_mem_config.memory_layout}, "
+        f"expected ND_SHARDED; full output config: {output_mem_config}"
+    )
+    assert output_mem_config.nd_shard_spec == input_mem_config.nd_shard_spec, (
+        f"dim={dim}: output ND shard spec was rebuilt.\n"
+        f"  expected (input_a): {input_mem_config.nd_shard_spec}\n"
+        f"  actual   (output) : {output_mem_config.nd_shard_spec}\n"
+        f"  full output config: {output_mem_config}"
+    )
+    logger.info(f"Indexed Fill (ND_SHARDED, dim={dim}) Output Memory Config: {output_mem_config}")
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=dim)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
 def test_indexed_fill_dim_out_of_bounds(device, expect_error):
     # Verify that a dim outside [-rank, rank) raises a fatal error.
     input_tensor_a = ttnn.rand((4, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -285,3 +342,64 @@ def test_indexed_fill_dim_out_of_bounds(device, expect_error):
 
     with expect_error(RuntimeError, "is out of bounds for rank"):
         ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=-5)  # -5 < -rank=-4
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+@pytest.mark.parametrize(
+    "shape, out_layout, expected_cores",
+    [
+        # HEIGHT_SHARDED: (B=2, ..., H=32, W=64) tiled → tensor_h=64, shard_h=32 → 2 populated cores.
+        pytest.param((2, 1, 32, 64), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2, id="H_shrinks"),
+        # WIDTH_SHARDED: W=64 tiled → shard_w=32 → 2 populated cores.
+        pytest.param((2, 1, 32, 64), ttnn.TensorMemoryLayout.WIDTH_SHARDED, 2, id="W_shrinks"),
+        # BLOCK_SHARDED: tensor_h=64, tensor_w=64 on 8x8 grid → 2x2 rectangle = 4 populated cores.
+        pytest.param((2, 1, 32, 64), ttnn.TensorMemoryLayout.BLOCK_SHARDED, 4, id="B_shrinks"),
+    ],
+)
+def test_indexed_fill_specless_sharded_output_grid_shrinks(device, shape, out_layout, expected_cores):
+    """No-spec sharded output MC must synthesise a CoreRangeSet sized to populated shards, not full compute grid."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= expected_cores:
+        pytest.skip(f"Device grid too small to observe shrink (need > {expected_cores} cores)")
+    if out_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and (compute_grid.x < 2 or compute_grid.y < 2):
+        pytest.skip("BLOCK case needs at least a 2x2 compute grid")
+
+    B = shape[0]
+    b = 1
+    batch_id = torch.randint(0, B, (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_b = torch.rand((b, *shape[1:]), dtype=torch.bfloat16)
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    input_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+
+    out_mc = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    output = ttnn.indexed_fill(batch_id_ttnn, input_a, input_b, memory_config=out_mc)
+    grid = output.memory_config().shard_spec.grid
+    assert grid.num_cores() == expected_cores, f"Expected {expected_cores} populated cores, got {grid.num_cores()}"
+    if out_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        # BLOCK: rectangular (0,0)-(nx-1, ny-1); shape=(2,1,32,64) on tile-aligned 8x8 → 2×2.
+        expected_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+    else:
+        expected_crs = ttnn.num_cores_to_corerangeset(expected_cores, compute_grid, True)
+    assert grid == expected_crs, f"Expected CoreRangeSet {expected_crs}, got {grid}"
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output), 0.9999)

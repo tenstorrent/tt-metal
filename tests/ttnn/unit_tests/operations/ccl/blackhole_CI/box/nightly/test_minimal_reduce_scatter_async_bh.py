@@ -269,6 +269,10 @@ def run_reduce_scatter_impl(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        # Zero-page worker regression: scattering on dim 1 gives 2 workers 1 page, so one owns nothing.
+        # That worker's only fabric send is the batch-ready increment, which deadlocked on the mux
+        # path until the ring writer flushed it (confirmed with tt-triage on an 8-device, 2-link ring).
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -283,6 +287,7 @@ def run_reduce_scatter_impl(
         "composite_rs_test_two",
         "composite_rs_test_three",
         "composite_rs_test_four",
+        "zero_page_worker",
     ],
 )
 @pytest.mark.parametrize(
@@ -385,6 +390,8 @@ def test_reduce_scatter_async_4dev_ring(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        # Same zero-page split on the line topology, whose writer never had the staging deadlock.
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -399,6 +406,7 @@ def test_reduce_scatter_async_4dev_ring(
         "composite_rs_test_two",
         # "composite_rs_test_three",
         "composite_rs_test_four",
+        "zero_page_worker",
     ],
 )
 @pytest.mark.parametrize(

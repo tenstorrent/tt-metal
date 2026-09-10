@@ -101,7 +101,7 @@ void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_
     // Initial summaries may be BF16 while stage and send buffers use the canonical FP32 internal format. Copy updates
     // the source format; startup already configured the packer for the internal format.
     reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     for (uint32_t tile = 0; tile < tiles; tile++) {
         tile_regs_acquire();
         copy_tile(in_id, tile, 0);

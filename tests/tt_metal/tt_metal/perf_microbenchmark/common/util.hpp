@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/device.hpp>

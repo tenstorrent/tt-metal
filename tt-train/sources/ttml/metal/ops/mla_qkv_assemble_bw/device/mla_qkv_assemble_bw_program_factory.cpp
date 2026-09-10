@@ -173,12 +173,14 @@ MLAQKVAssembleBwProgramFactory::cached_program_t MLAQKVAssembleBwProgramFactory:
     const uint32_t num_blocks = B * Ts;
 
     // Compute kernel uses Tr persistent dst-register slots as the head-axis accumulator, plus 1 temp
-    // slot. With fp32 dest accumulation the DST holds 8 fp32 tiles, so the bound is Tr + 1 ≤ 8.
+    // slot. fp32_dest_acc_en=true -> DST holds 4 tiles, so the bound is Tr + 1 <= 4.
+    constexpr uint32_t max_dst_tiles = 4U;
     TT_FATAL(
-        Tr + 1U <= 8U,
-        "MLAQKVAssembleBw: qk_rope_dim ({}) / TILE_W = {} too large for in-register accumulator (max 7).",
+        Tr + 1U <= max_dst_tiles,
+        "MLAQKVAssembleBw: qk_rope_dim ({}) / TILE_W = {} too large for in-register accumulator (max {}).",
         args.qk_rope_dim,
-        Tr);
+        Tr,
+        max_dst_tiles - 1U);
 
     // ── Work split ──
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

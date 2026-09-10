@@ -26,6 +26,19 @@ class _SingletonSamplingParams:
     top_p: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class _StatefulSamplingParams:
+    temperature: list[float]
+    top_k: torch.Tensor
+    top_p: list[float]
+    presence_penalty: list[float]
+    frequency_penalty: list[float]
+    repetition_penalty: list[float]
+    seed: list[int | None]
+    enable_log_probs: list[bool]
+    num_logprobs: list[int]
+
+
 class _Lane:
     def __init__(self, lane_idx, *, capacity=2):
         self.lane_idx = lane_idx
@@ -69,6 +82,9 @@ class _Lane:
         empty_slots=None,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         execution=None,
     ):
         self._call(
@@ -81,6 +97,9 @@ class _Lane:
                 "empty_slots": empty_slots,
                 "kv_cache": kv_cache,
                 "sampling_params": sampling_params,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+                "slot_remap": slot_remap,
                 "execution": execution,
             },
         )
@@ -93,6 +112,9 @@ class _Lane:
         page_table,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,
         execution=None,
     ):
@@ -104,6 +126,9 @@ class _Lane:
                 "page_table": page_table,
                 "kv_cache": kv_cache,
                 "sampling_params": sampling_params,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+                "slot_remap": slot_remap,
                 "reset_batch": reset_batch,
                 "execution": execution,
             },
@@ -150,6 +175,9 @@ class _Lane:
         empty_slots=None,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         execution=None,
     ):
         kwargs = {
@@ -160,6 +188,9 @@ class _Lane:
             "empty_slots": empty_slots,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
+            "prompt_tokens": prompt_tokens,
+            "output_tokens": output_tokens,
+            "slot_remap": slot_remap,
             "execution": execution,
         }
         self._call("prefill", kwargs)
@@ -176,6 +207,9 @@ class _Lane:
         *,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,
         read_from_device=True,
         execution=None,
@@ -186,6 +220,9 @@ class _Lane:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
+            "prompt_tokens": prompt_tokens,
+            "output_tokens": output_tokens,
+            "slot_remap": slot_remap,
             "reset_batch": reset_batch,
             "read_from_device": read_from_device,
             "execution": execution,
@@ -255,6 +292,9 @@ _PUBLIC_SIGNATURES = {
         ("empty_slots", _KEYWORD_ONLY, None),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("execution", _KEYWORD_ONLY, None),
     ),
     "compile_decode": (
@@ -263,6 +303,9 @@ _PUBLIC_SIGNATURES = {
         ("page_table", _POSITIONAL, _REQUIRED),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("reset_batch", _KEYWORD_ONLY, False),
         ("execution", _KEYWORD_ONLY, None),
     ),
@@ -286,6 +329,9 @@ _PUBLIC_SIGNATURES = {
         ("empty_slots", _KEYWORD_ONLY, None),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("execution", _KEYWORD_ONLY, None),
     ),
     "can_trace_prefill": (
@@ -300,6 +346,9 @@ _PUBLIC_SIGNATURES = {
         ("page_table", _POSITIONAL, _REQUIRED),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("reset_batch", _KEYWORD_ONLY, False),
         ("read_from_device", _KEYWORD_ONLY, True),
         ("execution", _KEYWORD_ONLY, None),
@@ -337,6 +386,9 @@ def test_prefill_routes_global_slots_and_restores_source_row_order():
         empty_slots=[3, 0, 2],
         prompt_lens=torch.tensor([1, 1, 1]),
         sampling_params=_sampling(),
+        prompt_tokens=torch.tensor([[100], [101], [102], [103]]),
+        output_tokens=[[200], [201], [202], [203]],
+        slot_remap=torch.tensor([0, 1, 2, 3]),
         kv_cache=["kv-0", "kv-1"],
     )
 
@@ -356,8 +408,46 @@ def test_prefill_routes_global_slots_and_restores_source_row_order():
     assert lane0_kwargs["sampling_params"].top_k.tolist() == [2]
     assert lane1_kwargs["sampling_params"].top_k.tolist() == [1, 3]
     assert lane0_kwargs["sampling_params"].top_p == 0.9
+    assert lane0_kwargs["prompt_tokens"].flatten().tolist() == [100, -1]
+    assert lane1_kwargs["prompt_tokens"].flatten().tolist() == [102, 103]
+    assert lane0_kwargs["output_tokens"] == [[200], [-1]]
+    assert lane1_kwargs["output_tokens"] == [[202], [203]]
+    assert lane0_kwargs["slot_remap"].tolist() == [0, 1]
+    assert lane1_kwargs["slot_remap"].tolist() == [0, 1]
     assert lane0_kwargs["kv_cache"] == "kv-0"
     assert lane1_kwargs["kv_cache"] == "kv-1"
+
+
+def test_prefill_log_probs_restore_source_rows_and_fill_nonrequesting_lane():
+    lanes = [_Lane(0), _Lane(1)]
+
+    def prefill_with_log_probs(
+        tokens,
+        page_table,
+        *,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        kv_cache=None,
+        sampling_params=None,
+        execution=None,
+    ):
+        assert tokens.shape[0] == 2
+        return torch.zeros(2, dtype=torch.int64), torch.tensor([0.25, 0.75])
+
+    lanes[1].prefill_forward = prefill_with_log_probs
+    group = LaneGroupExecutor(lanes)
+
+    output, log_probs = group.prefill_forward(
+        tokens=torch.tensor([[10], [11], [12]]),
+        page_table=torch.tensor([[0], [1], [2]], dtype=torch.int32),
+        empty_slots=[3, 0, 2],
+        sampling_params=_sampling(),
+    )
+
+    assert output.tolist() == [0, 11, 0]
+    assert isinstance(log_probs, torch.Tensor)
+    assert log_probs.tolist() == [0.25, 1.0, 0.75]
 
 
 def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
@@ -369,6 +459,9 @@ def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
         torch.tensor([1, 2, 3, 4]),
         torch.arange(4, dtype=torch.int32).view(4, 1),
         sampling_params=_sampling(),
+        prompt_tokens=torch.tensor([[100], [101], [102], [103]]),
+        output_tokens=[[200], [201], [202], [203]],
+        slot_remap=torch.tensor([1, 0, 3, 2]),
         kv_cache=["kv-0", "kv-1"],
         reset_batch=True,
     )
@@ -382,7 +475,224 @@ def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
     assert lane1_kwargs["tokens"].tolist() == [12, 13]
     assert lane0_kwargs["sampling_params"].temperature == [0.1, 0.2]
     assert lane1_kwargs["sampling_params"].temperature == [0.3, 0.4]
+    assert lane0_kwargs["prompt_tokens"].flatten().tolist() == [100, 101]
+    assert lane1_kwargs["prompt_tokens"].flatten().tolist() == [102, 103]
+    assert lane0_kwargs["output_tokens"] == [[200], [201]]
+    assert lane1_kwargs["output_tokens"] == [[202], [203]]
+    assert lane0_kwargs["slot_remap"].tolist() == [1, 0]
+    assert lane1_kwargs["slot_remap"].tolist() == [1, 0]
     assert lane0_kwargs["reset_batch"] is lane1_kwargs["reset_batch"] is True
+
+
+@pytest.mark.parametrize(
+    (
+        "layout",
+        "prefill_tokens",
+        "empty_slots",
+        "prefill_sampling",
+        "decode_tokens",
+        "decode_positions",
+        "decode_sampling",
+        "slot_remap",
+        "expected_prefill_tokens",
+        "expected_decode_tokens",
+        "expected_lane_slots",
+        "expected_lane_seeds",
+    ),
+    [
+        pytest.param(
+            "front_packed_gathered",
+            torch.tensor([[10], [11], [12], [13]]),
+            [0, 1, 2, 3],
+            _StatefulSamplingParams(
+                temperature=[0.0, 0.8, 1.0, 1.2],
+                top_k=torch.tensor([1, 5, 7, 9]),
+                top_p=[0.0, 0.7, 0.8, 0.9],
+                presence_penalty=[0.0, 0.1, 0.2, 0.3],
+                frequency_penalty=[0.0, 0.4, 0.5, 0.6],
+                repetition_penalty=[1.0, 1.1, 1.2, 1.3],
+                seed=[100, 101, 102, 103],
+                enable_log_probs=[False, True, False, True],
+                num_logprobs=[0, 0, 0, 0],
+            ),
+            torch.tensor([10, 11, 12, 13]),
+            torch.tensor([1, 2, 3, 4]),
+            _StatefulSamplingParams(
+                temperature=[0.0, 0.8, 1.0, 1.2],
+                top_k=torch.tensor([1, 5, 7, 9]),
+                top_p=[0.0, 0.7, 0.8, 0.9],
+                presence_penalty=[0.0, 0.1, 0.2, 0.3],
+                frequency_penalty=[0.0, 0.4, 0.5, 0.6],
+                repetition_penalty=[1.0, 1.1, 1.2, 1.3],
+                seed=[100, 101, 102, 103],
+                enable_log_probs=[False, True, False, True],
+                num_logprobs=[0, 0, 0, 0],
+            ),
+            torch.tensor([1, 0, 3, 2]),
+            [10, 11, 112, 113],
+            [10, 11, 112, 113],
+            ([0, 1], [0, 1]),
+            ([100, 101], [102, 103]),
+            id="front_packed_gathered",
+        ),
+        pytest.param(
+            "stable_gap_lane",
+            torch.tensor([[11], [13]]),
+            [1, 3],
+            _StatefulSamplingParams(
+                temperature=[0.8, 1.2],
+                top_k=torch.tensor([5, 9]),
+                top_p=[0.7, 0.9],
+                presence_penalty=[0.1, 0.3],
+                frequency_penalty=[0.4, 0.6],
+                repetition_penalty=[1.1, 1.3],
+                seed=[101, 103],
+                enable_log_probs=[True, True],
+                num_logprobs=[0, 0],
+            ),
+            torch.tensor([0, 11, 0, 13]),
+            torch.tensor([-1, 2, -1, 4]),
+            _StatefulSamplingParams(
+                temperature=[0.0, 0.8, 0.0, 1.2],
+                top_k=torch.tensor([1, 5, 1, 9]),
+                top_p=[0.0, 0.7, 0.0, 0.9],
+                presence_penalty=[0.0, 0.1, 0.0, 0.3],
+                frequency_penalty=[0.0, 0.4, 0.0, 0.6],
+                repetition_penalty=[1.0, 1.1, 1.0, 1.3],
+                seed=[None, 101, None, 103],
+                enable_log_probs=[False, True, False, True],
+                num_logprobs=[0, 0, 0, 0],
+            ),
+            torch.tensor([0, 1, 2, 3]),
+            [11, 113],
+            [0, 11, 100, 113],
+            ([1], [1]),
+            ([None, 101], [None, 103]),
+            id="stable_gap_lane",
+        ),
+    ],
+)
+def test_sampling_state_boundary_contract_for_gathered_and_lane_layouts(
+    layout,
+    prefill_tokens,
+    empty_slots,
+    prefill_sampling,
+    decode_tokens,
+    decode_positions,
+    decode_sampling,
+    slot_remap,
+    expected_prefill_tokens,
+    expected_decode_tokens,
+    expected_lane_slots,
+    expected_lane_seeds,
+):
+    """Validate layouts already constructed at the tt-metal target boundary.
+
+    ``front_packed_gathered`` models the dense, rank-segmented payload supplied
+    after gathered-DP packing. ``stable_gap_lane`` models the fixed stable-slot
+    grid supplied by lane-DP. This deliberately does not claim to test the vLLM
+    code that constructs or gathers either payload.
+    """
+
+    lanes = [_Lane(0), _Lane(1)]
+    group = LaneGroupExecutor(lanes)
+    prompt_tokens = torch.tensor([[200, -1], [210, 211], [220, -1], [230, 231]])
+    output_tokens = [[300, -1], [310, 311], [320, -1], [330, 331]]
+    execution = [f"trace-{layout}-0", f"trace-{layout}-1"]
+
+    prefill_result = group.prefill_forward(
+        prefill_tokens,
+        torch.arange(len(prefill_tokens), dtype=torch.int32).view(-1, 1),
+        empty_slots=empty_slots,
+        sampling_params=prefill_sampling,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        slot_remap=slot_remap,
+        execution=execution,
+    )
+    assert prefill_result[0].tolist() == expected_prefill_tokens
+
+    decode_result = group.decode_forward(
+        decode_tokens,
+        decode_positions,
+        torch.arange(4, dtype=torch.int32).view(4, 1),
+        sampling_params=decode_sampling,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        slot_remap=slot_remap,
+        reset_batch=True,
+        execution=execution,
+    )
+    assert decode_result[0].tolist() == expected_decode_tokens
+
+    if layout == "front_packed_gathered":
+        prefill_rows = ([0, 1], [2, 3])
+        prefill_prompt = (
+            prompt_tokens[0:2].tolist(),
+            prompt_tokens[2:4].tolist(),
+        )
+        prefill_output = (output_tokens[0:2], output_tokens[2:4])
+        lane_remap = ([1, 0], [1, 0])
+    else:
+        prefill_rows = ([0], [1])
+        prefill_prompt = (
+            [[-1, -1], prompt_tokens[1].tolist()],
+            [[-1, -1], prompt_tokens[3].tolist()],
+        )
+        prefill_output = (
+            [[-1, -1], output_tokens[1]],
+            [[-1, -1], output_tokens[3]],
+        )
+        lane_remap = ([0, 1], [0, 1])
+
+    for lane_idx, lane in enumerate(lanes):
+        prefill = next(kwargs for method, kwargs in lane.calls if method == "prefill")
+        decode = next(kwargs for method, kwargs in lane.calls if method == "decode")
+        source_rows = prefill_rows[lane_idx]
+        prefill_params = prefill["sampling_params"]
+        decode_params = decode["sampling_params"]
+        assert prefill["empty_slots"] == expected_lane_slots[lane_idx]
+        assert prefill["execution"] == execution[lane_idx]
+        assert prefill_params.temperature == [prefill_sampling.temperature[row] for row in source_rows]
+        assert prefill_params.top_k.tolist() == [int(prefill_sampling.top_k[row]) for row in source_rows]
+        assert prefill_params.top_p == [prefill_sampling.top_p[row] for row in source_rows]
+        assert prefill_params.presence_penalty == [prefill_sampling.presence_penalty[row] for row in source_rows]
+        assert prefill_params.frequency_penalty == [prefill_sampling.frequency_penalty[row] for row in source_rows]
+        assert prefill_params.repetition_penalty == [prefill_sampling.repetition_penalty[row] for row in source_rows]
+        assert prefill_params.seed == [prefill_sampling.seed[row] for row in source_rows]
+        assert prefill_params.enable_log_probs == [prefill_sampling.enable_log_probs[row] for row in source_rows]
+        assert prefill_params.num_logprobs == [prefill_sampling.num_logprobs[row] for row in source_rows]
+        assert prefill["prompt_tokens"].tolist() == prefill_prompt[lane_idx]
+        assert prefill["output_tokens"] == prefill_output[lane_idx]
+        assert prefill["slot_remap"].tolist() == lane_remap[lane_idx]
+        assert decode["execution"] == execution[lane_idx]
+        lane_slice = slice(lane_idx * 2, lane_idx * 2 + 2)
+        assert decode_params.temperature == decode_sampling.temperature[lane_slice]
+        assert decode_params.top_k.tolist() == decode_sampling.top_k[lane_slice].tolist()
+        assert decode_params.top_p == decode_sampling.top_p[lane_slice]
+        assert decode_params.presence_penalty == decode_sampling.presence_penalty[lane_slice]
+        assert decode_params.frequency_penalty == decode_sampling.frequency_penalty[lane_slice]
+        assert decode_params.repetition_penalty == decode_sampling.repetition_penalty[lane_slice]
+        assert decode_params.seed == expected_lane_seeds[lane_idx]
+        assert decode_params.enable_log_probs == decode_sampling.enable_log_probs[lane_slice]
+        assert decode_params.num_logprobs == decode_sampling.num_logprobs[lane_slice]
+        assert decode["prompt_tokens"].tolist() == prompt_tokens[lane_idx * 2 : lane_idx * 2 + 2].tolist()
+        assert decode["output_tokens"] == output_tokens[lane_idx * 2 : lane_idx * 2 + 2]
+        assert decode["slot_remap"].tolist() == lane_remap[lane_idx]
+        assert decode["reset_batch"] is True
+
+    raw = group.decode_forward(
+        decode_tokens,
+        decode_positions,
+        torch.arange(4, dtype=torch.int32).view(4, 1),
+        sampling_params=decode_sampling,
+        read_from_device=False,
+    )
+    host_outputs, events = group.read_decode_output(raw, async_read=True)
+    completed = group.process_decode_output_host(host_outputs, is_tokens=True)
+    assert events == ["event-0", "event-1"]
+    assert completed[0].tolist() == [0, 1, 2, 3]
+    assert completed[1] is None
 
 
 def test_decode_broadcasts_singleton_sampling_values_to_later_dp_lanes():
@@ -446,11 +756,11 @@ def test_warmup_replicates_lane_local_case_and_cache_to_every_lane():
     group.warmup_model_prefill(
         kv_cache=["kv-0", "kv-1"],
         can_sample_on_device=True,
-        enable_trace=True,
+        enable_trace=False,
     )
     group.warmup_model_decode(
         kv_cache=["kv-0", "kv-1"],
-        enable_trace=True,
+        enable_trace=False,
         max_batch_size=4,
         num_blocks=8,
         can_sample_on_device=True,
@@ -463,6 +773,22 @@ def test_warmup_replicates_lane_local_case_and_cache_to_every_lane():
         assert decode["kv_cache"] == f"kv-{lane_idx}"
         assert decode["max_batch_size"] == 2
     assert group.already_warmed_up_prefill
+
+
+def test_traced_warmup_without_coordinators_fails_before_invoking_a_lane(expect_error):
+    lanes = [_Lane(0), _Lane(1)]
+    group = LaneGroupExecutor(lanes)
+
+    with expect_error(RuntimeError, "Every DP lane must expose the trace activation barrier"):
+        group.warmup_model_decode(
+            kv_cache=["kv-0", "kv-1"],
+            enable_trace=True,
+            max_batch_size=4,
+            num_blocks=8,
+            can_sample_on_device=False,
+        )
+
+    assert [lane.calls for lane in lanes] == [[], []]
 
 
 class _DeferredCapture:
@@ -932,7 +1258,7 @@ def test_operation_failure_is_primary_group_becomes_terminal_and_all_lanes_clean
         group.allocate_kv_cache()
 
 
-def test_non_null_lane_log_probs_fail_explicitly_and_cleanup_group(expect_error):
+def test_non_null_lane_log_probs_are_aggregated_in_global_row_order():
     lanes = [_Lane(0), _Lane(1)]
 
     def decode_with_log_probs(
@@ -946,20 +1272,21 @@ def test_non_null_lane_log_probs_fail_explicitly_and_cleanup_group(expect_error)
         read_from_device=True,
         execution=None,
     ):
-        return torch.zeros(2, dtype=torch.int64), torch.ones(2)
+        return (tokens + 100).to(torch.int64), torch.tensor([0.25, 0.75])
 
     lanes[1].decode_forward = decode_with_log_probs
     group = LaneGroupExecutor(lanes)
 
-    with expect_error(NotImplementedError, "log probabilities"):
-        group.decode_forward(
-            tokens=torch.tensor([0, 1, 2, 3]),
-            start_pos=torch.tensor([0, 0, 0, 0]),
-            page_table=torch.zeros((4, 1), dtype=torch.int32),
-            sampling_params=_sampling(),
-        )
+    output, log_probs = group.decode_forward(
+        tokens=torch.tensor([0, 1, 2, 3]),
+        start_pos=torch.tensor([0, 0, 0, 0]),
+        page_table=torch.zeros((4, 1), dtype=torch.int32),
+        sampling_params=_sampling(),
+    )
 
-    assert [lane.cleanup_calls for lane in lanes] == [1, 1]
+    assert output.tolist() == [0, 1, 102, 103]
+    assert isinstance(log_probs, torch.Tensor)
+    assert log_probs.tolist() == [1.0, 1.0, 0.25, 0.75]
 
 
 def test_cleanup_is_idempotent_and_terminal(expect_error):

@@ -148,7 +148,7 @@ Configure the following BIOS settings on each Rev C host:
 | Cabling Web Tool | https://aus2-cablegen.aus2.tenstorrent.com/ |
 | Latest Vetted Exabox State | `/data/scaleout_configs/bh_glx_exabox/` |
 | Scaleout Configs Directory | `/data/scaleout_configs/` (shared location, requires sudo) |
-| Docker Image (Known Good) | `ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a` |
+| Docker Image (Known Good) | See [Quick Reference in the exabox README](README.md#quick-reference) |
 
 ---
 

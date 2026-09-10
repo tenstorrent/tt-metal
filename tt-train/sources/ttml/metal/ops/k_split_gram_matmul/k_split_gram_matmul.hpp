@@ -16,8 +16,10 @@ namespace ttml::metal {
 // Gram matrix multiplication is symmetric (G[i,j] = G[j,i]^T), so a standard matmul wastes half
 // the compute. This op exploits the symmetry by computing each output block exactly once.
 //
-// Constraints: input X is [M, K] in tile layout, BF16, DRAM. K must be a multiple of 64
-// (K_tiles must be even — enforced by TT_FATAL in the device op validation).
+// Constraints: input X is [M, K] in tile layout, BF16, DRAM. K must be a multiple of the tile
+// width (32) — the kernels reduce whole K tiles and make no assumption about tile-padding
+// contents — and K_tiles must be even for the K-split, i.e. K % 64 == 0. Both are enforced by
+// TT_FATAL in the device op validation.
 //
 // Core grid (N = min(device_grid.x - 1, device_grid.y)): an N × N compute grid plus a column
 // of diagonal helpers at x = N.

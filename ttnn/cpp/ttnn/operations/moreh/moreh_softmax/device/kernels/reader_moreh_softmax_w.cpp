@@ -38,26 +38,26 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     // Generate mask tile
-    DataflowBuffer dfb_mask_obj(dfb_mask);
+    const DataflowBuffer dfb_mask_obj(dfb_mask);
     if (is_fp32) {
         generate_mask_w<std::uint32_t>(dfb_mask_obj, mask_w);
     } else {
         generate_mask_w<std::uint16_t>(dfb_mask_obj, mask_w);
     }
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in_obj(dfb_in);
-    std::uint32_t src_in_tile_bytes = dfb_in_obj.get_entry_size();
+    const std::uint32_t src_in_tile_bytes = dfb_in_obj.get_entry_size();
 
     std::uint32_t curr_tile = tile_offset;
     for (std::uint32_t i = 0; i < N; i += onetile) {
-        dfb_in_obj.reserve_back(Wt);
+        dfb_in_obj.reserve_back(static_cast<uint16_t>(Wt));
         for (std::uint32_t w = 0; w < Wt; w++) {
             noc.async_read(
                 src_in, dfb_in_obj, src_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = w * src_in_tile_bytes});
             curr_tile++;
         }
         noc.async_read_barrier();
-        dfb_in_obj.push_back(Wt);
+        dfb_in_obj.push_back(static_cast<uint16_t>(Wt));
     }
 }
