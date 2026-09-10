@@ -32,6 +32,13 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
+# Off by default. Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's
+# log line, which times the push schedule and returns long before the model is done.
+EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
+PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
+# Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
+# on nothing.
+REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
 RUNNER_ENV=""
 PRODUCER_ENV=""
 PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
@@ -78,21 +85,19 @@ case "${MODEL}" in
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
     MANIFEST="${MANIFEST_DIR}/mistral4.json"
-    # Launches from a pre-generated 4-rank binding on ONE host, not from tt-run discovery across
-    # hosts. Everything below keys off PP_RANKS rather than re-testing the model name, so the next
-    # pipeline-parallel model sets this and needs no other change.
+    # Pre-generated 4-rank binding on one host, not tt-run discovery. Everything below keys off
+    # PP_RANKS, so the next pipeline-parallel model sets only that.
     PP_RANKS=4
     PP_EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/mistral4_pp4"
-    # A correctness leg: validate the entire 36-layer golden, including positions >8192.
-    # Keep the shared full-depth PCC floor; PP4 calibration requires a silicon run.
+    # Validates the entire 36-layer golden, including positions >8192.
     MAX_SEQ_LEN=${GOLDEN_LEN}
     # sc1 is the only config, so the sc1 window below must not widen it to the 256k default.
     SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
     MISTRAL_MODEL="${PREFILL_HF_MODEL:-/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603}"
     MISTRAL_CACHE="${PREFILL_TTNN_CACHE:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI}"
     MISTRAL_GOLDEN="${PREFILL_TRACE_DIR:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L}"
-    # torus_y, not the 2d_torus_xy the runner now defaults to: a PP=4 stage is [8,1], so only the
-    # SP axis wraps, and a RING collective on an axis the fabric does not wrap hangs at bring-up.
+    # torus_y, not the runner's 2d_torus_xy default: a [8,1] stage wraps only the SP axis, and a Ring
+    # collective on an unwrapped axis hangs at bring-up.
     RUNNER_ENV="export PREFILL_HF_MODEL='${MISTRAL_MODEL}'; export PREFILL_TTNN_CACHE='${MISTRAL_CACHE}'; \
         export PREFILL_FABRIC_MODE=2d_torus_y; \
         export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1; \
@@ -136,9 +141,8 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-# Start, ~50k, and the midpoint + tail of each config's window. Sorted and deduped: where the two
-# windows coincide (a model offering only one config) the raw list repeats itself -- mistral4 gives
-# 0,9,4,10,4,10 -- which probes the same chunk twice and labels it twice in the summary JSON.
+# Start, ~50k, and the midpoint + tail of each config's window. Deduped: a model with one config
+# yields the same chunk twice.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \
   "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 
@@ -158,6 +162,18 @@ PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
+
+SUMMARY_DONE=0
+emit_summary() {
+  [ "${SUMMARY_DONE}" = 1 ] && return 0
+  SUMMARY_DONE=1
+  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+    --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+    --chunk-size "${CHUNK_SIZE}" \
+    --probe-chunks "${PROBE_CHUNKS}" \
+    --summary-name "${MODEL}_${CONFIG}" \
+    || echo "summary generation failed (non-fatal)"
+}
 
 cleanup() {
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
@@ -182,12 +198,7 @@ cleanup() {
       echo "---- ${f#"${RANKLOGS}"/} ----"
       tail -n 40 "$f" 2>/dev/null || true
     done
-    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
-      --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      --chunk-size "${CHUNK_SIZE}" \
-      --probe-chunks "${PROBE_CHUNKS}" \
-      --summary-name "${MODEL}_${CONFIG}" \
-      || echo "summary generation failed (non-fatal)"
+    emit_summary
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
@@ -206,8 +217,8 @@ cleanup() {
 trap cleanup EXIT
 
 if [ "${PP_RANKS}" -ne 0 ]; then
-  # The CI controller has no chips. Probe the allocated worker, not localhost, and
-  # never reuse the template's device IDs: galaxy column enumeration is host-specific.
+  # The CI controller has no chips: probe the allocated worker, and never reuse the template's
+  # device IDs, since column enumeration is host-specific.
   [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
     echo "mistral4 PP4 requires exactly one Galaxy host in ${TTRUN_DIR}/hostfile" >&2; exit 2;
   }
@@ -227,8 +238,8 @@ if [ "${PP_RANKS}" -ne 0 ]; then
       exec python3 models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --out '${BINDING}'"
   TTRUN_ARGS=(--rank-binding "${BINDING}")
   RUNNER_PLACEMENT="--host ${HOSTS} --map-by slot"
-  # Each producer reads its matching stage's nine layers. Unique sidecars avoid
-  # stale maps; do not merge all four maps and read the entire Galaxy four times.
+  # Each producer reads its own stage's nine layers; merging the four maps would read the whole
+  # galaxy four times.
   RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
   PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map_r'\${OMPI_COMM_WORLD_RANK}'.json';"
 else
@@ -326,6 +337,45 @@ if [ "${PROD_RC}" -eq 0 ]; then
   fi
 fi
 
+TPS_GATE_RC=0
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+  # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
+  # a file to read. The trap's own call is a no-op once this one has run.
+  emit_summary
+  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
+    <<'TPSPY' || TPS_GATE_RC=$?
+import json, sys
+
+path, expected, margin = sys.argv[1], sys.argv[2], float(sys.argv[3])
+try:
+    rec = json.load(open(path))
+except Exception as e:
+    print(f"TPS GATE FAIL: no perf metrics at {path}: {type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+
+probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
+# Gate the deepest probe: throughput falls as the KV cache grows, so it is the worst case and the
+# one a full-context user sees.
+label = max(probes, key=lambda k: index.get(k, -1), default=None)
+if label is None:
+    print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
+    sys.exit(1)
+
+tps = probes[label]
+if not expected:
+    print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
+    sys.exit(0)
+
+expected = float(expected)
+lo, hi = expected * (1 - margin), expected * (1 + margin)
+print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
+if not lo <= tps <= hi:
+    print(f"TPS GATE FAIL: {tps:,.0f} outside [{lo:,.0f}, {hi:,.0f}]", file=sys.stderr)
+    sys.exit(1)
+print("TPS GATE PASS")
+TPSPY
+fi
+
 PCC_GATE_RC=0
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, math, os, sys
@@ -383,5 +433,8 @@ fi
 if [ "${RUNNER_RC}" -ne 0 ]; then
   echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
   exit "${RUNNER_RC}"
+fi
+if [ "${TPS_GATE_RC}" -ne 0 ]; then
+  exit "${TPS_GATE_RC}"
 fi
 exit "${PCC_GATE_RC}"
