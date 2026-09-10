@@ -225,6 +225,7 @@ def _variant(
     sort_mode=TopKXLSortMode.Dispatch,
     lsb_row_major=False,
     reinit_after_copy=False,
+    blaze_compat=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
 ):
@@ -270,6 +271,7 @@ def _variant(
                 sort_mode=sort_mode,
                 lsb_row_major=lsb_row_major,
                 reinit_after_copy=reinit_after_copy,
+                blaze_compat=blaze_compat,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -982,3 +984,35 @@ def test_topk_xl_reinit_after_copy(K, num_chunks, fused):
     _check_coordinates(
         result, K, rows, num_chunks=num_chunks, group_id=GROUP_ID, core_id=None
     )
+
+
+@parametrize(K=[512, 1024, 2048], fused_e2e=[False, True], input_fp32=[False, True])
+def test_topk_xl_blaze_compat(K, fused_e2e, input_fp32):
+    """Chained merges, copy reinit, and a partial/empty tail on two independent rows."""
+    _run_test_topk(
+        K,
+        num_chunks=4,
+        tail_elements=K // 2,
+        num_rows=2,
+        mode="signed",
+        reinit_after_copy=True,
+        fused_e2e=fused_e2e,
+        blaze_compat=True,
+        formats=InputOutputFormat(
+            DataFormat.Float32 if input_fp32 else DataFormat.Float16_b,
+            DataFormat.UInt32,
+        ),
+    )
+
+
+@parametrize(K=[512, 1024, 2048], core_id=[0, 31])
+def test_topk_xl_blaze_compat_pack_remove_msb(K, core_id):
+    """PACK owns replay only after MATH has handed over the full DEST section."""
+    result, rows = _run(
+        K,
+        num_rows=2,
+        index_op=TopKXLIndexOp.RemoveMsb,
+        core_id=core_id,
+        blaze_compat=True,
+    )
+    _check_remove_msb(result, K, rows, core_id=core_id)

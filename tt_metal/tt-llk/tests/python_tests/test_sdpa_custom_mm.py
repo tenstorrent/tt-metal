@@ -36,11 +36,11 @@ row-major) sit contiguously, then padding out to the full 32-row tile. We drop t
 and validate ONLY the M x N defined region against the golden (same reorder as
 compressed_utils.run_compressed).
 
-The mask_chunk=true path is NOT exercised: it unpacks a mask tile into SrcB and
-MOVB2D-broadcasts it, which needs an SFPU-produced mask CB and a downstream SFPU consumer of
-the FPU_SFPU semaphore -- out of scope for a compile+golden math test on a host without a BH
-card.
+The mask re-entry cases preload the mask from the host, then run masked and unmasked
+matmuls without reinitializing the unpacker. PACK consumes the FPU_SFPU notifications.
 """
+
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -57,6 +57,7 @@ from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
     NUM_FACES,
     SDPA_CUSTOM_MM_FLAGS,
+    TemplateParameter,
 )
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -126,19 +127,23 @@ class _SdpaCustomMMStimuli(StimuliConfig):
                M x FACE_C_DIM, contiguous (identical layout to compressed_utils' packed_a).
     """
 
-    def __init__(self, kt, ct, packed_in1, packed_in0):
+    def __init__(self, kt, ct, packed_in1, packed_in0, mask=None):
         super().__init__(
             buffer_A=torch.zeros(
                 1, dtype=torch.float32
             ),  # placeholder (raw bytes below)
             stimuli_A_format=DataFormat.Float16_b,
-            tile_count_A=kt * ct,
+            tile_count_A=kt * ct + (mask is not None),
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Float16_b,
             tile_count_B=kt,
             stimuli_res_format=DataFormat.Float16_b,
-            tile_count_res=ct,
+            tile_count_res=ct * (2 if mask is not None else 1),
         )
+        if mask is not None:
+            # One linear mask row: SrcB row i supplies the i-th 16-column face.
+            packed_mask = pack_bfp16(mask)
+            packed_in1 += packed_mask + bytes(2048 - len(packed_mask))
         self.packed_in1 = packed_in1
         self.packed_in0 = packed_in0
 
@@ -354,3 +359,61 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
     )
     M, K, N = shape
     _run(M, K, N, signal_granularity=sg, read_transposed=False, mm_transpose=False)
+
+
+@dataclass
+class SDPA_MASK_REENTRY(TemplateParameter):
+    def convert_to_cpp(self):
+        return "#define SDPA_MASK_REENTRY true"
+
+
+@parametrize(M=[1, 8], ct=[1, 3, 8], read_transposed=[False, True])
+def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
+    """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
+    _skip_on_simulator(request)
+    kt, K, N = 2, 64, ct * 32
+    generator = torch.Generator().manual_seed(73)
+    lhs = (torch.randint(-2, 3, (M, K), generator=generator).float() / 4).to(
+        torch.bfloat16
+    )
+    rhs = (torch.randint(-2, 3, (K, N), generator=generator).float() / 4).to(
+        torch.bfloat16
+    )
+    # Distinct nonzero face patterns reveal a truncated mask extent. Dyadic
+    # inputs keep both the mask-seeded and zero-seeded sums exactly representable.
+    mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
+    config = TestConfig(
+        "sources/sdpa_custom_mm_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        templates=[
+            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+            SDPA_CUSTOM_MM_FLAGS(
+                signal_granularity=ct, read_transposed=read_transposed
+            ),
+            SDPA_MASK_REENTRY(),
+        ],
+        runtimes=[
+            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
+            IN_FACE_DIMS(in0_face_r_dim=M),
+        ],
+        variant_stimuli=_SdpaCustomMMStimuli(
+            kt,
+            ct,
+            _pack_in1(rhs, kt, ct, read_transposed),
+            _pack_in0(lhs, kt),
+            mask=mask,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    packed = torch.as_tensor(config.run().result).reshape(2, ct, -1)
+    result = (
+        packed[:, :, : M * 32]
+        .reshape(2, ct, 2, M, 16)
+        .permute(0, 3, 1, 2, 4)
+        .reshape(2, M, N)
+    )
+    product = lhs.float() @ rhs.float()
+    golden = torch.stack([product + mask.float(), product]).to(torch.bfloat16)
+    assert torch.equal(
+        result, golden
+    ), "Mask extent or SrcB geometry restoration changed the matmul"
