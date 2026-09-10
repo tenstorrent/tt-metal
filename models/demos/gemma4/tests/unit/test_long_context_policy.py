@@ -33,7 +33,7 @@ _EXPECTED = [
     ("P150x4", "google/gemma-4-31B-it", 65536, True, 4096),
     ("P150x4", "google/gemma-4-31B-it", 131072, True, 2048),
     ("P300x2", "google/gemma-4-31B-it", 131072, True, 2048),
-    # ── 31B / T3K (WH 12 GB/ASIC: multi-chunk 2048; bound from 32k) ───────
+    # ── 31B / T3K (WH 12 GB/ASIC: chunk 2048 measured; bound from 64k) ────
     ("T3K", "google/gemma-4-31B-it", 8192, False, 2048),
     ("T3K", "google/gemma-4-31B-it", 16384, False, 2048),
     # Unbounded ceiling re-measured at 32768; bounded now starts at 65536 so the
@@ -58,12 +58,22 @@ _EXPECTED = [
     ("P150x8", "google/gemma-4-E4B-it", 262144, False, 4096),
     ("P150x4", "google/gemma-4-E2B-it", 262144, False, 4096),
     # ── Wormhole, measured on a real T3K / N300 (12 GB per ASIC) ──────────
-    # Bounded sliding is deliberately kept OUT of the WH serving range: its
-    # sliding page-table remap is keyed on the current tensor's row index rather
-    # than the request's persistent KV slot, which corrupts any multi-request
-    # batch (see generator_trace 12B/T3K comment). These cases pin that
-    # bounded_sliding stays False across the whole served context.
+    # Bounded sliding is deliberately kept OUT of the WH serving range. The
+    # stated reason -- that the sliding page-table remap keys on the current
+    # tensor's row index rather than the request's persistent KV slot, so it
+    # corrupts any multi-request batch -- is STALE: that remap was re-keyed
+    # onto vLLM's global block ID in #55287 (2026-09-05), after these
+    # thresholds were set (#50648, 2026-08-27). The thresholds are kept for
+    # now because the post-fix behaviour has NOT been re-measured at
+    # concurrency >1; revisit with a real concurrency test rather than by
+    # reading the code. These cases pin bounded_sliding False meanwhile.
     # 12B/T3K: unbounded measured through 131072; bounded only at the full 256k.
+    # Chunk is 2048 at EVERY isl. 4096 is faster from isl 8192 up (-17.8% TTFT
+    # at 64k) but measurably less accurate, so it is available only via
+    # GEMMA4_GEN_PREFILL_CHUNK — see the generator_trace 12B/T3K ACCURACY GATE.
+    # The 4096 row is pinned here too so a re-introduced by_isl tier cannot
+    # silently change the default.
+    ("T3K", "google/gemma-4-12B-it", 4096, False, 2048),
     ("T3K", "google/gemma-4-12B-it", 8192, False, 2048),
     ("T3K", "google/gemma-4-12B-it", 16384, False, 2048),
     ("T3K", "google/gemma-4-12B-it", 131072, False, 2048),
@@ -176,10 +186,16 @@ def test_wormhole_never_inherits_blackhole_policy(mesh, model, monkeypatch):
         f"{mesh}/{model} fell back to the Blackhole QB2 entry (source={policy['source']}); "
         "WH has 12 GB per ASIC and cannot inherit Blackhole DRAM headroom."
     )
-    # Blackhole gemma4 entries all use chunk 4096; every WH entry must stay at
-    # the 2048 chunk the WH boards were measured with. (unbounded_isl_max is no
-    # longer a useful discriminator: WH T3K is now measured unbounded through
-    # 131072 for 12B, which legitimately exceeds some Blackhole entries.)
+    # Every WH entry uses the 2048 chunk its board was measured with, and none
+    # carries a by_isl tier that would raise it. On 12B/T3K 4096 is faster
+    # (-6.9% / -17.8% / -22.0% TTFT at 32k / 64k / 128k) but less accurate and
+    # so is opt-in via GEMMA4_GEN_PREFILL_CHUNK; on 31B/T3K 4096 is not even
+    # faster (3.2% SLOWER at 32k), the optimum chunk being model-dependent.
+    # This assertion is a secondary guard only: the real regression -- a WH
+    # board inheriting Blackhole DRAM headroom -- is caught by the source check
+    # above, and unbounded_isl_max is no longer a useful discriminator either,
+    # since WH T3K is measured unbounded through 131072 for 12B. The resolved
+    # per-isl values are pinned in _EXPECTED.
     assert policy["prefill_chunk"] == 2048, f"{mesh}/{model}: {policy}"
 
 

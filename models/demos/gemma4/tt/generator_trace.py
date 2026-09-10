@@ -165,7 +165,10 @@ def maybe_auto_enable_chunked_prefill_trace(
 # 4096 is the largest chunk validated on QB2/P150x8 to both trace safely
 # (<= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN) and clear the #49083 wedge
 # (repro_prefill_hang.py, REPRO_ISLS=8192,8192 -> ALL_DONE, no wedge/OOM).
-# WH T3K uses a tighter per-board ``prefill_chunk`` (2048) — see policy table.
+# Every WH entry uses a tighter per-board ``prefill_chunk`` of 2048. 12B/T3K
+# is FASTER at 4096 but measurably less accurate there, so it stays at 2048
+# too; the measurements and the ``GEMMA4_GEN_PREFILL_CHUNK`` escape hatch are
+# in the policy table.
 GEMMA4_DEFAULT_PREFILL_CHUNK = 4096
 
 # Per-(model, device) long-context policy.
@@ -252,6 +255,24 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             # Unbounded measured through 32768. bounded_isl_min sits above it so
             # concurrent serving never enters the bounded sliding remap, which is
             # broken for >1 request (see the 12B/T3K entry for the mechanism).
+            #
+            # prefill_chunk stays 2048. Unlike 12B/T3K -- where 4096 is
+            # faster and is declined only on accuracy grounds -- here 4096 is
+            # not even faster, because the optimum chunk size is
+            # MODEL-dependent, not just ISL-dependent:
+            # total prefill = A*N^2/(2c) (KV prefix re-read once per chunk,
+            # favours large c) + B*N*c (intra-chunk causal attention, favours
+            # small c). 31B does far more work per token, so B is larger and the
+            # optimum sits lower. Measured on a real T3K, warm, prefill fwd,
+            # two runs a side:
+            #
+            #   32k unbounded : 2048 -> 13988 / 13997   4096 -> 14452 / 14428
+            #   64k bounded   : 2048 -> 31953 / 31959   4096 -> 30980
+            #
+            # i.e. 4096 is 3.2% SLOWER at 32k and only 3.1% faster at 64k --
+            # no case for changing the default. (12B at the same 32k ISL and the
+            # same unbounded mode goes the other way, 8013 -> 7459, so this is
+            # the model, not the ISL or the sliding mode.)
             "unbounded_isl_max": 32768,
             "bounded_isl_min": 65536,
             "chunked_bounded_isl_min": 65536,
@@ -293,20 +314,92 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         # reaches the full 256k ISL at batch-1 (TTFT ~468 s, 14.3 tok/s).
         #
         # bounded_isl_min is deliberately set ABOVE the measured unbounded
-        # ceiling so normal serving never enters bounded mode. Bounded sliding
-        # remaps sliding page tables to dense per-row block IDs
-        # (``_pad_sliding_page_tables_for_bounded``) keyed on the row index of
-        # the current page-table tensor rather than the request's persistent KV
-        # slot, so with more than one concurrent request a request's sliding
-        # blocks move between steps and it reads another user's KV — measured as
-        # nondeterministic garbage from concurrency 2 upward. Unbounded at the
-        # same context is clean at concurrency 32 (32/32 correct). Lower this
-        # again once that remap is keyed on a stable slot.
+        # ceiling so normal serving never enters bounded mode. The reason on
+        # record: bounded sliding remaps sliding page tables to dense per-row
+        # block IDs (``_pad_sliding_page_tables_for_bounded``) keyed on the row
+        # index of the current page-table tensor rather than the request's
+        # persistent KV slot, so with more than one concurrent request a
+        # request's sliding blocks move between steps and it reads another
+        # user's KV — measured as nondeterministic garbage from concurrency 2
+        # upward, against a clean 32/32 unbounded at the same context.
+        #
+        # CAVEAT (2026-09-10): that reason is STALE. The remap was re-keyed onto
+        # vLLM's global block ID (``_bounded_row_key`` / ``_bounded_ring_slots``,
+        # with a persistent slot map and decode-only reclaim) in #55287 on
+        # 2026-09-05 — AFTER these thresholds were set in #50648 on 2026-08-27 —
+        # and the thresholds were never revisited. They are kept for now only
+        # because the post-fix behaviour has not been re-measured above
+        # concurrency 1. Lowering them is likely worth a large long-context win
+        # on WH (31B/T3K 32k currently runs unbounded), but justify it with an
+        # actual concurrency test, not by reading this code.
+        #
+        # prefill_chunk stays 2048, matching every other WH entry. 4096 is
+        # FASTER here, and how much was measured precisely -- warm TTFT, 3 runs
+        # a side at 64k and 2 elsewhere:
+        #
+        #   ISL    chunk 2048   chunk 4096   delta
+        #   32k        8013         7459     -6.9%
+        #   64k       18717        15391    -17.8%
+        #   128k      37087        28926    -22.0%
+        #
+        # The gain grows with ISL because chunked prefill re-reads the KV prefix
+        # once per chunk: total KV traffic is ~N^2/2c, so doubling c halves it,
+        # and that term grows relative to per-token matmul work as N grows.
+        # Chunk cost is strongly sublinear, so halving the chunk COUNT is most
+        # of the win (12B/64k warm, g4-chunkprof totals: 2048 -> 30 chunks /
+        # 18627 ms fwd, 4096 -> 15 chunks / 15238 ms; doubling the chunk raises
+        # each chunk only 1.4-1.8x, never 2x). Decode is unchanged (64k 34.80 vs
+        # 34.82 ms/tok) and generation stays coherent.
+        #
+        # The speedup is NOT taken, because it costs accuracy -- see the
+        # ACCURACY GATE on the entry below.
+        #
+        # Two things the table does not show. Under BOUNDED sliding the prefix
+        # is capped at the window, so KV traffic is ~N*W/c and the saving
+        # largely vanishes (measured 3.1% on 31B/64k bounded) -- an independent
+        # reason the bounded entries keep 2048. And the optimum is a genuine
+        # interior one: 12B/64k warm at chunk 8192 is 16268 ms, 5.7% WORSE than
+        # 4096, so do not read "bigger is better" off the table.
         "T3K": {
             "unbounded_isl_max": 131072,
             "bounded_isl_min": 262144,
             "chunked_bounded_isl_min": 262144,
+            #
+            # ACCURACY GATE (2026-09-10): 4096 is faster (see above) but
+            # measurably LESS accurate, so the default stays 2048. Teacher
+            # forcing at 8192 prefill, 12B/T3K, bit-reproducible (paired runs
+            # agreed to every decimal), 2048 -> 4096:
+            #
+            #   top-1 agreement   69.70% -> 54.55%
+            #   top-5 agreement   87.88% -> 78.79%
+            #   prefill logit PCC 0.9724 -> 0.9597
+            #   decode PCC mean   0.9389 -> 0.9224
+            #
+            # Mechanically expected: a 4096-token chunk accumulates twice as
+            # much per SDPA pass, so more bf16 error.
+            #
+            # For scale: the same test on the REFERENCE branch (its own Python
+            # and C++, same box, same prompt, chunk forced to 2048) scores
+            # top-1 42.42% / prefill PCC 0.9420 -- one run, but the 27-point
+            # top-1 gap is far outside anything run-to-run noise explains on a
+            # test whose paired runs are bit-identical. Both our settings are more
+            # accurate than it, and it serves 12B/T3K at 4096 anyway (it has no
+            # 12B/T3K entry and falls through to QB2). So our 2048 is more
+            # accurate AND slower than the branch this work is measured
+            # against, while 4096 would match its speed and still beat its
+            # accuracy. Set GEMMA4_GEN_PREFILL_CHUNK=4096 to take that trade.
+            #
+            # Independently of accuracy, 4096 only pays from ISL 8192 up. At or
+            # below 4k it REGRESSES ~13% (warm: lc-4k, prompt 3828, TTFT 835 ms
+            # at 2048 vs 944 ms at 4096) because 4096 is also
+            # GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN, the trace-bucket ceiling:
+            # ``use_traced_chunks`` requires seq_len > max_chunk, so a
+            # 3828-token prompt chunks into 2x2048 and replays the 2048 prefill
+            # trace, while at 4096 it is a single untraced prefill. Above 4096
+            # the traced path is unavailable at any chunk size, so the
+            # KV-traffic win takes over.
             "prefill_chunk": 2048,
+            "prefill_chunk_by_isl": [],
             "source": "measured",
         },
         # WH N300 (1x2, 24 GB): the only Gemma4 variant that fits a single WH
