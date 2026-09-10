@@ -1,0 +1,29 @@
+# GLM-5.2 disaggregated prefill across TWO galaxies (SC2).
+#
+# sc4's descriptor with meshes 2 and 3 dropped and the chain shortened to a single hop. Everything
+# else is deliberately identical to sc4 -- 8x4 LINE/LINE per mesh (the CI configs run
+# PREFILL_FABRIC_MODE=2d, not torus, so LINE is correct here; the 2d_torus_xy pipeline descriptors
+# use RING/RING instead), one host per mesh, and 8 RELAXED channels on the inter-galaxy link -- so a
+# 2-galaxy number stays comparable to the 4-galaxy one.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
