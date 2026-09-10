@@ -165,7 +165,7 @@ def parse_args() -> argparse.Namespace:
         "--cleanup",
         choices=("true", "false"),
         default="true",
-        help="Delete the log and results directory after the run",
+        help="Delete the log and results directory after a run that passed",
     )
     p.add_argument(
         "--reboot-on-failure",
@@ -696,7 +696,7 @@ def main() -> int:
             remove_path(tempfile.gettempdir(), csv_dir)
         if effective_code == 0:
             remove_path(log_dir, str(log_file))
-        remove_path(log_dir, str(results_dir))
+            remove_path(log_dir, str(results_dir))
 
     return effective_code
 
