@@ -79,6 +79,19 @@ def to_additive(bool_mask, dtype=torch.float32):
     return torch.where(bool_mask, torch.zeros((), dtype=dtype), torch.full((), neg, dtype=dtype))
 
 
+def mask_has_image_spans(image_slices) -> bool:
+    """True if any batch item has a bidirectional (image) span.
+
+    Text-only recaption normalizes to ``[[]]`` (nested empty per batch row), not
+    ``[]`` — both mean pure causal and must skip materializing an S×S mask.
+    """
+    if not image_slices:
+        return False
+    if isinstance(image_slices[0], list):  # per-batch list-of-lists
+        return any(len(spans) > 0 for spans in image_slices)
+    return len(image_slices) > 0  # flat list of spans
+
+
 # ---------------------------------------------------------------------------
 # Quick smoke-test
 # ---------------------------------------------------------------------------

@@ -47,7 +47,8 @@ class HunyuanTtScheduler:
         self.flux_base_shift = flux_base_shift
         self.flux_max_shift = flux_max_shift
 
-        supported_solver = ["euler", "heun-2", "midpoint-2", "kutta-4"]
+        # ``step()`` implements Euler only (ref rejects other solvers at runtime).
+        supported_solver = ["euler"]
         if solver not in supported_solver:
             raise ValueError(f"Solver {solver} not supported. Supported solvers: {supported_solver}")
 

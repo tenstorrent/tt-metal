@@ -105,6 +105,56 @@ def is_checkpoint_complete(model_dir: Path) -> bool:
     return len(missing_weight_shards(model_dir)) == 0
 
 
+def validate_env_checkpoint_dir(env_var: str, repo_id: str) -> Path:
+    """Require ``env_var`` to name a complete checkpoint directory (no download / hub fallback).
+
+    Canonicalizes the path, writes it back to the environment, and raises ``FileNotFoundError``
+    with an actionable message when the directory is missing, lacks an index, or is incomplete.
+    Used by CI wrappers and offline resolvers so a mis-set ``HUNYUAN_*_MODEL_DIR`` fails fast
+    instead of silently falling back to the HF hub cache.
+    """
+    raw = os.environ.get(env_var)
+    if not raw:
+        raise FileNotFoundError(
+            f"[weights] {env_var} is not set; stage {repo_id!r} and export {env_var} to its directory"
+        )
+    path = Path(os.path.realpath(raw))
+    if not path.is_dir():
+        raise FileNotFoundError(f"[weights] {env_var}={raw!r} resolved to {path} which is not a directory")
+    if not _index_path(path).is_file():
+        raise FileNotFoundError(
+            f"[weights] {env_var}={path} has no {_WEIGHT_INDEX}; expected a complete {repo_id!r} checkpoint"
+        )
+    missing = missing_weight_shards(path)
+    if missing:
+        raise FileNotFoundError(
+            f"[weights] {env_var}={path} is incomplete for {repo_id!r}: "
+            f"missing {len(missing)} shard(s) (e.g. {missing[:3]})"
+        )
+    os.environ[env_var] = str(path)
+    return path
+
+
+def _complete_env_override(env_var: str) -> Path | None:
+    """Return a complete env-override checkpoint, or ``None`` when unset or incomplete."""
+    if not os.environ.get(env_var):
+        return None
+    path = Path(os.path.realpath(os.environ[env_var]))
+    if not is_checkpoint_complete(path):
+        return None
+    os.environ[env_var] = str(path)
+    return path
+
+
+def _require_env_override_or_ensure(env_var: str, repo_id: str, ensure_fn) -> Path:
+    """When ``env_var`` is set, require a complete local checkpoint or fail (offline) / ensure (online)."""
+    if complete := _complete_env_override(env_var):
+        return complete
+    if os.environ.get(env_var) and _downloads_disabled():
+        validate_env_checkpoint_dir(env_var, repo_id)
+    return ensure_fn()
+
+
 def find_hf_snapshot(repo_id: str) -> Path | None:
     """Return the newest complete hub snapshot (index + all safetensor shards)."""
     snaps = _repo_snapshots_dir(repo_id)
@@ -191,11 +241,10 @@ def resolve_checkpoint(*, env_var: str, repo_id: str) -> Path:
 
 def _resolve_complete_or_ensure(*, env_var: str, repo_id: str, ensure_fn) -> Path:
     """Return a complete checkpoint, downloading to hub cache (or ``env_var``) if needed."""
-    if override := os.environ.get(env_var):
-        path = Path(override)
-        if is_checkpoint_complete(path):
-            return path
-        return ensure_fn()
+    if complete := _complete_env_override(env_var):
+        return complete
+    if os.environ.get(env_var):
+        return _require_env_override_or_ensure(env_var, repo_id, ensure_fn)
     if snap := find_hf_snapshot(repo_id):
         if is_checkpoint_complete(snap):
             return snap
@@ -209,11 +258,10 @@ def resolve_base_model_dir() -> Path:
     (``~/.cache/huggingface/hub``, or ``HF_HOME`` / ``HUGGINGFACE_HUB_CACHE``).
     Set ``HUNYUAN_MODEL_DIR`` to download/reuse a fixed directory instead.
     """
-    if override := os.environ.get(ENV_BASE):
-        path = Path(override)
-        if is_checkpoint_complete(path):
-            return path
-        return ensure_base_weights()
+    if complete := _complete_env_override(ENV_BASE):
+        return complete
+    if os.environ.get(ENV_BASE):
+        return _require_env_override_or_ensure(ENV_BASE, HF_REPO_BASE, ensure_base_weights)
     if snap := find_hf_snapshot(HF_REPO_BASE):
         if is_checkpoint_complete(snap):
             return snap
@@ -308,12 +356,14 @@ def ensure_checkpoint(*, env_var: str, repo_id: str) -> Path:
         print(f"[weights] using {path}", flush=True)
         return path
 
-    # Env override still empty but hub cache got the snapshot (e.g. read-only local_dir).
+    # When the operator pinned a directory via env_var, never silently fall back to hub cache.
     if local_dir is not None:
-        snap = find_hf_snapshot(repo_id)
-        if snap is not None and is_checkpoint_complete(snap):
-            print(f"[weights] env path still incomplete; using hub snapshot {snap}", flush=True)
-            return snap
+        missing = missing_weight_shards(path)
+        raise RuntimeError(
+            f"Checkpoint still incomplete under {path} after download: "
+            f"missing {len(missing)} shard(s) (e.g. {missing[:5]}). "
+            f"Re-run: hf download {repo_id} --local-dir {local_dir}"
+        )
 
     missing = missing_weight_shards(path)
     index_ok = _index_path(path).is_file()

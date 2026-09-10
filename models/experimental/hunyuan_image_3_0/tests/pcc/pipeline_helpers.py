@@ -63,13 +63,10 @@ def e2e_pcc_thresholds(
     """Latent / RGB PCC gates for ``test_e2e_pipeline``.
 
     Small bf16 configs keep the historical 0.98 / 0.97 bar. Production 32L multi-step
-    matches ``production_loop_pcc_threshold`` (override with ``HY_LATENT_PCC`` /
-    ``HY_RGB_PCC``). bf8 + CFG amplifies step error — tighten the documented floor
-    rather than expecting single-step densify PCC.
+    matches ``production_loop_pcc_threshold``. bf8 + CFG amplifies step error — tighten
+    the documented floor rather than expecting single-step densify PCC.
     """
-    if env := os.environ.get("HY_LATENT_PCC"):
-        latent = float(env)
-    elif num_layers <= 8 and weight_dtype != ttnn.bfloat8_b:
+    if num_layers <= 8 and weight_dtype != ttnn.bfloat8_b:
         latent = 0.98
     else:
         latent = production_loop_pcc_threshold(num_layers, steps)
@@ -77,9 +74,7 @@ def e2e_pcc_thresholds(
         if weight_dtype == ttnn.bfloat8_b and cfg_guidance > 1.0:
             latent = min(latent, 0.70)
 
-    if env := os.environ.get("HY_RGB_PCC"):
-        rgb = float(env)
-    elif num_layers <= 8 and weight_dtype != ttnn.bfloat8_b:
+    if num_layers <= 8 and weight_dtype != ttnn.bfloat8_b:
         rgb = 0.97
     else:
         # VAE itself is high-PCC; RGB correlation tracks latent drift under CFG.
@@ -346,10 +341,8 @@ def production_loop_pcc_threshold(num_layers: int, steps: int) -> float:
     """PCC gate for multi-step denoise at production GRID=64.
 
     Single-step 32L uses ~0.85; error compounds across steps, so the full
-    50-step schedule uses a looser default (override with HY_DENOISE_LOOP_PCC).
+    50-step schedule uses a looser default.
     """
-    if env := os.environ.get("HY_DENOISE_LOOP_PCC"):
-        return float(env)
     if num_layers <= 8:
         return 0.95 if steps >= 10 else 0.99
     if steps >= 50:

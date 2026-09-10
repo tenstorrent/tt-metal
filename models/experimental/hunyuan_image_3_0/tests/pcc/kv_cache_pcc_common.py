@@ -234,8 +234,9 @@ class KvCachePccContext:
         # prefix supplies NO mask so SDPA uses its built-in causal path (no S×S host
         # build + upload; ~3x faster causal SDPA at large ISL). Only image spans need
         # an explicit mask.
-        has_spans = bool(self.attn_slices) and any(len(s) > 0 for s in self.attn_slices)
-        if not has_spans:
+        from models.experimental.hunyuan_image_3_0.ref.attention.mask import mask_has_image_spans
+
+        if not mask_has_image_spans(self.attn_slices):
             return None
         mask_add = to_additive(build_attention_mask(S, self.attn_slices, bsz=1), dtype=torch.bfloat16).reshape(
             1, 1, S, S
@@ -248,7 +249,11 @@ class KvCachePccContext:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _upload_mask_row(self, query_pos: int, total_len: int) -> ttnn.Tensor:
+    def _upload_mask_row(self, query_pos: int, total_len: int) -> ttnn.Tensor | None:
+        from models.experimental.hunyuan_image_3_0.ref.attention.mask import mask_has_image_spans
+
+        if not mask_has_image_spans(self.attn_slices):
+            return None
         mask_add = to_additive(
             build_attention_mask_query_row(total_len, query_pos, self.attn_slices, bsz=1),
             dtype=torch.bfloat16,
@@ -324,6 +329,14 @@ class KvCachePccContext:
         rope = self.backbone.layers[0].self_attn.rope
         cos_tt, sin_tt = rope.slice_cos_sin(state["cos"], state["sin"], query_pos)
         mask_tt = self._upload_mask_row(query_pos, S)
+        if mask_tt is None:
+            mask_tt = ttnn.zeros(
+                (1, 1, 1, S),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         hidden = self.backbone.forward(
             inputs_embeds=hidden_tt,
             seq_len=S,
