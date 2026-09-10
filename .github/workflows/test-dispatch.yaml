@@ -130,15 +130,25 @@ jobs:
         run: |
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py bh_quietbox_2
           python3 .github/scripts/utils/validate_perf_targets.py --path-profile repo-root --sku bh_quietbox_2
+      - name: Package QB2 evidence
+        if: ${{ !cancelled() }}
+        run: |
+          # Preserve partial evidence if a test fails before writing benchmark data.
+          evidence_dirs=()
+          for directory in test_reports test_logs benchmark_data; do
+            if [ -d "generated/$directory" ]; then
+              evidence_dirs+=("$directory")
+            fi
+          done
+          test "${#evidence_dirs[@]}" -gt 0
+          # An archive preserves filenames that GitHub artifacts cannot upload directly.
+          tar -czf generated/pr55922-qb2-evidence.tar.gz -C generated "${evidence_dirs[@]}"
       - name: Upload QB2 evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pr55922-qb2-evidence
-          path: |
-            docker-job/generated/test_reports
-            docker-job/generated/test_logs
-            docker-job/generated/benchmark_data
+          path: docker-job/generated/pr55922-qb2-evidence.tar.gz
           if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
