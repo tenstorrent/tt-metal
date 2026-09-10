@@ -302,6 +302,17 @@ class TtPrefillBlock(LightweightModule):
             f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
         )
 
+        use_fused_rmsnorm = (
+            getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+            and is_blackhole()
+            and is_chunked
+            and tuple(mesh_device.shape) == (8, 4)
+            and tp_axis == 1
+            and seq_len == 5120
+        )
+
+        self._fused_rmsnorm_enabled = use_fused_rmsnorm
+
         # --- Attention norm ---
         use_glm52_l1_attn_norm = (
             is_blackhole()
@@ -321,6 +332,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
             output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
         )
 
@@ -366,6 +378,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         # --- FFN (MoE or dense) ---
@@ -527,6 +540,11 @@ class TtPrefillBlock(LightweightModule):
         # Stored so the block's migration-ack site (below, in forward) can route through the controller
         # (trace path) instead of calling on_layer_complete directly — see the ack comment in forward.
         self._trace_controller = controller
+        # This optimization is scoped to eager prefill. Keep traced captures on
+        # the existing norm path, including when toggling capture on/off.
+        for norm in (self.attn_norm, getattr(self, "ffn_norm", None)):
+            if norm is not None:
+                norm.use_fused = self._fused_rmsnorm_enabled and controller is None
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "set_trace_controller"):
             ffn.set_trace_controller(controller)

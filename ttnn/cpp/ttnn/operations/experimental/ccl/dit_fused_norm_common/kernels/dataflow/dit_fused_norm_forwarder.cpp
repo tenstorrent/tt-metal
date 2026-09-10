@@ -51,6 +51,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // ---------- compile-time args ----------
@@ -72,6 +73,10 @@ constexpr uint32_t num_chunks_per_device =
 constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
 constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);       // forwarder incs; workers wait
 constexpr auto stats_dram_args = TensorAccessorArgs<14>();
+constexpr auto forward_route =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
+constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
+    stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -112,10 +117,10 @@ void kernel_main() {
     cb_pkt_hdr.push_back(1);
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_bwd_addr);
-    pkt_hdr_fwd->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward)});
-    pkt_hdr_bwd->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward)});
+    // The hop-only header initializer is a no-op for 2D fabric headers.
+    // Use the shared CCL helper to initialize the correct route for either fabric.
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_fwd, forward_route);
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_bwd, backward_route);
     // Guard open_finish on is_logically_connected(), matching the canonical CCL writers
     // (all_reduce_async / all_to_all_async): a forwarder with no live fabric connection
     // (e.g. a line-topology edge or a degenerate ring) must not run the open handshake.

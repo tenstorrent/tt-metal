@@ -1249,6 +1249,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         forwarder_kernel_ids[f] = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"

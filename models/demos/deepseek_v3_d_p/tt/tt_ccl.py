@@ -143,6 +143,38 @@ class TT_CCL:
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Shared across sequential norm layers. Semaphore and stats scratch must
+        # alternate together to absorb inter-device skew at collective completion.
+        self.fused_rmsnorm_resources: dict[tuple, dict] = {}
+
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+        key = (
+            tuple(x.shape),
+            tuple(x.padded_shape),
+            x.dtype,
+            tuple(weight.shape),
+            weight.dtype,
+            cluster_axis,
+            num_links,
+        )
+        resources = self.fused_rmsnorm_resources.get(key)
+        if resources is None:
+            pairs = []
+            for _ in range(2):
+                semaphores = [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)]
+                stats = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                    x, cluster_axis, self.mesh_device, num_links=num_links, weight=weight
+                )
+                pairs.append((semaphores, stats))
+            # All chips must initialize their semaphores before any peer sends.
+            # This allocation happens during the first warmup, once per geometry.
+            ttnn.synchronize_device(self.mesh_device)
+            resources = {"pairs": pairs, "next": 0}
+            self.fused_rmsnorm_resources[key] = resources
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
+
     def get_mla_ring_attention_buffers(
         self,
         *,

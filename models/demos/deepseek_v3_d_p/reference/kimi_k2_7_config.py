@@ -19,6 +19,7 @@ class KimiK27Config:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
+    USE_FUSED_PREFILL_RMSNORM = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
