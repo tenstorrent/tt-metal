@@ -169,14 +169,22 @@ void kernel_main() {
                                         ckernel::topk_canonicalize_negzero_values(0);
                                     }
                                 }
-                                ckernel::topk_local_sort<stable, DST_ACCUM_MODE, false, false, tie_order>(
-                                    /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<
+                                    stable,
+                                    DST_ACCUM_MODE,
+                                    /*fused=*/false,
+                                    /*rank_stamped=*/false,
+                                    tie_order>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
-                                ckernel::
-                                    topk_merge</*idir=*/false, stable, DST_ACCUM_MODE, false, false, false, tie_order>(
-                                        /*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::topk_merge<
+                                    /*idir=*/false,
+                                    stable,
+                                    DST_ACCUM_MODE,
+                                    /*fused=*/false,
+                                    /*rank_stamped=*/false,
+                                    tie_order>(/*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order

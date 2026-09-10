@@ -240,11 +240,21 @@ void kernel_main() {
 
                         if (sub == 1) {
                             // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                            ckernel::topk_local_sort<stable, DST_ACCUM_MODE, false, false, tie_order>(
+                            ckernel::topk_local_sort<
+                                stable,
+                                DST_ACCUM_MODE,
+                                /*fused=*/false,
+                                /*rank_stamped=*/false,
+                                tie_order>(
                                 /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge</*idir=*/false, stable, DST_ACCUM_MODE, false, false, false, tie_order>(
-                                /*idst=*/0, m_iter, /*k=*/64);
+                            ckernel::topk_merge<
+                                /*idir=*/false,
+                                stable,
+                                DST_ACCUM_MODE,
+                                /*fused=*/false,
+                                /*rank_stamped=*/false,
+                                tie_order>(/*idst=*/0, m_iter, /*k=*/64);
 
                             if (dir) {
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]

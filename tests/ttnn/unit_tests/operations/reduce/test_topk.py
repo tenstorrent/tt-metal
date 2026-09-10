@@ -1226,6 +1226,29 @@ def test_topk_stable_multicore_prealloc_signed_zero(largest, device):
     assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
 
 
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_multicore_fused_signed_zero(largest, device):
+    """bf16 +-0.0 tie class on the multicore FUSED-KEY engine (W=8192, default UINT16 indices): the
+    bf16 -> 32-bit-DEST widening datacopy folds -0.0 into +0.0 before the keys are fused, so both
+    zeros form ONE tie class broken by index, like torch. Zeros straddle the k cut for smallest."""
+    torch.manual_seed(12)
+    W, k = 8192, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
+    zero_cols = torch.arange(48) * 167
+    input[..., zero_cols[0::2]] = 0.0
+    input[..., zero_cols[1::2]] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    # u16 indices + bf16 values in the multicore band is exactly the fused-key engine's gate.
+    assert ttnn_indices.dtype == ttnn.uint16
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices).to(torch.int64))
+
+
 @pytest.mark.parametrize("W, k", ((64, 32), (8192, 32)))
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_index_parity_float32(W, k, largest, device):

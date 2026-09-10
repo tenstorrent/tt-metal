@@ -54,6 +54,9 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 // SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
 constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
+// All lanes enabled, CC result true. A macro, not a function: some sites sit inside replay-record windows.
+#define TOPK_SFPENCC_ALL_LANES_ON() TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI)
+
 // Fused-key mode (FUSED template parameter on the drivers below): the network sorts opaque
 // [bf16|u16] packed words that live only in the value region — index loads/stores disappear
 // (half the DEST traffic) and every value access must be raw INT32, because a float-mode store
@@ -190,7 +193,7 @@ inline void _topk_fuse_tile_()
     // lane-PREDICATED (and clobbers LREG0 transiently) — programmed under a partially-enabled
     // ambient CC state, disabled lanes would keep stale LREG12 bits and the mask/complement would
     // silently misfire in exactly those lanes.
-    TTI_SFPENCC(3, 0, 0, 10);
+    TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0x0000FFFF;
 
     set_dst_write_addr(0);
@@ -208,7 +211,7 @@ inline void _topk_fuse_tile_()
             TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);                       // L1 &= 0x0000FFFF (#50215)
             TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
             TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // complement enabled lanes
-            TTI_SFPENCC(3, 0, 0, 10);                        // all lanes back on
+            TOPK_SFPENCC_ALL_LANES_ON();                     // all lanes back on
             TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);   // L0 |= L1 -> packed key
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
             TTI_INCRWC(0, 2, 0, 0); // next 32-lane vector (Matrix-unit issue, free vs the SFPU port)
@@ -229,7 +232,7 @@ template <bool largest, std::uint32_t index_store_mode = static_cast<std::uint32
 inline void _topk_defuse_tile_(const int num_tiles)
 {
     // Lanes-on FIRST — the constant write is lane-predicated (see _topk_fuse_tile_).
-    TTI_SFPENCC(3, 0, 0, 10);
+    TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0x0000FFFF;
 
     set_dst_write_addr(0);
@@ -247,7 +250,7 @@ inline void _topk_defuse_tile_(const int num_tiles)
             TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
             TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
             TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // un-complement lo16
-            TTI_SFPENCC(3, 0, 0, 10);
+            TOPK_SFPENCC_ALL_LANES_ON();
             TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, 0); // L1 = [0x0000|u16 idx]
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // L0 = [bf16|0x0000] (exact bf16 pack)
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
@@ -324,7 +327,7 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
 {
     // Lanes-on FIRST -- the constant programming below goes through the
     // lane-PREDICATED SFPCONFIG path (see _topk_fuse_tile_).
-    TTI_SFPENCC(3, 0, 0, 10);
+    TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0x0000FFFF; // LREG12: tag complement operand
 
     LLK_ASSERT(dst_tile_index <= 1, "stamp_tile_rank_range expects dst tile 0 or 1");
@@ -356,12 +359,12 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
             TTI_SFPSHFT(1, 0, p_sfpu::LREG1, 1);
             TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0); // zero lanes -> +0.0
-            TTI_SFPENCC(3, 0, 0, 10);
+            TOPK_SFPENCC_ALL_LANES_ON();
             // Tag with the sequence position, sign-conditioned.
             TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
             TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-            TTI_SFPENCC(3, 0, 0, 10);
+            TOPK_SFPENCC_ALL_LANES_ON();
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
             TTI_INCRWC(0, 2, 0, 0);
         }
@@ -407,7 +410,7 @@ inline void _topk_stamp_local_positions_()
 // entry reprograms LREG12 defensively.
 inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
 {
-    TTI_SFPENCC(3, 0, 0, 10);
+    TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0xFFFF0000; // keep the bf16 half, clear the rank tag
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
@@ -427,7 +430,7 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
 // uint16 index tile in 32-bit DEST: rotate the [0|idx] integer into the high half the packer reads.
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
 {
-    TTI_SFPENCC(3, 0, 0, 10);
+    TOPK_SFPENCC_ALL_LANES_ON();
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -596,7 +599,7 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
     {
         TTI_SFPSWAP(0, IDX_VD, IDX_VC, MODE);
     }
-    TTI_SFPENCC(3, 0, 0, 10);
+    TOPK_SFPENCC_ALL_LANES_ON();
 
     // Restore values after the XOR scratch operation.
     TTI_SFPXOR(0, VC, VD, 0);
@@ -858,10 +861,12 @@ inline void bitonic_topk_inc_x4_dest(std::uint32_t inc, bool cr)
 // pack/unpack transport is a bit identity, so later local sorts and merges see canonical data. The 16-bit-DEST
 // engines need no sweep (their bf16 SrcA datacopy already canonicalizes +-0, silicon-
 // probed), uint16-in-fp32-dest values carry no live sign bit after their own strip, and
-// fused packed keys never take the comparator-stable path.
+// fused packed keys never take the comparator-stable path (their bf16 slab is widened into
+// 32-bit DEST by the same SrcA datacopy, which canonicalizes +-0 before the fuse -- silicon-probed).
 // Predicate: (x & 0x7FFFFFFF) == 0 (zero magnitude); action: x &= 0x7FFFFFFF (-> +0.0).
 inline void _topk_canonicalize_negzero_value_tiles_()
 {
+    TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -872,7 +877,7 @@ inline void _topk_canonicalize_negzero_value_tiles_()
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TTI_SFPENCC(3, 0, 0, 10);
+        TOPK_SFPENCC_ALL_LANES_ON();
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
     }
     set_dst_write_addr(0);
@@ -913,7 +918,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
         // Establish the lanes-on/flags-true CC entry invariant once; every stable comparator
         // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores/
         // transposes/SFPCONFIG writes preserve CC state.
-        TTI_SFPENCC(3, 0, 0, 10);
+        TOPK_SFPENCC_ALL_LANES_ON();
     }
 
     // init the replay buffer for local sort if uninitialized
@@ -1138,10 +1143,6 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_replay_init = -1;
 }
 
-// PRE_TAGGED (with RANK_STAMPED): the value words' low-16 tags are already globally consistent
-// (ttnn.sort fuses the TRUE u16 index in at every network call), so the merge runs the
-// RANK_STAMPED transport (raw INT32 value words, tracked index tiles, unstable swaps) but must
-// NOT overwrite the riding tags with position-derived ranks.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1149,7 +1150,6 @@ template <
     bool STABLE_SORT       = false,
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
-    bool PRE_TAGGED        = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
@@ -1171,16 +1171,15 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         // loops, so it dominates every per-iteration comparator execution; each comparator
         // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores
         // preserve CC state.
-        TTI_SFPENCC(3, 0, 0, 10);
+        TOPK_SFPENCC_ALL_LANES_ON();
     }
 
-    static_assert(!(PRE_TAGGED && !RANK_STAMPED), "pre-tagged keys ride the rank-stamped transport");
-    if constexpr (RANK_STAMPED && !PRE_TAGGED)
+    if constexpr (RANK_STAMPED)
     {
         // Lanes-on FIRST -- the constant programming below goes through the lane-PREDICATED
         // SFPCONFIG path and transiently clobbers LREG0 (see _topk_fuse_tile_), so it must
         // run before any load and under fully enabled lanes.
-        TTI_SFPENCC(3, 0, 0, 10);
+        TOPK_SFPENCC_ALL_LANES_ON();
         sfpi::vConstIntPrgm0 = 0x0000FFFF;                    // LREG12: tag complement operand
         _sfpu_load_config32_(p_sfpu::LREG14, 0xFFFF, 0x0000); // lo16 clear mask (SFPAND -- no loads mid-stamp)
         const std::uint32_t rank_span = 2 * static_cast<std::uint32_t>(k) - 1;
@@ -1209,7 +1208,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                 {
                     bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
-                    if constexpr (RANK_STAMPED && !PRE_TAGGED)
+                    if constexpr (RANK_STAMPED)
                     {
                         // Re-key both runs' value lo16 with fresh sign-conditioned local
                         // ranks so this merge AND the rebuild that follows it compare
@@ -1233,7 +1232,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                         TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
                         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
                         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-                        TTI_SFPENCC(3, 0, 0, 10);
+                        TOPK_SFPENCC_ALL_LANES_ON();
                         // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
                         // a single XOR because 2K is a power of two and rank < 2K.
                         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
@@ -1242,7 +1241,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                         TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
                         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
                         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-                        TTI_SFPENCC(3, 0, 0, 10);
+                        TOPK_SFPENCC_ALL_LANES_ON();
                         // Advance to the next 4 run positions.
                         TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
                     }
@@ -1333,7 +1332,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
         // Establish the lanes-on/flags-true CC entry invariant once; every stable comparator
         // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores/
         // transposes/SFPCONFIG writes preserve CC state.
-        TTI_SFPENCC(3, 0, 0, 10);
+        TOPK_SFPENCC_ALL_LANES_ON();
     }
 
     // init replay buffer for rebuild iteration 'm_iter' if uninitialized
