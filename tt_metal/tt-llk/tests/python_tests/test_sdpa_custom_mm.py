@@ -367,7 +367,13 @@ class SDPA_MASK_REENTRY(TemplateParameter):
         return "#define SDPA_MASK_REENTRY true"
 
 
-@parametrize(M=[1, 8], ct=[1, 3, 8], read_transposed=[False, True])
+@parametrize(
+    M=[1, 8],
+    ct=[1, 3, 8],
+    # The ct==1 fast path requires contiguous reads, as in the existing
+    # test_sdpa_custom_mm_read_transposed contract above.
+    read_transposed=lambda ct: [False, True] if ct > 1 else [False],
+)
 def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
     """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
     _skip_on_simulator(request)
