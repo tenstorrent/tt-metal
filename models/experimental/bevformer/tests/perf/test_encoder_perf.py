@@ -28,7 +28,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import get_preset_config, img_metas_for_dataset
+from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
