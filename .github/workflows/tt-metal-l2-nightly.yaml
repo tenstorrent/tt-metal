@@ -174,16 +174,23 @@ jobs:
   # =============================================================================
   # Bakes the source tree and this run's build output into one image the test legs
   # run in, so they need no artifact download and no recursive checkout. One bake
-  # per (base, profile) the wired legs need, not one per leg.
+  # serves every wired leg, since they all take the build tarball on the dev base.
   #
   # Not every leg here is wired, and the unwired ones keep the artifact path via the
-  # empty prebuilt-image default. ttsim runs on the simulator so there is no hardware
-  # time to win; ttnn-integration takes the basic-ttnn-runtime base and cnn-unit takes
-  # only a wheel, so each would need a bake of its own for well under 0.1 rh/day; and
-  # tt-train is excluded because it reads its outputs through hashFiles and host-side
-  # workspace paths, which resolve against GITHUB_WORKSPACE and so cannot see an image
-  # at /work. Its upload steps would silently stop firing. Not worth reworking for the
-  # ~1.8 rh/day it carries, so do not wire it without changing those reads first.
+  # empty prebuilt-image default:
+  #
+  # - ttsim runs on the simulator, so there is no hardware time to win.
+  # - ttnn-integration takes the basic-ttnn-runtime base and cnn-unit takes only a
+  #   wheel, so each would need a bake of its own for well under 0.1 rh/day.
+  # - tt-train reads its outputs through hashFiles and host-side workspace paths,
+  #   which resolve against GITHUB_WORKSPACE and so cannot see an image at /work; its
+  #   upload steps would silently stop firing. Not worth reworking for the ~1.8 rh/day
+  #   it carries, so do not wire it without changing those reads first.
+  # - ttnn-p100 takes the wheel rather than the build tarball, so it has only ~44s of
+  #   setup and checkout to save. MEASURED against a ~35s image-pull penalty on these
+  #   seeded pools plus ~5s residual, that nets ~4s a leg, or 0.07 rh/day, which does
+  #   not pay for a second bake. Wheel-only legs are the case this whole approach does
+  #   not help; do not wire one without measuring it first.
   bake-env-dev-full:
     needs: build-artifact
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
@@ -204,25 +211,6 @@ jobs:
       build-args: PROFILE=full
       # No source-ref: this caller takes no ref, so the producer's default (its own
       # commit) is already the commit build-artifact built.
-
-  # ttnn-p100 runs the Sanity ttnn impl, which imports ttnn from the wheel on the
-  # ci-test base rather than from a build tree, so it needs its own bake.
-  bake-env-ci-test-wheel:
-    needs: build-artifact
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
-    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
-    permissions:
-      contents: read
-      packages: write
-      actions: read
-    secrets: inherit
-    with:
-      artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      base-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
-      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
-      image-name: prebuilt-tests-env-image
-      checkout-source: true
-      build-args: PROFILE=wheel
 
   ttsim-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -340,21 +328,13 @@ jobs:
       additional_test_categories: cnn_pipeline,cnn_builder
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-p100-tests:
-    needs: [check-harbor, build-artifact, bake-env-ci-test-wheel]
-    # bake-env-ci-test-wheel is in needs but deliberately absent from the if:. A failed
-    # bake leaves the ref empty and the legs fall back to the artifact path; gating
-    # on it would skip the suite instead. The if: therefore restates the dependencies
-    # the bare needs list used to imply, check-harbor included since it feeds
-    # harbor-prefix.
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
-     needs.check-harbor.result == 'success' &&
-     (github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests)) }}
+    needs: [check-harbor, build-artifact]
+    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
       enabled-skus: "bh_p100"
       docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
-      prebuilt-image: ${{ needs.bake-env-ci-test-wheel.outputs.image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

@@ -39,8 +39,8 @@ name: "Cleanup prebuilt tests images"
 # two of these per run, one per (base, profile) its impls need; runtime sanity
 # adds about 20 runs a day with one more. The model tiers bake one each on a cron,
 # seven runs a day between the three unit and three e2e pipelines, and All Model
-# Tests one more per dispatch. The L2 nightly bakes two, one per base its wired
-# legs need, on one cron. So roughly 532 a day, and N=1500 buys about three days.
+# Tests one more per dispatch. The L2 nightly bakes one on one cron. So roughly 531
+# a day, and N=1500 buys about three days.
 # Recompute if a caller is added, the same way the figure above is derived from a
 # rate.
 #
