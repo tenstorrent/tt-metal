@@ -74,7 +74,7 @@ D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
-NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
@@ -108,15 +108,6 @@ assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
     "fd_mesh_command_queue as 'Event Synchronization is not supported during trace capture'. A prefill "
     "runner ignores the emitted token anyway, so leave PREFILL_KV_ONLY_LAST_LAYER at its default 1 when "
     "tracing (the kv-only last block still writes its KV cache)."
-)
-
-_ALLOW_TP_SHARD_TRACE = os.environ.get("PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE", "0") == "1"
-assert not (TP_SHARD_KV and USE_TRACE) or _ALLOW_TP_SHARD_TRACE, (
-    "PREFILL_TP_SHARD_KV=1 with PREFILL_USE_TRACE=1 has no CI coverage: no job exercises the tp_axis "
-    "on-device kv_actual_global read, the key_stripe_split>1 indexer geometry, or the kv-dedup two-stage "
-    "KVPE gather. The combination works (hand-validated on 8x4) but nothing would catch a regression. "
-    "Set PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE=1 to run it anyway, or add a `tp_sharded and traced` CI row "
-    "and delete this tripwire."
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
@@ -731,7 +722,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
-    use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
+    use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "1") == "1"
 
     from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 

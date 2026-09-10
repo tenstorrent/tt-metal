@@ -16,9 +16,7 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
-RUNNER_ENV=""
 PRODUCER_ENV=""
-TP_SHARD_KV_DEFAULT=0
 
 case "${CONFIG}" in
   sc1|sc4) ;;
@@ -32,24 +30,11 @@ case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    MAX_SEQ_LEN=256000
-    # Users are bounded by per-bank KV capacity, and that bound has to be bisected, not computed --
-    # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
-    # just above this and wanders between ranks, so re-bisect before raising it.
-    NUM_USERS_DEFAULT=86
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
-    MAX_SEQ_LEN=1049600
-    # Same per-bank capacity bound, relaxed by the TP KV dedup below. The sparse KV format moves it
-    # a long way (SP x TP fits 34 at bf16, 56 at fp8), so this sits well under the edge, not on it.
-    NUM_USERS_DEFAULT=28
-    TP_SHARD_KV_DEFAULT=1
-    # UNTRACED, as of now
-    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
@@ -62,12 +47,28 @@ esac
 MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
 
+manifest_env() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
+}
+MAX_SEQ_LEN=$(manifest_env PREFILL_MAX_SEQ_LEN)
+NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+
+RUNNER_OVERRIDES=""
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 SC1_MAX_SEQ_LEN=256000
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
-  NUM_USERS_DEFAULT=1
+  NUM_USERS=1
+  RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
+if [ -n "${PREFILL_NUM_USERS:-}" ]; then
+  NUM_USERS=${PREFILL_NUM_USERS}
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
+fi
+if [ -n "${PREFILL_TP_SHARD_KV:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV};"
+fi
+echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
@@ -141,15 +142,12 @@ python3 "${TTRUN_PY}" \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
-    export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
-    export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV:-${TP_SHARD_KV_DEFAULT}}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
-    ${RUNNER_ENV} \
+    ${RUNNER_OVERRIDES} \
     export LOGURU_LEVEL=INFO; \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
@@ -178,6 +176,7 @@ set +e
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    export PREFILL_NUM_USERS=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \

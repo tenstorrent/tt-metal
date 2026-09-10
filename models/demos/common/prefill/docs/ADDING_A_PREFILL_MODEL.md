@@ -204,8 +204,19 @@ put them in a per-model **manifest** in your package and point the binding at it
 
 ```json
 // models/demos/my_model/tt/runners/manifests/my_model.json
-{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }
+{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "256000", "PREFILL_NUM_USERS": "86" } }
 ```
+
+The manifest has two jobs, and only two: it names the model (the one thing the adapter cannot
+supply, since the name is what selects the adapter), and it carries the production-shape defaults a
+deployer may legitimately override per deployment — sequence length, user count, and any op-mode
+flag someone would flip in the field. Everything that is a fixed property of the model belongs on
+the adapter, where it can be computed and reviewed: layer count (`model_config.NUM_LAYERS`), gate
+mode (`default_gate_mode`), weight/cache/trace paths, capability flags. The boundary test is whether
+two deployments of the same model could legitimately want different values.
+
+A manifest entry that restates an adapter fact is a bug in waiting: nothing checks the two copies
+agree, and a manifest that simply omits one silently runs the engine default instead.
 
 ```yaml
 # the binding's global_env then needs only this model reference:
