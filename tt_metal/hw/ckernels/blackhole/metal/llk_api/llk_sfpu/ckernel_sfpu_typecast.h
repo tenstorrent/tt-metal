@@ -210,6 +210,18 @@ inline void calculate_typecast_fp32_to_int32() {
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
 
+        // A positive input cannot legitimately produce a negative int32, so the only lanes this
+        // matches are the positive overflows that the INT_MIN constant above saturated the wrong
+        // way: the same constant serves both signs and the negate only fires for in < 0.
+        // Decrementing wraps INT_MIN to INT_MAX.
+        // LaneEnabled = in >= 0
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        // LaneEnabled &= result < 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        // result -= 1
+        TTI_SFPIADD(-1 & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        // LaneEnabled = true
+        TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }
