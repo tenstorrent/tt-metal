@@ -418,7 +418,15 @@ void Cluster::get_metal_desc_from_tt_desc() {
         if (this->target_type_ == TargetDevice::Silicon) {
             umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
         }
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(umd_soc, this->get_cluster_desc()->get_board_type(id)));
+        // The CMFW bundle version drives the Blackhole DRAM endpoint selection (SYS-4948). It is
+        // cluster-wide rather than per-chip because UMD's topology discovery already rejects a
+        // cluster whose chips disagree (TopologyDiscovery::verify_fw_bundle_version).
+        this->sdesc_per_chip_.emplace(
+            id,
+            metal_SocDescriptor(
+                umd_soc,
+                this->get_cluster_desc()->get_board_type(id),
+                this->get_cluster_desc()->get_cluster_firmware_bundle_version()));
     }
 }
 

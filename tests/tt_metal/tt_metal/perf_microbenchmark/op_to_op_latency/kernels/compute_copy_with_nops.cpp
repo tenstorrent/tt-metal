@@ -26,6 +26,15 @@
 //                          zone so the per-tile profiler writes don't pace the consumer and
 //                          back-pressure the reader. Compute cost is then copy + NOPs
 //                          only, which is what we want when balancing NOPs vs read BW.)
+//   4: PASSTHROUGH       (1 = CB handshake only: no copy_tile / pack_tile / NOP spin, so the math
+//                          datapath is completely idle. Set by --bypass-compute, implied by
+//                          --write-only. Takes compute out of the measured path in BOTH
+//                          directions: on the write side the writer is no longer paced by the
+//                          packer producing one tile at a time; on the read side the reader is no
+//                          longer back-pressured through cb_in once the CB fills.
+//                          NOTE lean mode (PROFILE_PER_TILE=0) drops only INSTRUMENTATION -- it
+//                          still unpacks and packs every tile -- so it is not sufficient on its
+//                          own for either direction. NUM_NOPS_PER_TILE is ignored when set.)
 //
 // Runtime args:
 //   0: n_tiles
@@ -49,6 +58,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t num_nops_per_tile = get_compile_time_arg_val(2);
     constexpr uint32_t profile_per_tile = get_compile_time_arg_val(3);
+    constexpr uint32_t passthrough = get_compile_time_arg_val(4);
 
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
     const uint32_t program_id = get_arg_val<uint32_t>(1);
@@ -56,8 +66,11 @@ void kernel_main() {
     // no barrier between reps. Matches the reader/writer unroll so the whole op runs un-synced.
     const uint32_t workload_repeat = get_arg_val<uint32_t>(2) > 0 ? get_arg_val<uint32_t>(2) : 1;
 
-    compute_kernel_hw_startup(cb_in, cb_out);
-    copy_init(cb_in);
+    // Skip math-datapath setup entirely in passthrough mode -- nothing below touches it.
+    if constexpr (!passthrough) {
+        compute_kernel_hw_startup(cb_in, cb_out);
+        copy_init(cb_in);
+    }
 
     // Device 2.0 CB handles for the flow-control ops (wait/reserve/push/pop). The tile-copy /
     // pack LLK calls below still take the raw CB ids.
@@ -111,11 +124,15 @@ void kernel_main() {
                 }
             }
 
-            if constexpr (profile_per_tile) {
-                DeviceZoneScopedN("MATH");
-                copy_one_tile();
-            } else {
-                copy_one_tile();
+            // passthrough: no unpack/copy/pack at all -- the CB payload is whatever L1 already
+            // held (never validated in this mode), so the writer streams at its own pace.
+            if constexpr (!passthrough) {
+                if constexpr (profile_per_tile) {
+                    DeviceZoneScopedN("MATH");
+                    copy_one_tile();
+                } else {
+                    copy_one_tile();
+                }
             }
 
             out_cb.push_back(1);
