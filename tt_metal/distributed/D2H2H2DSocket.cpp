@@ -176,7 +176,7 @@ void D2H2H2DSocket::retire_tx(uint32_t core) {
 uint64_t D2H2H2DSocket::elapsed_ns_of(const Job& job, bool& usable, uint64_t& visibility_ns) const {
     visibility_ns = 0;
     const uint64_t word = job.operand_count > kArgElapsed ? job.operand[kArgElapsed] : 0;
-    // 2 fields or one -- never the value. 
+    // 2 fields or one -- never the value.
     const bool split = (ctrl_flags(job.ctrl) & kFlagElapsedSplit) != 0;
     const uint64_t raw = split ? elapsed_total_of(word) : word;
     const uint64_t raw_vis = split ? elapsed_visibility_of(word) : 0;
