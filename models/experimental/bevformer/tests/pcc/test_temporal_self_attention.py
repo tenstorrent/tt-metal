@@ -43,8 +43,10 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
         ("nuscenes_base", 1, 50, 50, 2, 0.999, 0.02, 0.11, 0.3),  # NuScenes base model - 50x50 BEV grid
         ("nuscenes_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # NuScenes base model - 100x100 BEV grid
         ("nuscenes_base", 2, 30, 30, 2, 0.999, 0.02, 0.06, 0.2),  # Batch size 2
-        ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # CARLA base model
         ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.58, 0.4),  # Large BEV grid
+        # Off: TSA reads only embed_dims/num_heads/num_points, identical here to
+        # nuscenes_base, and takes its grid from bev_h/bev_w -- same workload.
+        # ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # CARLA base model
     ],
 )
 @pytest.mark.parametrize("seed", [0])
