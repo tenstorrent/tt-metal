@@ -10,10 +10,11 @@ void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_untilized = get_compile_time_arg_val(1);
     constexpr uint32_t tiles_per_core = get_compile_time_arg_val(2);
-    constexpr uint32_t output_rows = get_compile_time_arg_val(3);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t full_width_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t gather_semaphore_id = get_compile_time_arg_val(6);
+    constexpr uint32_t skip_untilize = get_compile_time_arg_val(3);
+    constexpr uint32_t output_rows = get_compile_time_arg_val(4);
+    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t full_width_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t gather_semaphore_id = get_compile_time_arg_val(7);
 
     const uint32_t sender_id = get_arg_val<uint32_t>(0);
     const uint32_t hub_output_addr = get_arg_val<uint32_t>(1);
@@ -21,14 +22,19 @@ void kernel_main() {
     const uint32_t hub_noc_y = get_arg_val<uint32_t>(3);
 
     CircularBuffer input_cb(cb_in);
-    CircularBuffer untilized_cb(cb_untilized);
-
-    // The input CB is backed by this core's WIDTH_SHARDED input allocation. Publish the resident
-    // tiles so the compute kernel can untilize them in place.
-    input_cb.push_back(tiles_per_core);
-
-    untilized_cb.wait_front(tiles_per_core);
-    const uint32_t local_untilized_addr = untilized_cb.get_read_ptr();
+    uint32_t local_untilized_addr;
+    if constexpr (skip_untilize) {
+        // ROW_MAJOR shards are stored as one page per logical row.
+        input_cb.push_back(output_rows);
+        local_untilized_addr = input_cb.get_read_ptr();
+    } else {
+        CircularBuffer untilized_cb(cb_untilized);
+        // The input CB is backed by this core's WIDTH_SHARDED TILE allocation. Publish
+        // the resident tiles so the compute kernel can untilize them in place.
+        input_cb.push_back(tiles_per_core);
+        untilized_cb.wait_front(tiles_per_core);
+        local_untilized_addr = untilized_cb.get_read_ptr();
+    }
     const uint32_t shard_column_offset = sender_id * shard_width_bytes;
 
     // Width shards are contiguous columns. Stitch only the logical rows into the hub's
@@ -44,5 +50,8 @@ void kernel_main() {
     noc_semaphore_inc(get_noc_addr(hub_noc_x, hub_noc_y, gather_semaphore_addr), 1);
     noc_async_atomic_barrier();
 
-    untilized_cb.pop_front(tiles_per_core);
+    if constexpr (!skip_untilize) {
+        CircularBuffer untilized_cb(cb_untilized);
+        untilized_cb.pop_front(tiles_per_core);
+    }
 }

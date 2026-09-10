@@ -4,12 +4,12 @@
 
 """Unit test for ttnn.experimental.deepseek.all_gather_for_matmul.
 
-WIDTH_SHARDED TILE input: each core untilizes its column slice, the slices are gathered
-on a hub, then the hub multicasts the assembled tensor to ``output_core_range_set``.
+WIDTH_SHARDED input: each core untilizes its column slice if the data is TILE, then the
+slices are gathered on a hub and the hub multicasts the assembled tensor to
+``output_core_range_set``. ROW_MAJOR width shards skip untilize.
 
 HEIGHT_SHARDED single-core input: the full tensor already lives on one core, so that core
-untilizes if needed and multicasts (no gather). This is also the only path for an M x K whose
-width cannot be split into tile-wide column shards, e.g. 16x512.
+untilizes if needed and multicasts (no gather). TILE and ROW_MAJOR are accepted.
 
 Both paths replicate all M rows, so the output shard is the whole (M, K) logical tensor.
 """
@@ -55,33 +55,37 @@ def _assert_replicated(tt_output, torch_input, num_output_cores, logical_height,
         assert_equal(expected, per_core[core_id])
 
 
-# A TILE width shard must be a whole tile wide, so each shape here needs width / num_cores to be a
-# multiple of 32. Shapes too narrow to split that way (e.g. 16x512 over 64 cores) belong on the
-# single-core height-sharded path below.
-@pytest.mark.parametrize("shape", [(1, 1, 1, 4096), (1, 1, 16, 2048)], ids=lambda s: "x".join(str(d) for d in s))
+# A TILE width shard must be a whole tile wide, so TILE cases need width / num_cores to be a
+# multiple of 32. ROW_MAJOR only needs the width to divide evenly over the input cores.
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 1, 4096), (1, 1, 16, 2048), (1, 1, 16, 512)], ids=lambda s: "x".join(str(d) for d in s)
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
 @pytest.mark.parametrize("input_grid", [(4, 4), (8, 8)], ids=lambda g: f"in{g[0]}x{g[1]}")
 # The op multicasts over the bounding box of the output set, so cover both a full-grid broadcast and
 # a smaller one whose bounding box is a strict subset of the input cores.
 @pytest.mark.parametrize("output_grid", [(6, 6), (4, 4)], ids=lambda g: f"out{g[0]}x{g[1]}")
-def test_all_gather_for_matmul(device, shape, input_grid, output_grid):
+def test_all_gather_for_matmul(device, shape, layout, input_grid, output_grid):
     torch.manual_seed(0)
 
     width = shape[-1]
     logical_height = shape[-2]
     input_core_range_set = _core_range_set(*input_grid)
     num_input_cores = input_core_range_set.num_cores()
-    if width % num_input_cores != 0 or (width // num_input_cores) % TILE != 0:
+    if width % num_input_cores != 0:
+        pytest.skip(f"width {width} does not split evenly over {num_input_cores} cores")
+    if layout == ttnn.TILE_LAYOUT and (width // num_input_cores) % TILE != 0:
         pytest.skip(f"width {width} does not split into tile-wide shards over {num_input_cores} cores")
-    padded_height = max(TILE, logical_height)
+    shard_height = max(TILE, logical_height) if layout == ttnn.TILE_LAYOUT else logical_height
     output_core_range_set = _core_range_set(*output_grid)
 
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         device=device,
-        memory_config=_width_sharded_config(input_core_range_set, padded_height, width),
+        memory_config=_width_sharded_config(input_core_range_set, shard_height, width),
     )
 
     tt_output = ttnn.experimental.deepseek.all_gather_for_matmul(tt_input, output_core_range_set)

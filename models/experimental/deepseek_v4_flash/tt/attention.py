@@ -24,6 +24,7 @@ from .layers import (
     BatchedLinearDecode,
     DeepSeekV4RMSNorm,
     LinearDecode,
+    _core_grid_contains,
 )
 from .l1_weights import packed_weight_spec
 from .paged_cache import PagedLayerView
@@ -433,6 +434,22 @@ def _pack_tokens(hidden: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(hidden, [1, 1, tokens, d])
 
 
+def _packed_users(tokens: ttnn.Tensor) -> int:
+    """Packed-token count (``B*S``) for a ``[1, 1, B*S, D]`` row, including a gathered replica.
+
+    ``all_gather_for_matmul`` reports HEIGHT_SHARDED volume as ``num_cores * M``, so
+    ``tokens.shape[-2]`` is not the user count after the decode gather. The shard height is.
+    """
+    mem = tokens.memory_config()
+    if (
+        tokens.is_sharded()
+        and mem.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and mem.shard_spec is not None
+    ):
+        return mem.shard_spec.shape[0]
+    return tokens.shape[-2]
+
+
 def _height_sharded_l1_config(
     num_users: int, width: int, device, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT
 ) -> ttnn.MemoryConfig:
@@ -781,7 +798,8 @@ class DeepSeekV4HCACompressor:
         and append its single entry at row ``win_row`` of the layer's KV axis
         (``combined_cache``, or ``paged``'s block pool).
 
-        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``.
+        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered
+        onto the decode activation grid when the caller used :meth:`DeepSeekV4Attention.decode_static`.
 
         ``pool`` is set by the caller only on the steps that close a window, so the
         cost per step is ``O(compress_rate)`` rather than ``O(max_seq)``: in between,
@@ -789,7 +807,7 @@ class DeepSeekV4HCACompressor:
         (see the module header).
         """
         _signpost("HCA_START")
-        users = tokens.shape[-2]
+        users = _packed_users(tokens)
         kv, gate = self._project(tokens)  # [1, 1, B, Dh]
         kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, self.head_dim]))
         gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, self.head_dim]))
@@ -951,14 +969,15 @@ class DeepSeekV4CSACompressor:
         retained previous window) and append its single entry at row ``win_row``
         of the layer's KV axis (``combined_cache``, or ``paged``'s pool).
 
-        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``.
+        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered
+        onto the decode activation grid when the caller used :meth:`DeepSeekV4Attention.decode_static`.
 
         After pooling, the closing window becomes the ``prev_*`` the *next* window
         will overlap with. See :meth:`DeepSeekV4HCACompressor.decode_static`.
         """
         _signpost("CSA_START")
         feat = 2 * self.head_dim
-        users = tokens.shape[-2]
+        users = _packed_users(tokens)
         kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
         kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, feat]))
         gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, feat]))
@@ -1778,6 +1797,23 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
         return self._grouped_output(attn)
 
+    def _decode_activation_grid(self) -> ttnn.CoreRangeSet:
+        """Core set that receives the decode all-gather replica of packed ``tokens``.
+
+        Start from q_a's B grid (the larger of the two input projections) and grow to any
+        compressor kv/gate grid that already contains it, so one multicast covers q_a, kv
+        and the compressor pair. LinearDecode reuses a replica whose grid is a superset of
+        its B cores.
+        """
+        grid = self.q_a_proj.b_core_grid()
+        extras = [self.kv_proj.b_core_grid()]
+        if self.compressor is not None:
+            extras.extend((self.compressor.kv_proj.b_core_grid(), self.compressor.gate_proj.b_core_grid()))
+        for other in extras:
+            if other.num_cores() > grid.num_cores() and _core_grid_contains(other, grid):
+                grid = other
+        return grid
+
     def _qkv(self, tokens: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Project + RoPE the query and (shared) K=V for the packed-row ``tokens`` ``[1, 1, B, D]``.
 
@@ -1791,12 +1827,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         batch occupies, so a B-user step issues the same ops a one-user step does.
         """
         _profile(self.device)
-        # matmul_decode's full-width hub mode reads A as ROW_MAJOR HEIGHT_SHARDED with the
-        # whole of K replicated on each of the weight's B cores. Untilize+broadcast once onto
-        # q_a's (larger) B grid and reuse that replica for kv: every kv B core is in that
-        # rectangle. A partial-width weight cannot take this layout (the helper is a no-op).
-        qkv_tokens = ttnn.experimental.deepseek.all_gather_for_matmul(tokens, self.q_a_proj.b_core_grid())
-        q_a_raw = self.q_a_proj(qkv_tokens, mesh_coords=self.q_projection_mesh_coords)
+        # ``tokens`` is already the decode-static all-gather: ROW_MAJOR HEIGHT_SHARDED with
+        # full K on every core of :meth:`_decode_activation_grid`. q_a's B cores (and kv's,
+        # a subset) already hold a replica; a partial-width weight cannot take this layout
+        # (LinearDecode unreplicates).
+        q_a_raw = self.q_a_proj(tokens, mesh_coords=self.q_projection_mesh_coords)
         if self.dedicated_qkv_ranks:
             q_a_raw = _replicate_from_tp_rank(q_a_raw, self.device, self.q_projection_rank, self.tp_size)
         elif self.balanced_qkv:
@@ -1817,11 +1852,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim, head_dim=self.head_dim)
         # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a
         # prefetched matmul that runs out of turn pops another weight's page (see
-        # ``prefetch_weights``). Reuse q_a's replicated activation; kv's B cores are a
-        # subset of that grid.
-        kv_raw = self.kv_proj(qkv_tokens, mesh_coords=self.kv_projection_mesh_coords)
-        if qkv_tokens is not tokens:
-            ttnn.deallocate(qkv_tokens)
+        # ``prefetch_weights``). Reuse the same replicated activation; kv's B cores are a
+        # subset of that grid. The caller still owns ``tokens`` (the compressor reads it).
+        kv_raw = self.kv_proj(tokens, mesh_coords=self.kv_projection_mesh_coords)
 
         if self.dedicated_qkv_ranks:
             kv_raw = _replicate_from_tp_rank(kv_raw, self.device, self.kv_projection_rank, self.tp_size)
@@ -1919,6 +1952,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         b, s, _, d = hidden.shape
         assert s == 1, f"decode attends one token per user, but S == {s}"
         tokens = _pack_tokens(hidden)  # [1, 1, B, D]
+        # One all-gather of the packed row onto the union of q_a / kv / compressor B cores.
+        # matmul_decode's full-width hub mode reads that replica in place; a partial-width
+        # weight unreplicates. The original width-sharded row is then free.
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(tokens, self._decode_activation_grid())
+        if gathered is not tokens:
+            ttnn.deallocate(tokens)
+        tokens = gathered
         q, kv_new = self._qkv(tokens, cos, sin)  # q [1,1,B,H*Dh], kv_new [1,1,B,Dh]
         # kv_new = _one_row_per_user(kv_new)  # [1, B, 1, Dh] ROW_MAJOR, one core per user
 
@@ -1955,6 +1995,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                     neg_sin,
                     sdpa_cur_pos=sdpa_cur_pos,
                 )
+            ttnn.deallocate(tokens)
             return ttnn.reshape(out, [b, s, 1, d])
 
         # One KV axis holds both regions, so there is no per-step concat: the ring slot
@@ -1988,6 +2029,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             pool=pool_compressor,
             paged=paged,
         )
+        ttnn.deallocate(tokens)
         if q_config is not None:
             q = ttnn.to_memory_config(q, q_config)
         out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)

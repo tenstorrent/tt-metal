@@ -50,16 +50,12 @@ void AllGatherForMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(width_sharded || height_sharded, "Input must be WIDTH_SHARDED or HEIGHT_SHARDED, got {}", input_layout);
     TT_FATAL(input_tensor.memory_config().buffer_type() == BufferType::L1, "Input must be in L1");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input must have a shard spec");
-    if (width_sharded) {
-        TT_FATAL(input_tensor.layout() == Layout::TILE, "WIDTH_SHARDED input must use TILE layout");
-    } else {
-        TT_FATAL(
-            input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
-            "HEIGHT_SHARDED input must use TILE or ROW_MAJOR layout");
-        TT_FATAL(
-            input_tensor.dtype() != DataType::BFLOAT8_B || input_tensor.layout() == Layout::TILE,
-            "ROW_MAJOR HEIGHT_SHARDED input cannot be BFLOAT8_B");
-    }
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
+        "Input must use TILE or ROW_MAJOR layout");
+    TT_FATAL(
+        input_tensor.dtype() != DataType::BFLOAT8_B || input_tensor.layout() == Layout::TILE,
+        "ROW_MAJOR input cannot be BFLOAT8_B");
     TT_FATAL(input_tensor.logical_shape().rank() >= 2, "Input rank must be at least 2");
     TT_FATAL(!args.output_core_range_set.empty(), "Output core range set must not be empty");
 
@@ -111,6 +107,18 @@ void AllGatherForMatmulDeviceOperation::validate_on_program_cache_miss(
             padded_width,
             input_shard.grid.num_cores(),
             input_shard.shape[1]);
+        if (input_tensor.layout() == Layout::ROW_MAJOR) {
+            TT_FATAL(
+                padded_width == logical_width,
+                "ROW_MAJOR WIDTH_SHARDED input padded width {} must equal logical width {}",
+                padded_width,
+                logical_width);
+            TT_FATAL(
+                (input_shard.shape[1] * input_tensor.element_size()) % 16 == 0,
+                "ROW_MAJOR WIDTH_SHARDED shard width {} ({} bytes) must be 16-byte aligned for NoC writes",
+                input_shard.shape[1],
+                input_shard.shape[1] * input_tensor.element_size());
+        }
     }
     if (input_tensor.layout() == Layout::TILE) {
         TT_FATAL(
