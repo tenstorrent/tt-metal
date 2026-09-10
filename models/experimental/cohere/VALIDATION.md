@@ -92,3 +92,37 @@ Fork branches: `canada-quant/tt-metal@command-r-bringup` (pinned validated tree)
   chunked prefill to 128K, BFP8 compression, and the T3K perf targets
   (~60 T/S/U, ~70 ms TTFT) are all open; the conc-4 prefill crash above is a
   known blocker for high-concurrency serving.
+
+## Reproduce (exact commands)
+
+Run from the tt-metal repo root (python env with the repo on `PYTHONPATH`), devices
+visible. Weights: `CohereLabs/c4ai-command-r-v01` is HF-gated (CC-BY-NC-4.0) —
+accept the license and authenticate (`HF_TOKEN` / `huggingface-cli login`);
+`ModelArgs` downloads the checkpoint on first use.
+
+0. (PCC harnesses only) Generate the fp32 CPU reference dumps — CPU-only,
+   ~140 GB RAM for fp32 (70 GB checkpoint):
+
+       pip install 'transformers>=4.39.1' torch --index-url https://download.pytorch.org/whl/cpu
+       python models/experimental/cohere/reference/cpu_reference_capture.py \
+           --snapshot /path/to/local/HF/snapshot --out ./cohere_reference --dtype float32
+       export COHERE_REF_DIR=$PWD/cohere_reference
+
+1. Single-layer PCC (decoder-layer gate 0.99; layernorm gate 0.9999):
+
+       python -m pytest models/experimental/cohere/tests/test_cohere_pcc.py -v
+
+2. Full-model chained 40-layer PCC + final-norm + logits:
+
+       python -m pytest models/experimental/cohere/tests/test_cohere_fullmodel_pcc.py -v -s
+
+3. e2e prefill+decode through the vLLM-plugin call path (no reference dumps needed):
+
+       python -m pytest models/experimental/cohere/tests/test_cohere_vllm_e2e.py -v -s
+
+Mesh: all three tests read `MESH_DEVICE` (`N150`/`N300`/`T3K`/`TG` map; default
+QB2 (1,4)) — on a T3K run with `MESH_DEVICE=T3K` (TP=8; untested by us).
+Env knobs: `COHERE_LAYER` / `COHERE_LAYERS`, `COHERE_REF_PROMPT`, `COHERE_GATE`,
+`COHERE_DECODE_TOKENS`, `COHERE_MAX_SEQ` (keep <= 8192), `HF_MODEL`.
+Expected values: the Correctness table above (e.g. 40-layer chained min 0.995873 /
+mean 0.999017; logits 0.997250; e2e `1 passed in 230.18s` on QB2).
