@@ -19,8 +19,7 @@ report to ``models/demos/qwen3_tts/tests/perf/reports/prefill_single_layer_<buck
 
 The window is one untraced forward of one ``DecoderLayer`` at a demo prefill
 TRACE bucket, between ``start`` / ``stop`` signposts — the graph
-``tests/test_qwen3_tts_profile_single_layer.py`` profiles, called directly so the
-two cannot drift.
+``qwen3_tts_perf_layers.py`` defines, called directly so the two cannot drift.
 
 Bucket selection (the demo's buckets are 32 / 64 / 128; 64 is what the Japanese
 sample pads to)::
