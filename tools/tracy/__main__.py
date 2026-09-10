@@ -5,8 +5,8 @@
 from pathlib import Path
 from shutil import copyfile
 
-
 from tracy import *
+from tracy.perf_counter_multipass import plan_perf_counter_capture, run_perf_counter_passes
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
@@ -172,10 +172,19 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1, instrn, all",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, all",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",
+    )
+    parser.add_option(
+        "--perf-counter-multipass",
+        dest="perf_counter_multipass",
+        action="store_true",
+        default=False,
+        help="When the requested counter groups don't fit one pass (>1 L1 bank, or too many groups for "
+        "BRISC firmware), replay the workload once per scheduled pass and merge results. Without this, "
+        "such a request errors with the required pass plan.",
     )
     parser.add_option(
         "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
@@ -267,70 +276,13 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    if options.perf_counter_groups:
-        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
-        counter_group_bits = {
-            "fpu": 0,
-            "pack": 1,
-            "unpack": 2,
-            "l1_0": 3,
-            "l1_1": 4,
-            "instrn": 5,
-            "l1_2": 6,
-            "l1_3": 7,
-            "l1_4": 8,
-        }
-
-        bitfield = 0
-        for group in options.perf_counter_groups:
-            group_lower = group.lower()
-            if group_lower == "all":
-                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
-                break
-            elif group_lower in counter_group_bits:
-                bitfield |= 1 << counter_group_bits[group_lower]
-            else:
-                logger.warning(
-                    f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
-                )
-
-        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
-
-        # Reject BH-only groups on non-BH architectures.
-        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
-        requested_groups = {group.lower() for group in options.perf_counter_groups}
-        requested_bh_only = sorted(requested_groups & bh_only_groups)
-        if requested_bh_only:
-            declared_arch = next(
-                (
-                    os.environ.get(env_var)
-                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
-                    if os.environ.get(env_var)
-                ),
-                None,
-            )
-            if declared_arch is None:
-                try:
-                    import ttnn
-
-                    device = ttnn.open_device(device_id=0)
-                    declared_arch = str(device.arch()).split(".")[-1]
-                    ttnn.close_device(device)
-                except Exception:
-                    logger.debug("Failed to detect device arch via ttnn")
-            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
-            if not is_blackhole:
-                arch_desc = declared_arch if declared_arch is not None else "undeclared"
-                raise ValueError(
-                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
-                    f"but device arch is {arch_desc}."
-                )
-
-        if bitfield > 0:
-            os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
-            logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
+    # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
+    # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
+    inherited_mask = options.noCapture and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ
+    if options.perf_counter_groups and not inherited_mask:
+        options.perf_counter_pass_bitfields = plan_perf_counter_capture(
+            options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
+        )
 
     if not (
         options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
@@ -426,11 +378,14 @@ def main():
             if port:
                 envVars["TRACY_PORT"] = port
 
-            testProcess = subprocess.Popen([testCommand], shell=True, env=envVars, preexec_fn=os.setsid)
-            logger.info(f"Test process started")
+            # Multi-pass perf-counter capture replays the workload once per scheduled pass (each with
+            # its own group mask) and merges the per-pass device logs. Single pass runs once as before.
+            pass_bitfields = getattr(options, "perf_counter_pass_bitfields", None)
+            proc_holder = {"p": None}
 
             def signal_handler(sig, frame):
-                os.killpg(os.getpgid(testProcess.pid), signal.SIGTERM)
+                if proc_holder["p"] is not None:
+                    os.killpg(os.getpgid(proc_holder["p"].pid), signal.SIGTERM)
                 captureProcess.terminate()
                 captureProcess.communicate()
                 sys.exit(3)
@@ -438,10 +393,20 @@ def main():
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
 
-            testProcess.communicate()
-            if options.check_exit_code and testProcess.returncode != 0:
-                logger.error(f"{testCommand} exited with a non-zero return code")
-                sys.exit(4)
+            def run_workload(env):
+                proc = subprocess.Popen([testCommand], shell=True, env=env, preexec_fn=os.setsid)
+                proc_holder["p"] = proc
+                logger.info("Test process started")
+                proc.communicate()
+                if options.check_exit_code and proc.returncode != 0:
+                    logger.error(f"{testCommand} exited with a non-zero return code")
+                    sys.exit(4)
+
+            if pass_bitfields and len(pass_bitfields) > 1:
+                if not run_perf_counter_passes(run_workload, envVars, pass_bitfields, outputFolder):
+                    sys.exit(4)
+            else:
+                run_workload(envVars)
 
             # Large model traces can take over 15 seconds to save after the test exits.
             capture_timeout = 120

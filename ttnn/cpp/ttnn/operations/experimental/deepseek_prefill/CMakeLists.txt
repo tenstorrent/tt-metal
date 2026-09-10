@@ -9,6 +9,7 @@ add_subdirectory(extract)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
 add_subdirectory(masked_bincount)
+add_subdirectory(moe_fused_swiglu)
 add_subdirectory(moe_grouped_topk)
 add_subdirectory(moe_hash_gate)
 add_subdirectory(moe_padding_config)
@@ -19,6 +20,7 @@ add_subdirectory(per_token_cast_back)
 add_subdirectory(per_token_cast_to_fp8)
 add_subdirectory(post_combine_reduce)
 add_subdirectory(rotary_embedding_indexed)
+add_subdirectory(unified_routed_expert_ffn)
 add_subdirectory(update_padded_kv_cache)
 add_subdirectory(zero_padded_kv_cache)
 
@@ -39,6 +41,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
         TTNN::Ops::Experimental::DeepSeekPrefill::MoePaddingConfig
@@ -49,6 +52,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
+        TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
 )
@@ -76,6 +80,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoePaddingConfig>
@@ -86,6 +91,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache>
 )

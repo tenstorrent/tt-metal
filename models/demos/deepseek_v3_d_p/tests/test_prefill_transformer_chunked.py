@@ -196,24 +196,25 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut to the medians below.
+    # then re-cut twice; the medians below are the current cut.
     #
-    # The shift from the previous cut is a ramp, not a level change: -2.2% at chunks 0-3, tapering
-    # through -1.8/-1.3/-0.8/-0.3% to 0.0% at chunks 8 and 10. A uniform per-chunk saving would move
-    # every chunk equally, so this is a fixed cost coming off the front of each chunk and being
-    # progressively swamped by the depth ramp (chunk c attends to KV[0:c*CHUNK]).
+    # The shift from the previous cut is -10.8% to -15.2% per chunk, largest at chunk 0 and tapering
+    # with depth. In absolute terms it is close to flat -- 0.072-0.076 s off chunks 0-5, drifting to
+    # 0.087-0.093 s over chunks 7-10 -- so the bulk of it is a fixed cost coming off the front of each
+    # chunk, whose share shrinks as the depth ramp grows (chunk c attends to KV[0:c*CHUNK]). The extra
+    # saving at the deep chunks is on top of that and does scale with the attended window.
     (61, 11, 10): [
-        0.486,
-        0.490,
-        0.527,
-        0.555,
-        0.587,
-        0.621,
-        0.654,
-        0.695,
-        0.749,
-        0.785,
-        0.824,
+        0.412,
+        0.418,
+        0.451,
+        0.481,
+        0.512,
+        0.546,
+        0.574,
+        0.608,
+        0.656,
+        0.696,
+        0.735,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {

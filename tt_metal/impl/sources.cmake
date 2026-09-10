@@ -168,6 +168,8 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         IMPL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_deferred_mesh_dispatch.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp

@@ -1175,7 +1175,7 @@ def test_tilize_retile_dtype_conversion(
         # dest-format misconfiguration that PCC 0.9999 could silently absorb. Allow 1 ULP
         # because the packer breaks exact-half ties by rounding away from zero, whereas
         # torch's .to(bfloat16) uses round-half-to-even, so tie values may differ by 1 ULP.
-        assert_with_ulp(torch_input.to(torch.bfloat16), torch_output, ulp_threshold=1)
+        assert_with_ulp(expected_result=torch_input.to(torch.bfloat16), actual_result=torch_output, ulp_threshold=1)
     else:
         assert_with_pcc(torch_input.to(torch.float32), torch_output.to(torch.float32), min_pcc)
 

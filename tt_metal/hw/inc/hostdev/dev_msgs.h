@@ -25,6 +25,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "hostdev/profiler_common.h"
