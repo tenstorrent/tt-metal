@@ -37,7 +37,7 @@ runtime:
   plugin:
     path: /home/jashan/kimi-linear-bringup/third_party/vllm-tt-plugin
   extra_models_dir: models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/vllm_bundle
-  extension: models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/runtime_extras  # installs blobfile + tiktoken (overrides only pin versions)
+  extension: models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/runtime_extras
   overrides:
   - numpy>=1.24.4,<2
   - opencv-python-headless==4.11.0.86
