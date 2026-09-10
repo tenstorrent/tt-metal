@@ -71,6 +71,27 @@ class LTXAttention(Module):
         (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
     }
 
+    @classmethod
+    def resolve_ring_sdpa_chunks(cls, mesh_key, override):
+        # LTX_SDPA_RING_CHUNK="q,k" pins the ring self-attn chunk for a sweep. It must reach both
+        # the miss fallback and every per-N stage, else the tuned stages stay on their defaults.
+        fallback = cls.sdpa_chunk_size_map.get(mesh_key, cls.default_sdpa_chunk_size)
+        selected = None
+        if override:
+            try:
+                selected = tuple(int(value) for value in override.split(","))
+            except ValueError as e:
+                raise ValueError(f"LTX_SDPA_RING_CHUNK must be q,k (got {override!r})") from e
+            if len(selected) != 2:
+                raise ValueError(f"LTX_SDPA_RING_CHUNK must be q,k (got {override!r})")
+            fallback = selected
+        per_n = {
+            n: selected if selected is not None else chunk
+            for (blackhole, sp, tp, n), chunk in cls.ring_sdpa_chunk_by_n.items()
+            if (blackhole, sp, tp) == mesh_key
+        }
+        return fallback, per_n
+
     def __init__(
         self,
         *,
@@ -179,12 +200,9 @@ class LTXAttention(Module):
             self.parallel_config.sequence_parallel.factor,
             self.parallel_config.tensor_parallel.factor,
         )
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
-        # Tuning hook: LTX_SDPA_RING_CHUNK="q,k" overrides the ring self-attn chunk for a sweep.
-        _ring_chunk_override = os.environ.get("LTX_SDPA_RING_CHUNK")
-        if _ring_chunk_override:
-            _q, _k = (int(v) for v in _ring_chunk_override.split(","))
-            ring_sdpa_chunk_size = (_q, _k)
+        ring_sdpa_chunk_size, ring_chunks_by_n = self.resolve_ring_sdpa_chunks(
+            mesh_key, os.environ.get("LTX_SDPA_RING_CHUNK")
+        )
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
@@ -198,8 +216,7 @@ class LTXAttention(Module):
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
             )
-            for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
-            if (b, sp, tp) == mesh_key
+            for n, chunk in ring_chunks_by_n.items()
         }
         self._sdpa_pc_by_shape = {
             (q, kv): ttnn.SDPAProgramConfig(
