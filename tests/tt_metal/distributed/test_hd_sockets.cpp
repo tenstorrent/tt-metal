@@ -13,7 +13,10 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <random>
+#include <stdexcept>
+#include <thread>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -23,6 +26,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
+#include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -315,30 +320,82 @@ void test_hd_socket_multithreaded_loopback(
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
-    // Socket Read/Write done over different threads.
-    std::thread write_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                input_socket.write(src_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+    auto retry_until_deadline = [deadline](auto&& operation, const char* timeout_message) {
+        while (!operation()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error(timeout_message);
             }
+            std::this_thread::yield();
+        }
+    };
+
+    std::exception_ptr write_error;
+    std::exception_ptr read_error;
+
+    // Socket read/write are done on different threads, with each socket confined to one host thread.
+    std::thread write_thread([&]() {
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_write(
+                                input_socket,
+                                src_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for space in the H2D socket");
+                }
+            }
+        } catch (...) {
+            write_error = std::current_exception();
         }
     });
 
     std::thread read_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                output_socket.read(dst_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_read(
+                                output_socket,
+                                dst_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for data in the D2H socket");
+                }
             }
+        } catch (...) {
+            read_error = std::current_exception();
         }
     });
-    // Barrier with a timeout in the main thread ensure that the read/write threads are not hung.
-    input_socket.barrier(10000);
-    output_socket.barrier(10000);
 
     write_thread.join();
     read_thread.join();
 
+    auto report_thread_error = [](const char* thread_name, const std::exception_ptr& error) {
+        if (!error) {
+            return;
+        }
+        try {
+            std::rethrow_exception(error);
+        } catch (const std::exception& e) {
+            ADD_FAILURE() << thread_name << " failed: " << e.what();
+        } catch (...) {
+            ADD_FAILURE() << thread_name << " failed with an unknown exception";
+        }
+    };
+    report_thread_error("H2D writer thread", write_error);
+    report_thread_error("D2H reader thread", read_error);
+    if (write_error || read_error) {
+        return;
+    }
+
+    input_socket.barrier(10000);
+    output_socket.barrier(10000);
     EXPECT_EQ(src_vec, dst_vec);
 }
 

@@ -10,6 +10,7 @@
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -713,7 +714,10 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
     this->wait_for_bytes(num_bytes);
+    this->read_available(data, num_bytes, notify_sender);
+}
 
+void D2HSocket::read_available(void* data, uint32_t num_bytes, bool notify_sender) {
     uint32_t head_bytes = num_bytes;
     if (read_ptr_ + num_bytes > fifo_curr_size_) {
         head_bytes = fifo_curr_size_ - read_ptr_;
@@ -740,6 +744,33 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     if (notify_sender) {
         this->notify_sender();
     }
+}
+
+bool D2HSocket::try_read_impl(void* data, uint32_t num_pages, bool notify_sender) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
+    uint32_t bytes_required = num_bytes;
+    if (read_ptr_ + num_bytes >= fifo_curr_size_) {
+        bytes_required += fifo_size_ - fifo_curr_size_;
+    }
+
+    uint32_t bytes_sent_value;
+    if (using_hugepage_) {
+        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        _mm_lfence();
+        bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
+    } else {
+        tt_driver_atomics::mfence();
+        bytes_sent_value = bytes_sent_ptr_[0];
+    }
+    bytes_sent_ = bytes_sent_value;
+    if (bytes_sent_value - bytes_acked_ < bytes_required) {
+        return false;
+    }
+
+    this->read_available(data, num_bytes, notify_sender);
+    return true;
 }
 
 uint32_t D2HSocket::pages_available() {
@@ -862,3 +893,12 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::detail {
+
+bool D2HSocketTryReadAccess::try_read(
+    distributed::D2HSocket& socket, void* data, uint32_t num_pages, bool notify_sender) {
+    return socket.try_read_impl(data, num_pages, notify_sender);
+}
+
+}  // namespace tt::tt_metal::experimental::detail
