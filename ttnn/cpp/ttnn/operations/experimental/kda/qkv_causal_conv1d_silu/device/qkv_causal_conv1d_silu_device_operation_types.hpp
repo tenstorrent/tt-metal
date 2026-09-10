@@ -18,12 +18,14 @@ struct QkvCausalConv1dSiluParams {
     uint32_t v_width;
     uint32_t channel_chunk_size;
     tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::MemoryConfig state_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct QkvCausalConv1dSiluInputs {
     Tensor input;
     Tensor history;
+    Tensor state_source;
     Tensor tap0;
     Tensor tap1;
     Tensor tap2;
