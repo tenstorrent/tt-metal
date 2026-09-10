@@ -945,7 +945,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
         // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
-        // operands are mirrored relative to the physical CBs. The caller's per-operand
+        // operands are swapped relative to the physical CBs. The caller's per-operand
         // activation lists and the op-derived preprocess steps are both stated against the
         // mathematical operands, so both follow the same inversion: math LHS lands on c_1,
         // math RHS on c_0.
@@ -956,13 +956,13 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         // slots must leave the activation lists in mathematical order and let this inversion
         // map them; inverting them there as well cancels out and lands operand-b activations
         // on the scalar.
-        const bool mirrored = operation_attributes.scalar_is_lhs;
-        if (mirrored) {
+        const bool scalar_first = operation_attributes.scalar_is_lhs;
+        if (scalar_first) {
             std::swap(lhs_activations, rhs_activations);
         }
 
-        const auto& process_c0 = mirrored ? op_config.process_rhs : op_config.process_lhs;
-        const auto& process_c1 = mirrored ? op_config.process_lhs : op_config.process_rhs;
+        const auto& process_c0 = scalar_first ? op_config.process_rhs : op_config.process_lhs;
+        const auto& process_c1 = scalar_first ? op_config.process_lhs : op_config.process_rhs;
 
         if (process_c0.has_value()) {
             lhs_activations.push_back(*process_c0);

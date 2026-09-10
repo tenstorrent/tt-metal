@@ -271,10 +271,10 @@ define.
   configuration cannot be requested and there is no silent-wrong path.
 - **Risk on sync:** a mechanical rebase of this fork onto the production kernels would pick up the
   `SCALAR_IS_LHS` branches while the fork's device op never sets the attribute. The define would compile to
-  `0` and any scalar-first call arriving later would run unmirrored — `5.0 - t` returning `t - 5.0`. Silent
+  `0` and any scalar-first call arriving later would run with its operands the wrong way round — `5.0 - t` returning `t - 5.0`. Silent
   and dtype-independent, since operand order is not a numerical property.
-- **What porting needs:** the attribute plus its hash entry, the define, the activation-span inversion in
-  the program factory (the caller's spans and the op-derived `process_lhs`/`process_rhs` are both stated
+- **What porting needs:** the attribute plus its hash entry, the define, the activation swap in
+  the program factory (the caller's activation lists and the op-derived `process_lhs`/`process_rhs` are both stated
   against the mathematical operands, so both invert onto the physical DFBs), and the operand swap in both
   scalar compute kernels. The FPU kernel needs it at the format setup and LLK init too, not just the op
   call, because its operands are unpacked straight into srcA/srcB.
@@ -294,7 +294,7 @@ define.
    factory and hard-throw on Quasar (`DataMovementKernel` not supported); reroute to
    `invoke_binary_ng(BinaryOpType::MAXIMUM/MINIMUM)`.
 4. **Port `scalar_is_lhs`** (§8) — required before the scalar compute kernels are next synced from
-   production, or a scalar-first call silently returns the unmirrored result. No LLK work.
+   production, or a scalar-first call silently returns the operands the wrong way round. No LLK work.
 5. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
    applies under broadcast too, not just the no-broadcast slice.
 

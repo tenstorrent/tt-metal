@@ -1150,16 +1150,16 @@ void bind_div(
             {3}
 
         Args:
-            input_tensor_a (ttnn.Tensor or Number): the input tensor. A Number here is the numerator.
-                Per-operand activations follow this argument order, so a Number in this position takes
-                :attr:`input_tensor_a_activations` and the tensor takes :attr:`input_tensor_b_activations`.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands
-                must be a tensor; there is no scalar-scalar overload.
+            input_tensor_a (ttnn.Tensor or Number): the input tensor, or the numerator when a Number.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             fast_and_approximate_mode (bool, optional): `true` if input_tensor_b is non-zero for fast approximation, else `false` for accurate division (Only if the input tensor is not ComplexTensor). Defaults to `false`.
             rounding_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a before the operation. A Number in that position takes this list. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b before the operation. Defaults to `None`.
             dtype (ttnn.DataType, optional): dtype of the output tensor. Defaults to the dtype of the tensor operand, or `ttnn.float32` when an INT32 input is promoted by a floating-point scalar. Integer division with `rounding_mode=None` only accepts `None` or `ttnn.float32`, and always yields `ttnn.float32`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1513,16 +1513,16 @@ void bind_binary_operation_with_fast_approx(
             {3}
 
         Args:
-            input_tensor_a (ttnn.Tensor or Number): the input tensor. A Number here is the left operand.
-                Per-operand activations follow this argument order, so a Number in this position takes
-                :attr:`input_tensor_a_activations` and the tensor takes :attr:`input_tensor_b_activations`.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands
-                must be a tensor; there is no scalar-scalar overload.
+            input_tensor_a (ttnn.Tensor or Number): the input tensor, or the left operand when a Number.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.
 
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{8}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a before the operation. A Number in that position takes this list. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b before the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

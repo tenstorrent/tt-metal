@@ -40,7 +40,7 @@ TEST_F(ScalarLhsBinaryFixture, DivideScalarByTensorIsNotCommutative) {
         ttnn::allclose<::bfloat16>(ttnn::from_device(expected), ttnn::from_device(scalar_lhs)),
         "divide(2, full(4)) should be 0.5");
 
-    // 2/4 and 4/2 differ, so a dropped mirror flag cannot pass this.
+    // 2/4 and 4/2 differ, so a lost scalar_is_lhs cannot pass this.
     const auto tensor_lhs = ttnn::divide(input_tensor, operations::unary::ScalarVariant{2.0f});
     const auto reversed = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     TT_FATAL(
@@ -67,9 +67,9 @@ TEST_F(ScalarLhsBinaryFixture, MultiplyScalarByBlockFloatIgnoresFastApproximateM
 
     // Block float runs on the FPU only, so the block format overrides the caller's flag and the
     // result must not depend on it. Without that override an unset or false flag picks the SFPU.
-    // Comparing the two flag values rather than the two operand orders is deliberate: mirroring
-    // swaps the FPU's srcA/srcB, which perturbs rounding for any dtype, so the operand orders are
-    // not bit-identical even when both are correct.
+    // Comparing the two flag values rather than the two operand orders is deliberate: swapping
+    // the operands swaps the FPU's srcA/srcB, which perturbs rounding for any dtype, so the two
+    // orders are not bit-identical even when both are correct.
     const auto forced = ttnn::multiply(
         operations::unary::ScalarVariant{3.7f},
         input_tensor,
@@ -95,13 +95,13 @@ TEST_F(ScalarLhsBinaryFixture, MultiplyScalarByBlockFloatIgnoresFastApproximateM
         "block-float multiply must select the FPU kernel regardless of fast_and_approximate_mode");
 }
 
-TEST_F(ScalarLhsBinaryFixture, SubtractScalarFromBlockFloatTensorIsMirrored) {
+TEST_F(ScalarLhsBinaryFixture, SubtractScalarFromBlockFloatTensorKeepsOperandOrder) {
     auto& device = *device_;
     std::array<uint32_t, 2> dimensions = {32, 64};
     ttnn::Shape shape(dimensions);
 
     // The block-float multiply test above compares two flag values on one operand order, and
-    // multiply is commutative, so it cannot detect a dropped mirror. Subtract on the same
+    // multiply is commutative, so it cannot detect a lost scalar_is_lhs. Subtract on the same
     // block formats can: 2 - 6 and 6 - 2 differ in sign, and this checks an absolute value
     // rather than a second execution of the same implementation.
     for (const auto dtype : {DataType::BFLOAT8_B, DataType::BFLOAT4_B}) {

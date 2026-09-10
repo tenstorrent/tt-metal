@@ -21,11 +21,11 @@ void kernel_main() {
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
     CircularBuffer cb_out(tt::CBIndex::c_2);
 
-    // FPU operands are unpacked from these CBs straight into srcA/srcB, so the mirrored
+    // FPU operands are unpacked from these CBs straight into srcA/srcB, so the swapped
     // order has to hold for the format setup and the LLK init too, not just the op call.
-    // Only the LLK's view is mirrored: PREPROCESS and HAS_ACTIVATIONS stay on the physical
-    // c_0/c_1 because the host already inverted the spans before emitting the defines.
-    // Mirroring them here as well would apply each activation to the wrong operand.
+    // Only the LLK's operand order changes: PREPROCESS and HAS_ACTIVATIONS stay on the physical
+    // c_0/c_1 because the host already swapped the activation lists before emitting the defines.
+    // Swapping them here as well would apply each activation to the wrong operand.
 #if SCALAR_IS_LHS
     CircularBuffer& cb_op_a = cb_post_rhs;
     CircularBuffer& cb_op_b = cb_post_lhs;
