@@ -1286,3 +1286,120 @@ def test_collect_baseline(mesh_device, mesh_shape):
             f.flush()
 
     print(f"\nBaseline: {n_ok}/{n} shapes measured. Saved to {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 5B VAE decoder, cached t_chunk_size=7 (vae_t_chunk_size=7)
+# Mesh: h_factor=4, w_factor=8.  H/W are UNPADDED per-device dims exactly as the
+# real 5B VAE run passes them (the tool adds internal padding itself).
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_5B_480P_T7 = [
+    # (name,           C_in,  C_out, kernel,    stride,    padding,    T,   H,  W, h, w)
+    ("conv_in",          64,  1024, (3, 3, 3), (1, 1, 1), (0, 0, 0),  9,   8,  7, 4, 8),
+    ("res_deep_t9",    1024,  1024, (3, 3, 3), (1, 1, 1), (0, 0, 0),  9,   8,  7, 4, 8),
+    ("tconv_t9",       1024,  2048, (3, 1, 1), (1, 1, 1), (0, 0, 0),  9,   8,  7, 4, 8),
+    ("res_deep_t16",   1024,  1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 16,  16, 14, 4, 8),
+    ("spatial_deep",   1024,  1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 14,  16, 14, 4, 8),
+    ("tconv_t16",      1024,  2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 16,  16, 14, 4, 8),
+    ("spatial_mid",    1024,  1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 28,  32, 28, 4, 8),
+    ("up_512",         1024,   512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  32, 28, 4, 8),
+    ("res_512",         512,   512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  32, 28, 4, 8),
+    ("spatial_512",     512,   512, (1, 3, 3), (1, 1, 1), (0, 0, 0), 28,  64, 56, 4, 8),
+    ("up_256",          512,   256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  64, 56, 4, 8),
+    ("res_256",         256,   256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  64, 56, 4, 8),
+    ("conv_out",        256,    12, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  64, 56, 4, 8),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_4x8_5b_480p_t7_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_5B_480P_T7,
+    ids=[l[0] for l in _SWEEP_LAYERS_5B_480P_T7],
+)
+def test_bruteforce_sweep_5b_480p_t7(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_5b_480p_t7/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 5B VAE decoder, 720p, cached t_chunk_size=7 (vae_t_chunk_size=7)
+# Same channels/kernels as 480p, bigger per-device H/W.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_5B_720P_T7 = [
+    # (name,           C_in,  C_out, kernel,    stride,    padding,    T,   H,  W, h, w)
+    ("conv_in",          64,  1024, (3, 3, 3), (1, 1, 1), (0, 0, 0),  9,  11, 10, 4, 8),
+    ("res_deep_t9",    1024,  1024, (3, 3, 3), (1, 1, 1), (0, 0, 0),  9,  11, 10, 4, 8),
+    ("tconv_t9",       1024,  2048, (3, 1, 1), (1, 1, 1), (0, 0, 0),  9,  11, 10, 4, 8),
+    ("res_deep_t16",   1024,  1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 16,  22, 20, 4, 8),
+    ("spatial_deep",   1024,  1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 14,  22, 20, 4, 8),
+    ("tconv_t16",      1024,  2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 16,  22, 20, 4, 8),
+    ("spatial_mid",    1024,  1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 28,  44, 40, 4, 8),
+    ("up_512",         1024,   512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  44, 40, 4, 8),
+    ("res_512",         512,   512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  44, 40, 4, 8),
+    ("spatial_512",     512,   512, (1, 3, 3), (1, 1, 1), (0, 0, 0), 28,  88, 80, 4, 8),
+    ("up_256",          512,   256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  88, 80, 4, 8),
+    ("res_256",         256,   256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  88, 80, 4, 8),
+    ("conv_out",        256,    12, (3, 3, 3), (1, 1, 1), (0, 0, 0), 30,  88, 80, 4, 8),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_4x8_5b_720p_t7_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_5B_720P_T7,
+    ids=[l[0] for l in _SWEEP_LAYERS_5B_720P_T7],
+)
+def test_bruteforce_sweep_5b_720p_t7(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_5b_720p_t7/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        hw_product=32,
+    )
