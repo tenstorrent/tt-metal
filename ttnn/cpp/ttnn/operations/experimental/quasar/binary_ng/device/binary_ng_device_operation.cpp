@@ -14,7 +14,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 
 using namespace tt::tt_metal;
 
@@ -716,7 +715,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
         return false;
     }
-    // Borrowed shards use a different work split than the divisibility check below assumes.
+    // Load-bearing: a borrowed shard raises num_tiles_per_cycle above 1, which the strided multi-thread
+    // ring cannot express and the compute kernel's chunk loop assumes never happens.
     if (a.memory_config().is_sharded() || b.memory_config().is_sharded() || out_spec.memory_config().is_sharded()) {
         return false;
     }
@@ -724,26 +724,11 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
         return false;
     }
 
-    // Must match the factory's c.physical_volume(); input_a diverges under leading-dim broadcast.
-    const uint32_t tile_hw = out_spec.tile().get_tile_hw();
-    if (tile_hw == 0) {
-        return false;
-    }
-    const uint64_t total_tiles = out_spec.padded_shape().volume() / tile_hw;
-    if (total_tiles == 0) {
-        return false;
-    }
-    // split_work_to_cores(worker_grid, total_tiles) caps the core count at the tile count.
-    const uint64_t num_cores = std::min<uint64_t>(total_tiles, attributes.worker_grid.num_cores());
-    if (num_cores == 0) {
-        return false;
-    }
-    const uint32_t lcm_rcw = std::lcm(std::lcm(tuning.reader_threads, tuning.compute_threads), tuning.writer_threads);
-    // Unreachable (native_tuning() rejects 0), but the failure mode would be SIGFPE.
-    if (lcm_rcw == 0) {
-        return false;
-    }
-    if (total_tiles % (num_cores * lcm_rcw) != 0) {
+    // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
+    // Beyond that there is NO divisibility requirement: every kernel derives its own share from
+    // thread_id and num_threads, so a remainder just gives the low thread ids one extra tile, and
+    // split_work_to_cores already hands each core its own count. Threads that draw zero tiles are fine.
+    if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
         return false;
     }
     // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.

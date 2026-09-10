@@ -240,8 +240,17 @@ Rules and hazards:
   `finish_impl` (`dataflow_buffer.inl:252-261`) calls `handle_final_credits`, which does an **unconditional**
   `sync_threads(is_producer ? 0 : 1)` (`:390`) — and it is called under `if (ptiles_read_ > 0)` /
   `if (ctiles_written_ > 0)` (`:255,258`). ⇒ **a thread that issues zero transactions skips the barrier while
-  its siblings block: hard deadlock.** Even divisibility is therefore not just a simplification, it is what
-  makes the drain safe; uneven counts must clamp thread count to the work available.
+  its siblings block: hard deadlock.**
+
+  **Scope correction, 2026-09-04 (F1).** The deadlock above is real but **implicit-arm only**, and the
+  sentence that used to end this bullet — "even divisibility is what makes the drain safe; uneven counts
+  must clamp thread count" — generalised it to the whole design and was **wrong**. `ptiles_read_` /
+  `ctiles_written_` are incremented *only* by `commit_implicit_read`/`commit_implicit_write` (`:538`,
+  `:572`), reached only from the implicit-sync overloads. Under **explicit** sync — what the native
+  factory hardcodes — both stay 0, `handle_final_credits` is never called by any thread, and the barrier
+  is never reached. F1 therefore needed no thread clamping: uneven counts, including threads that draw
+  **zero** tiles, are bit-exact across the full matrix (status 09-03 slide 3). The hazard remains a live
+  trap for M2.6, when implicit sync is enabled.
 - **Barrier slots are a budget of 2, keyed by *role*.** `NUM_KERNEL_BARRIERS = 2`
   (`kernel_thread_globals.h:40-41`), invariant at `:36-39`: at most one producer-role and one consumer-role
   multi-thread DM rendezvous per worker. A reader(R>1) + writer(W>1) pair fits (producer/consumer). **Two
@@ -463,7 +472,7 @@ Artifacts: `generated/profiler/.logs/profile_log_device.csv` (header
    and **stall cycles** (`sim.cpp:143-150`).
 
 **Determinism: confirmed.** A repeat profiled run was bit-identical (7781 / 8019 / 7492 / 8036 / 7531;
-sim clock 17934 both times). (Per-core values are *nearly* uniform but not identical — see the caveat below.)
+sim clock 17934 both times). (Per-cluster values are *nearly* uniform but not identical — see the caveat below.)
 
 **Profiler perturbation: +11.3%** — 16115 sim cycles without the profiler vs 17934 with it, same test.
 ⇒ **always compare profiled-vs-profiled.**
@@ -478,7 +487,7 @@ sim clock 17934 both times). (Per-core values are *nearly* uniform but not ident
 
 **Shape ladder (DRAM-interleaved bf16 `add`, profiled, via `debug/bench_binary_ng_shapes.py`):**
 
-| tiles/core | total tiles | reader DM2 | writer DM3 | math TRISC1 | kernel span | reader cyc/tile | sim clock |
+| tiles/cluster | total tiles | reader DM2 | writer DM3 | math TRISC1 | kernel span | reader cyc/tile | sim clock |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 2  | 64   | 675   | 913   | 142   | 1467  | 337.5 | 9606  |
 | 8  | 256  | 1797  | 2035  | 2052  | 2589  | 224.6 | 10926 |
@@ -489,12 +498,12 @@ sim clock 17934 both times). (Per-core values are *nearly* uniform but not ident
 **Exactly linear: ~187 cycles per output tile marginal, ~300 cycles fixed.** Successive differences are
 187.0 / 187.0 / 187.0 / 187.6 at every rung.
 
-**⇒ Benchmark shape: 32×40 tiles (1280 total, 40/core) as primary** — ~15 s a run and identical to the
-existing functional test's shape, so that test doubles as the perf case. **64×40 (80/core) as the
+**⇒ Benchmark shape: 32×40 tiles (1280 total, 40/cluster) as primary** — ~15 s a run and identical to the
+existing functional test's shape, so that test doubles as the perf case. **64×40 (80/cluster) as the
 confirmation point.**
 
 > **Caveat added 2026-08-28 — "within 4% of the asymptote" is a property of THIS config, not of the op.**
-> The 4% holds for the 2-DM-core baseline above (raw@40 194.5 vs marginal 187.0). The Quasar-native path
+> The 4% holds for the 2-DM-core `metal_v2` baseline above (raw@40 194.5 vs marginal 187.0). The Quasar-native path
 > has a far larger prologue — 767 to 1491 cycles against this baseline's ~300 — so its ramp extends much
 > further, and at 40 tiles/cluster `4,4,2` sits **64% above** its asymptote (72.42 vs 44.12), not 4%.
 > **Its span curve is still bending at 40**, which is exactly where the successive-difference check above
@@ -505,9 +514,9 @@ confirmation point.**
 
 **Decomposition — the pipeline is lock-step and the Tensix is starved:**
 - Reader, writer and compute converge on the **same** ~187-195 cycles/tile, and the whole-kernel span
-  (8573 at 40/core) barely exceeds any single stage (7781-8036) ⇒ the stages *do* overlap, but all
+  (8573 at 40/cluster) barely exceeds any single stage (7781-8036) ⇒ the stages *do* overlap, but all
   advance at one shared rate.
-- Perf trace at 40 tiles/core: **46,752 instructions vs 701,616 stall cycles** (math_stall 246,648;
+- Perf trace at 40 tiles/cluster: **46,752 instructions vs 701,616 stall cycles** (math_stall 246,648;
   sem_stall 224,410; other_stall 230,558) — the Tensix is overwhelmingly waiting. DFB counts corroborate
   the per-tile lock-step: `cb_waits` 2560 (2/tile), `cb_reserves` 1280, `cb_pushes` 1280, `cb_pops` 2560;
   `unpack_instr` 2560, `pack_instr` 1280.
@@ -524,7 +533,7 @@ experiment should isolate that (implicit-sync reads alone, nothing else changed)
   `TT_VERSION == 2` NoC branch) but because Quasar DM kernels move data via ROCC command buffers that never
   call it; see §10.4. Count NoC
   transactions analytically, or try `TT_METAL_DEVICE_PROFILER_NOC_EVENTS` (still unverified on Quasar).
-- **Per-core values are not identical.** Real spreads: `QUASAR_DM3`
+- **Per-cluster values are not identical.** Real spreads: `QUASAR_DM3`
   8019→8031 (12 cycles), each `NEO0_TRISC0/1/2` 6, plus **24-cycle inter-core start skew**. The
   no-contention conclusion still holds but must be sourced, not inferred: craq-sim has no
   bandwidth/arbitration/queue model anywhere (only `eth_latency_cycles`, default 0; `libttsim.cpp:1961`
@@ -540,6 +549,379 @@ experiment should isolate that (implicit-sync reads alone, nothing else changed)
   plain script using `ttnn.open_device` for that reason.
 
 Harness (gitignored scratch): `debug/prof_summary.py`, `debug/bench_binary_ng_shapes.py`.
+
+### 5.0.2 PER-ROLE OCCUPANCY at `4,4,2`, and which roof it lands on — 2026-09-04
+
+Measured on anchor `8e3f13a177b` with craq-sim `ad401613`, interleaved bf16 `add`, 32 clusters, pinned
+cycle model (`RTL_AWARE_SCHEDULER=1`, `DEFAULT_LINGER=1`, the six vars §10.3 says to record). Harness
+`debug/perf/util_rcw.py`. **Two instrument checks passed before any number below was read:** its
+direct-op runner reproduces the fitted pytest node *bit-identically* (2909 cyc at 40/cluster), and the
+fitted marginal lands on the recorded value (below).
+
+**The role map, read off the profiler rather than assumed.** §5.0.1 only ever named DM2/DM3 because the
+baseline used two DM cores. At `4,4,2` the 6 user DM cores split by declaration order:
+
+| RISC | role | note |
+|---|---|---|
+| `QUASAR_DM0` | DFB ISR | `DM0-FW` zone only, no kernel |
+| `QUASAR_DM1` | remapper | no zones |
+| `QUASAR_DM2-DM5` | the 4 **readers** | `R=4` |
+| `QUASAR_DM6-DM7` | the 2 **writers** | `W=2` |
+| `QUASAR_NEO{0-3}_TRISC0/1/2` | unpack / math / pack | all 4 Neos identical to within 45 cyc |
+| `QUASAR_NEO{0-3}_TRISC3` | **idle — 18 cycles** | a spare RISC per Neo, in every config |
+
+**Occupancy converges from below, so a single shape misreports it.** Occupancy is a role's `*-KERNEL`
+span over the cluster's envelope across all its kernel zones:
+
+| tiles/cluster | span | cyc/tile | reader DM | writer DM | unpack | math | pack |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 40 | 2909 | 72.72 | 65.5% | 78.9% | 78.1% | 79.5% | 62.0% |
+| 80 | 4635 | 57.94 | 78.5% | 86.8% | 87.0% | 87.1% | 76.1% |
+| **160** | **8155** | **50.97** | 87.8% | **92.5%** | **92.6%** | **92.7%** | 86.4% |
+
+This is the §5.0.1 caveat showing up in a second quantity: at 40/cluster the span is 64% above its
+asymptote (72.72 here vs the 72.42 recorded there) **and** occupancy is 13 points below its. Quote
+occupancy at ≥160/cluster or not at all.
+
+```
+4,4,2 at 160 tiles/cluster -- share of the 8155-cycle cluster span
+
+  math    TRISC1   |############################################| 92.7%  <-- binds
+  unpack  TRISC0   |############################################| 92.6%
+  writer  DM6-DM7  |############################################| 92.5%
+  reader  DM2-DM5  |##########################################  | 87.8%   4.9 pts slack
+  pack    TRISC2   |#########################################   | 86.4%   6.3 pts slack
+  idle    TRISC3   |                                            |  0.2%
+```
+
+**Read that chart carefully, because occupancy measured this way is close to content-free.** Each
+role's *shortfall* from the envelope is *T-independent* — it is a fixed cycle count, not a growing one:
+
+| shortfall = envelope − role span | T=40 | T=80 | T=160 | spread |
+|---|---:|---:|---:|---:|
+| reader `DM2` | 1004 | 970 | 980 | 34 |
+| writer `DM6` | 613 | 613 | 613 | **0** |
+| unpack `TRISC0` | 638 | 604 | 604 | 34 |
+| math `TRISC1` | 595 | 599 | 599 | 4 |
+| pack `TRISC2` | 1104 | 1108 | 1108 | 4 |
+
+⇒ occupancy is `1 − const/envelope` and therefore **converges to 100% for every role**. The climb
+79.6→87.1→92.7% is that constant amortising (fill, drain, in-zone setup), not resources filling up. A
+blocked `cb_wait` sits *inside* the kernel zone, so a faster stage spends its surplus waiting inside its
+own span and stretches to match the binder — §5.0.1 saw the same thing as "all stages advance at one
+shared rate". **So this occupancy answers "is this stage inside the pipeline", not "is this stage the
+bottleneck".**
+
+The signal is the *difference between shortfalls*, not the distance from 100%: reader 980 vs math 599
+= **~380 cycles of genuine reader idle**, against 7060 − 6600 = 460 predicted by the roofline terms.
+Same quantity, two independent routes. Note also that `unpack`/`math`/`pack` are **serial within a
+tile**, so their three near-identical bars are three overlapping windows on one chain, not three
+parallel resources — which is why the model carries one `C` term rather than three.
+
+**Which roof it lands on — and this adjudicates the two competing fits.** The design's model is
+`marginal = max(165.0/R, 176.5/C, 83.5/W)` (§3.3.1, DESIGN §2.3); a rival 2-term fit dropping the `C`
+term matched 12/13 configs and predicts `max(41.25, 41.75) = 41.75`. Successive differences over
+40→80→160 give **43.15 then 44.00** cyc/tile — the first rung still inside the bend, the second clean:
+
+| config | `165/R` | `176.5/C` | `83.5/W` | binds | 3-term | 2-term | measured |
+|---|---:|---:|---:|:--:|---:|---:|---:|
+| `1,1,1` | 165.00 | 176.50 | 83.50 | **C** | 176.50 | 165.00 | 176.50 (§5.0.1) |
+| `2,2,1` | 82.50 | 88.25 | 83.50 | **C** | 88.25 | 83.50 | — |
+| `4,4,2` | 41.25 | 44.125 | 41.75 | **C** | **44.12** | 41.75 | **44.00** |
+
+⇒ **the 3-term model is right and the `C` term is real**: 44.00 is 0.3% from 44.12 and 5.4% from 41.75.
+The occupancy table agrees on the ordering — math is the highest at 92.7%.
+
+**But the `C` roof is not arithmetic.** Per tile a Neo retires 11 Tensix instructions — `unpack_instr`
+2, `math_instr` 8, `pack_instr` 1, invariant across every config and shape measured. Against a 176.5
+cyc/tile budget at `C=1` that is **≤4.5% arithmetic even charging one cycle per instruction**, and the
+perf trace's own issue efficiency `instr/(instr+stall)` independently reads **4.4% at `1,1,1` and 4.3%
+at `4,4,2`**, with `math_stall` covering 95.1% of the math TRISC's span. `unpack_stall` and
+`pack_stall` are **exactly 0** — only math, `sem` and `other` stall.
+
+```
+what the 176.5 cyc/tile "compute" roof is actually made of (per Neo, per tile)
+
+  arithmetic  8 math instr   |##                                  |  <=4.5%
+  waiting     DFB + operands |####################################|  >=95.5%
+```
+
+⇒ the `C` roof is a **DFB-delivery roof wearing a compute label**. Consequences: more Neos cannot lower
+it much (matching the recorded `C=2→4` = 0.3%), and the levers that *can* are fewer Tensix instructions
+per tile or cheaper DFB handshakes — which is precisely §10.6's 56% call-batching lever, not more `C`.
+This also generalises §5.0.1's "the Tensix is starved" from the 2-DM baseline to the tuned config: it
+is not a baseline artifact, it survives 4x more DM cores and 4x more Neos.
+
+**The two DM roofs are one constant.** `165.0 / 2 = 82.5` against `83.5` — 1.2% apart. One DM core costs
+**~83 cycles per tile-transaction regardless of direction**; the reader's 165 is that constant times its
+two transactions per tile, the writer's 83.5 times its one. That is also *why* the balanced frontier came
+out at `R ≈ 2W` (`R = ceil(0.935·C)`, `W = ceil(0.473·C)`, ratio 1.977 — algebraically `165/83.5 =
+1.976`, so this explains the frontier rather than confirming it independently).
+
+**What must NOT be said about any of this.** Bytes moved per cycle. §10.4 is explicit that
+`qsr_rocc_copy_bytes` is a host `memcpy` inside the issue instruction, so transfer size never becomes
+cycles and there is no contention model anywhere. Dividing analytic bytes by these spans yields a
+figure (~23 B/cyc/DM core) that is **invariant across `R`, `C`, `W` and shape by construction** — it is
+the fixed 2048 B/transaction divided by the fixed ~83-cycle instruction cost, and it measures the tile
+size, not a bandwidth. Per §10.6 report occupancy and per-core instruction cost; **the memory roof is
+absent from this roofline entirely and only the emulator can place it.**
+
+**Also re-verified, so §10.4's row is current, not stale:** the perf trace's NoC group
+(`noc_reads`/`noc_writes`/`noc_bytes`/`dram_*`/`l1_*`) still reads **0** at craq-sim `ad401613`, with a
+second independent witness — `TTSIM_L1_TRACE=1 TTSIM_L1_TRACE_TILE=0` emits 248 events and **zero**
+`noc_read_return`, the tag the instrumented `noc_cmd_ctrl` path writes, and `trace_l1_enabled` has no
+source filter. Consistent with §10.4's root cause (ROCC command buffers never call the tracer).
+
+**All three arms re-fitted on ONE simulator (`ad401613`), 80→160 tiles/cluster — do not mix bases.**
+The August marginals were taken on craq-sim `5ced8886`, so every ratio built from them was
+cross-simulator. Re-measuring closes that, and the numbers reproduce almost exactly:
+
+| arm | marginal | prologue | recorded (Aug, `5ced8886`) |
+|---|---:|---:|---:|
+| `metal_v2` (Milestone-0 **history record**) | **187.00** | 1118 | 187.0 |
+| native `1,1,1` — **the baseline for every gain** | **176.00** | 773 | 176.50 |
+| native `4,4,2` | **44.00** | 1115 | 44.12 |
+
+⇒ **Perf gains divide by native `1,1,1` only.** Threads delivered `176.00/44.00` = **4.000×, i.e.
+100.0% of the hard ceiling** — which is `C: 1→4`, since the `C` term binds at both endpoints and
+`C <= 4`. The `metal_v2` row is kept as the Milestone-0 history record and as the input to the F13
+price measurement below; **no gain is computed across the two factories** — a cross-arm ratio mixes a
+factory change into a threading claim and lands above the 4.00× ceiling, which correctly reads as a
+method error.
+
+**Every ratio in this section is a THROUGHPUT gain** — all three arms are marginals, i.e. slopes, so the
+prologues in the table above are excluded by construction. The **latency** gain (span ratio at a stated
+tensor size) is strictly smaller and size-dependent, because `4,4,2` carries the larger prologue: 2.69×
+at the 1280-tile benchmark shape, 3.59× at 5760 tiles, → 4.00× only asymptotically. Full curve and the
+naming rule: status §3, design §2.1. Never quote either gain unlabelled.
+
+**The `metal_v2` → native delta at identical threads (11.00 cyc/tile, ~6%) is the DELETED nD STRIDE
+CASCADE — it is F13's price, measured at last.** It is a *cost record*, never a gain factor.
+`native_span.py` expects zero here (*"A mechanical copy should be 0"*), and the copy is faithful
+everywhere it was supposed to be: the Tensix side is **byte-identical** (2 unpack / 8 math / 1 pack /
+21.10 other = 36.13 instr per tile, and `cb_waits` 2, `cb_reserves` 1, `cb_pushes` 1, `cb_pops` 2 —
+every counter equal). Ring depth is equal too: `2u` on both (metal_v2 `a_entries`/`b_entries`/
+`c_entries`, native `entries_per_thread × max(p,c)`), as is the sync mode
+(`disable_dfb_implicit_sync_for_all=true` in both). The divergence is entirely in the **DM kernels**,
+which is exactly where the perf trace is blind and the profiler is not:
+
+| per tile, T=160 | metal_v2 | native `1,1,1` | delta |
+|---|---:|---:|---:|
+| reader `DM2` span | 188.9 | 175.6 | **−13.24** |
+| writer `DM3` span | 190.7 | 177.6 | −13.05 |
+| Tensix `other_stall` | 177.30 | 22.01 | −155.29 |
+| Tensix instructions | 36.13 | 36.13 | **0** |
+
+`kernels_dfb`'s reader takes **18 runtime args** and decomposes the global index per tile through the
+nD/D/N/C/Ht/Wt/cND cascade; `kernels_qsr`'s takes **2** and computes `page = start_tile_id + k`.
+Design §3.4.1 records the deletion as **F13, an unmandated divergence and a regression**, and DESIGN:686
+priced it — *"4 div + 4 mod + ~10 mul-add per tile … at ~165 cyc/tile reader budget this is not free —
+measure before adopting"*. **Measured: 11.00 cyc/tile of marginal plus 345 cycles of prologue** (the
+args never read, the cascade never set up); those combine to the 13.16 cyc/tile of cluster span at
+T=160. The collapse in `other_stall` is the same fact seen from the Tensix side — a shorter reader
+chain means less time blocked in `cb_wait`, with the instruction mix untouched.
+
+⇒ **The ~6% delta is not a win, it is a debt.** It is the performance of a *missing feature*, and F13
+(Milestone 2.1) gives it back unless the cascade lands behind the compile-time flag §3.4.1 specifies so
+dense shapes keep the linear form. **And craq-sim under-prices it**: the DM cores run at IPC=1
+(§10.3), so a divide costs 1 cycle here against 10-30 on a real RISC-V, and the cascade is
+divide-heavy. The silicon cost of restoring it unflagged is therefore **larger** than 11 cyc/tile.
+⇒ **Report 4.000×, native basis. Folding the factory delta into a gain banks a regression as a win.**
+
+Harness (gitignored scratch): `debug/perf/util_rcw.py` (`--fallback` runs the baseline arm), raw data
+`debug/perf/util_442{,_T}.json`, `util_111_T.json`, `util_v2base.json`.
+
+### 5.0.3 Synthesis: it is a rate-coupled pipeline of dependency chains
+
+§5.0.2's three results — the roofline lands on `C`, every stage reads ~92% occupied, and the binding
+stage is 95.7% stalled — are not three findings. They are one mechanism seen from three sides.
+
+```
+DRAM --> reader DM x4 --> in0/in1 DFB --> [unpack -> math -> pack] Neo x4 --> out DFB --> writer DM x2 --> DRAM
+              165/R        2 entries               176.5/C                    2 entries       83.5/W
+                           per thread                                         per thread
+```
+
+**1. Bounded buffers make it rate-coupled.** The rings hold `entries_per_thread = 2` per thread, so no
+stage can run ahead. In steady state every stage passes the same tiles/cycle: there is **one rate for
+the whole pipeline**, set by the slowest stage. That is exactly why the model is a `max()` and not a
+sum — the stages overlap, so you do not add them; they are locked, so you take the worst.
+
+**2. That is why utilization is ~92% everywhere, and why the number is nearly content-free** — see the
+fixed-shortfall table in §5.0.2. Occupancy → 100% for every stage by construction.
+
+**3. The three roofline terms are the three stages' service times.** At `4,4,2`, T=160 the terms
+predict `165·T/R = 6600`, `83.5·T/W = 6680`, `176.5·T/C = 7060`; the measured spans order identically
+(reader 7175 < writer 7542 < math 7556). The residual ~500 cycles each is in-zone fixed setup, which
+these zones cannot separate from service — that needs the sub-kernel zones of §10.2's fourth row.
+
+**4. The binder is waiting on its own dependency chain, not on an upstream stage.** The Neo is slower
+than the reader (7060 vs 6600), so it is not starved by the DM side. Per tile it issues 11 Tensix
+instructions and **6 DFB operations** (`cb_waits` 2, `cb_reserves` 1, `cb_pushes` 1, `cb_pops` 2 —
+exactly, at every shape), strictly ordered: credit arrives → unpack A, unpack B → 8 math → pack → post
+credit. `unpack_stall` and `pack_stall` are **exactly 0** while `math_stall` is ~everything, because
+math waits on SrcA/SrcB valid — i.e. on the unpacker's turn, which is gated on the credit.
+
+⇒ **176.5 is the length of a serialized chain, not the throughput limit of an engine.** The same holds
+on the DM side, where ~83 cycles is one tile-transaction's chain: the reader's 165 is 2× it, the
+writer's 83.5 is 1× it.
+
+**So `165/R`, `176.5/C`, `83.5/W` are three chain lengths over how many copies run in parallel.** The
+divisor is replication; the `max()` is rate-coupling. Two consequences fall straight out and both match
+the record: thread counts never shorten a chain, so the gain is pure replication and **caps at 4.00×**
+with the thread budget (6 user DM, 4 Neos); and the balanced frontier `0.935 : 1 : 0.473` is just
+`165 : 176.5 : 83.5` normalised — **"replicate each chain in proportion to its length"**. `C` binds at
+*every* frontier point because `ceil()` rounds `R` and `W` up, giving them slightly more capacity than
+needed.
+
+**This op is dependency-latency-bound, not throughput-bound on anything.** Which separates the two
+levers cleanly:
+
+| lever | effect | measurable here? |
+|---|---|---|
+| **Shorten a chain** — batched `reserve_back(n)`/`push_back(n)`, fewer handshakes per tile | lowers the roof itself, and it is the *same* lever for all three stages since all three chains are handshake-dominated | **yes** — §10.6 prices it at 56% of the baseline term; this gives that measurement its mechanism |
+| **Overlap chains within a thread** — deeper rings, more tiles in flight per thread | hides latency inside a chain | **no** — barriers pre-satisfied, no modelled latency; measured 1.02% is a floor, not a ceiling |
+
+Arithmetic never enters: 8 math instructions against a 176.5-cycle chain. Even a 20× shorter chain
+leaves the FPU under half busy, and at 1 add per 3 bytes moved silicon's memory roof lands below its
+arithmetic roof anyway.
+
+### 5.0.5 RESOLVED: the compute chain is DFB-handshake-dominated, not intrinsic — 2026-09-09
+
+§5.0.3 left one thing unmeasured, and it was the one that decided whether the batching ask is worth
+making: of the compute chain's ~176 cyc/tile, how much is the DFB handshake and how much is intrinsic
+Tensix dependency. **It is the handshake.** Credit operations cost **40-60 cycles each** and there are
+six per tile, so batching amortises them and the DFB-side ask is justified.
+
+**Method, and two traps that each cost a run.** Profiler SUM zones wrap each region of the compute
+kernel's per-tile loop; they accumulate across iterations, so there is no zone-buffer pressure and the
+full 160 tiles/cluster shape can be used. `SUM_COUNT == 2` and both macros declare the same local
+names, so the six regions take three builds in separate scopes. Driver: `debug/perf/zone_split.py`.
+
+1. **`TT_METAL_PROFILER_SUM=1` is required** — `profileScopeAccumulate`'s body is
+   `if constexpr (DO_SUM)`, fed by `PROFILER_OPT_DO_SUM` (`jit_build/build.cpp:215`). Without it the
+   zones compile to *nothing* and the run is byte-identical to the control, which reads as "no zones
+   fired" rather than "misconfigured".
+2. **The accumulated total lands in the CSV's `data` column, not `time[cycles since reset]`** — `time`
+   carries a shared flush timestamp, so reading it makes every zone on a RISC report the same number.
+
+Calibration: **`TRISC3` executes none of these regions and reads 3.0 cyc/tile on every one**, so that is
+the instrumentation floor and is subtracted below. Enabling SUM mode also arms the *dataflow* kernels'
+pre-existing zones, which inflates the cluster span 8155 → 9863 (**+20.9%**); all four builds share
+that identical span, so the shares are internally consistent and `~clean` rescales by 0.858.
+
+| sub-unit | region | raw | −floor | share of its span | ~clean |
+|---|---|---:|---:|---:|---:|
+| `TRISC0` unpack | `IN_WAIT` — 2× `wait_front` | 38.0 | 35.0 | 16.9% | 30.0 |
+| `TRISC0` unpack | **`CREDITS` — 2× `pop_front`** | **121.0** | **118.0** | **57.1%** | **101.3** |
+| `TRISC1` math | `MATH_OP` — 8 add instrs + commit | 198.4 | 195.4 | 88.8% | 167.7 |
+| `TRISC2` pack | `PACK_SIDE` — `regs_wait`+pack+release | 113.1 | 110.1 | 52.4% | 94.5 |
+| `TRISC2` pack | `CREDITS` — 1× `push_back` | 44.5 | 41.5 | 19.8% | 35.6 |
+
+⇒ **the unpacker is the constraint, and 74% of its span is DFB credit work** (35 + 118 of 206.5). The
+causal chain reads cleanly off the table: the unpacker is busy posting credits → the math pipe sits
+inside `MATH_OP` at 88.8% waiting for operands it cannot get → the packer sits in `tile_regs_wait`
+waiting for math. Nothing here is arithmetic and nothing is an unavoidable pipeline hazard.
+
+**Priced per credit operation:** `pop_front` ≈ **59 cyc** (118 for two), `push_back` ≈ **42 cyc**, and on
+the dataflow side `reserve_back` ≈ **68 cyc** and `wait_front` ≈ **20 cyc** — the reader's 68 being the
+back-pressure §5.0.3 describes, which batching also relieves. The dataflow zones come free: `RD_RSV`
+70.9, `RD_BAR` 8.0, `WR_WAIT` 23.3, `WR_BAR` 8.0 cyc/tile, and the two ~8s confirm §10.4's
+pre-satisfied barriers.
+
+**This corrects §5.0.2's reading.** That section put ~22 cyc/tile on the hand-off and ~146 on
+"internal", from the perf trace's `other_stall`. The 22 was real but partial: `other_stall` saw only
+the **math** TRISC's `cb_wait`, and was blind to the unpacker's 118 and the packer's 42. The trace
+cannot attribute per sub-unit, which is exactly why the zones were needed. **The "internal" bucket was
+mostly credit posting all along.**
+
+⇒ **The substrate ask in §5.0.3 is justified — but not on the interleaved path, and the distinction
+matters.** Multi-tile batching (`num_tiles_per_cycle` up to 8, the hardware limit) does amortise the
+~195 cyc/tile of compute-side credit work: the Neo chain falls 176.5 → 110.9 → 61.6 at n = 1 → 2 → 8.
+**That is not a speedup of the same size.** The `C` term stops binding at n = 2, after which
+`max(165.0/R, 83.5/W) = 41.75` owns the marginal, so at `4,4,2` the whole compute-side lever is worth
+`44.12 / 41.75` = **5.7%, and everything past n = 2 is free headroom nobody uses.** Same ceiling that
+caps adding Neos, because both levers shrink the same term.
+
+So there are **two batching levers and they attack different terms** — do not quote one's mechanism as
+the other's payoff:
+
+| lever | shrinks | worth at `4,4,2` interleaved | where it pays | craq-sim verdict |
+|---|---|---|---|---|
+| compute-side `num_tiles_per_cycle` | the `C` term | **5.7%** | L1-resident/fused, where the DM terms vanish — but **unreachable on the native path today**, see below | a **ceiling** (instruction counts) |
+| dataflow-side reader `n` + ring depth | `165.0/R`, `83.5/W` | the lever that actually matters here | the interleaved path, now | a **floor** — scores ~0, see §10.6 |
+
+The blocker on the first is the STRIDED-ring restriction `max(R,C) == 1 && max(C,W) == 1` plus
+`capacity >= 2n`; `entries_per_thread` is already a knob, so the 2-entry NoC ring is the binding reason
+n = 1 on interleaved operands, not the layout as such. **Caveat:** these are craq-sim *instruction*
+costs. A credit op's instruction cost is real on silicon too, but the round-trip latency is not modelled
+here, so silicon's per-op cost is a floor, not a ceiling.
+
+⇒ **For DRAM-interleaved operands, n = 2 is the step to take** — one notch above today's ship (n = 1 on
+depth-2 rings; n = 2 needs depth 4). It collects the **entire** compute-side lever, which is solid: the
+`C` term stops binding at n = 2. **On the read path, n = 2 is not a proven stopping point** — crossing
+the 2.36 KB issue/transport knee is the first-order win, but how much further `Q` pays depends on
+`T_fix` (§5.0.7 Q1), and the O2O study's per-core `B_eff` saturation (Q ≈ 3) and its whole-cluster
+`f = Q·N/(k + Q·N)` curve do not obviously agree at our operating point — the per-core reading implies
+~144 B/cyc/cluster at Q=1 against the cluster curve's ~25. **Reconciling those two, or deriving one from
+the source study, is a prerequisite to quoting any read-path saturation figure.**
+
+**`num_tiles_per_cycle` on the native path is 1 unconditionally, and three things stack to keep it there
+(corrected 2026-09-10 — an earlier draft of this section wrongly said n = 8 "already runs" here):**
+
+1. **It is not a knob.** No env var sets it. It is derived:
+   `n = 1; if (all_borrowed) n = min(is_sfpu ? 2 : 8, c_full_shard_tiles);`
+   (`binary_ng_quasar_native_factory.cpp:576-581`). Trying n > 1 at all is a code edit.
+2. **`all_borrowed` is unreachable.** It requires all three operands sharded, and the native gate rejects
+   *any* sharded operand (`binary_ng_device_operation.cpp:718-724`). So the `if (all_borrowed)` branch is
+   **dead code on this path**, and admitting sharded operands is F3 (M1.3).
+3. **The real blocker: the DFB STRIDED rule makes threading and batching mutually exclusive.** The
+   factory's own `TT_FATAL` permits n > 1 only when `max(R,C) == 1 && max(C,W) == 1`, i.e. **`R=C=W=1`** —
+   and that mirrors the two directional STRIDED asserts in `dataflow_buffer.cpp`, so it is a substrate
+   constraint, not our check. **`4,4,2` with n = 8 cannot be expressed today at all**; the choices are
+   `4,4,2` with n = 1 or `1,1,1` with n = 8. That is what makes §5.0.3's item a *substrate ask* on the
+   tt-metal DFB rather than a factory change — and it is also why craq-sim has no opinion to offer: the
+   configuration cannot be built, so there is nothing to measure. (The 1.08x in the lever tables is
+   *reader* batching from a hand-written probe, a different lever.)
+
+**Where n = 8 IS reachable: the `metal_v2` factory with all operands sharded** — identical
+`min(8, shard_tiles)` logic (`binary_ng_metal_v2_factory.cpp:509-511`) and no sharded rejection. The
+45.25 cyc/tile all-sharded roofline is a **metal_v2** measurement (design §2.2). Do not compare it to a
+native interleaved marginal: that mixes both factory and layout in one ratio.
+
+**Measured (2026-09-10), so the depth knob is not the lever:** at `4,4,2`, 1280 tiles,
+`entries_per_thread` 2 / 4 / 8 / 16 all bit-exact, cluster span **2909 / 2897 / 2893 / 2889** — 0.7%
+across an 8x depth increase. Depth alone cannot help: the reader calls `async_read_barrier()` **inside**
+the per-tile loop with two reads outstanding (one per operand), so `Q` stays at 1 however deep the ring.
+A deeper ring only lets the reader run ahead of *compute*. Raising `Q` means hoisting the barrier out of
+the loop — reserve `n`, issue `n` reads, one barrier, push `n` — a kernel change, gated on depth >= 2n.
+
+### 5.0.4 The missing roof: NoC/DRAM demand vs architectural peak
+
+Since the sim charges no cycles for transfer, **achieved bandwidth cannot be measured here at all** —
+but *demand* can be computed exactly and checked against architectural peaks, which is the useful
+substitute. At `4,4,2`, T=160 (5120 tiles, bf16, `3 × 5120 × 2048 = 31.46 MB` over an 8155-cycle span):
+
+| quantity | value | peak | ratio |
+|---|---:|---:|---:|
+| per-cluster NoC demand | 120.5 B/cyc | **256 B/cyc** — one NoC port, `NOC_PAYLOAD_WIDTH 2048`/8 (`tt-2xx/quasar/noc/noc_parameters.h:390`) | **47%** |
+| device-wide DRAM demand | 3857 B/cyc | 2 channels in `quasar_32_arch.yaml` ⇒ **1929 B/cyc per channel** | **implausible** |
+
+Two readings. The NoC itself is **not** the roof at this operating point — Quasar's word is 256 B
+against Blackhole's 64 and Wormhole's 32, so one port covers our rate twice over. But the DRAM demand
+is far beyond any real channel pair (~1.9 TB/s per channel at 1 GHz), which is the concrete form of
+"craq-sim has no memory roof": **the simulated operating point is physically unreachable on silicon for
+a DRAM-interleaved shape**, and the gap is the DRAM roof, not the NoC roof. L1-sharded operands remove
+that term and put the 256 B/cyc port roof back in charge.
+
+**Where a real denominator comes from.** `tt_metal/.../experimental/noc_estimator/` already returns
+`bandwidth_bytes_per_cycle` per transaction pattern, but its `Architecture` enum is **WORMHOLE_B0 and
+BLACKHOLE only** — no Quasar. It was fitted from the `tests/tt_metal/tt_metal/data_movement/`
+microbenchmarks, so the path to a Quasar denominator is to run that suite on Quasar hardware and add
+the arch. To measure *achieved* bytes rather than derive them, `TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1`
+(+ `..._RPT_PATH`) is the per-transaction instrument — still unverified on Quasar. The craq-sim
+one-call-site patch of §10.4 only validates the numerator we can already compute analytically; it
+cannot produce a denominator.
 
 ### 5.0 Sequencing decision (2026-08-18): BASELINE FIRST, then native
 
@@ -614,6 +996,63 @@ harness becomes the regression gate for phase-2 broadcast work.
 - **Shape sizing tension**: craq-sim is slow, so per-cluster tile counts must be small enough to simulate
   yet large enough that steady state dominates the prologue. Start on 1 cluster with ~64-256 tiles per
   operand, then a small grid (e.g. 2×3) once single-cluster numbers are stable.
+
+### 5.0.6 Scorecard — expectations vs measurements (moved here from the tutorial page, 2026-09-10)
+
+Every pre-implementation expectation, scored against the Milestone-1 measurements. Result gains are
+native-basis (§5.0.2's rule). Two rows' *expectations* were stated on the pre-implementation gate basis —
+kept verbatim as history, per the same rule.
+
+| expectation | source | result | verdict |
+|---|---|---|---|
+| Kill criterion — stop if threads deliver <1.3x | design §2.4 | **4.000x** from threads | cleared 3x over |
+| Capture >=50% of the 149.1 cyc/tile headroom | design §2.3.2 (gate metric — pre-implementation basis by definition) | 94.6% span / ~101% marginal | far exceeded; marginal >100% because native `4,4,2` (44.00) undercuts the 45.25 floor, which was measured on the old arm at `C=1` |
+| Threads must deliver 2.83x for the ceiling | status, M0-entry plan table (history) | 4.000x, the ceiling exactly | exceeded |
+| Combination law: additive was the default; `max()` needed justifying | design §2.3.2 | envelope 8155 vs additive 20,340 at T=160 | **`max()` confirmed — additive killed by 2.5x** |
+| Issue-bound below a ~2.36 KB transaction | O2O study | 2048 B, measured issue-bound | predicted exactly |
+| NoC peak 256 B/cyc | HAS + `noc_parameters.h` + O2O | three sources agree | confirmed |
+| "More cores -> more sync -> more DM overhead" | Aether matmul notes | 6 DFB ops per 11 Tensix instructions | confirmed |
+| Headroom is the DM loop; target DM threads, not machinery | design §2.2 | the `C` term binds at every frontier point | **inverted** |
+| In-flight concurrency sufficient | implicit in the depth-2 default | Q=1, ~10% of achievable per-core NoC | **inverted — the large gap** |
+
+Two rows deserve more than their checkmarks:
+
+- **The combination law is settled.** The design flagged it as blocking falsifiability — the two laws are
+  44% apart at the target config, and additive was the default assumption. The measurement kills additive
+  by 2.5x (envelope 8155 vs additive 20,340). Every prediction that was hedged on this can now be stated
+  plainly.
+- **We are at the "irreducible machinery" floor — with a correction to the design doc.** 44.00 measured
+  against the recorded 45.25 floor is not an anomaly: the floor was measured on the `metal_v2` arm at
+  baseline knobs, so its Tensix machinery never divided by `C` — **45.25 is a floor only at `C=1`**, and
+  design §2.2 should not be read as a bound on multi-Neo configs. Practically: craq-sim has nothing left
+  to give on this op.
+
+### 5.0.7 Open questions (moved from the tutorial page, 2026-09-10)
+
+Q1-Q4 feed the emulator campaign (design §7.5); Q5-Q6 are platform/tooling asks. They live here rather
+than on the tutorial page so answers can land — strike through and date them here — without the published
+page going stale.
+
+1. **What is `T_fix` for Quasar?** One number converts our in-flight footprint into an expected
+   bandwidth fraction and decides whether depth or transaction size is the bigger lever; the O2O model
+   has everything else. Highest-value question on this list.
+2. **Should `entries_per_thread` default to >= 4?** We ship 2, giving Q=1 and ~39% of achievable
+   per-core bandwidth. The footprint at depth 16 is still ~2.7% of L1. craq-sim reports ~0 gain by
+   construction — that must not be read as a reason to leave it.
+3. **Is 2-tile batching the single highest-value change?** It crosses the ~2.36 KB issue/transport knee
+   AND raises Q. The `capacity >= 2n` coupling means it must be swept together with depth, never
+   separately.
+4. **Redo the lever-composition arithmetic on the native basis.** Threads and knobs are not independent
+   levers — batching removes DM instructions that threads already divided by `R`, so per-lever gains do
+   not multiply. Derive any composition from the native-basis measurements (4.00x throughput / 2.69x
+   latency, knobs <= 1.17x), never by multiplying per-lever numbers.
+5. **What is a "Neo"?** The Quasar HAS says 32 Neo instances per chiplet, each four Tensix cores plus a
+   shared 4 MB L1 — so a Neo *is* the cluster. tt-metal's profiler emits four `QUASAR_NEO{0..3}` per
+   CoreCoord. These docs follow the profiler; worth settling with the arch team before it spreads
+   further.
+6. **Can Quasar be added to `noc_estimator`?** Its `Architecture` enum is Wormhole and Blackhole only.
+   §5.0.4 carries the mechanism (run the `data_movement/` microbenchmarks on Quasar and fit the arch);
+   this entry is the ask.
 
 ---
 
@@ -707,7 +1146,7 @@ Why this is safe and cheap:
   precisely why production needs `override_runtime_arguments`. The **quasar** op has no such override, so
   it gets full reflection. Do not carry production's constraint across.
   The real constraint is narrower: on a cache hit the adapter re-applies **only tensor bindings**
-  (`UpdateTensorArgs`), so every non-tensor per-core arg must be a function of hashed inputs — and
+  (`UpdateTensorArgs`), so every non-tensor per-cluster arg must be a function of hashed inputs — and
   `worker_grid` is NOT hashed today, which is a hang risk once per-thread counts are baked in.
   `ProgramRunArgs` (and `DFBRunOverrides` if ring depth is dynamic), or folded into the hash.
 - **Divisibility**: with R producer threads and C consumer threads on a DFB, keep `num_entries` a multiple
@@ -796,7 +1235,7 @@ Environment:
 ## 9. Design levers: what craq-sim measured, and what that does not tell us
 
 **Re-derived from measurement on 2026-08-20; data and method in
-`.link_to_claude/plans/quasar-native-binary-ng-review-findings.md` §K-MEASURED-1..4.** Numbers are craq-sim at T=40 tiles/core, so
+`.link_to_claude/plans/quasar-native-binary-ng-review-findings.md` §K-MEASURED-1..4.** Numbers are craq-sim at T=40 tiles/cluster, so
 they bound instruction-count effects and say nothing about contention — **and for the latency-hiding levers
 they are floors, not ceilings.**
 
@@ -863,7 +1302,7 @@ inside that model's calibrated envelope. Coverage and model quality are **uneval
 | instrument | how | what you get |
 |---|---|---|
 | **Global cycle count** | free, printed at exit | `[<cycles>] <wall>s (<rate>)` from `g_clock` (`src/sim.cpp:502-513`) |
-| **Device profiler** | `TT_METAL_DEVICE_PROFILER=1` (no rebuild — profiler is on by default) | per-RISC kernel spans in `generated/profiler/.logs/profile_log_device.csv`; RiscTypes `QUASAR_DM0-7`, `QUASAR_NEO0-3_TRISC0-3`; cycles-since-reset stamps |
+| **Device profiler** | `TT_METAL_DEVICE_PROFILER=1` (no rebuild — profiler is on by default) | per-RISC kernel spans in `generated/profiler/.logs/profile_log_device.csv`; RiscTypes `QUASAR_DM0-7`, `QUASAR_NEO0-3_TRISC0-3`; cycles-since-reset stamps. **The only cycle source, and the only per-core one** — §5.0.2 has the measured role map (readers/writers/pipes by RISC name) and the occupancy method |
 | **craq-sim perf trace** | `TTSIM_PERF_TRACE=1 TTSIM_PERF_TRACE_PER_DISPATCH=1 TTSIM_PERF_TRACE_OUT=<dir>` | `ttsim_perf_trace.tsv`: per-engine instruction counts, DFB op counts (`cb_waits/reserves/pushes/pops`), `kernel_launches`, per-pipe **stall** cycles (`src/sim.cpp:143-150`) |
 | **Profiler zones inside a kernel** (DM cores included) | wrap a region in a device-profiler zone | exact cycles for a **sub-kernel region on any core**. The profiler's device-side stamp is a direct read of `NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0` (`tt_metal/tools/profiler/kernel_profiler.hpp:218-225`), which craq-sim answers with `g_clock` verbatim (`src/tile.cpp:1768`) and — unlike Gen1 — with **no read delay** (`src/riscv_impl.h:612` gates it on `TT_VERSION <= 1`). In-tree prior art: `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` (`TT_METAL_MEASURE_DFB_INIT_TIME=1`). |
 | **DFB credit event log** | `TTSIM_QSR_DFB_TRACE=1`, `TTSIM_QSR_DFB_COUNTER_TRACE=1` | every credit post/ack with `posted→M acked=K` per `(tensix, counter)`, plus a distinct *blocked* event carrying capacity (`src/riscv_impl.h:1941-1948`, `:2235-2252`, `:2521-2530`). Post-process for the **ring-occupancy trajectory** — max occupancy, whether the ring ever fills, at what depth. Event-ordered, not clock-stamped; pair with a profiler zone for time. |
@@ -905,7 +1344,7 @@ per tile** — the buffer saturates near 22 RISCs × 125 zones.
 | **DFB credit batching / the DM0 ISR** | `qsr_rocc_post_dfb_counter` increments `posted` by **1, per transaction, at issue** (`src/riscv_impl.h:2229-2243`, called from `:2827`). `PER_TR_ID_IP_*` reads hardwired 0 (`:3019-3028`); there is **no asynchronous interrupt delivery anywhere**. So implicit sync is *qualitatively* different from silicon: unbounded per-thread depth instead of batch-gated. |
 | **NoC/DRAM contention or queueing** | `set_noc_outstanding` is `#if TT_VERSION <= 1` so the outstanding count is permanently 0 on Quasar (`src/tile.cpp:1049-1066`); `get_vc_space` returns `0xffffffff` (`src/riscv_impl.h:3070-3075`); DRAM is a flat `memcpy` (`src/tile.cpp:5601-5605`). Only *ethernet* latency exists (`eth_latency_cycles`, default 0). |
 | **Store ordering** | every store is applied synchronously with no store-buffer state ⇒ the release-fence hazard (#51291) **cannot be reproduced or regressed here**. Coherence yes, ordering no. |
-| **NoC event counters, on our path only** | the perf trace's `noc_reads`/`noc_writes`/`noc_bytes`/`dram_*_bytes`/`l1_*_bytes` read **0**, but *not* because the tracer is unwired — `ttsim_perf_trace_noc` is called from the `TT_VERSION == 2` branch of `noc_cmd_ctrl` (`src/tile.cpp:2390`, `:2402`, `:2680`). The reason is that Quasar DM kernels move data through ROCC command buffers in `riscv_impl.h`, which never calls the tracer (`grep -c g_perf_trace src/riscv_impl.h` → **0**). ⇒ byte/transaction counts are a **one-call-site craq-sim patch**, not an emulator errand. |
+| **NoC event counters, on our path only** | the perf trace's `noc_reads`/`noc_writes`/`noc_bytes`/`dram_*_bytes`/`l1_*_bytes` read **0**, but *not* because the tracer is unwired — `ttsim_perf_trace_noc` is called from the `TT_VERSION == 2` branch of `noc_cmd_ctrl` (`src/tile.cpp:2390`, `:2402`, `:2680`). The reason is that Quasar DM kernels move data through ROCC command buffers in `riscv_impl.h`, which never calls the tracer (`grep -c g_perf_trace src/riscv_impl.h` → **0**). ⇒ byte/transaction counts are a **one-call-site craq-sim patch**, not an emulator errand. Re-verified still 0 at `ad401613` (2026-09-04) with a second witness — see §5.0.2. |
 | **Cache and locality timing** | coherence is modelled but *cost* is not: a D$ or L2 miss is **zero cycles** — the QSR DM L1 read/write paths return unconditionally (`src/riscv_impl.h:836-845`, `:902-911`) with no replay. L2 is idealized to one slot per TL1 line so it never conflict-evicts (`src/sim.h:292-297`). ⇒ any lever that improves DM locality, or trades cached for uncached-alias access, shows **exactly zero** delta here. |
 | **Anything DM-side in the *perf trace*** | `stall[engine]` is incremented per cycle per **Tensix** instruction returning `executed == false` (`src/tensix.cpp:18299-18302`); the DM RISC-V cores contribute nothing (`grep -c g_perf_trace src/riscv_impl.h` → 0). Since the DM path is ~76% of our measured cycles, **the trace** is blind to most of the op. **This is not true of the profiler** — see §10.2's third row: DM-side sub-kernel regions *are* measurable. |
 

@@ -68,9 +68,9 @@ void kernel_main() {
         dfb_in0.push_back(onetile);
         dfb_in1.push_back(onetile);
     }
-    // Drains outstanding credits before exit. Its sync_threads is reached only when a thread did
-    // work, so a zero-work thread would skip the barrier while its siblings block -- the gate's even
-    // divisibility is what keeps every thread non-empty.
+    // Drains this thread's outstanding credits; the ack wait is unguarded and runs even at zero tiles,
+    // which is benign there (posted == acked == 0). No deadlock because finish()'s thread barrier sits
+    // inside handle_final_credits, reached only via the NocOptions::TXN_ID overloads this kernel avoids.
     dfb_in0.finish();
     dfb_in1.finish();
 }
