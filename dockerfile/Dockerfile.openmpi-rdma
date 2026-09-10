@@ -1,0 +1,109 @@
+# =============================================================================
+# OpenMPI 5 + UCX: the RDMA one-sided variant, built standalone.
+#
+# This builds the same OpenMPI version from the same sources,
+# adds UCX, and exports to /install like every other tool.
+#
+# Provides: pml/ob1 + osc/ucx (and btl/uct) over verbs. pml/ucx is
+# deliberately EXCLUDED so ob1 keeps ULFM -- see install-openmpi-rdma.sh.
+#
+# BUILD
+#   docker build -f dockerfile/Dockerfile.openmpi-rdma -t openmpi-rdma:v5.0.7 .
+#
+# USE, from another Dockerfile
+#   FROM openmpi-rdma:v5.0.7 AS openmpi-rdma-layer
+#   ...
+#   COPY --from=openmpi-rdma-layer /install/ /opt/
+#   ENV PATH=/opt/openmpi-v5.0.7-ulfm-rdma/bin:$PATH
+#   # BOTH paths, and at RUN TIME, not just build time: UCX dlopens its transport modules
+#   # from ${UCX_PREFIX}/lib/ucx/ when a job starts. Without them it comes up self/tcp only,
+#   # which looks exactly like a working RDMA run at a tenth the bandwidth.
+#   ENV LD_LIBRARY_PATH=/opt/openmpi-v5.0.7-ulfm-rdma/lib:/opt/ucx-1.22.0/lib:$LD_LIBRARY_PATH
+# =============================================================================
+
+# Keep these in step with Dockerfile.tools' openmpi-builder. They are duplicated rather than
+# shared on purpose: this file is standalone, so bumping the mainline version does not silently
+# change what this image ships. If you bump one, bump the other and say so in the PR.
+ARG OMPI_VERSION=v5.0.7
+ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
+ARG UCX_VERSION=1.22.0
+# Unpinned, like install-ucx.sh says. Fill it in with:
+#   curl -fsSL https://github.com/openucx/ucx/releases/download/v1.22.0/ucx-1.22.0.tar.gz | sha256sum
+ARG UCX_SHA256=
+
+# -----------------------------------------------------------------------------
+# UCX. manylinux base for the same ABI as the mainline openmpi-builder.
+# -----------------------------------------------------------------------------
+FROM quay.io/pypa/manylinux_2_34_x86_64 AS ucx-builder
+ARG UCX_VERSION
+ARG UCX_SHA256
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+    sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+# libibverbs-devel and librdmacm-devel are load-bearing: without them UCX builds clean and
+# comes up with self/tcp/sysv only. install-ucx.sh fails the build if uct_ib is missing.
+RUN dnf install -y \
+        ca-certificates \
+        gcc \
+        gcc-c++ \
+        make \
+        libibverbs-devel \
+        librdmacm-devel \
+        numactl-devel \
+        zlib-devel \
+    && dnf clean all
+
+COPY dockerfile/scripts/install-ucx.sh /tmp/install-ucx.sh
+RUN UCX_VERSION=${UCX_VERSION} \
+    UCX_SHA256=${UCX_SHA256} \
+    INSTALL_DIR=/install \
+    UCX_JOBS="$(nproc)" \
+    /bin/bash /tmp/install-ucx.sh
+
+# -----------------------------------------------------------------------------
+# OpenMPI, built against that UCX.
+# -----------------------------------------------------------------------------
+FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-rdma-builder
+ARG OMPI_VERSION
+ARG OMPI_COMMIT_SHA
+ARG UCX_VERSION
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+    sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+# Same build deps as the mainline openmpi-builder, plus the verbs headers UCX needs at link time.
+RUN dnf install -y \
+    autoconf automake bison bzip2 ca-certificates flex gcc gcc-gfortran gawk git python3 \
+    gmp-devel hwloc-devel libibverbs-devel librdmacm-devel libevent-devel libmpc-devel \
+    mpfr-devel libtool make perl zlib-devel numactl-devel \
+    && dnf clean all
+
+# UCX lands at its final path so the recorded --with-ucx and the run-time location agree.
+# They diverging is a real trap: the headers you compiled against and the library you load
+# end up in two different trees.
+COPY --from=ucx-builder /install/ /opt/
+
+# Slurm headers + libslurm, as the mainline builder does. Under OpenMPI 5 the launcher lives
+# in PRRTE, so this is what gives prte ras/slurm and plm/slurm -- without it mpirun cannot read
+# a SLURM allocation and --map-by ppr:N:node maps only the local node.
+COPY .github/scripts/install-slurm.sh /tmp/install-slurm.sh
+RUN /bin/bash /tmp/install-slurm.sh
+
+COPY dockerfile/scripts/install-openmpi-rdma.sh /tmp/install-openmpi-rdma.sh
+RUN OMPI_VERSION=${OMPI_VERSION} \
+    OMPI_COMMIT_SHA=${OMPI_COMMIT_SHA} \
+    UCX_PREFIX=/opt/ucx-${UCX_VERSION} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-openmpi-rdma.sh
+
+# UCX ships alongside: it is a run-time dependency, not just a build-time one.
+RUN cp -a /opt/ucx-${UCX_VERSION} /install/
+
+# -----------------------------------------------------------------------------
+# Export layer: /install only, so this is a drop-in COPY --from source.
+# -----------------------------------------------------------------------------
+FROM scratch AS openmpi-rdma
+COPY --from=openmpi-rdma-builder /install/ /install/
