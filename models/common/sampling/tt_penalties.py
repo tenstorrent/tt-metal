@@ -226,12 +226,24 @@ class TTPenalties(LightweightModule):
         presence_tensor = self._pad_params(presence)
         frequency_tensor = self._pad_params(frequency)
         repetition_tensor = self._pad_params(repetition)
+
+        # The decode loop re-applies the same penalty params on every token, and each apply is four
+        # host->device writes on cq0 that must wait behind the decode trace already enqueued there --
+        # the host stalls a whole device step before the first byte moves. These four buffers are
+        # written nowhere else, so once a set of values is resident, re-uploading identical values is
+        # pure serialization. Compare by value (cheap: batch-sized float rows) and skip.
+        key = (presence_tensor, frequency_tensor, repetition_tensor)
+        resident = getattr(self, "_resident_penalty_params", None)
+        if resident is not None and all(torch.equal(a, b) for a, b in zip(resident, key)):
+            return
+
         inverse_repetition_tensor = 1 / repetition_tensor
 
         self._copy_host_to_device(self.presence_penalties, presence_tensor)
         self._copy_host_to_device(self.frequency_penalties, frequency_tensor)
         self._copy_host_to_device(self.repetition_penalties, repetition_tensor)
         self._copy_host_to_device(self.inverse_repetition_penalties, inverse_repetition_tensor)
+        self._resident_penalty_params = key
 
     def _pad_params(self, values: List[float]) -> torch.Tensor:
         tensor = torch.tensor(values, dtype=torch.float32)

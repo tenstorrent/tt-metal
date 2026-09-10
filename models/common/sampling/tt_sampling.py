@@ -630,6 +630,18 @@ class TTSampling(LightweightModule):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        if not self._force_argmax_sampling and self._params_already_resident(k, p, temp):
+            # The decode loop re-applies the SAME sampling params on every token, and each apply is
+            # four host->device writes issued on cq0 -- which sit behind the decode trace already
+            # enqueued there, so the host stalls for a whole device step before the first byte moves.
+            # self.k_tensor / p_tensor / temp_tensor / _greedy_col are written NOWHERE else, so once a
+            # set of values is resident, re-uploading the identical values buys nothing and costs a
+            # full serialization of host against device. Skip straight to the log-probs mode, which is
+            # host-side state.
+            self.log_probs_calculator.set_log_probs_mode(
+                enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+            )
+            return
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
@@ -679,10 +691,28 @@ class TTSampling(LightweightModule):
                 ),
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
+            self._resident_params_key = self._params_key(k, p, temp)
 
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
         )
+
+    @staticmethod
+    def _params_key(k, p, temp):
+        """Value fingerprint of the (k, p, temp) triple actually written to device.
+
+        Compared, not hashed, so an unhashable list is fine; built from ``tolist()`` so two
+        equal-valued tensors match regardless of identity. Batch-sized (<= a few hundred entries),
+        which is microseconds against the millisecond-scale upload it guards.
+        """
+        return (
+            k.tolist() if torch.is_tensor(k) else list(k) if isinstance(k, (list, tuple)) else k,
+            p.tolist() if torch.is_tensor(p) else list(p) if isinstance(p, (list, tuple)) else p,
+            temp.tolist() if torch.is_tensor(temp) else list(temp) if isinstance(temp, (list, tuple)) else temp,
+        )
+
+    def _params_already_resident(self, k, p, temp):
+        return getattr(self, "_resident_params_key", None) == self._params_key(k, p, temp)
 
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
