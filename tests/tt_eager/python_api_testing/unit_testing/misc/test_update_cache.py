@@ -198,7 +198,7 @@ def test_update_cache_decode_odd_num_users(num_users, device):
     tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     eq_cache, output_cache = comp_equal(cache, tt_got_back)
     logger.info(output_cache)
-    assert eq_cache
+    assert eq_cache, output_cache
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
