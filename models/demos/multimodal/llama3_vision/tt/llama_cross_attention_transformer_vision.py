@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
+from models.demos.multimodal.llama3_vision.tt.llama_vision_encoder import TtLlamaVisionEncoder
 
 
 class TtLlamaCrossAttentionTransformerVision(LightweightModule):

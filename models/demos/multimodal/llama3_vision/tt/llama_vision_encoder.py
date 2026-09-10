@@ -8,13 +8,13 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.multimodal.llama3_vision.tt.llama_class_embedding import TtLlamaClassEmbedding
+from models.demos.multimodal.llama3_vision.tt.llama_conv2d_patch import TtLlamaConv2dPatch
+from models.demos.multimodal.llama3_vision.tt.llama_image_transformer import TtLlamaImageTransformer
+from models.demos.multimodal.llama3_vision.tt.llama_positional_embedding import TtLlamaPositionalEmbedding
+from models.demos.multimodal.llama3_vision.tt.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
+from models.demos.multimodal.llama_layernorm import TtLayerNorm
 from models.tt_transformers.tt.common import build_encoder_attention_mask
-from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
-from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
-from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
-from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
-from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
 
 
 def to_2tuple(x):

@@ -14,9 +14,9 @@ from transformers.models.mllama.modeling_mllama import MllamaPrecomputedPosition
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tests.multimodal.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tt.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 

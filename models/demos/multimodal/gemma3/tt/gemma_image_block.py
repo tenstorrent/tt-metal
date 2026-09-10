@@ -12,7 +12,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.multimodal.gemma3.tt.gemma_image_attention import TtGemmaImageAttention
 from models.demos.multimodal.gemma3.tt.gemma_image_mlp import TtGemmaImageFeedForward
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
+from models.demos.multimodal.llama_layernorm import TtLayerNorm
 
 
 class TtGemmaImageTransformerBlock(LightweightModule):

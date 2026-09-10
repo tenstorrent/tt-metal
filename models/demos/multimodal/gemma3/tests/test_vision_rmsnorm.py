@@ -133,7 +133,7 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
     indirect=True,
 )
 def test_llama_rms_norm(mesh_device):
-    from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
+    from models.demos.multimodal.llama_layernorm import TtLayerNorm
 
     mode = "prefill"
     tt_model_args = ModelArgs(

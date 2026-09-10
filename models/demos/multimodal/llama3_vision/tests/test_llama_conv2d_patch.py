@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.multimodal.llama3_vision.tt.llama_conv2d_patch import TtLlamaConv2dPatch
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
 from ttnn import ConcatMeshToTensor
 
 

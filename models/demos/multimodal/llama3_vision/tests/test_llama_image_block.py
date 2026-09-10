@@ -11,16 +11,16 @@ from transformers.models.mllama.modeling_mllama import MllamaVisionEncoderLayer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tests.multimodal.utils import (
+from models.demos.multimodal.llama3_vision.tests.utils import (
     contract_num_tokens_from_mult8,
     expand_num_tokens_to_mult8,
     load_partial_weights,
 )
+from models.demos.multimodal.llama3_vision.tt.llama_image_block import TtLlamaImageTransformerBlock
+from models.demos.multimodal.llama3_vision.tt.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import build_encoder_attention_mask
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
-from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
 
 
 @pytest.mark.parametrize(

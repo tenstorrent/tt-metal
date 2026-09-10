@@ -9,15 +9,15 @@ import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.cache_utils import DynamicCache
-from transformers.models.mllama.modeling_mllama import MllamaCrossAttentionDecoderLayer
+from transformers.models.mllama.modeling_mllama import MllamaTextCrossAttention
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
-from models.tt_transformers.tests.multimodal.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tt.llama_cross_attention import TtLlamaCrossAttention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 
 
 @pytest.mark.parametrize(
@@ -42,21 +42,22 @@ from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossA
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
+def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch)
-    # Limit the max seqlen to 4k to avoid OOM on host
-    model_args.max_seq_len = 4096
+    model_args = ModelArgs(mesh_device)
+    model_args.max_seq_len = text_seq_len
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "text_model.cross_attention_layers.0."
+    first_layer_prefix = "text_model.cross_attention_layers.0.attention."
+
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
+    norm_eps = model_args.norm_eps
 
     # Initialization of HF subclass parameters
     hf_weights_repo_name = os.getenv("HF_MODEL")
@@ -66,14 +67,16 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
 
     # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
     layer_idx = config.text_config.cross_attention_layers[0]
-    # transformers 5.x changed the cross-attn cache-hit check to past_key_values.get_seq_length()
-    # (defaults to layer 0). This isolated single-layer test populates one cache slot, so route the
-    # reference's cache through slot 0; the real layer_idx is still used for the HF weight prefix.
+    # transformers 5.x changed the cross-attention cache-hit check from `cache_position[0] != 0` to
+    # `past_key_values.get_seq_length() > 0`, which inspects layer 0 (Cache.get_seq_length defaults to
+    # layer_idx=0). This isolated single-layer test populates only one cache slot, so route the reference's
+    # cache through slot 0 (the cross-attn math is layer-independent; layer_idx only selects the cache slot).
+    # The real layer_idx is still used below for the HF weight-key prefix. Works on both <5 and >=5.
     cache_layer_idx = 0
-    reference_model = MllamaCrossAttentionDecoderLayer(config.text_config, layer_idx=cache_layer_idx)
+    reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=cache_layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        AutoModelForImageTextToText, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}."
+        AutoModelForImageTextToText, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
     )
     reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4
@@ -82,7 +85,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     all_tests_pass = True
 
     tt_ccl = TT_CCL(mesh_device)
-    tt_model = TtLlamaCrossAttentionTransformerBlock(
+    tt_model = TtLlamaCrossAttention(
         mesh_device,
         tt_ccl,
         state_dict,
@@ -90,7 +93,11 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        no_ffn=False,
+        dim=dim,
+        head_dim=head_dim,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        norm_eps=norm_eps,
     )
 
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
@@ -108,9 +115,8 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     reference_model.forward(
         torch.ones(batch, 1, dim),
         pt_xattn_tokens,
-        cross_attention_mask=None,
-        full_text_row_masked_out_mask=None,
         attention_mask=None,
+        use_cache=True,
         **{_pkv_kw: past_key_values},
     )
     # tt_model expects a list of Key and Value projections
@@ -164,24 +170,15 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
             )
         )
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
-        full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+        full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
+        # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
+        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st output of the subclass method indexed as [0].
         pt_out = reference_model.forward(
-            pt_x,
-            None,
-            cross_attention_mask=xattn_mask,
-            cache_position=[layer_idx],
-            full_text_row_masked_out_mask=full_text_mask,
-            attention_mask=None,
-            **{_pkv_kw: past_key_values},
-        )
-        # 0 element is the actual feature map/hidden state needed for comparison. transformers 5.x
-        # returns a bare Tensor (4.x returned a tuple), so only unwrap [0] when it's a tuple —
-        # otherwise [0] slices off the batch dim ([1,S,D] -> [S,D]) and breaks the PCC comparison.
-        pt_out = pt_out[0] if isinstance(pt_out, tuple) else pt_out
+            pt_x, None, attention_mask=xattn_mask, cache_position=[layer_idx], **{_pkv_kw: past_key_values}
+        )[0] * full_text_mask.squeeze(1)
 
         if mode == Mode.PREFILL:
-            full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
                 tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
@@ -190,6 +187,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
                 )
                 tt_tensor_x = model_args.prepare_residual_tensor_prefill(
                     tt_x[b : b + 1],
+                    force_replicated=True,
                 )
                 tt_xattn_mask = ttnn.from_torch(
                     xattn_mask[b : b + 1],
@@ -199,27 +197,18 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
-                tt_full_text_mask_expand_1NSH = ttnn.from_torch(
-                    full_text_mask_expand_1NSH[b : b + 1],
+                tt_full_text_mask = ttnn.from_torch(
+                    full_text_mask_expand[b : b + 1],
                     device=mesh_device,
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
-                tt_full_text_mask_expand_11SD = ttnn.from_torch(
-                    full_text_mask_expand_11SD[b : b + 1],
-                    device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-                )
                 tt_out = tt_model(
                     tt_tensor_x,
                     xattn_mask=tt_xattn_mask,
-                    full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
-                    full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
+                    full_text_row_masked_out_mask_1NSH=tt_full_text_mask,
                     xattn_cache=tt_xattn_cache,
                     mode=mode,
                     user_id=b,
@@ -234,8 +223,10 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
         else:
             tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                model_args.get_residual_mem_config(Mode.DECODE, None),
+                model_args.get_attn_input_mem_config(Mode.DECODE, None),
+                force_replicated=True,
             )
+
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
@@ -251,41 +242,25 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
                 [1, batch, 32, vision_seq_len],
             )
 
-            full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.permute(2, 0, 1, 3).contiguous()
-            tt_full_text_mask_expand_1NSH = ttnn.from_torch(
-                full_text_mask_expand_1NSH,
+            full_text_mask_expand = full_text_mask_expand.permute(2, 0, 1, 3).contiguous()
+            tt_full_text_mask = ttnn.from_torch(
+                full_text_mask_expand,
                 device=mesh_device,
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-            tt_full_text_mask_expand_1NSH = ttnn.reshape(
-                tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask = ttnn.reshape(
+                tt_full_text_mask,
                 [1, batch, n_heads // model_args.num_devices, head_dim],
                 [1, batch, 32, head_dim],
             )
 
-            full_text_mask_expand_11SD = full_text_mask.transpose(0, 2)
-            if batch < 32:
-                full_text_mask_expand_11SD = torch.cat(
-                    [full_text_mask_expand_11SD, torch.zeros(1, 1, 32 - batch, 1)], dim=2
-                )
-            full_text_mask_expand_11SD = full_text_mask_expand_11SD.expand(-1, -1, -1, dim // model_args.num_devices)
-            tt_full_text_mask_expand_11SD = ttnn.from_torch(
-                full_text_mask_expand_11SD,
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            tt_full_text_mask_expand_11SD = ttnn.to_layout(tt_full_text_mask_expand_11SD, ttnn.TILE_LAYOUT)
-
             tt_out = tt_model(
                 tt_x,
                 xattn_mask=tt_xattn_mask,
-                full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
-                full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
+                full_text_row_masked_out_mask_1NSH=tt_full_text_mask,
                 xattn_cache=tt_xattn_cache,
                 mode=mode,
             )

@@ -5,10 +5,10 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.multimodal.llama3_vision.tt.llama_cross_attention import TtLlamaCrossAttention
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
-from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
 
 
 class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
