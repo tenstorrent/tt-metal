@@ -20,6 +20,16 @@ name: "LLK perf gate"
 # TRIGGER: add the 'llk-perf-gate' label to a PR. The gate then re-runs on every
 # later push to that PR, so a fix can be checked without removing and re-adding
 # the label.
+#
+# SLACK: When the gate finds a regression it posts to Slack and names the PR
+# author. The gate runs on one PR, so the author is known by construction — no
+# blame analysis is needed. It also posts when the gate SKIPS, because a gate
+# that compares nothing goes green and looks like a pass.
+# Two secrets, both optional. Without them the gate runs and stays silent.
+#   LLK_SLACK_REPORTING_BOT_TOKEN     — existing bot token, already used by CI
+#   LLK_PERF_GATE_SLACK_CHANNEL_ID    — the channel to post in. Invite the bot
+#                                       to it first; a bot cannot post to a
+#                                       private channel it is not a member of.
 on:
   pull_request:
     types: [labeled, synchronize]
