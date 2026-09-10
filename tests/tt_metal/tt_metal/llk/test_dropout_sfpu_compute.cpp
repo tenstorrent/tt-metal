@@ -35,10 +35,6 @@
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
