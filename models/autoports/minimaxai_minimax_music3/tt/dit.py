@@ -155,6 +155,7 @@ class TTDiT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep,
         )
+        host = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep)
         st = {
             "L": L,
             "Lp": Lp,
@@ -162,6 +163,14 @@ class TTDiT:
             "sin": mk(sin_full),
             "mask": mk(mask),
             "sel": mk(sel),
+            # host-side copies: these constants are re-written before EVERY replay. They are allocated after other
+            # modules' traces were captured, so they may sit inside another trace's scratch region and be clobbered
+            # by its replays (the LLM decode trace, in particular); rewriting is cheap (~1.5 MB) and removes the
+            # allocation-order dependency.
+            "cos_h": host(cos_full),
+            "sin_h": host(sin_full),
+            "mask_h": host(mask),
+            "sel_h": host(sel),
             "xin": mk(torch.zeros(2, 1, Lp, self.cfg.concat_channels)),
             "tf": mk(torch.zeros(2, 1, 32, self.cfg.fourier_embedding_dim)),
             "trace": None,
@@ -264,6 +273,8 @@ class TTDiT:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(tf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), st["tf"]
         )
+        for k in ("cos", "sin", "mask", "sel"):
+            ttnn.copy_host_to_device_tensor(st[k + "_h"], st[k])
         self._ensure_trace(st)
         if st["trace"] is not None:
             ttnn.execute_trace(self.mesh, st["trace"], cq_id=0, blocking=True)

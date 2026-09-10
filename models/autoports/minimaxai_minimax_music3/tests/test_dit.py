@@ -122,3 +122,26 @@ def test_window_denoise_and_vocoder(dit, snapshot, golden_root):
     assert rows["chunk0_step0_pred_cond_pcc"] >= 0.99, rows["chunk0_step0_pred_cond_pcc"]
     assert rows["chunk0_latents_pcc"] >= 0.95, rows["chunk0_latents_pcc"]
     assert rows["spectral_convergence"] < 0.5, rows["spectral_convergence"]
+
+
+def test_two_window_denoise_blues(dit, snapshot, golden_root):
+    """Two windows (689 + 345 latents) with the overlap carry, against the CPU reference on the blues golden."""
+    ref_p = golden_root / "blues" / "tf" / "dit_reference.pt"
+    if not ref_p.exists():
+        pytest.skip("blues DiT reference not computed")
+    g = torch.load(golden_root / "blues" / "golden.pt")
+    ref_out = torch.load(ref_p)
+    ref = Music3Reference(snapshot, load_llm=False, load_dit=False, load_vocoder=True)
+    gen = torch.Generator("cpu").manual_seed(int(ref_out["seed"]))
+    den = ref.denoise(g["frame_hiddens"], gen, record_steps=(0,), dit_forward=dit.forward)
+    rows = {"chunks": len(den["latent_chunks"])}
+    for k, (a, b) in enumerate(zip(den["chunk_records"], ref_out["chunk_records"])):
+        rows[f"chunk{k}_step0_pred_cond_pcc"] = pcc(a["steps"][0]["pred_cond"], b["steps"][0]["pred_cond"])
+        rows[f"chunk{k}_latents_pcc"] = pcc(a["latents_out"], b["latents_out"])
+    wav = ref.decode(den["latent_chunks"])
+    rows["audio_pcc"] = pcc(wav, ref_out["audio"])
+    rows["audio_rms"] = float(wav.pow(2).mean().sqrt())
+    rows["ref_audio_rms"] = float(ref_out["audio"].pow(2).mean().sqrt())
+    REPORT["window_blues"] = rows
+    print(json.dumps(rows, indent=1))
+    assert rows["chunks"] == 2 and rows["chunk1_latents_pcc"] >= 0.95, rows
