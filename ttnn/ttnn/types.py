@@ -125,6 +125,7 @@ TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
 # Mcast2D = one mcast over a single rectangle (matmul-1d: single sender -> whole grid).
 McastGroup = ttnn._ttnn.mcast_host.McastGroup
 McastFamily = ttnn._ttnn.mcast_host.McastFamily
+IrregularReceiverSetMode = ttnn._ttnn.mcast_host.IrregularReceiverSetMode
 Mcast1D = ttnn._ttnn.mcast_host.Mcast1D
 Mcast1DShape = ttnn._ttnn.mcast_host.Mcast1DShape
 Mcast1DSenderPlacement = ttnn._ttnn.mcast_host.Mcast1DSenderPlacement

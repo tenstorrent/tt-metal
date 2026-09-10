@@ -4,7 +4,7 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
 
 #define ENABLE_DEBUG 0
 

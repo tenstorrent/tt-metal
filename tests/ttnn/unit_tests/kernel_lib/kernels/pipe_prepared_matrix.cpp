@@ -3,7 +3,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
 using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr auto mc = McastArgs<0, 4>();
