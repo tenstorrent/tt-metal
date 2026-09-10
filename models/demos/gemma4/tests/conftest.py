@@ -14,19 +14,9 @@ _MARKERS_REQUIRING_REAL_CHECKPOINT = frozenset(
 )
 
 
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "gemma4_hf_direct_parity: Direct model prefill/decode PCC vs HuggingFace reference",
-    )
-    config.addinivalue_line(
-        "markers",
-        "gemma4_batched_prefill: Batched multi-user prefill integration and perf",
-    )
-    config.addinivalue_line(
-        "markers",
-        "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
-    )
+# Marker registration for these lives in models/demos/gemma4/conftest.py (the parent
+# conftest), since demo/text_demo.py also uses gemma4_batched_prefill and is outside
+# this tests/ directory's collection scope.
 
 
 def pytest_addoption(parser):
