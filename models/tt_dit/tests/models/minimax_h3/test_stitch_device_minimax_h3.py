@@ -14,7 +14,7 @@ import ttnn
 
 from ....models.vae.minimax_h3.decoder_minimax_h3 import unpatchify
 from ....models.vae.minimax_h3.stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
-from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig, split_tiles, stitch_tiles
+from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig, _fold_pixel_denorm, split_tiles, stitch_tiles
 from ....utils.check import assert_quality
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
@@ -178,7 +178,7 @@ def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
     combination and the fold is affine, so they commute -- and if they did not, every seam would
     carry the error.
     """
-    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig
 
     config = MiniMaxH3VaeConfig()
     channels = config.out_channels
@@ -190,9 +190,11 @@ def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
     bias = torch.randn(out_features, dtype=torch.float64) * 0.1
     hidden = torch.randn(5, in_features, dtype=torch.float64)
 
-    vae = MiniMaxH3Vae(config, mesh_device=None, pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    # The module function, not the VAE: the fold is pure state-dict arithmetic, and constructing a
+    # `MiniMaxH3Vae` to reach it would build the decoder's `Linear`s against a device this
+    # host-only test does not open.
     state = {"proj_out.weight": weight.clone(), "proj_out.bias": bias.clone()}
-    vae._fold_pixel_denorm(state)
+    _fold_pixel_denorm(state, (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), channels)
 
     mean = torch.tensor(MINIMAX_H3_PIXEL_MEAN, dtype=torch.float64).view(1, channels, 1, 1, 1)
     std = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=torch.float64).view(1, channels, 1, 1, 1)
