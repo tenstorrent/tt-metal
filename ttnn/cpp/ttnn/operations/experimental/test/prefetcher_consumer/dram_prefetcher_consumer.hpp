@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -29,11 +30,12 @@ struct DramPrefetcherConsumerDeviceOperation {
         // entry size the PrefetcherPipes are Attached at. Either way it must be what the sender
         // pushes per receiver per block.
         uint32_t page_size_bytes;
-        // Exactly one of these is set. optional<> because reflection-based profiler serialization
-        // needs a default-constructible attribute struct, and GlobalCircularBuffer has no default
-        // ctor.
+        // Exactly one of these is set: a GCB, or a non-empty pipe list. global_cb is optional<>
+        // because reflection-based profiler serialization needs a default-constructible attribute
+        // struct and GlobalCircularBuffer has no default ctor; an empty list is already that state
+        // for the pipes.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
-        std::optional<ttnn::operations::experimental::TensorPrefetcherPipes> prefetcher_pipes;
+        std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipes;
         ttnn::MeshDevice* mesh_device;
     };
 
@@ -84,6 +86,6 @@ void test_tensor_prefetcher_pipe_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,
     uint32_t page_size_bytes,
-    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes);
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes);
 
 }  // namespace ttnn::operations::experimental::test

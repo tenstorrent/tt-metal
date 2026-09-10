@@ -17,6 +17,8 @@
 
 namespace ttnn::operations::experimental::test {
 
+namespace metal_exp = tt::tt_metal::experimental;
+
 namespace {
 constexpr uint32_t kRemoteCBId = 31;
 }  // namespace
@@ -27,16 +29,16 @@ void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.num_iters > 0, "num_iters must be > 0");
     TT_FATAL(attrs.page_size_bytes > 0, "page_size_bytes must be > 0");
     TT_FATAL(
-        attrs.global_cb.has_value() != attrs.prefetcher_pipes.has_value(),
-        "Supply exactly one delivery target: global_cb={} prefetcher_pipes={}",
+        attrs.global_cb.has_value() != !attrs.prefetcher_pipes.empty(),
+        "Supply exactly one delivery target: global_cb={} prefetcher_pipes={} pipes",
         attrs.global_cb.has_value(),
-        attrs.prefetcher_pipes.has_value());
+        attrs.prefetcher_pipes.size());
     if (attrs.global_cb.has_value()) {
         TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
     } else {
-        TT_FATAL(attrs.prefetcher_pipes->num_pipes() > 0, "TensorPrefetcherPipes holds no pipes");
         TT_FATAL(
-            attrs.prefetcher_pipes->receiver_cores().num_cores() > 0, "TensorPrefetcherPipes has no receiver cores");
+            metal_exp::prefetcher_pipe_receiver_cores(attrs.prefetcher_pipes).num_cores() > 0,
+            "The PrefetcherPipes have no receiver cores");
     }
 }
 
@@ -55,16 +57,18 @@ DramPrefetcherConsumerDeviceOperation::create_output_tensors(const operation_att
 
 ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
-    // Neither target is reflection-hashable as a whole, so hash the identity of whichever one is
-    // set: a config address is unique per live instance on this device, and the program bakes it
-    // in, so a same-geometry replacement must miss this cache. The unset target contributes an
-    // empty list, which is also what keeps the two transports from colliding.
+    // Hash the identity of whichever target is set: a config address is unique per live instance on
+    // this device, and the program bakes it in, so a same-geometry replacement must miss this cache.
+    // The unset target contributes an empty list, which is also what keeps the two transports from
+    // colliding. (A pipe now reflects its own identity, so the pipes could ride the default
+    // attribute hash instead -- and would gain the exact canonical key -- but that loses this
+    // transport disambiguation, so it is a separate change.)
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherConsumerDeviceOperation>,
         attrs.num_iters,
         attrs.page_size_bytes,
         attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
-        attrs.prefetcher_pipes.has_value() ? attrs.prefetcher_pipes->config_addresses() : std::vector<uint32_t>{});
+        metal_exp::prefetcher_pipe_config_addresses(attrs.prefetcher_pipes));
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherConsumerDeviceOperation::ProgramFactory::shared_variables_t>
@@ -77,16 +81,17 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
 
     Program program = CreateProgram();
 
-    if (operation_attributes.prefetcher_pipes.has_value()) {
-        const auto& pipes = operation_attributes.prefetcher_pipes.value();
-        const CoreRangeSet receiver_cores = pipes.receiver_cores();
+    if (!operation_attributes.prefetcher_pipes.empty()) {
+        const auto& pipes = operation_attributes.prefetcher_pipes;
+        const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(pipes);
 
         // No receiver-side CB: a PrefetcherPipe consumer Attaches instead, at the entry size the
-        // sender is pushing, and reads through the device-side class. attach() and
-        // sender_receiver_core_mapping() both enumerate bank-major, so a pipe's id shares its
-        // index with that pipe's receiver set.
-        const std::vector<uint8_t> pipe_ids = pipes.attach(program, operation_attributes.page_size_bytes);
-        const auto& mapping = pipes.sender_receiver_core_mapping();
+        // sender is pushing, and reads through the device-side class. The attach ids and the mapping
+        // are both positioned alongside the pipes, so a pipe's id shares its index with that pipe's
+        // receiver set.
+        const std::vector<uint8_t> pipe_ids =
+            metal_exp::AttachPrefetcherPipes(program, pipes, operation_attributes.page_size_bytes);
+        const auto mapping = metal_exp::prefetcher_pipe_sender_receiver_mapping(pipes);
         TT_FATAL(
             pipe_ids.size() == mapping.size(),
             "Attached {} pipes for {} senders; each receiver takes the id of the pipe it belongs to",
@@ -163,7 +168,7 @@ void test_tensor_prefetcher_pipe_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,
     uint32_t page_size_bytes,
-    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes) {
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes) {
     using OperationType = DramPrefetcherConsumerDeviceOperation;
     OperationType::operation_attributes_t attrs{
         .num_iters = num_iters,

@@ -23,6 +23,8 @@
 
 namespace ttnn::operations::experimental::test {
 
+namespace metal_exp = tt::tt_metal::experimental;
+
 namespace {
 constexpr uint32_t kValidatorRemoteCBId = 31;
 constexpr uint32_t kValidatorScratchCBId = 0;
@@ -334,20 +336,20 @@ void test_tensor_prefetcher_pipe_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     bool streaming,
     const std::vector<uint32_t>& rotation) {
     using namespace tt::tt_metal;
 
-    TT_FATAL(!prefetcher_pipes.banks.empty(), "prefetcher_pipes must hold at least one bank");
+    TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
     TT_FATAL(num_layers > 0, "num_layers must be > 0");
     Buffer* tensor_buffer = source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
 
-    const auto& sr_mapping = prefetcher_pipes.sender_receiver_core_mapping();
-    const CoreRangeSet receiver_cores = prefetcher_pipes.receiver_cores();
-    TT_FATAL(receiver_cores.num_cores() > 0, "TensorPrefetcherPipes has no receiver cores");
+    const auto sr_mapping = metal_exp::prefetcher_pipe_sender_receiver_mapping(prefetcher_pipes);
+    const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(prefetcher_pipes);
+    TT_FATAL(receiver_cores.num_cores() > 0, "The PrefetcherPipes have no receiver cores");
 
     const ValidatorGeometry geom = compute_validator_geometry(source_tensor, sr_mapping);
 
@@ -359,9 +361,10 @@ void test_tensor_prefetcher_pipe_validator(
     // differ it is also what makes the device-side constructor run the resize handshake, which is
     // the behaviour under test.
     //
-    // attach() and sender_receiver_core_mapping() both enumerate the pipes bank-major, so a plan's
+    // The attach ids and the mapping are both positioned alongside the pipes, so a plan's
     // sender_index (an index into sr_mapping) is also the index of that sender's pipe id.
-    const std::vector<uint8_t> pipe_ids = prefetcher_pipes.attach(program, geom.page_bytes_per_recv);
+    const std::vector<uint8_t> pipe_ids =
+        metal_exp::AttachPrefetcherPipes(program, prefetcher_pipes, geom.page_bytes_per_recv);
     TT_FATAL(
         pipe_ids.size() == sr_mapping.size(),
         "Validator: attached {} pipes for {} senders; each receiver plan indexes its sender's pipe id",
