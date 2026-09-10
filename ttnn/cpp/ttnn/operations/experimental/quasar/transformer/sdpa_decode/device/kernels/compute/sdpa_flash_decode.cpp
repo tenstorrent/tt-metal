@@ -118,8 +118,22 @@ void kernel_main() {
     constexpr auto dfb_sum_1 = dfb::sum_1;
     constexpr auto dfb_sum_2 = dfb::sum_2;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
-    constexpr auto dfb_prev_sum_2 = dfb::prev_sum_2;
-    constexpr auto dfb_exp_max_diff_2 = dfb::exp_max_diff_2;
+    // Tile-counter budget (Quasar caps intra-Tensix DFBs at 8; flash-decode declared 11). Two of the
+    // three tree-reduction temps reuse compute-private buffers that are drained after the flash loop:
+    //   - prev_sum_2   -> out_im  (move_block(l_in -> out_im); correction consumes it)
+    //   - exp_max_diff_2 -> qk_im (correction produces it; the child-O mul consumes it)
+    // im_df == stats_df == Float16_b with identical tile geometry, so the IM buffers hold the STATS-format
+    // temps byte-for-byte (out_tiles/qk_tiles >= statistics_tiles). Temps MUST be compute-private: the
+    // mul/add in-place helpers reserve_back+push_back their operand (they RE-PRODUCE it), which only the
+    // buffer's producer may do, so the borrowed cross-core buffers (l_in/out_o) may only be *consumed*
+    // via move_block (that consume preserves their cross-core handshake). The 3rd temp
+    // (out_accumulate_im_2) cannot share a DFB with the other two — proven on WH: reusing one DFB for two
+    // different-sized temps within a round corrupts numerics via ring wrap — so it stays a dedicated DFB
+    // here => 9 intra-Tensix DFBs. Reaching 8 for Quasar needs out_accumulate_im_2 moved off the
+    // tile-counter budget (fused scaled-accumulate that never materializes it, or a synced scratchpad):
+    // follow-up.
+    constexpr auto dfb_prev_sum_2 = dfb::out_im;
+    constexpr auto dfb_exp_max_diff_2 = dfb::qk_im;
     constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
 
     constexpr auto dfb_out_o = dfb::out_o;
@@ -615,7 +629,12 @@ void kernel_main() {
                         dfb_exp_max_diff_2,
                         Sq_chunk_t);
 
-                    // OUT_ACC_2 <- CHILD_OUT
+                    // OUT_ACC_2 <- CHILD_OUT: consume the child's O out of the borrowed out_o into the
+                    // compute-private out_accumulate_im_2 (== out_im, freed above when correction popped
+                    // prev_sum_2). This move_block only *consumes* out_o (wait_front+pop_front), preserving
+                    // its cross-core handshake; the in-place scale/add below then run on out_im, never on
+                    // out_o (in-place ops re-produce their operand, which compute may not do to a borrowed
+                    // buffer).
                     move_block<true>(dfb_out_o, dfb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
