@@ -30,6 +30,7 @@ never attended and get overwritten next iteration).
 
 TP (P150x4) only, B=1, greedy (temperature==0).
 """
+
 import os
 import time
 
@@ -92,10 +93,11 @@ class SpeculativeDecoder:
             f"spec feed contract mismatch: model spec_postnorm={self.spec_postnorm} but "
             f"mtp spec_postnorm={getattr(model.mtp, 'spec_postnorm', False)}"
         )
+        # The caller's page table as a flat python list, so every page table this class builds from
+        # it is plain ints (the torch tensor itself is still what model.py's trace capture takes).
+        self._pt_row = [int(b) for b in page_table_torch.reshape(-1).tolist()]
         # The MTP layer keeps its own paged KV cache with its own (identity) page table.
-        self.mtp_pt = ttnn.from_torch(
-            page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh
-        )
+        self.mtp_pt = ttnn.Tensor(self._pt_row, [1, len(self._pt_row)], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, self.mesh)
         self._gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
         for gdn in self._gdn:
             # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
@@ -135,7 +137,7 @@ class SpeculativeDecoder:
         # It must not be one of the sequence's own blocks: stealing the last one caps the sequence at
         # (nb - 1) * block_size, which the 256k demo case overruns by 36 tokens. The page table stays
         # nb wide and identity, so nothing but the pad rows below ever names this block.
-        self._reseed_scratch_block = int(page_table_torch.shape[-1])
+        self._reseed_scratch_block = len(self._pt_row)
         self._reseed_block_size = 0  # filled in generate(), once the KV caches exist
         self.total_drafted = 0
         self.total_accepted = 0  # accepted DRAFT tokens (excludes the mandatory correction/bonus)
@@ -170,13 +172,7 @@ class SpeculativeDecoder:
 
         Returns the K drafted ids; drafts[j] is the candidate for position p+2+j.
         """
-        tok_tt = ttnn.from_torch(
-            torch.tensor([[int(pending_tok)]], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-        )
+        tok_tt = ttnn.Tensor([int(pending_tok)], [1, 1], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh)
         if self._draft_traced:
             # TRACED chain: one execute_trace per leg, nothing per-leg on the host. See
             # Qwen36MTP.init_draft_window for why (an eager leg is ~19 ms of host against 0.5 ms of
@@ -247,8 +243,10 @@ class SpeculativeDecoder:
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int. Reads only the device-0 replica: the logits are
         replicated across the TP mesh, so a ConcatMeshToTensor would move 4x the bytes for nothing."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
-        return int(t.reshape(-1)[0])
+        flat = ttnn.get_device_tensors(id_tt)[0].to_list()
+        while isinstance(flat, list):
+            flat = flat[0]
+        return int(flat)
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance
@@ -276,11 +274,8 @@ class SpeculativeDecoder:
             return
         bucket = hidden.shape[-2]
         # Slot i is fused with the token at i+1 (shift pairing); 0-pad past the prompt.
-        toks = torch.zeros(1, bucket, dtype=torch.int32)
         n = min(bucket, T - 1 - chunk_start)
-        toks[0, :n] = torch.tensor(
-            [int(t) for t in prompt_ids[chunk_start + 1 : chunk_start + 1 + n]], dtype=torch.int32
-        )
+        toks = [int(t) for t in prompt_ids[chunk_start + 1 : chunk_start + 1 + n]] + [0] * (bucket - n)
         self.model.ttnn_mtp_prefill_forward(hidden, toks, chunk_start, self.page_table)
 
     def _warm_mtp_last(self, last_hidden, first_tok, slot):
@@ -345,25 +340,27 @@ class SpeculativeDecoder:
             return
         T = vhidden.shape[-2]
         assert m <= T, f"reseed {m} slots into a {T}-row batch"
-        mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
-        tok = torch.zeros(T, 1, dtype=torch.int32)
-        tok[:m, 0] = torch.tensor([int(t) for t in tokens[:m]], dtype=torch.int32)
-        pos = torch.zeros(T, dtype=torch.int32)
-        pos[:m] = torch.arange(slot0, slot0 + m, dtype=torch.int32)
-        pt = self.page_table.repeat(T, 1).contiguous()
-        pt[m:, :] = self._reseed_scratch_block
-        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos)
+        mesh = self.mesh
+        nb = len(self._pt_row)
+        rm = ttnn.ROW_MAJOR_LAYOUT
+        # Flat row-major lists: the real rows alias the sequence's own blocks, the padding rows aim
+        # their whole page-table row at the scratch block and sit at position 0.
+        tok = [int(t) for t in tokens[:m]] + [0] * (T - m)
+        pos = list(range(slot0, slot0 + m)) + [0] * (T - m)
+        pt = self._pt_row * m + [self._reseed_scratch_block] * (nb * (T - m))
+        # cos/sin are gathered ON DEVICE off the resident rope table (no host trig, no upload).
+        cos, sin = self.model._rope_tp_cos_sin_decode_rows(pos)
         if self._reseed_traced:
             # Same inputs, one execute_trace instead of ~35 ms of host enqueue.
-            self.mtp.stage_reseed_window(tok, pos, pt, cos_t, sin_t)
+            self.mtp.stage_reseed_window(tok, pos, pt, cos, sin)
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
             self.mtp.reseed_replay()
             self.mtp_extra_steps += 1
             return
-        tok_tt = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
-        pos_tt = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
-        pt_tt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
-        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
-        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+        tok_tt = ttnn.Tensor(tok, [T, 1], ttnn.uint32, rm, mesh)
+        pos_tt = ttnn.Tensor(pos, [T], ttnn.int32, rm, mesh)
+        pt_tt = ttnn.Tensor(pt, [T, nb], ttnn.int32, rm, mesh)
         _, h_next = self.mtp.forward_decode(
             vhidden, tok_tt, pos_tt, cos, sin, pt_tt, need_logits=False, alias_kv_write=True
         )
@@ -503,16 +500,17 @@ class SpeculativeDecoder:
         ttnn.deallocate(row)
 
     def _seed(self, first, p):
-        """Consume the prompt's first predicted token at position p -> (logits, hidden).
+        """Consume the prompt's first predicted token at position p -> (next token id, hidden).
 
         One eager recurrent verify forward. Runs once per request, so it is not on the hot path.
-        The hidden is the persistent anchor buffer (_anchor_warmup), not a fresh clone.
+        The greedy pick runs on device (argmax=True), so only the winning index comes back rather
+        than the vocab row. The hidden is the persistent anchor buffer, not a fresh clone.
         """
-        clogits, chidden = self.model.verify_forward([first], p + 1, self.page_table, gdn_recurrent=True)
+        tok, chidden = self.model.verify_forward([first], p + 1, self.page_table, gdn_recurrent=True, argmax=True)
         self._anchor_warmup(self.K + 1, chidden.shape[-1], chidden.dtype)
         self._set_anchor(chidden, 0)
         ttnn.deallocate(chidden)
-        return clogits[0], self._hp_buf
+        return tok, self._hp_buf
 
     def _phase(self, name, fn):
         """Run fn, accumulating its synchronize-bracketed wall time under `name` when profiling."""
@@ -651,8 +649,8 @@ class SpeculativeDecoder:
                 ttnn.deallocate(feed)
 
         logits_dev = model.prefill_for_spec(prompt, self.page_table, T, _on_chunk)
-        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
-        first = int(lt.reshape(-1)[: self.vocab].float().argmax())
+        # Greedy pick on device (ttnn.argmax over the replicated row); only the index crosses the bus.
+        first = model._argmax_device(logits_dev)
         out = [first]
 
         # Slot T-1 pairs the base hidden at T-1 with `first`, which only exists now.
@@ -691,7 +689,7 @@ class SpeculativeDecoder:
         p = T
         # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
         # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
-        pending = int(Lp.argmax())
+        pending = Lp  # _seed already argmaxed on device
         # Draft warmup: the logits-producing drafter step (head norm, fp32 LM head, untilize, argmax
         # — plus V3's mesh_partition) has not run yet, and its first real run is AFTER the capture
         # below. Compile it now; its one KV write (slot p from (H_p, pending)) is what draft step 0
@@ -741,13 +739,17 @@ class SpeculativeDecoder:
             # cannot touch the sequence, then compile + capture against the verify trace's own
             # persistent rows buffer (a fixed address the replay re-reads each iteration).
             _T = self.K + 1
-            _pt = torch.full((_T, self.page_table.shape[-1]), self._reseed_scratch_block, dtype=torch.int32)
+            _zeros = [0] * _T
+            _cos, _sin = self.model._rope_tp_cos_sin_decode_rows(_zeros)
             self.mtp.stage_reseed_window(
-                torch.zeros(_T, 1, dtype=torch.int32),
-                torch.zeros(_T, dtype=torch.int32),
-                _pt,
-                *self.model._rope_tp_cos_sin_decode_torch(torch.zeros(_T, dtype=torch.int32)),
+                _zeros,
+                _zeros,
+                [self._reseed_scratch_block] * (_T * len(self._pt_row)),
+                _cos,
+                _sin,
             )
+            ttnn.deallocate(_cos)
+            ttnn.deallocate(_sin)
             self.mtp.compile_reseed_window(model._vfy_rows_out)
             self.mtp.release_reseed_window()
             self.mtp.capture_reseed_window(model._vfy_rows_out)

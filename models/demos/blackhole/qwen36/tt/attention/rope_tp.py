@@ -501,15 +501,20 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions, full_head_d
     per-user rows are fetched with ttnn.embedding, so the only host->device traffic per step is
     the [B] index vector. A position past the current table end (M-RoPE rope_delta can push
     rope_pos beyond max_seq_len) grows the table rather than dropping to host trig.
+
+    ``positions`` is a [B] torch tensor or any sequence of ints; a sequence keeps the Wormhole path
+    torch-free end to end (the traced draft window uses it).
     """
     W = full_head_dim or rope_dim
+    pos_i = [int(p) for p in (positions.reshape(-1).tolist() if isinstance(positions, torch.Tensor) else positions)]
     if is_blackhole():
-        # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec).
+        # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec). Positions are
+        # integers, so rebuilding the float row from the int list is bit-identical to .float().
         inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
-        pos = positions.float()
+        pos = torch.tensor(pos_i, dtype=torch.float32)
         freqs = torch.outer(pos, inv_freq)  # [B, rope_dim/2]
         emb = torch.cat([freqs, freqs], dim=-1)  # [B, rope_dim]
-        B = positions.shape[0]
+        B = len(pos_i)
         cos, sin = emb.cos(), emb.sin()
         if W != rope_dim:
             cos, sin = to_full_width_rot_mats(cos, sin, W, rope_dim, device)
@@ -530,17 +535,10 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions, full_head_d
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
         return cos_tt, sin_tt
-    pos_i = positions.to(torch.int64).reshape(-1)
-    assert int(pos_i.min()) >= 0, f"negative rope position {int(pos_i.min())}"
-    tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, int(pos_i.max()) + 1, theta, full_head_dim=full_head_dim)
-    B = int(positions.shape[0])
-    idx = ttnn.from_torch(
-        pos_i.to(torch.int32).reshape(1, B),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    assert min(pos_i) >= 0, f"negative rope position {min(pos_i)}"
+    tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, max(pos_i) + 1, theta, full_head_dim=full_head_dim)
+    B = len(pos_i)
+    idx = ttnn.Tensor(pos_i, [1, B], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
 
     def _gather(tbl):
         r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, W]
