@@ -644,12 +644,25 @@ template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     detail::check_entry_format(storage.dfb_id, acc);
-#endif
     const uint32_t first = block_idx * storage.num_entries;
+#else
+    (void)acc;
+    (void)block_idx;
+#endif
     return noc_load<thread>(storage, [&](L1Entries pages) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        Noc noc;
         for (uint32_t p = 0; p < pages.count; ++p) {
-            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.entry_bytes);
+            noc.async_read(
+                acc,
+                CoreLocalMem<uint32_t>(pages.addr(p)),
+                pages.entry_bytes,
+                {.page_id = first + p, .offset_bytes = 0},
+                {});
         }
+#else
+        (void)pages;
+#endif
     });
 }
 
@@ -696,12 +709,25 @@ template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     detail::check_entry_format(block.dfb_id, acc);
-#endif
     const uint32_t first = block_idx * block.num_entries;
+#else
+    (void)acc;
+    (void)block_idx;
+#endif
     return noc_store<thread>(std::move(block), [&](L1Entries pages) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        Noc noc;
         for (uint32_t p = 0; p < pages.count; ++p) {
-            noc_async_write(pages.addr(p), acc.get_noc_addr(first + p), pages.entry_bytes);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(pages.addr(p)),
+                acc,
+                pages.entry_bytes,
+                {},
+                {.page_id = first + p, .offset_bytes = 0});
         }
+#else
+        (void)pages;
+#endif
     });
 }
 
@@ -779,7 +805,22 @@ NocAsyncMcastTx<thread, S> noc_load(
 
             {
                 TT_U_ZONE("MCAST-SEND");
-                noc_async_write_multicast(pages.base, mcast.get_noc_addr(pages.base), pages.total_bytes(), num_dests);
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+                Noc noc;
+                const PhysicalCoord noc_start = noc.get_noc_id() == 1 ? mcast.end : mcast.start;
+                const PhysicalCoord noc_end = noc.get_noc_id() == 1 ? mcast.start : mcast.end;
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(pages.base),
+                    MulticastEndpoint{},
+                    pages.total_bytes(),
+                    num_dests,
+                    {},
+                    {.noc_x_start = noc_start.x,
+                     .noc_y_start = noc_start.y,
+                     .noc_x_end = noc_end.x,
+                     .noc_y_end = noc_end.y,
+                     .addr = pages.base});
+#endif
 
                 Noc().async_writes_flushed();
 
@@ -808,12 +849,25 @@ NocAsyncMcastTx<thread, S> noc_load(
     uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     detail::check_entry_format(storage.dfb_id, acc);
-#endif
     const uint32_t first = block_idx * storage.num_entries;
+#else
+    (void)acc;
+    (void)block_idx;
+#endif
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, [&](L1Entries pages) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        Noc noc;
         for (uint32_t p = 0; p < pages.count; ++p) {
-            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.entry_bytes);
+            noc.async_read(
+                acc,
+                CoreLocalMem<uint32_t>(pages.addr(p)),
+                pages.entry_bytes,
+                {.page_id = first + p, .offset_bytes = 0},
+                {});
         }
+#else
+        (void)pages;
+#endif
     });
 }
 
@@ -1000,8 +1054,12 @@ NocAsyncReadCoreTx<thread, D, S> noc_core_read(
         buffer(src.dfb_id).wait_front(src.num_entries);
         buffer(dst.dfb_id).reserve_back(dst.num_entries);
         const uint32_t bytes = dfb_entry_bytes(dst.dfb_id);
-        const uint64_t from = coord.get_noc_addr(buffer(src.dfb_id).get_read_ptr() + byte_offset);
-        noc_async_read(from, buffer(dst.dfb_id).get_write_ptr(), bytes * dst.num_entries);
+        Noc().async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(buffer(dst.dfb_id).get_write_ptr()),
+            bytes * dst.num_entries,
+            {.noc_x = coord.x, .noc_y = coord.y, .addr = buffer(src.dfb_id).get_read_ptr() + byte_offset},
+            {});
     }
 #else
     (void)coord;
@@ -1020,8 +1078,12 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
         buffer(dst.dfb_id).reserve_back(dst.num_entries);
         if (write_predicate) {
             const uint32_t bytes = dfb_entry_bytes(dst.dfb_id);
-            const uint64_t to = coord.get_noc_addr(buffer(dst.dfb_id).get_write_ptr() + byte_offset);
-            noc_async_write(buffer(src.dfb_id).get_read_ptr(), to, bytes * src.num_entries);
+            Noc().async_write(
+                CoreLocalMem<uint32_t>(buffer(src.dfb_id).get_read_ptr()),
+                UnicastEndpoint{},
+                bytes * src.num_entries,
+                {},
+                {.noc_x = coord.x, .noc_y = coord.y, .addr = buffer(dst.dfb_id).get_write_ptr() + byte_offset});
 
             Semaphore<thread> semaphore(kCopyArrivedSem<thread>);
             semaphore.inc_remote(coord);
@@ -1050,19 +1112,40 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
 
         if (write_predicate) {
             const uint32_t bytes = dfb_entry_bytes(dst.dfb_id);
-            const uint64_t to = mcast.get_noc_addr(buffer(dst.dfb_id).get_write_ptr() + byte_offset);
-
             const bool same_local_addr = buffer(dst.dfb_id).get_write_ptr() == buffer(src.dfb_id).get_read_ptr();
             const bool loopback = !same_local_addr && mcast.contains(PhysicalCoord::this_core());
 
             const uint32_t num_dests =
                 loopback ? mcast.volume() : mcast.num_dests_excluding(PhysicalCoord::this_core());
 
+            Noc noc;
+            const PhysicalCoord noc_start = noc.get_noc_id() == 1 ? mcast.end : mcast.start;
+            const PhysicalCoord noc_end = noc.get_noc_id() == 1 ? mcast.start : mcast.end;
+
             if (loopback) {
-                noc_async_write_multicast_loopback_src(
-                    buffer(src.dfb_id).get_read_ptr(), to, bytes * src.num_entries, num_dests);
+                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                    CoreLocalMem<uint32_t>(buffer(src.dfb_id).get_read_ptr()),
+                    MulticastEndpoint{},
+                    bytes * src.num_entries,
+                    num_dests,
+                    {},
+                    {.noc_x_start = noc_start.x,
+                     .noc_y_start = noc_start.y,
+                     .noc_x_end = noc_end.x,
+                     .noc_y_end = noc_end.y,
+                     .addr = buffer(dst.dfb_id).get_write_ptr() + byte_offset});
             } else {
-                noc_async_write_multicast(buffer(src.dfb_id).get_read_ptr(), to, bytes * src.num_entries, num_dests);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(buffer(src.dfb_id).get_read_ptr()),
+                    MulticastEndpoint{},
+                    bytes * src.num_entries,
+                    num_dests,
+                    {},
+                    {.noc_x_start = noc_start.x,
+                     .noc_y_start = noc_start.y,
+                     .noc_x_end = noc_end.x,
+                     .noc_y_end = noc_end.y,
+                     .addr = buffer(dst.dfb_id).get_write_ptr() + byte_offset});
             }
 
             Semaphore<thread> semaphore(kCopyArrivedSem<thread>);

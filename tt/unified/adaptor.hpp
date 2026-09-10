@@ -41,10 +41,12 @@
 #include "api/tensor/tensor_accessor_args.h"
 #else
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/tensor_accessor_args.h"
+#include "api/tensor/noc_traits.h"
 #endif
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
