@@ -169,8 +169,7 @@ def table(title, formula, data, field, fmt):
         for stage_key, _ in STAGES:
             v = data[key].get(stage_key, {}).get(field)
             cells.append(("-" if v is None else format(v, fmt)))
-        print("  " + str(size).rjust(bw_col) + str(cores).rjust(7)
-              + "".join(c.rjust(w) for c, w in zip(cells, widths)))
+        print("  " + str(size).rjust(bw_col) + str(cores).rjust(7) + "".join(c.rjust(w) for c, w in zip(cells, widths)))
 
 
 def main(argv):
