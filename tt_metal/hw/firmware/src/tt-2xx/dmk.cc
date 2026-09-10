@@ -27,6 +27,7 @@
 // Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
 thread_local uint32_t num_sw_threads __attribute__((used));
 thread_local uint32_t my_thread_id __attribute__((used));
+thread_local uint32_t my_barrier_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
@@ -98,6 +99,12 @@ uint32_t _start() {
     // Setup after the go signal so the previous kernel has completed.
     num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
     my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+    // Barrier slot for this kernel. thread_0_hartid is the lowest hart running this same kernel
+    // text, so every thread of a kernel derives the same value and two co-resident kernels derive
+    // different ones — exactly the per-kernel identity sync_threads() needs to keep its rendezvous
+    // separate. This reuses the identity the thread-0 election above already relies on, rather
+    // than spending launch-message space on it (kernel_config_msg_t has no room to spare).
+    my_barrier_id = thread_0_hartid;
 
     // Paint stack after all thread_local writes and CRT init are done.
     mark_stack_usage();
