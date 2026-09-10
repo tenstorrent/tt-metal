@@ -52,6 +52,10 @@ def _precision_from_env() -> PrecisionPolicy:
     name = os.environ.get("KIMI_PRECISION", "").lower()
     if name in ("bfp4", "bfp4_experts"):
         pol.experts = ttnn.bfloat4_b
+    if (
+        os.environ.get("KIMI_KV_BFP8") == "1"
+    ):  # datatype sweep (stage 08) selection, written into serve.env by the manifest
+        pol.kv_cache = ttnn.bfloat8_b
     return pol
 
 
@@ -122,6 +126,11 @@ class KimiLinearForCausalLM(Generator):
         snapshot = _resolve_snapshot(hf_config)
         cfg = KimiLinearConfig.from_snapshot(snapshot)
         cfg.validate()
+        # vLLM's ModelConfig.get_num_layers_by_block_type (hybrid path, used by the plugin's KV-cache allocation) reads
+        # hf_config.layer_types; Kimi's config only carries linear_attn_config.{kda_layers,full_attn_layers}. The loader
+        # hands us model_config.hf_config itself, so annotate it (Qwen3-Next vocabulary) before the KV caches are sized.
+        if getattr(hf_config, "layer_types", None) is None:
+            hf_config.layer_types = list(cfg.layer_types)  # "linear_attention" (KDA) / "full_attention" (MLA)
         cache_root = os.environ.get("TT_CACHE_PATH") or os.environ.get("TT_DIT_CACHE_DIR")
         cache_path = Path(cache_root) / "kimi_linear_48b" / f"tp{tuple(mesh_device.shape)[1]}" if cache_root else None
         args = KimiModelArgs(mesh_device, cfg, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
