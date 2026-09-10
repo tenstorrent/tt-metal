@@ -165,7 +165,13 @@ D2dSyncConsumer::Frame D2dSyncConsumer::frame_of(uint32_t dev) const {
         return f;
     }
     const LocalClockFit& fit = it->second.fit;
-    const DeviceClock& clk = ctx_.devices[dev].clock;
+    // Anchor on the ETH clock: the local fit's wall domain is the eth core's wall clock (the sync kernels run on eth
+    // cores), so refclk_at_anchor and period_ns must be taken against the eth anchor, not the worker anchor -- the two
+    // tiles keep different wall totals (per-card duty cycle), and mixing them was a ~hours domain error.
+    const DeviceClock& clk = ctx_.devices[dev].eth_clock;
+    if (clk.frequency_ghz <= 0.0) {
+        return f;  // no eth anchor: cannot place this chip's refclk on the host timeline
+    }
     const double A = static_cast<double>(clk.anchor_ticks);
     double ksum = 0.0;
     size_t nk = 0;
@@ -215,7 +221,10 @@ void D2dSyncConsumer::publish_all(bool final) {
     if (!fr.ok) {
         return;
     }
-    const DeviceClock& rclk = ctx_.devices[root].clock;
+    const DeviceClock& rclk_eth = ctx_.devices[root].eth_clock;
+    if (rclk_eth.frequency_ghz <= 0.0) {
+        return;  // root has no eth anchor: nothing to place the fleet timeline against
+    }
 
     // Compose each device's refclk onto the root's along the solved-link tree, so a chip with no DIRECT link to the
     // root still lands on the fleet timeline through its neighbours. A link solves receiver = sender*(1+rate) +
@@ -259,7 +268,6 @@ void D2dSyncConsumer::publish_all(bool final) {
         if (!fd.ok) {
             continue;
         }
-        const DeviceClock& dclk = ctx_.devices[dev].clock;
         // The correction is keyed by HOST TIME, not wall ticks: eth and worker tiles keep different wall-clock
         // totals (per-card duty cycle), so map each segment's eth wall-tick bounds to host ns via the eth anchor.
         // A worker zone then looks the correction up by its own base host ns and gets the cross-chip shift.
@@ -271,30 +279,36 @@ void D2dSyncConsumer::publish_all(bool final) {
             return static_cast<double>(eclk.anchor_host_ns) +
                    (eth_tick - static_cast<double>(eclk.anchor_ticks)) / eclk.frequency_ghz;
         };
-        const double hz_d = static_cast<double>(baked_hz(dclk));
-        const double A_d = static_cast<double>(dclk.anchor_ticks);
-        // Host anchors differ by a small amount (ms): keep it in integers, then double.
-        const double dH = static_cast<double>(rclk.anchor_host_ns - dclk.anchor_host_ns);
-        // This chip's refclk onto the root's, from the composed transform (identity for the root itself); a chip no
-        // link path reaches keeps its own anchor and the local term alone.
+        const double eth_hz = eclk.frequency_ghz;  // eth wall ticks per ns
+        // This chip's refclk onto the root's, from the composed transform (identity for the root). The correction is
+        // ABSOLUTE: it brings this chip's zones onto the root's timeline, which cancels the chip's static host-anchor
+        // error (the demo's point). What it does NOT carry is the boot-random refclk COUNTER offset: root_refclk(T) -
+        // fr.refclk_at_anchor is the root's refclk ELAPSED since the root's anchor, so xf.shift and the ~1e13 counter
+        // values cancel. Both chips' host DeviceClocks share one host reference (steady_clock, one process), so a
+        // common extrapolation error in fr.refclk_at_anchor is common-mode across chips and drops out of any
+        // cross-chip comparison; what survives is each chip's own anchor error + the crystal rate drift (~us).
         const auto xf = to_root.find(dev);
         const bool on_root = xf != to_root.end() && xf->second.ok;
         const double xf_scale = on_root ? xf->second.scale : 1.0;
         const double xf_shift = on_root ? xf->second.shift : 0.0;
-        // The corrected host time of wall tick T, relative to this chip's own anchor host time (so the frame stays
-        // small): (root_refclk(R_d(T)) - R_r(A_r)) * P_r + (H_r - H_d) on the root timeline; else its own refclk frame.
-        const auto corrected_rel = [&](const LocalClockFit::Accum& b, double T) -> double {
-            const double R = b.refclk_of_wall(T);
-            if (on_root) {
-                return (xf_scale * R + xf_shift - fr.refclk_at_anchor) * fr.period_ns + dH;
-            }
-            return (R - fd.refclk_at_anchor) * fd.period_ns;
+        // Work in this chip's own eth-anchor frame so magnitudes stay small (steady_clock ns and refclk counters are
+        // ~1e13-1e15). dH_eth: the two chips' eth host anchors differ by ~ms (booted at different instants).
+        const double dH_eth = static_cast<double>(rclk_eth.anchor_host_ns - eclk.anchor_host_ns);
+        const double eth_anchor = static_cast<double>(eclk.anchor_ticks);
+        // LINKED: root-timeline host ns of instant (refclk R, eth wall T) minus this chip's own eth-clock host ns,
+        // both in the chip's eth-anchor frame. The counter offset has cancelled; the anchor error and rate drift stay.
+        const auto link_corr = [&](double R, double T) -> double {
+            const double root_refclk = xf_scale * R + xf_shift;
+            const double h_link = dH_eth + (root_refclk - fr.refclk_at_anchor) * fr.period_ns;
+            const double h_own = (T - eth_anchor) / eth_hz;
+            return h_link - h_own;
         };
-        const auto base_rel = [&](double T) -> double { return (T - A_d) * 1e9 / hz_d; };
-        // The LOCAL-only correction (this chip's own-anchor + local-AICLK term, no cross-chip link), for the
-        // local-vs-linked plots. It is the on_root=false branch of corrected_rel.
-        const auto local_rel = [&](const LocalClockFit::Accum& b, double T) -> double {
-            return (b.refclk_of_wall(T) - fd.refclk_at_anchor) * fd.period_ns;
+        // LOCAL: this chip's OWN refclk placing on its OWN host timeline (no cross-chip link) -- corrects only its own
+        // AICLK/DVFS drift relative to the DVFS-immune refclk. error = linked - local is then the pure cross-chip term.
+        const auto local_corr = [&](double R, double T) -> double {
+            const double h_local = (R - fd.refclk_at_anchor) * fd.period_ns;
+            const double h_own = (T - eth_anchor) / eth_hz;
+            return h_local - h_own;
         };
         std::vector<SyncSegment> segs, local_segs;
         segs.reserve(st.fit.buckets.size());
@@ -310,16 +324,16 @@ void D2dSyncConsumer::publish_all(bool final) {
             if (!(T_hi > T_lo)) {
                 continue;
             }
-            const double d_lo = corrected_rel(b, T_lo) - base_rel(T_lo);
-            const double d_hi = corrected_rel(b, T_hi) - base_rel(T_hi);
+            const double d_lo = link_corr(r_lo, T_lo);
+            const double d_hi = link_corr(r_hi, T_hi);
             const double H_lo = to_host(T_lo), H_hi = to_host(T_hi);
             segs.push_back(SyncSegment{
                 .ns_lo = static_cast<int64_t>(H_lo),
                 .ns_hi = static_cast<int64_t>(H_hi),
                 .delta_ns_lo = d_lo,
                 .slope = (d_hi - d_lo) / (H_hi - H_lo)});
-            const double l_lo = local_rel(b, T_lo) - base_rel(T_lo);
-            const double l_hi = local_rel(b, T_hi) - base_rel(T_hi);
+            const double l_lo = local_corr(r_lo, T_lo);
+            const double l_hi = local_corr(r_hi, T_hi);
             local_segs.push_back(SyncSegment{
                 .ns_lo = static_cast<int64_t>(H_lo),
                 .ns_hi = static_cast<int64_t>(H_hi),

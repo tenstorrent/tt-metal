@@ -99,6 +99,9 @@ int main() {
         d.clock.frequency_ghz = kF0 * 1e-9;
         d.clock.anchor_ticks = static_cast<uint64_t>(std::llround(wall(c, tau_anchor[c])));
         d.clock.anchor_host_ns = static_cast<int64_t>(std::llround(host_ns(tau_anchor[c]) + kAnchorErr[c]));
+        // The truth model uses one wall() for both tiles, so the eth clock (which the correction is built from)
+        // carries the same anchor and rate as the worker clock, including this chip's static host-anchor error.
+        d.eth_clock = d.clock;
         ctx.devices.push_back(d);
     }
     // Links: (0 e0 -> 1 e0) and (1 e1 -> 2 e0). Chip 1 receives on e0, sends on e1.
@@ -141,15 +144,18 @@ int main() {
         SyncCorrections::published(2));
 
     // Record::host_time, reproduced: the baked hz/offset exactly as record_consts bakes them, plus the term.
-    const auto record_host_ns = [&](int c, double T) {
+    const auto base_ns = [&](int c, double T) -> int64_t {
         const DeviceClock& k = ctx.devices[c].clock;
         const uint32_t hz = static_cast<uint32_t>(std::llround(k.frequency_ghz * 1e9));
         const int64_t offset =
             std::llround(static_cast<double>(k.anchor_host_ns) * (hz * 1e-9)) - static_cast<int64_t>(k.anchor_ticks);
         const uint64_t ticks = static_cast<uint64_t>(std::llround(T));
         const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset);
-        const int64_t base = static_cast<int64_t>(cycles * 1e9 / hz);
-        return static_cast<double>(base + SyncCorrections::lookup_ns(static_cast<uint32_t>(c), ticks));
+        return static_cast<int64_t>(cycles * 1e9 / hz);
+    };
+    const auto record_host_ns = [&](int c, double T) {
+        const int64_t base = base_ns(c, T);
+        return static_cast<double>(base + SyncCorrections::lookup_ns(static_cast<uint32_t>(c), base));
     };
     char what[112];
     for (double tau : {0.050, 0.150, 0.280}) {
@@ -174,7 +180,7 @@ int main() {
     }
     check_near(
         "(d) chip2 term ~ -anchor error (proves 2-hop composition ran)",
-        static_cast<double>(SyncCorrections::lookup_ns(2, static_cast<uint64_t>(std::llround(wall(2, 0.5))))),
+        static_cast<double>(SyncCorrections::lookup_ns(2, base_ns(2, wall(2, 0.5)))),
         -kAnchorErr[2],
         400.0);
     if (SyncCorrections::published(2) == 0) {
