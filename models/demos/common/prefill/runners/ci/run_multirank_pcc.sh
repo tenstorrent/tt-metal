@@ -19,6 +19,14 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
+# Perf mode (B4). Default off, so every existing caller keeps today's PCC-gated behaviour.
+# SKIP_PCC=1 stops the producer reading KV back, so the run is not PCC-comparable -- that is the
+# point: the same workload timed without the readback, the way MiniMax splits its two legs.
+SKIP_PCC="${PREFILL_SKIP_PCC:-0}"
+EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
+PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
+CHECK_PCC=1
+[ "${SKIP_PCC}" = 1 ] && CHECK_PCC=0
 RUNNER_ENV=""
 PRODUCER_ENV=""
 TP_SHARD_KV_DEFAULT=0
@@ -252,7 +260,7 @@ set +e
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC=1; \
+    export PREFILL_PRODUCER_CHECK_PCC="${CHECK_PCC}"; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
@@ -273,7 +281,36 @@ if [ "${PROD_RC}" -eq 0 ]; then
   fi
 fi
 
+TPS_GATE_RC=0
+if [ "${SKIP_PCC}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+  # Whole-sequence figure from the producer's own summary line (total tokens / wall seconds).
+  # `|| true`: under set -e a grep that matches nothing would abort the script here, losing the
+  # "measured nothing" diagnostic below -- which is the case this gate exists to report.
+  TPS=$(grep -rhoE 'throughput=[0-9]+ tok/s' "${RANKLOGS}" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)
+  if [ -z "${TPS}" ]; then
+    echo "TPS GATE FAIL: no 'throughput=<n> tok/s' line under ${RANKLOGS}; the run measured nothing" >&2
+    TPS_GATE_RC=1
+  elif [ -z "${EXPECTED_TPS}" ]; then
+    echo "TPS: ${TPS} tok/s (no PREFILL_EXPECTED_TPS set -- reporting, not gating; cut the baseline from this)"
+  else
+    python3 - "${TPS}" "${EXPECTED_TPS}" "${PERF_MARGIN}" <<'TPSPY' || TPS_GATE_RC=$?
+import sys
+
+tps, expected, margin = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
+lo, hi = expected * (1 - margin), expected * (1 + margin)
+print(f"TPS GATE: {tps:.0f} tok/s vs {expected:.0f} +/- {margin * 100:.0f}% [{lo:.0f}, {hi:.0f}]")
+if not lo <= tps <= hi:
+    print(f"TPS GATE FAIL: {tps:.0f} outside [{lo:.0f}, {hi:.0f}]", file=sys.stderr)
+    sys.exit(1)
+print("TPS GATE PASS")
+TPSPY
+  fi
+fi
+
 PCC_GATE_RC=0
+if [ "${SKIP_PCC}" = 1 ]; then
+  echo "PCC GATE SKIPPED (PREFILL_SKIP_PCC=1): perf leg; its sibling gates correctness"
+else
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
@@ -304,6 +341,7 @@ if bad:
     sys.exit(1)
 print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
 PY
+fi
 
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"
@@ -311,5 +349,8 @@ fi
 if [ "${RUNNER_RC}" -ne 0 ]; then
   echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
   exit "${RUNNER_RC}"
+fi
+if [ "${TPS_GATE_RC}" -ne 0 ]; then
+  exit "${TPS_GATE_RC}"
 fi
 exit "${PCC_GATE_RC}"

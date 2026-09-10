@@ -108,7 +108,9 @@ else:
 
 
 class MultirankPccHarnessTests(unittest.TestCase):
-    def run_harness(self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None):
+    def run_harness(
+        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+    ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -156,6 +158,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "TEST_VERDICT": verdict,
             "TEST_RUNNER_RC": str(runner_rc),
         }
+        env.update(extra_env or {})
         command = ["bash", str(harness), model]
         if config is not None:
             command.append(config)
@@ -232,6 +235,18 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(
                     self.one_record(records, "producer")["env"]["PREFILL_MAX_SEQ_LEN"], str(expected_length)
                 )
+
+    def test_perf_gate_fails_when_no_throughput_was_measured(self):
+        result, _ = self.run_harness("mistral4", extra_env={"PREFILL_SKIP_PCC": "1", "PREFILL_EXPECTED_TPS": "17000"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        self.assertIn("PCC GATE SKIPPED", result.stdout + result.stderr)
+
+    def test_perf_knobs_absent_leaves_pcc_gating_untouched(self):
+        result, _ = self.run_harness("mistral4")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("TPS GATE", result.stdout + result.stderr)
+        self.assertNotIn("PCC GATE SKIPPED", result.stdout + result.stderr)
 
     def test_mistral_rejects_sc4(self):
         result, records = self.run_harness("mistral4", config="sc4")
