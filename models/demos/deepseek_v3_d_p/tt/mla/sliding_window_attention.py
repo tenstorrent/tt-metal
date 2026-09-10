@@ -187,6 +187,7 @@ class TtSWA(LightweightModule):
     def _build_masks(self, seq_local: int):
         """Both masks over the key layout ``[halo | own rows]``, built here and never touched again."""
         sw = self.sliding_window
+        assert seq_local >= sw, f"seq_local ({seq_local}) must be >= sliding_window ({sw})"
         width = sw + seq_local
 
         ic = self.ops.from_torch(torch.arange(seq_local).float().view(1, 1, seq_local, 1), dtype=ttnn.float32)
@@ -238,7 +239,6 @@ class TtSWA(LightweightModule):
 
         The gather covers the whole chunk because the carry slice needs the global slab."""
         batch, num_heads_local, seq_local, _ = q.shape
-        sw = self.sliding_window
 
         if self.sp_factor > 1:
             gathered = ttnn.experimental.all_gather_async(
