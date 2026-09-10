@@ -113,11 +113,8 @@ def to_torch_chip0(t: ttnn.Tensor, device=None, **kwargs) -> "torch.Tensor":
     ``to_torch`` goes through ``ConcatMeshToTensor``, which pulls the tensor off
     **every** chip in the mesh and then throws all but the first slice away. After a
     TP all-reduce every chip holds the same data, so for a read-only host peek chip 0
-    is the whole answer and the other reads are pure cost. Measured on N300, the
-    hot-loop reads in the AR decode loop:
-
-        [1,1,1,32] uint32 token   0.38 ms -> 0.17 ms
-        [1,1,1,3072] logits       0.79 ms -> 0.42 ms
+    is the whole answer and the other chips' reads are pure cost — which matters for the
+    per-frame reads in the AR decode loop.
 
     Bit-exact against ``to_torch`` (``torch.equal``), because it is literally the
     same bytes without the second chip's transfer.
@@ -184,7 +181,7 @@ def _int_env(name):
 def _all_gather_maybe_async(tensor, dim, cluster_axis, memory_config, device):
     """ttnn.all_gather, or its async form with pre-created semaphores when enabled."""
     # Default ON: bit-exact (pure data movement), op-count neutral, and strictly faster
-    # per frame. QWEN3_TTS_CCL_ASYNC=0 restores ttnn.all_gather. See PERF_NOTES 3.aa.
+    # per frame. QWEN3_TTS_CCL_ASYNC=0 restores ttnn.all_gather.
     if os.environ.get("QWEN3_TTS_CCL_ASYNC", "1") == "0":
         return ttnn.all_gather(tensor, dim=dim, cluster_axis=cluster_axis, memory_config=memory_config)
     ent = _ccl_semaphores(device)
@@ -193,7 +190,7 @@ def _all_gather_maybe_async(tensor, dim, cluster_axis, memory_config, device):
     bar = ent["barrier"][ent["i_bar"]]
     ent["i_bar"] = (ent["i_bar"] + 1) % 2
     kw = {}
-    # SWEPT, ALL NEGATIVE (PERF_NOTES 3.aa): chunks_per_sync, num_workers_per_link,
+    # SWEPT, ALL NEGATIVE: chunks_per_sync, num_workers_per_link,
     # num_buffers_per_channel, sub_core_grids, L1_SMALL semaphores and
     # use_optimal_ccl_for_llama were each measured over 3 captures and none beat the op's
     # own defaults. The reference's 10/2/2 is Llama-payload tuning and does nothing at
@@ -255,23 +252,23 @@ def tp_all_reduce_2chip(tensor: ttnn.Tensor, device, memory_config=None, out_wid
     """All-reduce across exactly 2 chips using one CCL op instead of two.
 
     ``ttnn.all_reduce`` lowers to reduce_scatter + all_gather, and on N300 both are
-    dominated by fixed fabric setup rather than payload — a 1-tile CP activation pays
-    ~51 us to reduce 64 KB. With two chips we can instead all-gather the two partial
-    sums and add the halves locally: 34 us of CCL plus ~4 us of slice/add.
+    dominated by fixed fabric setup rather than payload at these sizes. With two chips
+    we can instead all-gather the two partial sums and add the halves locally: one CCL
+    op plus a slice/add.
 
-    Two measured details, both worth keeping:
-      * Gather on the last dim. Width is tile-aligned for every CP/Talker activation,
+    Two rules this depends on:
+      * Gather on the LAST dim. Width is tile-aligned for every CP/Talker activation,
         whereas a size-1 outer dim or a 1-2-row height inside a 32-row tile pushes
-        all_gather onto its composite all-broadcast fallback (78 us vs 34 us).
-      * Leave ``num_links`` on auto. Forcing 2 links doubled the gather to 69 us: the
+        all_gather onto its much slower composite all-broadcast fallback.
+      * Leave ``num_links`` on auto. Forcing 2 links makes the gather slower — the
         payload is far too small to amortise a second link's setup.
 
     ``out_width`` narrows the two slices so a DRAM-shard N-pad is dropped HERE instead
     of by a separate unpad slice before the call. A DRAM-sharded matmul pads N up to a
     multiple of TILE*dram_cores (1024 -> 1152 for the CP's o_proj and MLP down), and the
     padded columns are zero because the weight was zero-padded, so discarding them costs
-    nothing and is exact. The slices happen either way, so this removes one op per call
-    per layer -- 150 per CP frame -- for free.
+    nothing and is exact. The slices happen either way, so this removes the separate
+    unpad op per call per layer for free.
     """
     rows, cols = get_mesh_shape(device)
     cluster_axis = 1 if rows == 1 else 0

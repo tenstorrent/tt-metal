@@ -154,9 +154,9 @@ class CodePredictor(LightweightModule):
         #   * Listen / WER check. NOT RUN. Slightly less audio is either faster speech
         #     (harmless) or a dropped word (not), and duration alone cannot distinguish
         #     them.
-        # PERF_NOTES 3.4 is explicit that PCC cannot predict generation length here, and
-        # records a tiny embedding change flipping a render into a 256-frame runaway
-        # while PCC stayed indistinguishable. If generation quality regresses,
+        # PCC cannot predict generation length here: a tiny embedding change once
+        # flipped a render into a 256-frame runaway while PCC stayed indistinguishable.
+        # If generation quality regresses,
         # QWEN3_TTS_CP_FUSED_SDPA=0 is the first thing to try.
         # NOTE: --greedy is NOT a usable gate for this -- pristine HEAD already runs
         # away to the 256-frame cap on the en_long prompt.
@@ -346,8 +346,7 @@ class CodePredictor(LightweightModule):
         # QWEN3_TTS_CP_GU_CORES / _DOWN_CORES override the auto grid (total cores, 1 row).
         # In-model the optimum is 8, NOT the 4 that wins in isolation: gate/up's in0 grid is
         # also the post-attention norm's output grid (see the _ln_mlp_memcfg assert below),
-        # so cutting to 4 cripples that norm and costs more than the matmul saves
-        # (PERF_NOTES 3.ab).
+        # so cutting to 4 cripples that norm and costs more than the matmul saves.
         if self._n300_cp_opt and _k_tiles_gu % 8 == 0 and _n_tiles_gu % 8 == 0:
             _rows_gu, _cols_gu = 1, 8
         _gu_ov = os.environ.get("QWEN3_TTS_CP_GU_CORES", "")
@@ -462,9 +461,9 @@ class CodePredictor(LightweightModule):
             # there): nlp_concat_heads takes its OUTPUT shard spec from its INPUT's, so
             # packing num_heads / o_proj_in0_cores heads per core on the way in makes the
             # concat land exactly in the DRAM-sharded o_proj's in0 spec, and the Reshard
-            # between them disappears. PERF_NOTES 2.5 recorded this as applying to N150
-            # too but never ported; it drops the per-frame Reshards (5 CP layers x 15 CP
-            # invocations) that the N300 path does not run.
+            # between them disappears. This applies to N150 too but was never ported;
+            # it drops the per-frame Reshards (5 CP layers x 15 CP invocations) that the
+            # N300 path does not run.
             _heads_per_shard = 1
             _wo_shard = self._cp_wo_in0_memcfg.shard_spec
             _wo_cores = _wo_shard.grid.num_cores()
@@ -573,7 +572,7 @@ class CodePredictor(LightweightModule):
                 ]
                 _stacked = torch.stack(_per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
                 # bf16 on purpose, NOT an oversight that QWEN3_TTS_BF8_WEIGHTS missed:
-                # bfp8_b here buys exactly nothing (PERF_NOTES 5). This matmul is
+                # bfp8_b here buys exactly nothing. This matmul is
                 # interleaved on 64 cores at M=1 tile and is latency-bound, not
                 # bandwidth-bound -- halving the weight bytes leaves the time unchanged.
                 lw["wqkv_kvgi"] = ttnn.from_torch(
@@ -629,7 +628,8 @@ class CodePredictor(LightweightModule):
         # (the perf report already puts them near DRAM peak), so halving the weight bytes
         # is the only lever with real headroom left -- no program config can beat a
         # bandwidth wall. RMSNorm weights stay bf16 (small, dynamic-range sensitive).
-        # This is an ACCURACY change, hence default off; see PERF_NOTES 2.8.
+        # This is an ACCURACY change: it ships ON, gated by the voice-quality test
+        # (SIM/WER), not by PCC alone. QWEN3_TTS_BF8_WEIGHTS=0 reverts to bf16.
         _ds_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "1") != "0" else ttnn.bfloat16
 
         # DRAM-sharded MLP weights on every SKU. QKV / o_proj DS weights are N150-only.
@@ -705,8 +705,8 @@ class CodePredictor(LightweightModule):
     def _all_reduce(self, t: ttnn.Tensor, fast: bool, out_width: int = None) -> ttnn.Tensor:
         """TP all-reduce. On N300 use the 1-CCL 2-chip form (see mesh_utils).
 
-        Both forms are noisy run to run, so this was picked on medians of 3 captures of
-        the CP decode layer: 429 us with the 2-chip form vs 488 us with ttnn.all_reduce.
+        Both forms are noisy run to run, so the 2-chip form was picked on medians of
+        repeated captures of the CP decode layer, not on a single run.
         """
         from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce, tp_all_reduce_2chip
 
@@ -1397,7 +1397,7 @@ class CodePredictor(LightweightModule):
             # on the shard spec the layer stack already returns, then bridge out once for
             # the lm_head. Same op count as the interleaved route (which paid an S2I on the
             # way IN instead), but the norm parallelises over the hidden dim instead of
-            # landing on one core (PERF_NOTES 3.z).
+            # landing on one core.
             #
             # The `else` below is not dead: it serves the SKUs that never build the sharded
             # RMSNorm configs (_use_sharded_ln is N150 or the N300 CP fast path only), so

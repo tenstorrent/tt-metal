@@ -4,11 +4,6 @@
 
 One command, one report:
 
-    export TT_VISIBLE_DEVICES=1
-    export TT_METAL_CACHE=$HOME/.cache/tt_metal_n150_1
-    export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
-    export MESH_DEVICE=N150
-
     TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) python_env/bin/python3 -m pytest -s -q \\
       models/demos/qwen3_tts/tests/perf/test_qwen3_tts_perf_prefill_single_layer.py
 
