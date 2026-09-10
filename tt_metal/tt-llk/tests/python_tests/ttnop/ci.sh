@@ -97,6 +97,9 @@ if [[ "$METAL" == 1 ]]; then
     metal_env
     DEVICE_JOBS=1
 fi
+if [[ "$CHIP_ARCH" == "quasar" ]]; then
+    DEVICE_JOBS=1
+fi
 
 build_scanner
 cd "$TESTS_ROOT"
@@ -110,7 +113,6 @@ XDIST_ARGS=()
 [[ "$DEVICE_JOBS" -gt 1 ]] && XDIST_ARGS=(-n "$DEVICE_JOBS")
 # Progress comes from supervise.py. These keep pytest from flooding the log.
 QUIET_ARGS=(-p no:sugar -o console_output_style=classic -o log_cli=false --show-capture=no --tb=short)
-
 if [[ "${TTNOP_RANDOM_DELAY_COUNT:-0}" -gt 0 ]]; then
     export TTNOP_DELAYS="$(
         python3 - <<'PY'

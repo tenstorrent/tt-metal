@@ -67,6 +67,10 @@ if [[ "$METAL" == 1 ]]; then
     DEVICE_JOBS=1
 fi
 
+if [[ "$CHIP_ARCH" == "quasar" ]]; then
+    DEVICE_JOBS=1
+fi
+
 # Split this case's variant plan across the cores (8 unless --device-jobs).
 XDIST_ARGS=()
 [[ "$DEVICE_JOBS" -gt 1 ]] && XDIST_ARGS=(-n "$DEVICE_JOBS" --dist each)
