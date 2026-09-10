@@ -1122,6 +1122,35 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
+# Retile with an explicit multi-range sub_core_grids. split_blocks_for_tilize picks the full and
+# cliff cores by walking available_grid, so the per-core runtime args must be handed out in that same
+# order. Iterating the sorted CoreRangeSet instead permutes them whenever the grid spans more than one
+# range AND the split has a cliff core -- the "two_ranges_with_cliff" case below is the regression
+# guard for that (it fails without the available_grid enumeration in the retile factory). The 32x32 ->
+# 16x32 shapes here run on Wormhole, so no tiny-tile skip is needed.
+@pytest.mark.parametrize(
+    "tensor_shape, grid_ranges",
+    [
+        # 9 tile-rows over 8 cores -> a 1-row cliff core; the multi-range grid is where the split
+        # order and the sorted-set order diverge.
+        pytest.param([1, 1, 288, 64], [((0, 0), (3, 0)), ((0, 1), (3, 1))], id="two_ranges_with_cliff"),
+        # Controls: same eight cores as one rectangle (with cliff), and two ranges without a cliff.
+        pytest.param([1, 1, 288, 64], [((0, 0), (3, 1))], id="one_rectangle_with_cliff"),
+        pytest.param([1, 1, 256, 64], [((0, 0), (3, 0)), ((0, 1), (3, 1))], id="two_ranges_no_cliff"),
+    ],
+)
+def test_tilize_retile_sub_core_grids(device, tensor_shape, grid_ranges):
+    torch.manual_seed(0)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*lo), ttnn.CoreCoord(*hi)) for (lo, hi) in grid_ranges})
+    torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([32, 32])
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile([16, 32]), sub_core_grids=grid)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
 # Tilize with simultaneous tile-shape and dtype change (the retile path).
 # The packer destination format must be reconfigured to match the output CB before
 # the tilize phase; without it the dtype conversion is silently skipped and the
