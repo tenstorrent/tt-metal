@@ -219,8 +219,15 @@ inline void tanh_init() {
         // Max abs error 0.0563, against 0.1447 for the previous 0.90625 / 0.09375+0.8125
         // table, whose peak sat at x = 1.0 and exceeded the unary sweep's default 5% rtol.
         //
-        // Derivation, rejected alternatives and the coefficient byte encoding are in
-        // APPROX_TANH_RETUNE.md; refit with approx_tanh_remez_fit.py.
+        // Coefficients are the SFPLUT FP8 byte -- S1 E3 M4, exponent negated, 0xFF meaning
+        // 0.0 -- packed as imm16 (A << 8) | B: LReg0 0x1AFF (was 0x1DFF), LReg1 0x3814
+        // (was 0x481A), LReg2 0xFF00. That grid is 1/32 wide around A, and only 16 of its
+        // values keep 1 - A and 2A - 1 representable as well; 0.8125 is the best of those,
+        // 3.1% off the continuous optimum of 0.054625 at A = 0.816218753.
+        //
+        // Rejected: freeing LReg0's bias reaches 0.0409, but SGN_RETAIN computes
+        // sign(x) * (A|x| + B), so a nonzero B puts a jump of 0.0817 across the origin --
+        // larger than the error it buys down, and it would break monotonicity.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
         sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
         sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);

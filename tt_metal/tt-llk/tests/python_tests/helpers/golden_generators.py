@@ -3145,7 +3145,7 @@ class UnarySFPUGolden:
         # (breakpoints at 1.0 and 2.0). Validating it against an accurate tanh would fail by
         # design.
         # These three segments must match tanh_derivative_init's SFPLUT table exactly; it
-        # carries the same coefficients as tanh_init (see APPROX_TANH_RETUNE.md).
+        # carries the same coefficients as tanh_init.
         a = abs(x)
         if a < 1.0:
             t = 0.8125 * a

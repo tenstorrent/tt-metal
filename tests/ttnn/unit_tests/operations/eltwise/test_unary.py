@@ -2029,7 +2029,7 @@ def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data1)
 
     # The approximate path is a 3-segment SFPLUT with a max abs error of 0.0563 (see
-    # APPROX_TANH_RETUNE.md). atol was 0.15, sized for the 0.1447 of the pre-retune
+    # tanh_init in ckernel_sfpu_tanh.h). atol was 0.15, sized for the 0.1447 of the pre-retune
     # table, which left this test unable to notice a regression back to it. 0.08 is the
     # LUT error plus room for output quantization -- bfloat8_b's shared-exponent step
     # over a [-1, 1] block adds ~0.008 on top.

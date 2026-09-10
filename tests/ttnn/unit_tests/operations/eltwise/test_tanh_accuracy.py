@@ -72,13 +72,16 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=atol)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     # PCC and max abs error against torch.tanh over this test's 32-value input,
-    # measured on a Wormhole n150 (2026-09-10) after the approximate-tanh SFPLUT
-    # retune -- see APPROX_TANH_RETUNE.md:
+    # measured on a Wormhole n150 after the approximate-tanh SFPLUT retune:
     #
     #   bfloat16  approx=False  pcc 0.9999898975945355   max|err| 0.003906
     #   bfloat16  approx=True   pcc 0.9992522964571828   max|err| 0.056641
     #   float32   approx=False  pcc 0.9999999999999984   max|err| 0.000000
     #   float32   approx=True   pcc 0.9992540536236625   max|err| 0.055867
+    #
+    # Re-measured on a Blackhole p100a: every max|err| is identical and every PCC
+    # agrees to seven decimals (bfloat16 0.9999899108605391 / 0.9992523141137097,
+    # float32 1.0 / 0.9992540467544825), so the two architectures share this table.
     #
     # The retune lifted approximate mode from pcc 0.9978378297942829 (bfloat16) and
     # 0.9977552960423647 (float32). Its max|err| here is set by x = -0.5, the sampled
