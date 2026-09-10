@@ -1325,27 +1325,49 @@ class DFlashFusedDecoder:
         n_taps = len(d.target_layer_ids)
         assert len(taps) % n_taps == 0, f"taps {len(taps)} not a multiple of {n_taps}"
         groups = [taps[i : i + n_taps] for i in range(0, len(taps), n_taps)]
+        # Only the last ``keep_target`` rows survive into the mirror (the
+        # sliding window), so the concat+project+device->host readback below is
+        # wasted on every row before the window. Skip chunk groups wholly below
+        # it and slice the straddling group at a tile-aligned offset: the
+        # per-session ingest drops from O(prompt) to O(window) readback
+        # (measured 2.4 s -> ~0.2 s at 131k ISL; dominated every REUSE session).
+        # Window math is in RETAINED-row coordinates (groups the hook's
+        # keep_last cap dropped never made it here), matching the tail-slice
+        # into the mirror below, which is likewise relative to what was kept.
+        rvs = []
         seen = 0
-        chunks = []
-        for gi, g in enumerate(groups):
-            avail = int(g[0].shape[2])
-            remaining = n - seen
-            if remaining <= 0:
-                for t in g:
-                    t.deallocate(True)
-                continue
+        for g in groups:
             # never slice past what this forward actually produced; the final
             # chunk is tile-padded so its valid rows are what remains of n
-            rv = min(avail, remaining)
-            cat = ttnn.concat([t[:, :, :rv, :] for t in g], dim=3)
+            rv = min(int(g[0].shape[2]), max(n - seen, 0))
+            rvs.append(rv)
+            seen += rv
+        keep_target = min(self.cap, seen, n)
+        window_start = seen - keep_target
+        g_start = 0
+        chunks = []
+        for g, rv in zip(groups, rvs):
+            if rv <= 0 or g_start + rv <= window_start:
+                # Dead group (past n, or entirely below the window): no row of
+                # it can reach the mirror.
+                for t in g:
+                    t.deallocate(True)
+                g_start += rv
+                continue
+            # Straddling group starts at the window (aligned down to the tile
+            # row so the slice stays tile-friendly; the extra leading rows are
+            # dropped by the tail-slice into the mirror below).
+            lo = max(0, window_start - g_start)
+            lo -= lo % 32
+            cat = ttnn.concat([t[:, :, lo:rv, :] for t in g], dim=3)
             for t in g:
                 t.deallocate(True)
             proj = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
             cat.deallocate(True)
             host = ttnn.to_torch(ttnn.get_device_tensors(proj)[0] if self._tp > 1 else proj)
             proj.deallocate(True)
-            chunks.append(host.reshape(-1, host.shape[-1])[:rv])
-            seen += rv
+            chunks.append(host.reshape(-1, host.shape[-1])[: rv - lo])
+            g_start += rv
         if not chunks:
             # No usable prefill taps reached the drafter (e.g. a chunked or
             # prefix-cache-served prefill whose tap hook produced nothing for
