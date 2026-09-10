@@ -37,7 +37,9 @@ inline void calculate_heaviside(std::uint32_t value) {
         // (torch returns NaN here instead; neither the old nor the new kernel does, and
         // this rewrite does not change that.)
         vFloat r = sfpi::copysgn(vFloat(0.5f), v) + 0.5f;
-        v_if(v == 0.0f) { r = s; }
+        // SFPABS first: SFPSETCC's zero test is a bit-pattern test, so a raw -0.0
+        // (0x80000000) reads as non-zero and takes the sign-bit-set arm as 0.0.
+        v_if(sfpi::abs(v) == 0.0f) { r = s; }
         v_endif;
 
         dst_reg[0] = r;

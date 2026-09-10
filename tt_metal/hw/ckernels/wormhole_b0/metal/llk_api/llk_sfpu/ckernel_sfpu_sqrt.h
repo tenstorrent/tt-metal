@@ -37,7 +37,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
             // If x != inf and x != 0.
-            v_if(infinity_minus_x_bits != 0 && x_bits != 0) { y = y * t; }
+            v_if(infinity_minus_x_bits != 0 && (x_bits << 1) != 0) { y = y * t; }
             // Otherwise, if x = 0, then y = inf; if x = inf, then y = 0.
             v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
             // If x != inf and x != 0.
-            v_if(infinity_minus_x_bits != 0 && x_bits != 0) { y = one_minus_xyy * half_y + y; }
+            v_if(infinity_minus_x_bits != 0 && (x_bits << 1) != 0) { y = one_minus_xyy * half_y + y; }
             // Otherwise, if x = 0, then y = inf; if x = inf, then y = 0.
             v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
@@ -76,7 +76,10 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         }
     }
     if constexpr (!FAST_APPROX) {
-        v_if(x < 0.0F) {
+        // `x < 0.0F` is an SFPSETCC sign-bit test, so it claims -0.0 too, and IEEE wants
+        // sqrt(-0) = -0 / rsqrt(-0) = -inf. Exclude a zero magnitude from the guard: the
+        // shifted-out sign bit is the only difference from a plain sign test.
+        v_if(x < 0.0F && (sfpi::as<sfpi::vInt>(x) << 1) != 0) {
             y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
         }
         v_endif;
