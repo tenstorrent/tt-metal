@@ -121,6 +121,15 @@ RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-laye
     test -d "${OMPI_PREFIX}/bin" || \
     { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_VERSION (${OMPI_VERSION}) likely differs from Dockerfile.tools ARG OMPI_VERSION." >&2; exit 1; }
 
+# UCX links libmpi.so against libibverbs/librdmacm/libnuma. These live in `base`, not in
+# a CI stage: release, mig-client and release-models all derive straight from base, and
+# without them libmpi.so fails to load in exactly the images that ship.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libibverbs1 \
+    librdmacm1 \
+    libnuma1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Auto-detect Python version from Ubuntu version if not explicitly provided
 RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
