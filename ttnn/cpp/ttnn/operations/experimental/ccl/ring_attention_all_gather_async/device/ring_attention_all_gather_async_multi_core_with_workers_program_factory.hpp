@@ -133,6 +133,33 @@ constexpr uint32_t kWriterForwardKernelOffset = 1;
 constexpr uint32_t kReaderBackwardKernelOffset = 2;
 constexpr uint32_t kWriterBackwardKernelOffset = 3;
 
+// Trace-safe metadata block (present only when the caller passes slot_id), appended to the READER's
+// args after the per-input tensor descriptors AND the input/output tensor-accessor address words --
+// one accessor word each per input, consumed by make_tensor_accessor_tuple.
+//   [+0] slot_id buffer address        [+1] kv_actual_isl buffer address
+//   [+2] chunk_local_tiles             [+3] kv_cache_num_layers      [+4] kv_cache_layer_idx
+// The reader recomposes the gathered slot on-device as slot_id[0] * num_layers + layer_idx.
+//
+// Buffer addresses are auto-patched on cache hits by the descriptor framework, but the two LAYER
+// scalars are plain values: a caller that shares ONE cached program across layers (rather than
+// hashing the layer index, as ring_joint_sdpa does) MUST re-patch kReaderMetadataLayerIdxOffset per
+// dispatch, or every layer gathers the slot of whichever layer took the cache miss.
+constexpr uint32_t kReaderAccessorWordsPerInput = 2;
+constexpr uint32_t kReaderMetadataSlotIdOffset = 0;
+constexpr uint32_t kReaderMetadataKvActualOffset = 1;
+constexpr uint32_t kReaderMetadataChunkLocalTilesOffset = 2;
+constexpr uint32_t kReaderMetadataNumLayersOffset = 3;
+constexpr uint32_t kReaderMetadataLayerIdxOffset = 4;
+
+// The metadata block is appended only on the metadata path, and that is exactly the path where every
+// per-input descriptor carries the extra input_cache_batch_extent word (offset 8). So the block always
+// sits behind kMetadataTensorDescriptorFieldCount-wide descriptors -- using the plain
+// kTensorDescriptorFieldCount here lands num_inputs words short, silently re-patching the wrong slot.
+inline uint32_t reader_metadata_base(uint32_t num_inputs) {
+    return kReaderRuntimeArgHeaderCount +
+           num_inputs * (kMetadataTensorDescriptorFieldCount + kReaderAccessorWordsPerInput);
+}
+
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
     return batch_idx * num_heads * Ht * Wt;
 }
@@ -179,17 +206,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
     std::optional<uint32_t> gather_valid_Ht = std::nullopt,
-    // Trace-safe slot select: when set (with input_batch_slice_idx engaged), the readers recompute the
-    // single-slot gather offset from slot = slot_id[0] on-device, so a captured trace replays across
-    // cache slots. slot_id / kv_actual_isl are 1-element uint32 DRAM tensors (were metadata[0] /
-    // metadata[1]); the reader uses slot_id[0] for the gather slot and kv_actual_isl[0] for the gather
-    // extent, and the writer uses kv_actual_isl[0]. std::nullopt => take the host input_batch_base
-    // (default; existing callers unaffected). Both must be supplied together on the metadata path.
+    // Optional trace-safe slot selection. When present, slot_id[0] replaces the host-provided cache slot.
+    // It requires kv_actual_isl because the reader must also derive the valid gather extent on-device.
     std::optional<Tensor> slot_id = std::nullopt,
     std::optional<Tensor> kv_actual_isl = std::nullopt,
-    // Per-device Q slab in tiles (metadata path only): lets the reader/writer recompute the gather extent
-    // (gather_valid_Ht) from kv_actual_isl[0] on-device, so the gather stays bounded even when the host
-    // logical_n is a placeholder. Unused when slot_id is absent.
+    // kv_actual_isl is an independent 1-element uint32 DRAM tensor containing the trace-safe KV extent.
+    // With chunk_local_tiles, it lets reader and writer derive gather_valid_Ht on-device even when no
+    // device-resident slot selection is needed. std::nullopt keeps the host gather extent.
     uint32_t chunk_local_tiles = 0,
     // (user, layer)-major KV-cache batch dim (metadata path only): the reader computes the gathered
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching
