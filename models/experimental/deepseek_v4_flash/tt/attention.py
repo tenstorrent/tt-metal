@@ -57,8 +57,8 @@ from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 #     tile-row. Everything that is per-token arithmetic (projections, norms, RoPE)
 #     runs here, so one decode step costs one tile-row of work rather than B of them.
 #     This is what caps a step at ``TILE_SIZE`` users.
-#   * *per-user tile-rows* ``[1, B, 1, F]`` / ``[B, 1, ..., F]`` -- one tile-row per
-#     user. The KV-cache ops require it (``paged_update_cache`` dispatches one user per
+#   * *per-user rows* ``[1, B, 1, F]`` / ``[B, 1, ..., F]`` -- one row per user.
+#     The KV-cache ops require it (``paged_update_cache`` dispatches one user per
 #     core, SDPA-decode indexes K/V by a leading batch), and the surrounding block hands
 #     ``hidden`` in as ``[B, S, 1, D]``.
 #
@@ -396,14 +396,39 @@ def _pack_tokens(hidden: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(hidden, [1, 1, tokens, d])
 
 
-def _one_row_per_user(x: ttnn.Tensor) -> ttnn.Tensor:
-    """``[1, 1, B, F]`` -> ``[1, B, 1, F]``, the layout the KV-cache writer indexes by user.
+def _height_sharded_l1_config(
+    num_users: int, width: int, device, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT
+) -> ttnn.MemoryConfig:
+    """Height-sharded L1 config for a ``[1, B, 1, width]`` decode row: one core per user.
 
-    ``paged_update_cache`` dispatches one user per core and reads its input with the batch
-    on dim 1, so the packed rows the projections produce have to be spread back over one
-    tile-row each. A view at ``B == 1``, a relayout above it.
+    ``paged_update_cache`` requires its (single-token) input to be height-sharded with the
+    core count equal to the number of batch users -- it dispatches one user per core --
+    shard width == the last dim, ROW_MAJOR orientation. ROW_MAJOR uses a 1-high shard
+    (the contiguous token row the writer splices); TILE pads that to a 32-row tile.
     """
-    return ttnn.reshape(x, [1, x.shape[-2], 1, x.shape[-1]])
+    shard_h = ttnn.TILE_SIZE if layout == ttnn.TILE_LAYOUT else 1
+    grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), row_wise=True)
+    shard_spec = ttnn.ShardSpec(grid, [shard_h, width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+def _one_row_per_user(x: ttnn.Tensor) -> ttnn.Tensor:
+    """``[1, 1, B, F]`` -> ``[1, B, 1, F]`` ROW_MAJOR, height-sharded one user per core.
+
+    ``paged_update_cache`` indexes by user on dim 1 and, for ROW_MAJOR input, copies the
+    shard as a contiguous token row (it skips the TILE untilize). Packed projection
+    rows therefore have to be spread back over one core each. A view at ``B == 1`` when
+    the producer already holds that shard; a relayout otherwise. TILE input is untilized
+    (via DRAM if the shard is 1-high, which cannot untilize in L1) rather than padded
+    up to a 32-row tile.
+    """
+    x = ttnn.reshape(x, [1, x.shape[-2], 1, x.shape[-1]])
+    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        if x.is_sharded():
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    want = _height_sharded_l1_config(x.shape[1], x.shape[-1], x.device())
+    return x if x.memory_config() == want else ttnn.to_memory_config(x, want)
 
 
 def _rope_height_sharded_config(width: int, num_cores: int, device) -> ttnn.MemoryConfig:
@@ -494,40 +519,6 @@ def _sdpa_decode_output_config(
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _height_sharded_l1_config(
-    num_users: int, width: int, device, layout: ttnn.Layout = ttnn.TILE_LAYOUT
-) -> ttnn.MemoryConfig:
-    """Height-sharded L1 config for a ``[1, B, 1, width]`` decode row: one core per user.
-
-    ``paged_update_cache`` requires its (single-token) input to be height-sharded with the
-    core count equal to the number of batch users -- it dispatches one user per core --
-    shard width == the last dim, ROW_MAJOR orientation.
-    """
-    shard_h = ttnn.TILE_SIZE if layout == ttnn.TILE_LAYOUT else 1
-    grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), row_wise=True)
-    shard_spec = ttnn.ShardSpec(grid, [shard_h, width], ttnn.ShardOrientation.ROW_MAJOR)
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-
-def _to_cache_row_layout(row: ttnn.Tensor) -> ttnn.Tensor:
-    """``row`` in the layout :func:`_update_cache_at` insists on: height-sharded one user per
-    core, in whole 32x32 tiles. A no-op for a producer that already holds it.
-
-    ``kv_proj`` does not, and that is what its fused RMSNorm costs: the epilogue reads a
-    replicated ROW_MAJOR activation, so the matmul packs its result into 1x32 tiles.
-    ``paged_update_cache`` sizes its input CB in whole tiles (``shard_h * shard_w / TILE_HW``,
-    which rounds to zero for a one-row shard) and its reader walks ``W / 32`` of them, so the
-    row has to be re-tilized first. Untilizing the shard where it sits would trip the sharded
-    untilize's "shard height must be a multiple of tile height"; hence the hop out to DRAM.
-    """
-    if row.layout != ttnn.TILE_LAYOUT or row.get_tile().tile_shape[0] != ttnn.TILE_SIZE:
-        row = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
-        row = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)
-        row = ttnn.to_layout(row, ttnn.TILE_LAYOUT)
-    want = _height_sharded_l1_config(row.shape[1], row.shape[-1], row.device())
-    return row if row.memory_config() == want else ttnn.to_memory_config(row, want)
-
-
 def _update_cache_at(
     cache: ttnn.Tensor,
     row: ttnn.Tensor,
@@ -543,9 +534,10 @@ def _update_cache_at(
     only ``window / block_size`` blocks; without it any position past that capacity
     resolves through the row's unmapped tail (see :mod:`.paged_cache`).
 
-    ``row`` has to arrive in the writer's own layout (:func:`_height_sharded_l1_config`):
-    it is written as it stands rather than resharded, since a copy here would be paid on
-    every cache write, and it stays the caller's to free.
+    ``row`` has to arrive ROW_MAJOR, height-sharded one user per core
+    (:func:`_height_sharded_l1_config`): it is written as it stands rather than
+    resharded, since a copy here would be paid on every cache write, and it stays
+    the caller's to free.
     """
 
     num_users, width = row.shape[1], row.shape[-1]
@@ -687,7 +679,7 @@ class DeepSeekV4HCACompressor:
         compressed = ttnn.reshape(compressed, [1, 1, users, self.head_dim])
         compressed = self.kv_norm(compressed)
         compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
-        return _to_cache_row_layout(_one_row_per_user(compressed))
+        return _one_row_per_user(compressed)
 
     def decode_static(
         self,
@@ -717,8 +709,8 @@ class DeepSeekV4HCACompressor:
         _signpost("HCA_START")
         users = tokens.shape[-2]
         kv, gate = self._project(tokens)  # [1, 1, B, Dh]
-        kv = _to_cache_row_layout(_one_row_per_user(ttnn.reshape(kv, [1, 1, users, self.head_dim])))
-        gate = _to_cache_row_layout(_one_row_per_user(ttnn.reshape(gate, [1, 1, users, self.head_dim])))
+        kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, self.head_dim]))
+        gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, self.head_dim]))
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
         if pool and (combined_cache is not None or paged is not None):
@@ -848,7 +840,7 @@ class DeepSeekV4CSACompressor:
         compressed = ttnn.reshape(compressed, [1, 1, users, dh])
         compressed = self.kv_norm(compressed)
         compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
-        return _to_cache_row_layout(_one_row_per_user(compressed))
+        return _one_row_per_user(compressed)
 
     def decode_static(
         self,
@@ -877,8 +869,8 @@ class DeepSeekV4CSACompressor:
         feat = 2 * self.head_dim
         users = tokens.shape[-2]
         kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
-        kv = _to_cache_row_layout(_one_row_per_user(ttnn.reshape(kv, [1, 1, users, feat])))
-        gate = _to_cache_row_layout(_one_row_per_user(ttnn.reshape(gate, [1, 1, users, feat])))
+        kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, feat]))
+        gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, feat]))
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
         if pool and (combined_cache is not None or paged is not None):
@@ -1840,8 +1832,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         assert s == 1, f"decode attends one token per user, but S == {s}"
         tokens = _pack_tokens(hidden)  # [1, 1, B, D]
         q, kv_new = self._qkv(tokens, cos, sin)  # q [1,1,B,H*Dh], kv_new [1,1,B,Dh]
-        kv_new = _one_row_per_user(kv_new)  # [1, B, 1, Dh], one core per user for the write
-        kv_new = _to_cache_row_layout(kv_new)
+        # kv_new = _one_row_per_user(kv_new)  # [1, B, 1, Dh] ROW_MAJOR, one core per user
 
         if self.compressor is None:
             # The KV axis is the sliding ring alone. Paged: the *absolute* position,
