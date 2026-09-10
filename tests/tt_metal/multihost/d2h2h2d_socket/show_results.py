@@ -131,8 +131,10 @@ def load(paths):
                 if bw is not None and msgs is not None and per_msg:
                     closed = msgs * per_msg / 1e9
                     if abs(bw - closed) > 1e-6 * max(1.0, bw):
-                        problems.append(f"{where}: bandwidth {bw:.6f} != messages_per_second x "
-                                        f"bytes_per_message/1e9 {closed:.6f}")
+                        problems.append(
+                            f"{where}: bandwidth {bw:.6f} != messages_per_second x "
+                            f"bytes_per_message/1e9 {closed:.6f}"
+                        )
                 if per_msg and payload != samples * per_msg:
                     problems.append(
                         f"{where}: payload_bytes {payload} != samples {samples} "
