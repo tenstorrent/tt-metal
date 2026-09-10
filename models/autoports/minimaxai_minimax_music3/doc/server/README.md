@@ -62,7 +62,7 @@ Gate: `~/mm3-bringup/checks/08.sh` (= `pytest tests/test_server.py -m "not slow"
 ## Evidence
 
 Hardware: Blackhole p300c, board id `000004613193411b` (`tt-smi -s`), device 0 of the 1x1 mesh, host `qbge-devex-02`.
-Code: commit `COMMIT_PLACEHOLDER` on `jashan/minimax-music3` (`models/autoports/minimaxai_minimax_music3`).
+Code: commit `1f3a581da33 (stage files; this line was added in the follow-up commit)` on `jashan/minimax-music3` (`models/autoports/minimaxai_minimax_music3`).
 
 Gate run (`~/mm3-bringup/checks/08.sh`, 2026-09-10 01:09-01:11, idle host, warm weight caches; `doc/server/results.json`,
 pytest output `generated/gate08.log`, server stdout `generated/server_test.log`): **7 passed in 148 s, `GATE_OK`**. Two
