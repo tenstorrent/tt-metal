@@ -139,6 +139,7 @@ struct PacketFormat {
         Point,   // a {timestamp} record with no payload
         Data,    // a {timestamp} record with a payload of size_word's count of words behind the fixed head
         Sticky,  // sets a lane field (the timer high half or the program id); emits nothing
+        Clock,   // a local-refclk sample (idle-eth clock tracker) routed to the clock sink; emits no record
     };
     enum class Sets : uint8_t { Nothing, TimerHi, Prog };
 
@@ -188,10 +189,11 @@ inline constexpr PacketFormat kStickyProg{
     .type = PP_STICKY_PROG, .words = 1, .kind = Kind::Sticky, .sets = PacketFormat::Sets::Prog, .value_word = 0};
 inline constexpr PacketFormat kStickyProgExt{
     .type = PP_STICKY_PROG_EXT, .words = 2, .kind = Kind::Sticky, .sets = PacketFormat::Sets::Prog, .value_word = 1};
+inline constexpr PacketFormat kClock{.type = PP_CLOCK, .words = 2, .kind = Kind::Clock, .ts_lo = 1};
 
 // The walk tests types in this order, so the common ones come first.
-inline constexpr std::array<PacketFormat, 8> kFormats = {
-    kZoneS, kZoneAtomic, kEvent, kData, kZoneL, kStickyTimer, kStickyProg, kStickyProgExt};
+inline constexpr std::array<PacketFormat, 9> kFormats = {
+    kZoneS, kZoneAtomic, kEvent, kData, kZoneL, kStickyTimer, kStickyProg, kStickyProgExt, kClock};
 
 constexpr bool spsc_formats_ok() {
     uint32_t seen = 0, data_rows = 0;
@@ -229,6 +231,12 @@ constexpr bool spsc_formats_ok() {
                     if (f.size_word == kAbsent || f.size_word == 0 || f.size_word >= f.words || f.size_mask == 0) {
                         return false;
                     }
+                }
+                break;
+            case Kind::Clock:
+                // A 2-word point-like sample; carries a timestamp, no duration, no delta, no payload.
+                if (f.ts_lo == kAbsent || f.has_dur() || f.delta16) {
+                    return false;
                 }
                 break;
             case Kind::Sticky:

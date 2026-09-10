@@ -44,6 +44,14 @@
 // EVENT (2 words): [0] type|id27 [1] timer_low; a flag with no payload and no size word.
 #define PP_EVENT 12u
 
+// CLOCK (2 words): [0] type | kind<<PP_CLOCK_KIND_SHIFT | value24  [1] wall_lo. A local-refclk sample from the
+// idle-eth clock tracker: value24 = this chip refclk low 24 bits, wall = lane sticky-timer hi | wall_lo. Routed
+// to the clock sink at decode, never delivered as a record. Must match ppfmt::T_CLOCK (kernel_profiler_streaming.hpp).
+#define PP_CLOCK 5u
+#define PP_CLOCK_KIND_SHIFT 24u
+#define PP_CLOCK_VALUE_MASK 0xFFFFFFu
+#define PP_CLOCK_LOCAL_REFCLK 0u
+
 /* 11 is retired (was ZONE_TOTAL); never reuse it. */
 
 /* --- PP_DATA word2 sub-fields (word0 is type|id27, identical to a zone marker) --- */

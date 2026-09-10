@@ -160,6 +160,14 @@ int main() {
             // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this
             // iteration, since it's guaranteed to be valid.
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
+            // Resolve the SPSC publish gate for idle eth. On this base zoneValid defaults true, but
+            // init_profiler() (via DeviceProfilerInit above) sets it false for every PROFILER_VALIDATES_ZONE
+            // RISC, and this base explicitly added COMPILE_FOR_IDLE_ERISC to that set -- yet nothing on the
+            // idle-eth path calls DeviceValidateProfiler to resolve it, unlike brisc.cc / erisc.cc. Left
+            // unresolved, publish_tail() early-returns forever: the ring fills, its tail never advances, and
+            // the core reads to the drainer as permanently idle. An idle ERISC only gets a go signal for a
+            // real launch, so it is always valid -- pass true, not enables.
+            DeviceValidateProfiler(true);
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);

@@ -226,6 +226,7 @@ void Service::consumer_thread(Consumer& c) {
             }
             s->dec.st = &s->state;
             s->dec.lanes = s->lanes.data();
+            s->dec.dev = ps.dev;  // stamped on ClockSamples the decoder routes to the clock sink
             a.streams.push_back(std::move(s));
         }
         a.capture = ++c.captures;

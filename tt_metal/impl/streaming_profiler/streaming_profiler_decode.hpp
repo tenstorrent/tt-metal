@@ -124,12 +124,27 @@ inline constexpr size_t kFrameDataBytesReserve =
     kFrameRecsReserve * profiler::kSpscRecBytes + profiler::kSpscMaxPayloadWords * 4 + 32;
 
 // One stream's decode, owned by one thread; the wire-integrity totals are its owner's to report.
+// A decoded local-refclk sample from the idle-eth clock tracker (PP_CLOCK): chip, producing lane, clock kind
+// (CLOCK_LOCAL_REFCLK today), the 24-bit refclk value, and the full wall timestamp. The host fit unwraps value24
+// against ts. Routed to StreamDecoder::clock_fn at decode; never becomes a record.
+struct ClockSample {
+    uint32_t dev;
+    uint32_t lane;
+    uint32_t kind;
+    uint32_t value24;
+    uint64_t ts;
+};
+
 struct StreamDecoder {
     profiler::SpanDecodeState* st = nullptr;
     uint64_t batch_seq = 0;  // a lane's last-record pointer is only meaningful within its own batch
     const profiler::SpscRecConsts* lanes = nullptr;  // per lane: what its records carry besides the packet's words
     StreamStats stats;
     uint64_t stall_zones = 0;
+    // Idle-eth PP_CLOCK samples are routed here at decode, never delivered as records. null clock_fn = drop.
+    uint32_t dev = 0;  // index into capture_context().devices, stamped on each ClockSample
+    void* clock_ctx = nullptr;
+    void (*clock_fn)(void*, const ClockSample&) = nullptr;
 
     // Where a frame's records go: kFrameRecsReserve records of room for zones and for events, kFrameDataBytesReserve
     // bytes for timestamped data.
@@ -167,6 +182,9 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     // through `this` would be reloaded after every such store.
     const SpscRecConsts* const lane_consts = lanes;
     const uint64_t seq = batch_seq;
+    void (*const clock_fn)(void*, const ClockSample&) = this->clock_fn;
+    void* const clock_ctx = this->clock_ctx;
+    const uint32_t clock_dev = this->dev;
     uint8_t* const zb = out.zones;
     uint8_t* const eb = out.events;
     uint8_t* const db = out.data;
@@ -319,7 +337,24 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
                                            fixes += x.fixes;
                                            oreg += x.regressions;
                                        };
-            if ((kSpscPointTypes >> t) & 1u) {
+            if (t == PP_CLOCK) {
+                // 2-word local-refclk sample: word0 = type|kind<<shift|value24, word1 = wall_lo; full wall =
+                // this lane s sticky-timer hi | wall_lo. Route to the clock sink, produce no record, advance 2.
+                if (left >= 2u) {
+                    if (clock_fn) {
+                        const uint32_t low27 = pp_low27(src[0]);
+                        clock_fn(
+                            clock_ctx,
+                            ClockSample{
+                                clock_dev,
+                                lane,
+                                (low27 >> PP_CLOCK_KIND_SHIFT) & 0x7u,
+                                low27 & PP_CLOCK_VALUE_MASK,
+                                lc.th_hi | src[1]});
+                    }
+                    got = 2;
+                }
+            } else if ((kSpscPointTypes >> t) & 1u) {
                 // Points: the same head record for every point kind, Data with a payload behind its size word. One
                 // branch for them all keeps random alternation from mispredicting, so the run gate below tests the
                 // words for a run of four of each fixed-size point kind without branching on t first.
