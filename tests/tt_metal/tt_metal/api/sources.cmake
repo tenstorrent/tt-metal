@@ -9,6 +9,7 @@ set(UNIT_TESTS_API_SOURCES
     circular_buffer/test_CircularBuffer_allocation.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
+    circular_buffer/test_CircularBuffer_tracking_perf.cpp
     circular_buffer/test_CircularBuffer_wrapping.cpp
     core_coord/test_CoreRange_adjacent.cpp
     core_coord/test_CoreRange_contains.cpp
@@ -44,6 +45,7 @@ set(UNIT_TESTS_API_SOURCES
     test_filesystem_utils.cpp
     test_tt_memory.cpp
     test_graph_tracking.cpp
+    test_memory_tracking_shm.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp

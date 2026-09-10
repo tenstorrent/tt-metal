@@ -462,6 +462,12 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
     detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
 
+    // Telemetry: on a slow-dispatch mesh only local_devices[0] goes through LaunchProgram, so
+    // without this every other device reports zero CB usage while holding the program's CBs.
+    if (auto* concrete_device = dynamic_cast<class Device*>(device)) {
+        concrete_device->record_dispatched_program_cbs(program.impl());
+    }
+
     metal_ctx.get_cluster().dram_barrier(device_id);
     metal_ctx.get_cluster().l1_barrier(device_id);
     const auto& hal = metal_ctx.hal();
@@ -941,6 +947,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
         detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+
+        // Telemetry: ConfigureDeviceWithProgram has just written this program's CB config into
+        // L1. Mirrors the fast-dispatch hook in fd_mesh_command_queue.cpp.
+        if (auto* concrete_device = dynamic_cast<Device*>(device)) {
+            concrete_device->record_dispatched_program_cbs(program.impl());
+        }
 
         auto device_id = device->id();
 
