@@ -200,4 +200,6 @@ CheckOptions:
 
 FormatStyle: 'file'
 
-HeaderFilterRegex: '(?!.*\.pb\.h$).*'
+# LLVM uses POSIX regular expressions, which do not support negative lookahead.
+HeaderFilterRegex: '.*'
+ExcludeHeaderFilterRegex: '\.pb\.h$'
