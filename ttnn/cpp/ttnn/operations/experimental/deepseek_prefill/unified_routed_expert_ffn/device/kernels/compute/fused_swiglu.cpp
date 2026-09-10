@@ -952,7 +952,7 @@ void kernel_main() {
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
 
-    // Wait for the reader (BRISC) to push the counts/idx into shared L1. They
+    // Wait for the reader (NCRISC) to push the counts/idx into shared L1. They
     // are pushed ONCE and stay resident, so UNPACK can re-index them per expert.
     counts_scratch_cb.wait_front(1);
     idx_scratch_cb.wait_front(1);
