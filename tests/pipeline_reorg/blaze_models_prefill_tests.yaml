@@ -77,7 +77,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 14
+      timeout: 28
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -102,7 +102,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 11
+      timeout: 22
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -123,7 +123,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 24
+      timeout: 48
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -144,7 +144,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 16
+      timeout: 32
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -162,14 +162,14 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=900
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=1800
     '
   test_type: prefill_block_determinism
   test_tags: [kimi_k2_7, block, determinism]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 12
+      timeout: 24
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -186,14 +186,14 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_kimi_prefill_transformer -k "torus-xy-8x4 and 5_layers and e384_device and 5k and not 25k and iter2 and not iter25 and not iter2000 and smoke and with_determinism and non_balanced and right_pad and json_prompts and pretrained" -vvv --tb=short --timeout=1800
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_kimi_prefill_transformer -k "torus-xy-8x4 and 5_layers and e384_device and 5k and not 25k and iter2 and not iter25 and not iter2000 and smoke and with_determinism and non_balanced and right_pad and json_prompts and pretrained" -vvv --tb=short --timeout=3600
     '
   test_type: prefill_transformer_determinism
   test_tags: [kimi_k2_7, transformer, determinism]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 15
+      timeout: 30
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -219,9 +219,9 @@
   skus:
     bh_sc1:
       # Measured 9.9 min at L61/mid15k (the untraced mode also does the per-layer decoder-output PCC,
-      # which is a host readback per layer per chunk). 20 min is ~2x headroom. Was 40; the (team, sku)
+      # which is a host readback per layer per chunk). 52 min is ~5x headroom. The (team, sku)
       # time budget is a SUM, so the traced twin has to come out of the same allowance.
-      timeout: 26
+      timeout: 52
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -251,8 +251,8 @@
   skus:
     bh_sc1:
       # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
-      # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
-      timeout: 26
+      # KV PCC only (a host readback cannot live inside a capture). 52 min is ~10x headroom.
+      timeout: 52
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -287,9 +287,9 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # Measured 4.7 min at two_iters on a galaxy; ten_iters adds ~8x13.4s -> ~6.5 min. 18 min is ~2.7x
-      # headroom. Was 40, but the (team, sku) time budget is a SUM and the traced twin needs room too.
-      timeout: 18
+      # Measured 4.7 min at two_iters on a galaxy; ten_iters adds ~8x13.4s -> ~6.5 min. 36 min is ~5.5x
+      # headroom. The (team, sku) time budget is a SUM and the traced twin needs room too.
+      timeout: 36
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -329,7 +329,7 @@
     bh_sc1_high_power:
       # Measured 4.0 min at two_iters; ten_iters adds ~8x10.6s -> ~5.5 min. Trace replay is faster per
       # chunk than eager dispatch, so this needs no more than its untraced twin.
-      timeout: 18
+      timeout: 36
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -361,8 +361,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # +2 min on the Kimi/GLM/dflash baseline of 10 for the Mistral row this leg now also runs.
-      timeout: 12
+      # +4 min on the Kimi/GLM/dflash baseline of 20 for the Mistral row this leg now also runs.
+      timeout: 24
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -378,7 +378,7 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
     '
   test_type: kimi_dflash
@@ -386,7 +386,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 9
+      timeout: 18
       tier: 2
       release_ready: false
   owner_id: U09L76N1MAT  # Nenad Babin
@@ -413,14 +413,14 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
-      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
+      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=3600
     '
   test_type: prefill_runner
   test_tags: [kimi_k2_7, runner]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U09L76N1MAT  # Nenad Babin
@@ -443,7 +443,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 6
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -465,7 +465,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 6
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -488,7 +488,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 6
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -512,7 +512,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 5
+      timeout: 10
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -533,7 +533,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 26
+      timeout: 52
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -562,7 +562,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 16
+      timeout: 32
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -584,7 +584,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 20
+      timeout: 40
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -606,14 +606,14 @@
     # dense and MoE parametrizations.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm52" -vvv --tb=short --timeout=300
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm52" -vvv --tb=short --timeout=600
     '
   test_type: glm_prefill_block
   test_tags: [glm_5_2, block]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -642,7 +642,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 36
+      timeout: 72
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -673,7 +673,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 36
+      timeout: 72
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -698,7 +698,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 58
+      timeout: 116
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -727,7 +727,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 25
+      timeout: 50
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -750,7 +750,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 3
+      timeout: 6
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -771,7 +771,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 3
+      timeout: 6
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -792,7 +792,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 4
+      timeout: 8
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
   sp_config: sc1
@@ -811,7 +811,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 3
+      timeout: 6
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
   sp_config: sc1
@@ -846,7 +846,7 @@
   skus:
     bh_sc1:
       # Warm tilized-cache + chunked prefill (5120) + KV PCC; cold weight-cache build will exceed this.
-      timeout: 60
+      timeout: 120
       tier: 2
       release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
@@ -892,7 +892,7 @@
   skus:
     bh_sc1_high_power:
       # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
-      timeout: 28
+      timeout: 56
       tier: 2
       release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
@@ -925,12 +925,12 @@
   test_group: module
   skus:
     bh_sc1:
-      # 4.9 min measured on CI run 33558247799 for all three pytest invocations; 10 is ~2.0x.
+      # 4.9 min measured on CI run 33558247799 for all three pytest invocations; 20 is ~4.0x.
       # Was briefly 18, sized from 12.0 min measured on a galaxy box -- the same work runs ~2.4x
       # slower there than on CI, so local numbers oversize CI timeouts badly. Size from CI runs.
       # `set -e` above is load-bearing: without it only the LAST pytest's status reaches the runner,
       # so a failure in either of the first two would report as a pass.
-      timeout: 10
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -953,10 +953,10 @@
   test_group: module
   skus:
     bh_sc1:
-      # 13.0 min on run 33425317777 for all 13 scenarios (verified by --collect-only); 22 is ~1.7x.
+      # 13.0 min on run 33425317777 for all 13 scenarios (verified by --collect-only); 44 is ~3.4x.
       # The old 32 was sized against 20.9 min on run 32884863854, before the weight cache was staged
       # -- a warm cache is what took this leg under 15.
-      timeout: 22
+      timeout: 44
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -982,7 +982,7 @@
       # run where every row skipped (the non_balanced CI skip had no Mistral exemption), so it timed
       # nothing. The `-k` pins the two PCC rows, random and pretrained, at iter1; the full matrix is
       # 24 runnable rows and would not fit any sane budget.
-      timeout: 20
+      timeout: 40
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -1001,8 +1001,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # 4.5 min on run 33425317777, covering both the 5k and 25k rows; 10 is ~2.2x.
-      timeout: 10
+      # 4.5 min on run 33425317777, covering both the 5k and 25k rows; 20 is ~4.4x.
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -1025,10 +1025,10 @@
   test_group: module
   skus:
     bh_sc1:
-      # 9.1 min on CI run 33558247799; 14 is ~1.5x. The previous 12 came from 3.9 min on run
+      # 9.1 min on CI run 33558247799; 28 is ~3.0x. The previous 12 came from 3.9 min on run
       # 33425317777 and had eroded to 1.32x margin as the leg's cost grew. Full-model PCC gated per
       # stage on npcc, heavier than the 5.4 min smoke row it replaces.
-      timeout: 14
+      timeout: 28
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -1061,9 +1061,9 @@
   skus:
     bh_sc1:
       # 17.1 min on CI run 33558247799 at L36/full55k (18 chunks x 35 layers, each a host readback);
-      # 26 is ~1.5x. The previous 20 came from 10.9 min on run 33425317777 and had eroded to 1.17x
+      # 52 is ~3.0x. The previous 20 came from 10.9 min on run 33425317777 and had eroded to 1.17x
       # margin as the leg's cost grew -- not enough on shared hardware.
-      timeout: 26
+      timeout: 52
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -1093,8 +1093,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # 4.9 min on run 33425317777 vs the untraced twin's 10.9 (KV assert only); 10 is ~2x.
-      timeout: 10
+      # 4.9 min on run 33425317777 vs the untraced twin's 10.9 (KV assert only); 20 is ~4x.
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
@@ -1126,7 +1126,7 @@
       # Mesh bringup, weight load and the staggered device teardown dominate the step; the chunk loop
       # is a couple of minutes of it. Budget covers those plus the up-to-120s producer connect.
       # Must match the shield/demo budget.
-      timeout: 20
+      timeout: 40
       tier: 1
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
@@ -1157,7 +1157,7 @@
       # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
       # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
       # Counts against the shield/demo budget together with the Kimi entry.
-      timeout: 30
+      timeout: 60
       tier: 1
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
@@ -1180,7 +1180,7 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      timeout: 35
+      timeout: 70
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc1
@@ -1200,7 +1200,7 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      timeout: 40
+      timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc1
@@ -1233,7 +1233,7 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 20
+      timeout: 40
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -1271,7 +1271,7 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 10
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic

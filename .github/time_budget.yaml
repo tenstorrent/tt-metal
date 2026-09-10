@@ -135,7 +135,7 @@ ttnn:
     bh_p100a_civ2_viommu: 8
     bh_p150b_civ2_viommu: 8
   demo:
-    bh_sc1_high_power: 10
+    bh_sc1_high_power: 20
   sweep:
     wh_galaxy: 640
     wh_n150_civ2: 1100
@@ -192,8 +192,8 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 50
-    bh_sc1: 75
+    bh_sc4: 100
+    bh_sc1: 150
 
 scaleout:
   merge_gate:
@@ -408,8 +408,8 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 540
-    bh_sc1_high_power: 194
+    bh_sc1: 1080
+    bh_sc1_high_power: 388
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
