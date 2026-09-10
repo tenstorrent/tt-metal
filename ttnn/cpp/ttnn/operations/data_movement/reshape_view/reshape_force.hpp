@@ -24,11 +24,15 @@ namespace ttnn::operations::data_movement::detail {
 //
 // Prefer `ttnn::reshape` everywhere else: it already declines the cases the second entry rejects.
 
+// Both take the public op's call shape -- `shape` only, no separate padded shape -- because the
+// measurement harness forwards a case's kwargs to the forced entry verbatim, and a case names its
+// target as `shape`. The single shape serves as logical and padded, exactly as the public
+// single-shape overload of `ttnn::reshape` passes it through.
+
 // The existing composite/native implementation, unconditionally.
 ttnn::Tensor reshape_force_native(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 // The generated implementation, unconditionally. Throws for a case outside its support scope
@@ -36,8 +40,7 @@ ttnn::Tensor reshape_force_native(
 // measuring native twice and reporting it as agreement.
 ttnn::Tensor reshape_force_codegen(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn::operations::data_movement::detail

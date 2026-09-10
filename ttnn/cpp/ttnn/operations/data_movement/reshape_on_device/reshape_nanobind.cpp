@@ -86,8 +86,7 @@ void bind_reshape(nb::module_& mod) {
         "reshape_force_native",
         &ttnn::operations::data_movement::detail::reshape_force_native,
         nb::arg("input_tensor"),
-        nb::arg("logical_shape"),
-        nb::arg("padded_shape"),
+        nb::arg("shape"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::call_guard<nb::gil_scoped_release>(),
@@ -98,8 +97,7 @@ void bind_reshape(nb::module_& mod) {
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
-                logical_shape (ttnn.Shape): the requested logical output shape.
-                padded_shape (ttnn.Shape): the requested padded output shape.
+                shape (ttnn.Shape): the requested output shape.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
@@ -113,8 +111,7 @@ void bind_reshape(nb::module_& mod) {
         "reshape_force_codegen",
         &ttnn::operations::data_movement::detail::reshape_force_codegen,
         nb::arg("input_tensor"),
-        nb::arg("logical_shape"),
-        nb::arg("padded_shape"),
+        nb::arg("shape"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::call_guard<nb::gil_scoped_release>(),
@@ -125,8 +122,7 @@ void bind_reshape(nb::module_& mod) {
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
-                logical_shape (ttnn.Shape): the requested logical output shape.
-                padded_shape (ttnn.Shape): the requested padded output shape.
+                shape (ttnn.Shape): the requested output shape.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.

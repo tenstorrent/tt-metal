@@ -769,13 +769,12 @@ ttnn::Tensor ttnn::reshape(
 
 ttnn::Tensor ttnn::operations::data_movement::detail::reshape_force_native(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config) {
     return reshape_dispatch(
         input_tensor,
-        logical_shape,
-        padded_shape,
+        shape,
+        shape,
         memory_config,
         std::nullopt,
         TileReshapeMapMode::CACHE,
@@ -786,13 +785,12 @@ ttnn::Tensor ttnn::operations::data_movement::detail::reshape_force_native(
 
 ttnn::Tensor ttnn::operations::data_movement::detail::reshape_force_codegen(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config) {
     return reshape_dispatch(
         input_tensor,
-        logical_shape,
-        padded_shape,
+        shape,
+        shape,
         memory_config,
         std::nullopt,
         TileReshapeMapMode::CACHE,
