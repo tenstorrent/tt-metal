@@ -633,8 +633,10 @@ Tensor fold(
     const auto in_channels = shape[3];
     const bool was_tiled = processed_tensor.layout() == Layout::TILE;
 
-    // The interleaved fold kernels operate on row-major data, so untilize first.
-    if (was_tiled) {
+    // Tile-native factory holds one full output row in L1 scratch; if it wouldn't fit, fall back
+    // to untilize→RM so prim::qsr::fold takes the RM path (1-stick scratch).
+    if (was_tiled && !ttnn::operations::experimental::quasar::tile_native_fold_scratch_fits_l1(
+                         processed_tensor, stride_h, stride_w)) {
         processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 

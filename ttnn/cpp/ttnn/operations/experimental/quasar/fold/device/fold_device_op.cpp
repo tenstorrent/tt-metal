@@ -5,8 +5,27 @@
 #include "fold_device_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::experimental::quasar {
+
+bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w) {
+    if (input_tensor.layout() != tt::tt_metal::Layout::TILE) {
+        return false;
+    }
+    // Output dtype mirrors compute_output_specs: BFLOAT8_B/BFLOAT16 collapse to BFLOAT16 on RM output.
+    const auto in_dt = input_tensor.dtype();
+    const auto out_dt = (in_dt == tt::tt_metal::DataType::FLOAT32 || in_dt == tt::tt_metal::DataType::UINT16)
+                            ? in_dt
+                            : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t out_elem = tt::datum_size(datatype_to_dataformat_converter(out_dt));
+    const uint32_t input_width = input_tensor.logical_shape()[2];
+    const uint32_t C = input_tensor.logical_shape()[-1];
+    const uint64_t scratch_bytes = static_cast<uint64_t>(input_width / stride_w) * stride_h * stride_w * C * out_elem;
+    // ~200 KB reserve for src0/src1 tile CBs and kernel code/stack (pattern from conv3d factory).
+    constexpr uint64_t kOverhead = 200 * 1024;
+    return scratch_bytes + kOverhead < tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
+}
 
 Fold::program_factory_t Fold::select_program_factory(
     const operation_attributes_t& op_attr, const tensor_args_t& /*tensors*/) {
@@ -77,18 +96,15 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
     }
-    // Interleaved tensors (DRAM or L1)
+    // Interleaved tensors (DRAM or L1): DRAM keeps the folded 4D shape (both TILE and RM go through
+    // fold_multi_core_tiled_interleaved / fold_multi_core_row_major_interleaved and land RM).
     ttnn::Shape output_logical_shape = output_shape;
     if (input_tensor.memory_config().is_dram()) {
-        // DRAM path preserves 4D shape; for tiled inputs the caller reshapes afterward
-        output_logical_shape = ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
-        if (input_tensor.layout() == Layout::ROW_MAJOR) {
-            output_logical_shape = ttnn::Shape(
-                {input_shape[0],
-                 input_shape[1] / op_attr.stride_h,
-                 input_shape[2] / op_attr.stride_w,
-                 input_shape[3] * op_attr.stride_h * op_attr.stride_w});
-        }
+        output_logical_shape = ttnn::Shape(
+            {input_shape[0],
+             input_shape[1] / op_attr.stride_h,
+             input_shape[2] / op_attr.stride_w,
+             input_shape[3] * op_attr.stride_h * op_attr.stride_w});
     }
     return {tt::tt_metal::TensorSpec(
         output_logical_shape,
