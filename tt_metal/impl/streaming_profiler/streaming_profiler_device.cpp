@@ -1020,6 +1020,9 @@ void Devices::quiesce(const RelayStateFn& on_state) {
                     kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),
                     tt_cxy_pair(ctx.chip_id, ln.virt),
                     ln.prof_l1);
+                if (lcv[kernel_profiler::SPSC_RING_TAIL_0] == 0 && lcv[kernel_profiler::SPSC_RING_TAIL_0 + 1] == 0) {
+                    continue;  // never published: nothing to report
+                }
                 log_info(
                     tt::LogMetal,
                     "[streaming profiler] Device {}: linked active eth ({},{}) lanes: dm0 tail {} head {}, dm1 tail {} "

@@ -35,10 +35,20 @@ inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TR
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
 // the process-wide site table publishes them as ELFs load (init_site_registry).
+// The host<->device clock relation of one chip as the device layer measured it.
+struct DeviceClock {
+    uint32_t chip_id = 0;
+    double frequency_ghz = 0.0;  // device ticks per nanosecond
+    uint64_t anchor_ticks = 0;
+    int64_t anchor_host_ns = 0;  // std::chrono::steady_clock at `anchor_ticks`, in nanoseconds since its epoch
+};
+
 struct CaptureContext {
     struct Device {
         std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
+        uint32_t chip_id = 0;
+        DeviceClock clock;  // the baked anchor the records carry; the d2d sync composes its term with it
     };
     std::vector<Device> devices;
     // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b
@@ -49,14 +59,6 @@ struct CaptureContext {
         CoreCoord eth_a, eth_b;
     };
     std::vector<Link> links;
-};
-
-// The host<->device clock relation of one chip as the device layer measured it.
-struct DeviceClock {
-    uint32_t chip_id = 0;
-    double frequency_ghz = 0.0;  // device ticks per nanosecond
-    uint64_t anchor_ticks = 0;
-    int64_t anchor_host_ns = 0;  // std::chrono::steady_clock at `anchor_ticks`, in nanoseconds since its epoch
 };
 
 // What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip,

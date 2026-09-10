@@ -195,6 +195,7 @@ struct ClockSample;
 // consumers' decoders drop them. on_capture_end: once a producer's last frame is decoded, before its streams
 // are finished -- where a fit over the whole capture belongs.
 struct ConsumerHooks {
+    std::function<void(const CaptureContext&)> on_attach;  // a producer's context, before its first batch
     std::function<void(const ClockSample&)> clock_sink;
     std::function<void(const CaptureContext&)> on_capture_end;
 };

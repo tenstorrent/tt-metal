@@ -253,6 +253,9 @@ void Service::consumer_thread(Consumer& c) {
             }
             a.streams.push_back(std::move(s));
         }
+        if (c.hooks.on_attach) {
+            c.hooks.on_attach(ctx);
+        }
         a.capture = ++c.captures;
         attached.push_back(std::move(a));
     };

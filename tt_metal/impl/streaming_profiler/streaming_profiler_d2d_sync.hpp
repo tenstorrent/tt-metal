@@ -46,6 +46,9 @@ struct LocalClockFit {
             }
             return static_cast<double>((sy - static_cast<long double>(slope()) * sx) / static_cast<long double>(n));
         }
+        // The fitted line, both ways, through this bucket's own anchor so a conversion never leaves the interval.
+        double wall_of_refclk(double r) const { return ay + intercept() + slope() * (r - ax); }
+        double refclk_of_wall(double w) const { return ax + (w - ay - intercept()) / slope(); }
         void add(double x, double y) {
             if (!anchored) {
                 ax = x;
@@ -87,12 +90,23 @@ struct RefclkUnwrap {
     }
 };
 
-// Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry -- the local half above per device, and
-// the link half: the boot-time eth sync rounds, whose sender (round start and end) and receiver (arrival) stamps are
-// paired by round and solved refclk against refclk, so DVFS on either chip's wall clock cannot enter the link solve.
-// Runs on its consumer's own thread: on_clock() for every routed sample, on_capture_end() once per producer.
+// Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry, and the correction it publishes.
+//
+// LOCAL samples feed one LocalClockFit per device. LINK samples (the boot-time eth sync rounds: sender round start
+// and end, receiver arrival) are paired by round and solved refclk against refclk, so DVFS on either wall clock
+// cannot enter the link solve. From those the consumer publishes, per chip, a time-indexed correction to the baked
+// host anchor every Record carries (SyncCorrections; Record::host_time composes it):
+//
+//   root chip r:      host(T) = H_r + (R_r(T) - R_r(A_r)) * P_r         (static host anchor o applied-AICLK term)
+//   non-root chip c:  host(T) = H_r + (link(R_c(T)) - R_r(A_r)) * P_r   (the same, on the root's timeline)
+//
+// where R_x(T) inverts the 1 ms bucket holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns), P_x
+// its refclk period taken as k_mean/hz so it is consistent with that anchor, and link() maps c's refclk onto r's by
+// the solved offset and rate about the burst midpoint. Published incrementally for live sinks, finally at capture end.
+// Runs entirely on its consumer's thread.
 class D2dSyncConsumer {
 public:
+    void on_attach(const CaptureContext& ctx);
     void on_clock(const ClockSample& s);
     void on_capture_end(const CaptureContext& ctx);
 
@@ -109,9 +123,36 @@ private:
         RefclkUnwrap unwrap;
         std::vector<LinkSample> samples;  // in emission order
     };
+    // A solved link: receiver refclk = sender refclk + offset + rate * (sender refclk - mid).
+    struct LinkSolution {
+        bool ok = false;
+        uint32_t dev_snd = 0, dev_rcv = 0;
+        double offset_ticks = 0.0, rate = 0.0, mid = 0.0;
+        double offset_ns = 0.0, rate_ppm = 0.0, residual_rms_ns = 0.0;
+        size_t rounds = 0, kept = 0;
+    };
+    // A chip's refclk frame: its anchor tick's refclk and its refclk period, once its buckets allow.
+    struct Frame {
+        bool ok = false;
+        double refclk_at_anchor = 0.0;
+        double period_ns = 0.0;
+        double k_mean = 0.0;
+    };
+
+    int64_t core_index(uint32_t dev, const CoreCoord& eth) const;
+    void try_solve_links(bool final);
+    Frame frame_of(uint32_t dev) const;
+    void publish_all(bool final);
+    void log_summary() const;
+
+    CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;                     // device index -> local fit
     std::map<std::pair<uint32_t, uint32_t>, LinkState> link_;  // (device index, core index) -> link stamps
-    uint64_t dropped_kind_ = 0;                                // samples of a kind this build does not know
+    std::vector<LinkSolution> solved_;                         // per ctx_.links index
+    uint64_t dropped_kind_ = 0;
+    size_t buckets_at_publish_ = 0;
+    static constexpr size_t kPublishEveryBuckets = 100;  // ~100 ms of tracker time between live publications
+    static constexpr size_t kLinkRounds = 240;           // the boot-time burst
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

@@ -11,14 +11,46 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/streaming_profiler/spsc_packet.h"
+#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
 #include "tools/profiler/sync/eth_wallclock_sync_refclk.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
+
+namespace {
+// The frequency the records were baked with (record_consts rounds the same way), so base and correction agree.
+uint32_t baked_hz(const DeviceClock& k) {
+    return static_cast<uint32_t>(
+        std::clamp<int64_t>(std::llround(k.frequency_ghz * 1e9), 1, std::numeric_limits<uint32_t>::max()));
+}
+}  // namespace
+
+void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
+    ctx_ = ctx;
+    local_.clear();
+    link_.clear();
+    solved_.assign(ctx.links.size(), LinkSolution{});
+    dropped_kind_ = 0;
+    buckets_at_publish_ = 0;
+    // A new capture: its corrections start from nothing.
+    for (const CaptureContext::Device& d : ctx.devices) {
+        SyncCorrections::clear(d.chip_id);
+    }
+}
 
 void D2dSyncConsumer::on_clock(const ClockSample& s) {
     if (s.kind == PP_CLOCK_LOCAL_REFCLK) {
         LocalState& l = local_[s.dev];
         l.fit.add(l.unwrap.full(s.value24), s.ts);
+        // Live publication: every ~100 ms of tracker time across the devices.
+        size_t nb = 0;
+        for (const auto& [dev, st] : local_) {
+            nb += st.fit.buckets.size();
+        }
+        if (nb >= buckets_at_publish_ + kPublishEveryBuckets) {
+            buckets_at_publish_ = nb;
+            try_solve_links(/*final=*/false);
+            publish_all(/*final=*/false);
+        }
     } else if (s.kind == PP_CLOCK_LINK_REFCLK) {
         LinkState& k = link_[{s.dev, s.lane / profiler::kSpscNRiscDecode}];
         k.samples.push_back(LinkSample{.wall = s.ts, .refclk = k.unwrap.full(s.value24)});
@@ -27,95 +59,46 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
     }
 }
 
-void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
-    // ---- local half: per device, the AICLK that actually applied, from the 1 ms bucket slopes -----------------
-    for (auto& [dev, l] : local_) {
-        size_t nb = 0;
-        double smin = std::numeric_limits<double>::max(), smax = 0.0, ssum = 0.0;
-        for (const auto& [key, b] : l.fit.buckets) {
-            if (b.n < 2) {
-                continue;
-            }
-            const double s = b.slope();
-            if (s <= 0.0) {
-                continue;
-            }
-            nb++;
-            ssum += s;
-            smin = std::min(smin, s);
-            smax = std::max(smax, s);
+int64_t D2dSyncConsumer::core_index(uint32_t dev, const CoreCoord& eth) const {
+    if (dev >= ctx_.devices.size()) {
+        return -1;
+    }
+    const auto& lanes = ctx_.devices[dev].lanes;
+    for (size_t ci = 0; (ci + 1) * profiler::kSpscNRiscDecode <= lanes.size(); ci++) {
+        if (lanes[ci * profiler::kSpscNRiscDecode].logical == eth) {
+            return static_cast<int64_t>(ci);
         }
-        if (nb == 0) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync device {}: {} local clock samples but no fittable 1 ms bucket",
-                dev,
-                l.fit.n_total);
+    }
+    return -1;
+}
+
+// Sender: two stamps per round (start, end); receiver: one (arrival). Each stamp carries the wall tick and a refclk
+// reading, which is exactly EthSyncSample -- t0/t2 and t1 with an rc -- so the checkpoint-1 solver runs unchanged.
+void D2dSyncConsumer::try_solve_links(bool final) {
+    for (size_t li = 0; li < ctx_.links.size(); li++) {
+        LinkSolution& out = solved_[li];
+        if (out.ok) {
             continue;
         }
-        const double mean = ssum / static_cast<double>(nb);
-        const double to_ghz = LocalClockFit::kRefclkHz * 1e-9;  // wall ticks per refclk tick -> GHz
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] d2d sync device {}: local clock {} samples in {} x 1 ms buckets; applied AICLK mean "
-            "{:.5f} GHz (bucket min {:.5f}, max {:.5f}), spread {:.1f} ppm",
-            dev,
-            l.fit.n_total,
-            nb,
-            mean * to_ghz,
-            smin * to_ghz,
-            smax * to_ghz,
-            mean > 0.0 ? (smax - smin) / mean * 1e6 : 0.0);
-    }
-
-    // ---- link half: each boot-time eth sync, sender (round start/end) and receiver (arrival) paired by round ---
-    const auto core_index = [&](uint32_t dev, const CoreCoord& eth) -> int64_t {
-        if (dev >= ctx.devices.size()) {
-            return -1;
-        }
-        const auto& lanes = ctx.devices[dev].lanes;
-        for (size_t ci = 0; (ci + 1) * profiler::kSpscNRiscDecode <= lanes.size(); ci++) {
-            if (lanes[ci * profiler::kSpscNRiscDecode].logical == eth) {
-                return static_cast<int64_t>(ci);
-            }
-        }
-        return -1;
-    };
-    for (const CaptureContext::Link& L : ctx.links) {
+        const CaptureContext::Link& L = ctx_.links[li];
         const int64_t ca = core_index(L.dev_a, L.eth_a);
         const int64_t cb = core_index(L.dev_b, L.eth_b);
         if (ca < 0 || cb < 0) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} -> chip {}: an eth end is not in the decode roster",
-                L.chip_a,
-                L.chip_b);
             continue;
         }
         const auto ia = link_.find({L.dev_a, static_cast<uint32_t>(ca)});
         const auto ib = link_.find({L.dev_b, static_cast<uint32_t>(cb)});
         const size_t n_snd = ia == link_.end() ? 0 : ia->second.samples.size();
         const size_t n_rcv = ib == link_.end() ? 0 : ib->second.samples.size();
-        if (n_snd < 2 || n_rcv < 1) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): no link stamps drained "
-                "({} sender, {} receiver)",
-                L.chip_a,
-                L.eth_a.x,
-                L.eth_a.y,
-                L.chip_b,
-                L.eth_b.x,
-                L.eth_b.y,
-                n_snd,
-                n_rcv);
+        const size_t n = std::min(n_snd / 2, n_rcv);
+        // Live: wait for the whole burst. Final: take what arrived, if it is enough for a fit at all.
+        if (n < (final ? 8u : kLinkRounds)) {
             continue;
         }
         const auto& snd_s = ia->second.samples;
         const auto& rcv_s = ib->second.samples;
-        // Sender: two stamps per round (start, end); receiver: one (arrival). t0/t2 and t1 with a refclk each.
-        const size_t n = std::min(snd_s.size() / 2, rcv_s.size());
         std::vector<eth_sync::EthSyncSample> snd(n), rcv(n);
+        long double mid_acc = 0;
         for (size_t i = 0; i < n; i++) {
             const LinkSample& s0 = snd_s[2 * i];
             const LinkSample& s2 = snd_s[2 * i + 1];
@@ -132,44 +115,254 @@ void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
             b.t1_lo = static_cast<uint32_t>(r1.wall);
             b.rc_hi = static_cast<uint32_t>(r1.refclk >> 32);
             b.rc_lo = static_cast<uint32_t>(r1.refclk);
+            mid_acc += static_cast<long double>(s0.refclk);
         }
         const eth_sync::RefclkSolution sol = eth_sync::solve_refclk_domain(snd, rcv);
         if (!sol.valid) {
+            if (final) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): {} rounds, refclk "
+                    "solve invalid (sender ratio valid {}, receiver ratio valid {})",
+                    L.chip_a,
+                    L.eth_a.x,
+                    L.eth_a.y,
+                    L.chip_b,
+                    L.eth_b.x,
+                    L.eth_b.y,
+                    n,
+                    sol.k_snd.valid,
+                    sol.k_rcv.valid);
+            }
+            continue;
+        }
+        out.ok = true;
+        out.dev_snd = L.dev_a;
+        out.dev_rcv = L.dev_b;
+        out.offset_ticks = sol.offset_ticks;
+        out.rate = sol.rate_ppm * 1e-6;
+        out.mid = static_cast<double>(mid_acc / static_cast<long double>(n));
+        out.offset_ns = sol.offset_ns;
+        out.rate_ppm = sol.rate_ppm;
+        out.residual_rms_ns = sol.residual_rms_ns;
+        out.rounds = sol.n_total;
+        out.kept = sol.n_kept;
+    }
+}
+
+// A chip's refclk frame from its buckets: the refclk at its anchor tick, and its refclk period taken as k_mean / hz
+// so the correction is consistent with the anchor the records were baked with.
+D2dSyncConsumer::Frame D2dSyncConsumer::frame_of(uint32_t dev) const {
+    Frame f;
+    const auto it = local_.find(dev);
+    if (it == local_.end() || dev >= ctx_.devices.size()) {
+        return f;
+    }
+    const LocalClockFit& fit = it->second.fit;
+    const DeviceClock& clk = ctx_.devices[dev].clock;
+    const double A = static_cast<double>(clk.anchor_ticks);
+    double ksum = 0.0;
+    size_t nk = 0;
+    const LocalClockFit::Accum* holder = nullptr;  // the bucket whose wall span contains the anchor
+    const LocalClockFit::Accum* first = nullptr;
+    const LocalClockFit::Accum* last = nullptr;
+    for (const auto& [key, b] : fit.buckets) {
+        if (b.n < 2 || b.slope() <= 0.0) {
+            continue;
+        }
+        ksum += b.slope();
+        nk++;
+        if (first == nullptr) {
+            first = &b;
+        }
+        last = &b;
+        const double r_lo = static_cast<double>(key * LocalClockFit::kBucketTicks);
+        const double r_hi = static_cast<double>((key + 1) * LocalClockFit::kBucketTicks);
+        if (holder == nullptr && b.wall_of_refclk(r_lo) <= A && A <= b.wall_of_refclk(r_hi)) {
+            holder = &b;
+        }
+    }
+    if (nk == 0) {
+        return f;
+    }
+    if (holder == nullptr) {
+        // The anchor precedes or follows every fitted bucket: the nearest line, extended.
+        holder = A < first->ay ? first : last;
+    }
+    f.k_mean = ksum / static_cast<double>(nk);
+    f.refclk_at_anchor = holder->refclk_of_wall(A);
+    f.period_ns = f.k_mean * 1e9 / static_cast<double>(baked_hz(clk));
+    f.ok = true;
+    return f;
+}
+
+void D2dSyncConsumer::publish_all(bool final) {
+    if (local_.empty()) {
+        return;
+    }
+    // Root: the lowest device index with a local fit. Its host anchor is the fleet timeline's.
+    const uint32_t root = local_.begin()->first;
+    const Frame fr = frame_of(root);
+    if (!fr.ok) {
+        return;
+    }
+    const DeviceClock& rclk = ctx_.devices[root].clock;
+    for (const auto& [dev, st] : local_) {
+        const Frame fd = frame_of(dev);
+        if (!fd.ok) {
+            continue;
+        }
+        const DeviceClock& dclk = ctx_.devices[dev].clock;
+        const double hz_d = static_cast<double>(baked_hz(dclk));
+        const double A_d = static_cast<double>(dclk.anchor_ticks);
+        // Host anchors differ by a small amount (ms): keep it in integers, then double.
+        const double dH = static_cast<double>(rclk.anchor_host_ns - dclk.anchor_host_ns);
+        // The link that puts this chip on the root's refclk, if it is not the root. Direct links only: a chip with
+        // no solved link to the root keeps its own anchor and gets the local term alone.
+        const LinkSolution* link = nullptr;
+        bool d_is_receiver = false;
+        if (dev != root) {
+            for (const LinkSolution& s : solved_) {
+                if (!s.ok) {
+                    continue;
+                }
+                if (s.dev_snd == root && s.dev_rcv == dev) {
+                    link = &s;
+                    d_is_receiver = true;
+                    break;
+                }
+                if (s.dev_rcv == root && s.dev_snd == dev) {
+                    link = &s;
+                    d_is_receiver = false;
+                    break;
+                }
+            }
+        }
+        // Root's refclk of this chip's refclk R: receiver = sender + offset + rate * (sender - mid).
+        const auto to_root_refclk = [&](double R) -> double {
+            if (dev == root || link == nullptr) {
+                return R;
+            }
+            if (d_is_receiver) {
+                // Solve sender from receiver: R_s (1 + rate) = R - offset + rate * mid.
+                return (R - link->offset_ticks + link->rate * link->mid) / (1.0 + link->rate);
+            }
+            return R + link->offset_ticks + link->rate * (R - link->mid);
+        };
+        // The corrected host time of wall tick T, relative to this chip's own anchor host time (so the frame stays
+        // small): (link(R_d(T)) - R_r(A_r)) * P_r + (H_r - H_d), if on the root timeline; else its own refclk frame.
+        const bool on_root = dev == root || link != nullptr;
+        const auto corrected_rel = [&](const LocalClockFit::Accum& b, double T) -> double {
+            const double R = b.refclk_of_wall(T);
+            if (on_root) {
+                return (to_root_refclk(R) - fr.refclk_at_anchor) * fr.period_ns + dH;
+            }
+            return (R - fd.refclk_at_anchor) * fd.period_ns;
+        };
+        const auto base_rel = [&](double T) -> double { return (T - A_d) * 1e9 / hz_d; };
+        std::vector<SyncSegment> segs;
+        segs.reserve(st.fit.buckets.size());
+        for (const auto& [key, b] : st.fit.buckets) {
+            if (b.n < 2 || b.slope() <= 0.0) {
+                continue;
+            }
+            const double r_lo = static_cast<double>(key * LocalClockFit::kBucketTicks);
+            const double r_hi = static_cast<double>((key + 1) * LocalClockFit::kBucketTicks);
+            const double T_lo = b.wall_of_refclk(r_lo);
+            const double T_hi = b.wall_of_refclk(r_hi);
+            if (!(T_hi > T_lo)) {
+                continue;
+            }
+            const double d_lo = corrected_rel(b, T_lo) - base_rel(T_lo);
+            const double d_hi = corrected_rel(b, T_hi) - base_rel(T_hi);
+            segs.push_back(SyncSegment{
+                .tick_lo = static_cast<uint64_t>(T_lo),
+                .tick_hi = static_cast<uint64_t>(T_hi),
+                .delta_ns_lo = d_lo,
+                .slope_ns_per_tick = (d_hi - d_lo) / (T_hi - T_lo)});
+        }
+        if (!segs.empty()) {
+            SyncCorrections::publish(ctx_.devices[dev].chip_id, std::move(segs));
+        }
+    }
+    (void) final;
+}
+
+void D2dSyncConsumer::log_summary() const {
+    for (const auto& [dev, l] : local_) {
+        size_t nb = 0;
+        double smin = std::numeric_limits<double>::max(), smax = 0.0, ssum = 0.0;
+        for (const auto& [key, b] : l.fit.buckets) {
+            if (b.n < 2) {
+                continue;
+            }
+            const double s = b.slope();
+            if (s <= 0.0) {
+                continue;
+            }
+            nb++;
+            ssum += s;
+            smin = std::min(smin, s);
+            smax = std::max(smax, s);
+        }
+        const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
+        if (nb == 0) {
             log_warning(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): {} rounds, refclk solve "
-                "invalid (sender ratio valid {}, receiver ratio valid {})",
+                "[streaming profiler] d2d sync chip {}: {} local clock samples but no fittable 1 ms bucket",
+                chip,
+                l.fit.n_total);
+            continue;
+        }
+        const double mean = ssum / static_cast<double>(nb);
+        const double to_ghz = LocalClockFit::kRefclkHz * 1e-9;
+        const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].clock.frequency_ghz : 0.0;
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] d2d sync chip {}: local clock {} samples in {} x 1 ms buckets; applied AICLK mean "
+            "{:.5f} GHz (bucket min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} ppm; {} correction "
+            "segments published",
+            chip,
+            l.fit.n_total,
+            nb,
+            mean * to_ghz,
+            smin * to_ghz,
+            smax * to_ghz,
+            anchor_ghz,
+            mean > 0.0 ? (smax - smin) / mean * 1e6 : 0.0,
+            SyncCorrections::published(chip));
+    }
+    for (size_t li = 0; li < solved_.size() && li < ctx_.links.size(); li++) {
+        const LinkSolution& s = solved_[li];
+        const CaptureContext::Link& L = ctx_.links[li];
+        if (!s.ok) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): not solved (no or too "
+                "few link stamps drained)",
                 L.chip_a,
                 L.eth_a.x,
                 L.eth_a.y,
                 L.chip_b,
                 L.eth_b.x,
-                L.eth_b.y,
-                n,
-                sol.k_snd.valid,
-                sol.k_rcv.valid);
+                L.eth_b.y);
             continue;
         }
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): {} rounds ({} kept); refclk "
-            "domain offset {:.1f} ns, rate {:.3f} ppm, residual rms {:.1f} ns; AICLK/refclk sender {:.4f} ({:+.1f} "
-            "ppm vs nominal) receiver {:.4f} ({:+.1f} ppm)",
+            "domain offset {:.1f} ns, rate {:.3f} ppm, residual rms {:.1f} ns",
             L.chip_a,
             L.eth_a.x,
             L.eth_a.y,
             L.chip_b,
             L.eth_b.x,
             L.eth_b.y,
-            sol.n_total,
-            sol.n_kept,
-            sol.offset_ns,
-            sol.rate_ppm,
-            sol.residual_rms_ns,
-            sol.k_snd.k,
-            sol.k_snd.ppm_vs_nominal,
-            sol.k_rcv.k,
-            sol.k_rcv.ppm_vs_nominal);
+            s.rounds,
+            s.kept,
+            s.offset_ns,
+            s.rate_ppm,
+            s.residual_rms_ns);
     }
     if (dropped_kind_ != 0) {
         log_warning(
@@ -177,7 +370,14 @@ void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
             "[streaming profiler] d2d sync: {} PP_CLOCK samples of an unknown kind ignored",
             dropped_kind_);
     }
-    // A capture's samples are its own.
+}
+
+void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
+    (void)ctx;
+    try_solve_links(/*final=*/true);
+    publish_all(/*final=*/true);
+    log_summary();
+    // The published corrections stay for the sinks that write at process end; the next attach starts fresh.
     local_.clear();
     link_.clear();
     dropped_kind_ = 0;

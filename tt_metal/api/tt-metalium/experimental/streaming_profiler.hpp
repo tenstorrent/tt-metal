@@ -123,6 +123,12 @@ struct batch_of<F> : batch_of<decltype(&F::operator())> {};
 }  // namespace detail
 
 /** @brief Base class of every record: its site, core, program id and clock. */
+namespace detail {
+// This chip's time-indexed device<->device sync correction to the record's baked anchor, in nanoseconds: 0 until
+// the d2d sync publishes one, so a record converts exactly as before by default. Defined in the library.
+int64_t sync_correction_ns(uint16_t chip_id, uint64_t device_ticks) noexcept;
+}  // namespace detail
+
 class Record {
 public:
     const Site& site() const { return detail::site_of(zone_id_); }
@@ -144,8 +150,9 @@ protected:
     }
     std::chrono::steady_clock::time_point host_time(uint64_t ticks) const {
         const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset_);
-        return std::chrono::steady_clock::time_point(
-            std::chrono::nanoseconds(static_cast<int64_t>(cycles * 1e9 / frequency_hz_)));
+        // The baked scalar anchor, composed with this chip's time-indexed d2d sync term (0 until published).
+        return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(
+            static_cast<int64_t>(cycles * 1e9 / frequency_hz_) + detail::sync_correction_ns(chip_id_, ticks)));
     }
 
     uint64_t timestamp_;

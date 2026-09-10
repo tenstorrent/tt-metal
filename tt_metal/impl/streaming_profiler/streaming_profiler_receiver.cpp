@@ -72,6 +72,8 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
             streams_.push_back(std::move(s));
         }
         ctx_.devices.push_back(dev.ctx);
+        ctx_.devices.back().chip_id = dev.chip_id;
+        ctx_.devices.back().clock = dev.clock;
     }
     ctx_.links = relays_->links();
     for (const auto& st : streams_) {
