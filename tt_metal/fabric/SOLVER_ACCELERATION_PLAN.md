@@ -49,12 +49,15 @@ is tiny and rigid).
 
 ## 3. Decision
 
-**Ship `gimsatul + distilled pool` as the enumerator, driven in-process, wrapped in a best-of-N race for the
-112–128 cliff.** Rationale from the data (§5): it is never worse than cold gimsatul and materially better in
-the tractable tail (~2.3× at 96 for both `-n 5` and `-n 10`), it is the only mode that reliably completes
-128-`n5` and 96-`n10`, and it solves + exhaustively enumerates 144 in minutes. The clause-share portfolio is
-kept only as the pool's producer, not as a standalone mode. Plain single-thread CaDiCaL is retained as the
-race's warm/incremental arm and as the always-available fallback.
+**Ship gimsatul driven in-process, wrapped in a best-of-N race, with the distilled pool as an enabler that
+must be fed by a live CaDiCaL searcher (P3) to earn its keep.** Rationale from the *contention-controlled*
+data (§5a — this replaces an earlier overstated read): the pool's benefit is real but **narrow** — a durable
+edge at 112 (completes 3/4 seeds vs cold gimsatul's 1/4), a wash at 144, and thread-budget-dependent at 128
+— because in pure gimsatul-every-step mode the pool barely fills (fixed units only). So the load-bearing
+pieces are: (1) **in-process gimsatul** (removes the subprocess/DIMACS cost — done, P6), (2) the **best-of-N
+race** (the real answer to gimsatul's large run-to-run nondeterminism and the 112–128 variance), and (3)
+**P3** to make the pool actually accumulate learned clauses. The clause-share portfolio is kept only as the
+pool's producer, not a standalone mode; plain CaDiCaL is the race's warm arm + fallback.
 
 ## 4. Architecture
 
@@ -108,14 +111,35 @@ Enumeration `-n 5`, solutions found (`@cap` = hit the 20-min budget):
 `-n 10` deep tail (seeds 0/7): 96 → B 10·493s / A 10·1159s / D 10·958s; 128 → B 3–4@cap / A 7@cap / D 0@cap.
 Primes: B solves all sizes/seeds with **no timeouts**; D times out on the 128 prime.
 
-**Reading (with the variance caveat above in mind):** ≤80 → pool neutral (nothing hard to carry); 96 →
-pool appears to win (~2.3×) but a per-seed single comparison; **the only size where the pool's benefit is
-mechanistically expected (the injected clauses actually prune the cliff) and shows up as more solutions is
-128** (B 3–5 vs A 1–2); 112 and 144 are within run-variance (some seeds favor A, others B — e.g. 112 s0
-favored A, 112 s1 favored B), i.e. a wash, consistent with the pool being nearly empty in pure-gimsatul
-mode; D not viable alone on min-host (times out on 128 prime + all 128/144 enums). Net: the honest claim is
-"pool clearly helps at 128, is a wash at 112/144, needs the multi-seed medians to confirm 96." This is why
-P2 (race) + P3 (keep the CaDiCaL arm searching so the pool actually fills) matter more than a single mode.
+### 5a. Contention-controlled re-measurement (the table above was contaminated)
+
+The 90-cell table above used **32 gimsatul threads under a 36-rank mpirun on a 64-core box** — where the 35
+non-solving ranks busy-wait at ~89% CPU each (~31 cores), so 32 threads + ~31 spinning cores ≈ 63, right at
+the oversubscription edge, and gimsatul's threads were preempted by a *fluctuating* amount → timing variance
+that is partly a harness artifact. A re-run at **16 threads (16 + 35 spin ≈ 51 ≪ 64, guaranteed headroom)**,
+paired A-vs-B on the same seeds {1,5,99,123}, isolates the pool from CPU contention:
+
+| size | **B: gimsatul+pool** (completions / caps) | **A: gimsatul cold** | honest verdict |
+|---:|---|---|---|
+| 112 | **5/5 · 623–1151s ×3, 1@cap** — completes **3/4** | 5/5 ×1, 2–4@cap ×3 — completes **1/4** | **B — real, durable edge** |
+| 128 | 2, 3, 1, 1 @cap | 2, 2, 2, 1 @cap | wash / slight A **at 16t** (B led at 32t → thread-budget-dependent) |
+| 144 | 99–973s (all 1 exhaustive) | 118–711s (all 1) | wash — trade wins by seed on nondeterminism alone |
+
+**Corrected conclusion (this supersedes the earlier framing):**
+- The blanket "pool wins" was **overstated** — inflated by CPU oversubscription + too few seeds against
+  gimsatul's large intrinsic nondeterminism (144 wall swung 99↔973s for the *same* mode).
+- **Where the pool genuinely, repeatably helps: 112** (completes 3/4 vs 1/4, faster head-to-head when both
+  finish) — survives contention-clean multi-seed.
+- **144: no pool value** — single rigid host-set, near-empty pool → pure nondeterminism.
+- **128: thread-budget-dependent** — pool ahead at 32 threads, wash-to-slight-A at 16.
+- Root cause of the modest effect (and the actionable lever): in **pure gimsatul-every-step mode the pool
+  barely fills** (fixed units only, no learned clauses). Its theoretical power requires **P3** — keep a
+  CaDiCaL searcher populating the pool. The current benchmark tests the pool *starved*, and it still edges
+  ahead at 112, which is encouraging for what P3 could unlock.
+- **Methodology note for all future runs:** cap `gimsatul_threads + mpi_ranks ≤ cores` (or fix MPI idle
+  busy-wait), and average ≥4 seeds — single-seed A-vs-B gaps are dominated by nondeterminism + contention.
+
+D remains not viable alone on min-host (times out on 128 prime + all 128/144 enums) in either measurement.
 
 ## 6. Implementation stories
 
