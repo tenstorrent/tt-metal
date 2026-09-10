@@ -245,9 +245,143 @@ TEST_F(KernelThreadSyncTest, ComputeBarrierSynchronizesAllTriscs) {
     }
 }
 
-TEST_F(KernelThreadSyncTest, AllCoresBarrierSynchronizesDmAndTriscs) {
+// Three DM kernels, each parallelized 2 ways, co-resident with a compute kernel spread over 4
+// NEOs. Each kernel calls sync_threads() with no argument, so the barrier it lands on is the slot
+// firmware derived for it. If two kernels ended up on the same slot they would share an arrival
+// counter, and since sync_threads() releases on the arriving thread's own participant count, the
+// mismatched groups would either release early (a short observed count below) or hang.
+TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) {
     if (this->arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "sync_all_cores across DMs and TRISCs is Quasar-only";
+        GTEST_SKIP() << "Per-kernel barrier slots are Quasar-only";
+    }
+
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumDmKernels = 3;
+    constexpr uint32_t kDmThreadsPerKernel = 2;
+    constexpr uint32_t kNumNeos = 4;
+    constexpr uint32_t kTriscCoresPerNeo = 4;
+    constexpr uint32_t kComputeParticipants = kNumNeos * kTriscCoresPerNeo;
+    constexpr const char* kComputeKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/kernel_thread_barrier.cpp";
+
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    // Each kernel gets a private scratch region, so a wrong observed count can only come from
+    // barrier slots colliding rather than from two kernels writing the same words.
+    std::vector<std::string> dm_names;
+    std::vector<ScratchLayout> dm_layouts;
+    std::vector<KernelSpec> specs;
+    std::vector<std::string> kernel_names;
+    uint32_t next_addr = l1_base;
+    for (uint32_t i = 0; i < kNumDmKernels; i++) {
+        std::string name = "dm_barrier_kernel_" + std::to_string(i);
+        auto spec = MakeMinimalGen2DMKernel(name, kDmThreadsPerKernel);
+        spec.source = kKernelPath;
+        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        specs.push_back(spec);
+        dm_layouts.push_back(make_layout(next_addr, kRounds));
+        next_addr += dm_layouts.back().total_words * sizeof(uint32_t);
+        dm_names.push_back(name);
+        kernel_names.push_back(name);
+    }
+
+    // The compute kernel indexes arrivals/post by participant, so its rows are wider.
+    const uint32_t compute_arrivals_words = kRounds * kComputeParticipants;
+    const uint32_t compute_observed_words = kRounds + 1;
+    const uint32_t compute_post_words = kRounds * kComputeParticipants;
+    const uint32_t compute_arrivals_addr = next_addr;
+    const uint32_t compute_observed_addr = compute_arrivals_addr + compute_arrivals_words * sizeof(uint32_t);
+    const uint32_t compute_post_addr = compute_observed_addr + compute_observed_words * sizeof(uint32_t);
+    const uint32_t compute_total_words = compute_arrivals_words + compute_observed_words + compute_post_words;
+
+    auto compute_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
+    compute_spec.source = kComputeKernelPath;
+    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+    specs.push_back(compute_spec);
+    kernel_names.push_back("compute_barrier_kernel");
+
+    ProgramSpec spec;
+    spec.name = "multi_kernel_thread_barrier";
+    spec.kernels = specs;
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, kernel_names)};
+
+    Program program = MakeProgramFromSpec(this->device(), spec);
+
+    uint32_t total_words = compute_total_words;
+    for (const auto& layout : dm_layouts) {
+        total_words += layout.total_words;
+    }
+    std::vector<uint32_t> zeros(total_words, 0);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
+
+    ProgramRunArgs params;
+    for (uint32_t i = 0; i < kNumDmKernels; i++) {
+        params.kernel_run_args.push_back(
+            make_run_params(KernelSpecName{dm_names[i]}, node, dm_layouts[i], kRounds, kSkewIters));
+    }
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute_barrier_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          compute_arrivals_addr,
+                          compute_observed_addr,
+                          compute_post_addr,
+                          kRounds,
+                          kSkewIters,
+                          kComputeParticipants,
+                      }}},
+            },
+    });
+    SetProgramRunArgs(program, params);
+    LaunchProgram(this->device(), std::move(program));
+
+    // Every DM kernel must see exactly its own two threads, never another kernel's.
+    for (uint32_t i = 0; i < kNumDmKernels; i++) {
+        std::vector<uint32_t> observed, arrivals, post;
+        slow_dispatch::ReadFromL1(
+            this->device(), kCore, dm_layouts[i].observed_addr, (kRounds + 1) * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(
+            this->device(), kCore, dm_layouts[i].arrivals_addr, kRounds * sizeof(uint32_t), arrivals);
+        slow_dispatch::ReadFromL1(this->device(), kCore, dm_layouts[i].post_addr, kRounds * sizeof(uint32_t), post);
+        ASSERT_EQ(observed.size(), kRounds + 1);
+        ASSERT_EQ(arrivals.size(), kRounds);
+        ASSERT_EQ(post.size(), kRounds);
+        EXPECT_EQ(observed[kRounds], kDmThreadsPerKernel) << dm_names[i] << ": get_num_threads() mismatch";
+        for (uint32_t r = 0; r < kRounds; r++) {
+            EXPECT_EQ(arrivals[r], kDmThreadsPerKernel)
+                << dm_names[i] << " round " << r << ": not all of this kernel's threads arrived before release";
+            EXPECT_EQ(observed[r], kDmThreadsPerKernel)
+                << dm_names[i] << " round " << r << ": observed a count from outside this kernel";
+            EXPECT_EQ(post[r], kDmThreadsPerKernel)
+                << dm_names[i] << " round " << r << ": not all threads completed post-barrier phase";
+        }
+    }
+
+    // The compute kernel's own barrier still covers all TRISCs of all its NEOs.
+    std::vector<uint32_t> compute_observed, compute_arrivals;
+    slow_dispatch::ReadFromL1(
+        this->device(), kCore, compute_observed_addr, compute_observed_words * sizeof(uint32_t), compute_observed);
+    slow_dispatch::ReadFromL1(
+        this->device(), kCore, compute_arrivals_addr, compute_arrivals_words * sizeof(uint32_t), compute_arrivals);
+    ASSERT_EQ(compute_observed.size(), compute_observed_words);
+    ASSERT_EQ(compute_arrivals.size(), compute_arrivals_words);
+    EXPECT_EQ(compute_observed[kRounds], kNumNeos) << "compute get_num_threads() mismatch";
+    for (uint32_t r = 0; r < kRounds; r++) {
+        uint32_t arrived = 0;
+        for (uint32_t p = 0; p < kComputeParticipants; p++) {
+            arrived += compute_arrivals[r * kComputeParticipants + p];
+        }
+        EXPECT_EQ(arrived, kComputeParticipants) << "round " << r << ": not all TRISCs arrived before release";
+        EXPECT_EQ(compute_observed[r], kComputeParticipants)
+            << "round " << r << ": compute observer counted wrong number of TRISCs";
+    }
+}
+
+TEST_F(KernelThreadSyncTest, DmComputeBarrierSynchronizesDmAndTriscs) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "dm_compute_barrier across DMs and TRISCs is Quasar-only";
     }
 
     NodeCoord node{0, 0};
@@ -255,10 +389,10 @@ TEST_F(KernelThreadSyncTest, AllCoresBarrierSynchronizesDmAndTriscs) {
     constexpr uint32_t kNumNeos = 4;
     constexpr uint32_t kTriscCoresPerNeo = 4;
     constexpr uint32_t kNumParticipants = kNumDmThreads + kNumNeos * kTriscCoresPerNeo;
-    constexpr uint32_t kAllCoresArgsCount = 7;
-    constexpr const char* kDmKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_all_cores_barrier.cpp";
+    constexpr uint32_t kDmComputeArgsCount = 8;
+    constexpr const char* kDmKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_dm_compute_barrier.cpp";
     constexpr const char* kComputeKernelPath =
-        "tests/tt_metal/tt_metal/test_kernels/compute/kernel_all_cores_barrier.cpp";
+        "tests/tt_metal/tt_metal/test_kernels/compute/kernel_dm_compute_barrier.cpp";
 
     uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t arrivals_words = kRounds * kNumParticipants;
@@ -269,18 +403,18 @@ TEST_F(KernelThreadSyncTest, AllCoresBarrierSynchronizesDmAndTriscs) {
     const uint32_t post_addr = observed_addr + observed_words * sizeof(uint32_t);
     const uint32_t total_words = arrivals_words + observed_words + post_words;
 
-    auto dm_spec = MakeMinimalGen2DMKernel("dm_all_cores_kernel", kNumDmThreads);
+    auto dm_spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", kNumDmThreads);
     dm_spec.source = kDmKernelPath;
-    dm_spec.advanced_options.num_runtime_varargs_per_node = {{node, kAllCoresArgsCount}};
+    dm_spec.advanced_options.num_runtime_varargs_per_node = {{node, kDmComputeArgsCount}};
 
-    auto compute_spec = MakeMinimalGen2ComputeKernel("compute_all_cores_kernel", kNumNeos);
+    auto compute_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
     compute_spec.source = kComputeKernelPath;
-    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kAllCoresArgsCount}};
+    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kDmComputeArgsCount}};
 
     ProgramSpec spec;
-    spec.name = "all_cores_kernel_thread_barrier";
+    spec.name = "dm_compute_kernel_thread_barrier";
     spec.kernels = {dm_spec, compute_spec};
-    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_all_cores_kernel", "compute_all_cores_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_barrier_kernel", "compute_barrier_kernel"})};
 
     Program program = MakeProgramFromSpec(this->device(), spec);
 
@@ -295,15 +429,16 @@ TEST_F(KernelThreadSyncTest, AllCoresBarrierSynchronizesDmAndTriscs) {
         kSkewIters,
         kNumParticipants,
         kNumDmThreads,
+        kNumNeos,
     };
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = KernelSpecName{"dm_all_cores_kernel"},
+        .kernel = KernelSpecName{"dm_barrier_kernel"},
         .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
     });
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = KernelSpecName{"compute_all_cores_kernel"},
+        .kernel = KernelSpecName{"compute_barrier_kernel"},
         .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
     });
     SetProgramRunArgs(program, params);
