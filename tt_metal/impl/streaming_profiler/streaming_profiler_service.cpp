@@ -240,8 +240,15 @@ void Service::consumer_thread(Consumer& c) {
             s->state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
             s->state.core_of_xy.load(dev.core_xy);
             s->lanes.reserve(dev.lanes.size());
-            for (const auto& core : dev.lanes) {
-                s->lanes.push_back(record_consts(core, p->clock(ps.dev)));
+            // The trailing eth cores read a different wall-clock counter than the workers, so their records need
+            // the eth anchor or they land hours off on the timeline.
+            const size_t n_eth_lanes = static_cast<size_t>(dev.n_eth_cores) * profiler::kSpscNRiscDecode;
+            const size_t worker_lanes =
+                dev.lanes.size() >= n_eth_lanes ? dev.lanes.size() - n_eth_lanes : dev.lanes.size();
+            for (size_t li = 0; li < dev.lanes.size(); li++) {
+                const DeviceClock& clk =
+                    (li >= worker_lanes && dev.eth_clock.frequency_ghz > 0.0) ? dev.eth_clock : p->clock(ps.dev);
+                s->lanes.push_back(record_consts(dev.lanes[li], clk));
             }
             s->dec.st = &s->state;
             s->dec.lanes = s->lanes.data();

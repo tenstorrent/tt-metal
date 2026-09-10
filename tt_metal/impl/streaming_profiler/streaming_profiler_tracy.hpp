@@ -85,6 +85,9 @@ private:
     // gap between the two curves on a non-root chip is the cross-chip error the linked sync removes.
     void plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks);
     const char* plot_name(uint32_t chip, bool linked);
+    // Plots are emitted at capture end, not during decode: at decode time the correction is not yet solved
+    // (lookup returns 0) and the timeline map has no segments (points land at raw, hours-off timestamps).
+    void emit_plots();
 
     Service& service_;
     ConsumerHandle handle_ = 0;
@@ -101,7 +104,14 @@ private:
     size_t srcloc_count_ = 0;
     std::unordered_map<std::string, const void*> srclocs_;
     std::vector<DeviceClock> clocks_;  // per device index, for mapping a clock sample's device time to the timeline
+    std::vector<DeviceClock> eth_clocks_;  // per device index, the idle-eth wall anchor for PP_CLOCK samples
     std::unordered_map<uint32_t, std::string> plot_local_, plot_linked_;  // persistent per-chip plot names for Tracy
+    struct PlotSample {
+        uint32_t dev;
+        uint32_t kind;
+        uint64_t ts;
+    };
+    std::vector<PlotSample> plot_samples_;  // accumulated during the capture, drained in emit_plots()
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

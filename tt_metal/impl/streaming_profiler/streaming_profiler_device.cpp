@@ -382,6 +382,22 @@ bool Devices::boot_device(
 
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     ctx.out.clock = sync_device_clock(cluster, ctx.chip_id, ctx.cores.front().virt);
+    // The idle-eth core's wall clock (0xFFB121F0) is a different counter from the workers'
+    // -- free-running from power-on, not device init -- so the PP_CLOCK samples need their own anchor to land on
+    // the host timeline. Measured the same way, on the idle-eth core.
+    if (!ctx.eth.empty()) {
+        ctx.out.ctx.eth_clock = sync_device_clock(cluster, ctx.chip_id, ctx.eth.front().virt);
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: eth clock anchor_ticks {} ghz {:.5f} (worker ghz {:.5f})",
+            ctx.chip_id,
+            ctx.out.ctx.eth_clock.anchor_ticks,
+            ctx.out.ctx.eth_clock.frequency_ghz,
+            ctx.out.clock.frequency_ghz);
+        // Same chip AICLK as the workers: reuse the worker's reliably-measured frequency, keep only the eth
+        // anchor tick (the counter's zero). The idle-eth core runs the pusher, so its own slope read is noisier.
+        ctx.out.ctx.eth_clock.frequency_ghz = ctx.out.clock.frequency_ghz;
+    }
     TT_FATAL(
         ctx.out.clock.frequency_ghz > 0.0,
         "streaming profiler: device {} wall clock did not advance during clock sync",
@@ -788,6 +804,7 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
             e.linked.push_back(std::move(ln));
         }
     }
+    cap.n_eth_cores = 1u + static_cast<uint32_t>(e.linked.size());  // the idle pusher core + its active cores
     ctx.eth.push_back(std::move(e));
 }
 

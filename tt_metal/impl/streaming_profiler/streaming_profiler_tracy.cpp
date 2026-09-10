@@ -10,6 +10,7 @@
 #include <umd/device/driver_atomics.hpp>
 
 #include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
 #include <tracy/Tracy.hpp>
@@ -75,11 +76,15 @@ TracySink::TracySink(Service& service) : service_(service), srcloc_table_(kSrclo
             .on_attach =
                 [this](const CaptureContext& ctx) {
                     clocks_.clear();
+                    eth_clocks_.clear();
                     for (const auto& d : ctx.devices) {
                         clocks_.push_back(d.clock);
+                        eth_clocks_.push_back(d.eth_clock);
                     }
                 },
-            .clock_sink = [this](const ClockSample& cs) { plot_clock(cs.dev, cs.kind, cs.ts); }});
+            .clock_sink =
+                [this](const ClockSample& cs) { plot_samples_.push_back(PlotSample{cs.dev, cs.kind, cs.ts}); },
+            .on_capture_end = [this](const CaptureContext&) { emit_plots(); }});
 }
 
 TracySink::~TracySink() {
@@ -334,6 +339,14 @@ void TracySink::push_marker(
 #endif
 }
 
+void TracySink::emit_plots() {
+    for (const PlotSample& p : plot_samples_) {
+        plot_clock(p.dev, p.kind, p.ts);
+    }
+    plot_samples_.clear();
+    plot_samples_.shrink_to_fit();
+}
+
 const char* TracySink::plot_name(uint32_t chip, bool linked) {
     auto& m = linked ? plot_linked_ : plot_local_;
     auto it = m.find(chip);
@@ -352,16 +365,21 @@ void TracySink::plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks) {
     if (dev >= clocks_.size()) {
         return;
     }
-    const DeviceClock& clk = clocks_[dev];
-    if (clk.frequency_ghz <= 0.0) {
+    const DeviceClock& wclk = clocks_[dev];
+    const DeviceClock& eclk =
+        (dev < eth_clocks_.size() && eth_clocks_[dev].frequency_ghz > 0.0) ? eth_clocks_[dev] : clocks_[dev];
+    if (wclk.frequency_ghz <= 0.0) {
         return;
     }
-    const uint32_t chip = clk.chip_id;
-    const double hz = clk.frequency_ghz * 1e9;
+    const uint32_t chip = wclk.chip_id;
+    const double hz = wclk.frequency_ghz * 1e9;
+    // The eth wall clock is a different counter from the workers, but the same AICLK rate. Take the eth TICK delta
+    // since the eth anchor (session-relative, in the eth domain) and place it via the WORKER host anchor -- the
+    // reliable steady-clock reference the zones use -- so plots and zones share one timeline.
     const int64_t base_ns =
-        clk.anchor_host_ns +
+        wclk.anchor_host_ns +
         static_cast<int64_t>(
-            static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(clk.anchor_ticks)) * 1e9 /
+            static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(eclk.anchor_ticks)) * 1e9 /
             hz);
     const int64_t tsc = to_timeline(base_ns);
     if (kind == PP_CLOCK_LOCAL_REFCLK) {

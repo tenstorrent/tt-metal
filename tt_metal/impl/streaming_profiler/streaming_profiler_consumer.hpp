@@ -49,6 +49,8 @@ struct CaptureContext {
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
         uint32_t chip_id = 0;
         DeviceClock clock;  // the baked anchor the records carry; the d2d sync composes its term with it
+        DeviceClock eth_clock;     // the idle-eth core's own wall-clock anchor, for placing PP_CLOCK plot samples
+        uint32_t n_eth_cores = 0;  // trailing cores in `lanes` that are eth (idle + active); they use eth_clock
     };
     std::vector<Device> devices;
     // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b
