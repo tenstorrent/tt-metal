@@ -425,7 +425,7 @@ void run_single_core_unary_broadcast_quasar(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), packed_tilized_input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> dest_buffer_data;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);

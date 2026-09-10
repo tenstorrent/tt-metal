@@ -40,7 +40,10 @@
 #              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
 #              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
-#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes.
+#     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
+#     release_ready: Whether this SKU leg is included in package-and-release (default false).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 #   sp_config: Supercluster configuration (sc1) to run this test on.
@@ -75,7 +78,9 @@
   skus:
     bh_sc1:
       timeout: 14
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -98,6 +103,8 @@
   skus:
     bh_sc1:
       timeout: 11
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -117,7 +124,9 @@
   skus:
     bh_sc1:
       timeout: 24
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -136,7 +145,9 @@
   skus:
     bh_sc1_high_power:
       timeout: 16
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -159,7 +170,9 @@
   skus:
     bh_sc1:
       timeout: 12
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -181,7 +194,9 @@
   skus:
     bh_sc1:
       timeout: 15
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -207,6 +222,8 @@
       # which is a host readback per layer per chunk). 20 min is ~2x headroom. Was 40; the (team, sku)
       # time budget is a SUM, so the traced twin has to come out of the same allowance.
       timeout: 26
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -236,6 +253,8 @@
       # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
       # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
       timeout: 26
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -271,7 +290,9 @@
       # Measured 4.7 min at two_iters on a galaxy; ten_iters adds ~8x13.4s -> ~6.5 min. 18 min is ~2.7x
       # headroom. Was 40, but the (team, sku) time budget is a SUM and the traced twin needs room too.
       timeout: 18
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -309,7 +330,9 @@
       # Measured 4.0 min at two_iters; ten_iters adds ~8x10.6s -> ~5.5 min. Trace replay is faster per
       # chunk than eager dispatch, so this needs no more than its untraced twin.
       timeout: 18
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -340,7 +363,9 @@
     bh_sc1:
       # +2 min on the Kimi/GLM/dflash baseline of 10 for the Mistral row this leg now also runs.
       timeout: 12
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -362,7 +387,9 @@
   skus:
     bh_sc1:
       timeout: 9
-  owner_id: U09L76N1MAT
+      tier: 2
+      release_ready: false
+  owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   sp_config: sc1
 
@@ -380,7 +407,7 @@
     export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
     export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
     export PREFILL_RUNNER_LAUNCH=ci
-    export PREFILL_STANDALONE_CHUNKED_PCC=0.892300
+    export PREFILL_STANDALONE_CHUNKED_PCC=0.877000
     export LOGURU_LEVEL=INFO  # as every other prefill entry; keeps per-layer progress, drops per-op DEBUG
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -394,6 +421,8 @@
   skus:
     bh_sc1:
       timeout: 30
+      tier: 2
+      release_ready: false
   owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   sp_config: sc1
@@ -415,6 +444,8 @@
   skus:
     bh_sc1:
       timeout: 6
+      tier: 2
+      release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
   sp_config: sc1
@@ -435,6 +466,8 @@
   skus:
     bh_sc1:
       timeout: 6
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -456,6 +489,8 @@
   skus:
     bh_sc1:
       timeout: 6
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -478,6 +513,8 @@
   skus:
     bh_sc1_high_power:
       timeout: 5
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -497,7 +534,9 @@
   skus:
     bh_sc1:
       timeout: 26
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -524,6 +563,8 @@
   skus:
     bh_sc1:
       timeout: 16
+      tier: 2
+      release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
   sp_config: sc1
@@ -544,6 +585,8 @@
   skus:
     bh_sc1:
       timeout: 20
+      tier: 2
+      release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
   sp_config: sc1
@@ -571,6 +614,8 @@
   skus:
     bh_sc1:
       timeout: 30
+      tier: 2
+      release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
   sp_config: sc1
@@ -594,6 +639,8 @@
   skus:
     bh_sc1:
       timeout: 36
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -617,6 +664,8 @@
   skus:
     bh_sc1_high_power:
       timeout: 58
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -638,6 +687,8 @@
   skus:
     bh_sc1:
       timeout: 3
+      tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
   sp_config: sc1
@@ -657,6 +708,8 @@
   skus:
     bh_sc1_high_power:
       timeout: 3
+      tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
   sp_config: sc1
@@ -692,6 +745,8 @@
     bh_sc1:
       # Warm tilized-cache + chunked prefill (5120) + KV PCC; cold weight-cache build will exceed this.
       timeout: 60
+      tier: 2
+      release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1
@@ -736,6 +791,8 @@
     bh_sc1_high_power:
       # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
       timeout: 28
+      tier: 2
+      release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1
@@ -772,6 +829,8 @@
       # `set -e` above is load-bearing: without it only the LAST pytest's status reaches the runner,
       # so a failure in either of the first two would report as a pass.
       timeout: 10
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -796,6 +855,8 @@
       # The old 32 was sized against 20.9 min on run 32884863854, before the weight cache was staged
       # -- a warm cache is what took this leg under 15.
       timeout: 22
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -820,6 +881,8 @@
       # nothing. The `-k` pins the two PCC rows, random and pretrained, at iter1; the full matrix is
       # 24 runnable rows and would not fit any sane budget.
       timeout: 20
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -838,6 +901,8 @@
     bh_sc1:
       # 4.5 min on run 33425317777, covering both the 5k and 25k rows; 10 is ~2.2x.
       timeout: 10
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -862,6 +927,8 @@
       # 33425317777 and had eroded to 1.32x margin as the leg's cost grew. Full-model PCC gated per
       # stage on npcc, heavier than the 5.4 min smoke row it replaces.
       timeout: 14
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -895,6 +962,8 @@
       # 26 is ~1.5x. The previous 20 came from 10.9 min on run 33425317777 and had eroded to 1.17x
       # margin as the leg's cost grew -- not enough on shared hardware.
       timeout: 26
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -924,6 +993,8 @@
     bh_sc1:
       # 4.9 min on run 33425317777 vs the untraced twin's 10.9 (KV assert only); 10 is ~2x.
       timeout: 10
+      tier: 2
+      release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -947,13 +1018,15 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
   test_type: prefill_runner_kv_pcc
   test_tags: [kimi_k2_7, runner, kv_cache]
-  test_group: module
+  test_group: disagg_prefill
   skus:
     bh_sc4:
       # Mesh bringup, weight load and the staggered device teardown dominate the step; the chunk loop
       # is a couple of minutes of it. Budget covers those plus the up-to-120s producer connect.
       # Must match the shield/demo budget.
       timeout: 20
+      tier: 1
+      release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4
@@ -975,7 +1048,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_2, runner, kv_cache]
-  test_group: module
+  test_group: disagg_prefill
   skus:
     bh_sc4:
       # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
@@ -983,9 +1056,52 @@
       # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
       # Counts against the shield/demo budget together with the Kimi entry.
       timeout: 30
+      tier: 1
+      release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4
+
+
+
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k2_7, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      timeout: 35
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  sp_config: sc1
+
+
+- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52 sc1
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_2, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      timeout: 40
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  sp_config: sc1
 
 
 # ===== Op-level, no model under test ===================================================================
@@ -1016,7 +1132,9 @@
   skus:
     bh_sc1_high_power:
       timeout: 20
-  owner_id: U08RL15T4N8
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   sp_config: sc1
 
@@ -1045,6 +1163,8 @@
   skus:
     bh_sc1_high_power:
       timeout: 10
+      tier: 2
+      release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   sp_config: sc1

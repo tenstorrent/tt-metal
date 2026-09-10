@@ -94,7 +94,7 @@ ttnn:
     bh_p150b_civ2: 850
     wh_n150_civ2: 1020
     wh_n300_civ2: 1190
-    bh_p150b_civ2_viommu: 115
+    bh_p150b_civ2_viommu: 117
     bh_p300: 60
     bh_quietbox_2: 60
   package_and_release:
@@ -193,6 +193,7 @@ shield:
     bh_p150: 60
   demo:
     bh_sc4: 50
+    bh_sc1: 75
 
 scaleout:
   merge_gate:
@@ -226,7 +227,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 60
+    bh_galaxy: 125
     bh_sc1: 20
     bh_sc4: 90
     bh_sc16: 150
@@ -350,9 +351,9 @@ models:
     wh_n150: 28
     wh_galaxy_perf: 215
     bh_p150: 27
-    bh_quietbox_2: 320
+    bh_quietbox_2: 390
     bh_galaxy: 78
-    bh_sc1: 260
+    bh_sc1: 335
     bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -375,9 +376,9 @@ models:
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20
-    bh_quietbox_2: 345
+    bh_quietbox_2: 465
     bh_galaxy: 75
-    bh_sc1: 310
+    bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
