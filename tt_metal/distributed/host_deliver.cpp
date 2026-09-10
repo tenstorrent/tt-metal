@@ -506,7 +506,7 @@ public:
             // receiver kernels are pulling payloads across. A tight poll from every worker
             // thread contends with the transfers it is waiting for, inflating both the stage
             // it is timing and its variance.
-	    // 
+	    //
             // The first read still happens immediately, so an already-delivered message costs
             // exactly one read. Only a genuine wait pays the backoff.
             for (uint32_t k = 0, n = 1u << (spins < 10 ? spins : 10); k < n; ++k) {
