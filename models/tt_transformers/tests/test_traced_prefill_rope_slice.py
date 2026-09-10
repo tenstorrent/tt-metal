@@ -135,9 +135,15 @@ def test_trace_rope_table_supports_every_bucket_and_dynamic_start():
     ids=["builtin", "builtin_local", "custom", "custom_local"],
 )
 def test_only_setups_owning_shared_prefill_tables_are_padded(rope_setup_class, has_local, expected):
-    # A custom rope_setup_class, as Qwen2.5-VL and Qwen3-VL pass, has cos_matrix
-    # and sin_matrix but no cos_matrix_prefill, so padding it raises AttributeError.
+    # Transformer builds rope_setup from rope_setup_class, so which attributes it
+    # owns follows that class: the built-in setups define cos_matrix_prefill, and
+    # the Qwen2.5-VL and Qwen3-VL setups define only cos_matrix and sin_matrix, so
+    # padding one of those raises AttributeError. rope_local_setup is always built
+    # in, so it always owns the prefill tables.
     rope_setup = SimpleNamespace(name="global", cos_matrix=object(), sin_matrix=object())
+    if rope_setup_class is None:
+        rope_setup.cos_matrix_prefill = object()
+        rope_setup.sin_matrix_prefill = object()
     rope_local_setup = (
         SimpleNamespace(name="local", cos_matrix_prefill=object(), sin_matrix_prefill=object()) if has_local else None
     )
