@@ -555,8 +555,8 @@ def build_talker_decode_trace_h2d_constants(
     # both exact in bf16, and fused SDPA typecasts an fp32 mask to bf16 anyway
     # (prepare_fused_sdpa_mask) — so this is the same bytes SDPA already saw, minus a
     # per-step typecast. Every head also held an IDENTICAL row, so num_talker_heads
-    # copies were uploaded per frame where one broadcasts. Together the per-frame H2D
-    # goes 490 us -> ~50 us on N300, the largest single transfer in the AR loop.
+    # copies were uploaded per frame where one broadcasts. Together they cut the
+    # largest single H2D transfer in the AR loop by an order of magnitude.
     _mask_heads = 1
     for T in range(real_seq_len, max_talker_seq_len):
         mh = torch.full((1, _mask_heads, 1, max_talker_seq_len), float("-inf"), dtype=torch.float32)
@@ -614,10 +614,9 @@ def _read_device_token(tok_tt: ttnn.Tensor, index: int = 0) -> int:
 
 # --- In-trace device sampling -------------------------------------------------
 # ttnn.topk only takes the multicore path at width >= 8192 (multi_core_min_width);
-# our 2048-wide CP vocab would otherwise run single-core. Measured on N300, traced:
-# 1199 us/call at width 2048 vs 466 us/call at width 8192, so we pad first (the pad
-# itself costs ~59 us). Pad value must stay well clear of real logits (O(10)) while
-# staying representable in bfloat16 after the sampling kernel's exp().
+# our 2048-wide CP vocab would otherwise run single-core, so we pad first. Pad value
+# must stay well clear of real logits (O(10)) while staying representable in bfloat16
+# after the sampling kernel's exp().
 _SAMPLING_PAD_W = 8192
 # ttnn.topk goes multi-core when `topk_multicore_structurally_eligible` holds
 # (ttnn/cpp/ttnn/operations/reduction/topk/device/topk_utils.cpp):
@@ -629,18 +628,12 @@ _SAMPLING_PAD_W = 8192
 #
 # _SAMPLING_PAD_W=8192 predates the Ht-aware second clause. A CP logit row is
 # [1,1,1,2048] — ONE tile row — so it already qualifies at its native width, and
-# padding to 8192 only makes the sort network 4x wider. Measured on N300:
+# padding to 8192 only makes the sort network 4x wider. topk is monotonically slower
+# as the padded width grows, and the Pad + FillPad ops are pure added cost on top,
+# so the native width wins outright.
 #
-#     topk k=64   width 2048  217.2 us   (9 cores)
-#                 width 4096  267.4 us  (17 cores)
-#                 width 8192  431.6 us  (17 cores)  <- was shipping
-#
-# plus the pad itself (Pad 40.4 + 2x FillPad 42.4 = 82.8 us). Total -297 us per
-# sampling call, x15 calls/frame = -4.46 ms of a 32.9 ms CP frame.
-#
-# Numerics: the top-64 VALUES are bit-exact either way (verified with
-# torch.equal) — with 2048 real logits the
-# -1e4 padding can never enter a top-64. The INDEX order differs only where
+# Numerics: the top-64 VALUES are bit-exact either way (torch.equal) — with 2048 real
+# logits the -1e4 padding can never enter a top-64.
 # values are exactly EQUAL in bf16, and the Gumbel noise row is i.i.d. per rank,
 # so permuting which draw lands on which of two equal-logit candidates leaves
 # the sampled distribution unchanged. Distributionally exact, not bit-identical.
@@ -736,16 +729,13 @@ class _DeviceSampler:
         # sorted=False buys nothing).
         #
         # A standalone sweep at the sampler's exact shape ([1,1,32,2048] bf16 DRAM, k=64)
-        # said a narrower grid was monotonically faster:
-        #     8x8 792.7 us | 6x8 672.2 | 4x8 583.6 | 2x8 456.6 | auto 700.5
-        # It was wrong. Those are HOST timings around a single dispatched call, ~400 us of
-        # which is dispatch overhead against a 219 us kernel, so what they actually ranked
-        # was program setup cost, not kernel time. In the traced CP frame, where dispatch
-        # is amortised away, 2x8 measured 29.51 ms/frame against 27.34 ms on the full grid
-        # -- 2.17 ms WORSE.
+        # said a narrower grid was monotonically faster. It was wrong. Those were HOST
+        # timings around a single dispatched call, most of which is dispatch overhead, so
+        # what they actually ranked was program setup cost, not kernel time. In the traced
+        # CP frame, where dispatch is amortised away, the narrow grid is clearly WORSE.
         #
-        # Lesson for the next person: rank kernels with the traced per-op profile
-        # (tests/test_qwen3_tts_perf_report.py), never with a host-side loop around one op.
+        # Lesson for the next person: rank kernels with a traced per-op profile, never
+        # with a host-side loop around one op.
         # The knob is kept for A/B: QWEN3_TTS_SAMPLING_TOPK_GRID=XxY, 0x0 = full grid.
         _tg = os.environ.get("QWEN3_TTS_SAMPLING_TOPK_GRID", "0x0")
         try:
@@ -765,13 +755,13 @@ class _DeviceSampler:
         self._mesh_mapper = _replicate_mapper(device)
         # With TP > 1 every chip runs this sampling chain on its OWN copy of the
         # logits, and the model's tensor-parallel path does not produce bit-identical
-        # logits on every device. Measured in the real demo: 140/3840 sampled tokens
-        # (3.6%) differed between the two N300 chips. That is invisible while the host
+        # logits on every device: in the real demo a few percent of sampled tokens
+        # differ between the two N300 chips. That is invisible while the host
         # samples (it reads chip 0 and broadcasts one embedding back), but fatal once
         # the token is embedded ON device: each chip would embed a different token and
         # the tensor-parallel halves silently diverge, which degenerated generation and
         # stopped it ever reaching EOS. So all_gather the sampled id and keep device
-        # 0's, making every chip agree by construction (13.4 us/call, 0.2 ms/frame).
+        # 0's, making every chip agree by construction.
         from models.demos.qwen3_tts.tt.mesh_utils import get_mesh_shape, get_tp_size
 
         self._tp_size = get_tp_size(device)
@@ -1105,8 +1095,7 @@ def capture_fused_cp_trace(
     def _body():
         # (1) Restore the CP constants that the Talker's paged_update_cache clobbers,
         # and re-zero the CP KV caches. These were 3 + 2*num_layers host-dispatched
-        # ttnn.assign calls per frame (4.04 ms measured); inside the trace they cost
-        # no dispatch at all.
+        # ttnn.assign calls per frame; inside the trace they cost no dispatch at all.
         if restore_in_trace:
             ttnn.assign(cp_prefill_mask_src, cp_prefill_mask_tt)
             ttnn.assign(cp_prefill_cos_src, cp_prefill_cos_tt)
@@ -1116,7 +1105,7 @@ def capture_fused_cp_trace(
                 ttnn.assign(v_zero, v_cache)
 
         # (2) CP prefill input = [Talker hidden (last pos) ; embed(code0)], on device.
-        # Was: D2H the Talker hidden, host F.embedding, torch.cat, H2D (1.96 ms/frame).
+        # Was: D2H the Talker hidden, host F.embedding, torch.cat, H2D.
         if hidden_seq > 1:
             h_last = ttnn.slice(talker_hidden_src_tt, [0, 0, hidden_seq - 1, 0], [1, 1, hidden_seq, talker_h])
         else:
@@ -1180,13 +1169,13 @@ def capture_fused_cp_trace(
         # though this trace does not sample it: when the Talker trace does (see
         # codec0_in_talker_trace), tok_bufs[0] is already on device and folding it in
         # here costs one element of an existing concat, while sparing the loop a
-        # SECOND D2H for it — and a D2H is ~1 ms of wall on this host whatever its
-        # size, the single most expensive non-trace item in the frame.
+        # SECOND D2H for it — and on this host a D2H costs the same wall time whatever
+        # its size, making it the most expensive non-trace item in the frame.
         tokens = ttnn.concat([ttnn.reshape(t, [1, 1, 1, 1]) for t in tok_bufs], dim=-1)
 
         # (6) Next Talker input embedding, accumulated on device in float32 (which is
         # bit-exact with the host's F.embedding + float32 sum, since every codec table
-        # is bf16 in the checkpoint). Was 1.06 ms of host work plus a 2048-wide H2D.
+        # is bf16 in the checkpoint). Replaces host embedding work plus a wide H2D.
         if not build_talker_embed:
             return tokens
         acc = append_device_embedding(tok_bufs[0], codec_embed_tt, talker_h, dtype=ttnn.float32)
@@ -1629,11 +1618,10 @@ def generate_codes_ttnn(
     # ttnn.experimental.paged_fused_update_cache writes ~4.4 MB PAST the end of its
     # KV cache every frame; that is the pre-existing bug the per-frame "restore CP
     # constants" ttnn.assign hack in the decode loop works around. Anything allocated
-    # after the Talker KV cache can land in that blast radius. Measured with the
-    # tables allocated after it (max_new_tokens=256, Talker max_seq=352): rows
-    # 0..1071 of the 3072-row codec table were overwritten on every frame, silently
-    # giving the wrong code-0 embedding on 123/256 frames, which degenerated
-    # generation so it never reached EOS (256-frame cap instead of ~110 frames).
+    # after the Talker KV cache can land in that blast radius. With the tables
+    # allocated after it, a third of the codec table was overwritten every frame,
+    # silently giving the wrong code-0 embedding on many frames, which degenerated
+    # generation so it never reached EOS.
     # Allocating before the cache puts the tables on the same side as the model
     # weights, which are never hit. The integrity check after the first frame
     # (QWEN3_TTS_CP_CHECK_CORRUPT=1) is how to confirm this if the layout changes.
@@ -1840,8 +1828,8 @@ def generate_codes_ttnn(
     # and use those for trace capture (same as the reference in generator.py).
 
     # Prefill runs exactly ONCE per process, so any device op in the timed region that
-    # is not already in the program cache pays its full JIT compile there — measured
-    # 2.3 s for the assign + slice below. Warm them here, on the real shapes, so the
+    # is not already in the program cache pays its full JIT compile there, which for
+    # the assign + slice below is seconds. Warm them here, on the real shapes, so the
     # timed path only dispatches cached programs.
     if padded_seq_len in talker_prefill_traces:
         _pf_warm = talker_prefill_traces[padded_seq_len]
@@ -2084,11 +2072,11 @@ def generate_codes_ttnn(
     # Sampling (non-greedy): sample codec0 inside the Talker trace too, with the same
     # Gumbel-max chain the CodePredictor's 15 codebooks already use. The host path it
     # replaces was the single most expensive thing in the AR loop that was not a trace
-    # replay — a [1,1,1,3072] fp32 D2H plus a host top-k/softmax/multinomial, measured
-    # 0.79 + 0.86 ms/frame on N300 — and it also forced a per-frame H2D to hand the
-    # token back for the next frame's CP trace. Writing straight into tok_bufs[0], the
-    # buffer the fused CP frame reads, removes all three (~1.5 ms/frame) for ~0.4 ms of
-    # in-trace topk. Slot 15 of the noise tile is free: the CP frame uses slots 0-14.
+    # replay — a [1,1,1,3072] fp32 D2H plus a host top-k/softmax/multinomial — and it
+    # also forced a per-frame H2D to hand the token back for the next frame's CP trace.
+    # Writing straight into tok_bufs[0], the buffer the fused CP frame reads, removes
+    # all three for the cost of one in-trace topk. Slot 15 of the noise tile is free:
+    # the CP frame uses slots 0-14.
     #
     # fused_sampler and fused_tok_bufs are allocated before ANY trace capture (see the
     # unsafe-allocation note where they are created), so both are safe to bake in here.

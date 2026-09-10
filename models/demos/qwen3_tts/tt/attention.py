@@ -23,7 +23,6 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     decode_hidden_width_memcfg,
     dram_sharded_program_config,
     find_grid_k_n,
-    sharded_hidden_width_memcfg,
     unpad_dram_sharded_out,
     width_sharded_l1_memcfg,
 )
@@ -35,18 +34,15 @@ from models.demos.qwen3_tts.tt.linear_1d_program_config import (
 from models.demos.qwen3_tts.tt.model_config import N150_DRAM_PREFILL_SEQS, PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
 
-# Swept prefill o_proj program configs, keyed by the EXACT (seq, K, N) that was measured,
-# so a shape nobody benchmarked can never match. `find_1d_mcast_grid` returns the largest
+# Prefill o_proj program configs, keyed by the EXACT (seq, K, N) that was tuned, so a
+# shape nobody benchmarked can never match. `find_1d_mcast_grid` returns the largest
 # core count whose per_core_N >= 2, which is 32 cores for 2048x2048 — and 32 cores forces
-# in0_block_w = K_tiles/32 = 2. The same "most cores, thinnest K block" trap that cost
-# decode gate/up 34 us/matmul:
-#
-#   seq=64   c32 ibw=2  46.2 us  ->  c16 ibw=4    35.4 us   (-10.8)
-#   seq=128  c32 ibw=2  70.0 us  ->  2D 8x4 ibw=8 51.6 us   (-18.4)
+# in0_block_w = K_tiles/32 = 2. That is the same "most cores, thinnest K block" trap the
+# decode gate/up grids in mlp.py avoid, so both entries below pick a wider K block.
 #
 # At seq=128 the 1D configs run out of room (M is 4 tiles but 1D mcast blocks only over
 # N), so the 2D config — which blocks over M and K as well — wins outright. in0 is
-# L1-interleaved from nlp_concat_heads in both cases, which is what the sweep measured.
+# L1-interleaved from nlp_concat_heads in both cases, which is what was benchmarked.
 # QWEN3_TTS_PREFILL_WO_OVERRIDE=0 reverts.
 _PREFILL_WO = {
     # (seq, K, N): ("1d", num_cores) | ("2d", (grid_x, grid_y))
@@ -312,7 +308,7 @@ class Attention(LightweightModule):
         k_norm_weight = _permute_rope_head_dim_vector(state_dict[f"{layer_prefix}.self_attn.k_norm.weight"], head_dim)
 
         # ttnn's SDPA wrapper folds `scale` into the softmax exponent, so it has to
-        # pre-multiply the additive mask by 1/scale on EVERY call — a 6 us DRAM pass
+        # pre-multiply the additive mask by 1/scale on EVERY call — a whole DRAM pass
         # over a mask that is pure {0, -inf} and therefore scale-invariant. Passing
         # scale=1.0 skips it; the softmax scale rides along in the q_norm gain instead,
         # which is a load-time constant. RoPE is a rotation, so scaling Q before it is
@@ -405,10 +401,10 @@ class Attention(LightweightModule):
             k_chunk_size=64,
         )
         # Decode attends one query row to the whole KV cache, so that config is wrong
-        # twice over: q_chunk_size=64 pads the single query tile to two and doubles
-        # every chunk (82 -> 38 us at kv=352), and k_chunk_size=64 leaves 6 chunks
-        # where one exact-divisor chunk costs 26.8 us. Keyed by cache length; a
-        # program config is a host-side object, so building it lazily is trace-safe.
+        # twice over: q_chunk_size=64 pads the single query tile to two and so doubles
+        # every chunk, and k_chunk_size=64 does not divide the cache length exactly,
+        # leaving a ragged final chunk. Keyed by cache length; a program config is a
+        # host-side object, so building it lazily is trace-safe.
         self._decode_sdpa_grid = (_compute_grid_sdpa.x, _compute_grid_sdpa.y)
         self._decode_sdpa_progcfg_by_k = {}
 
@@ -514,10 +510,10 @@ class Attention(LightweightModule):
         # ([1, 1, heads, head_dim] HEIGHT_SHARDED (32, head_dim) on one core), so the
         # KV-group permutation below is dropped and the two head norms stop running on
         # 8x / 4x tile padding. Bit-exact with the KV-group route (q/k/v all
-        # torch.equal); measured -6.5 us per decoder layer in isolation.
+        # torch.equal).
         # Only the *width-sharded* create_qkv_heads wants the interleaved order — the
         # L1-interleaved one reads concat too, which is what the seq=32 prefill bucket
-        # falls back to when this is on (see _decode_head_split_ok).
+        # falls back to when this is on (see the `_decode_head_split` local in forward).
         self._decode_head_split = (
             os.environ.get("QWEN3_TTS_DECODE_HEAD_SPLIT", "1") != "0"
             and self.num_heads <= ttnn.TILE_SIZE
@@ -663,11 +659,10 @@ class Attention(LightweightModule):
         # columns each — which for hidden=2048 is EXACTLY the K-width shard a 1D-mcast wo at
         # 16 cores wants (`width_sharded_l1_memcfg(m/32, 64, 8, 2)`). The prefill path was
         # calling `to_memory_config(..., L1_MEMORY_CONFIG)` on it, paying a
-        # ShardedToInterleaved (2.9 us at m=64) to hand the matmul a layout that is then also
-        # SLOWER to consume: 36.7 us interleaved vs 33.2 us sharded, bit-exact.
-        # So the flatten cost -6.4 us/layer and an
-        # op for nothing. The earlier sweep missed this because it only tried sharded-in0 at
-        # `cores in (32, 64)`, and the config that ships at m=64 is c16.
+        # ShardedToInterleaved to hand the matmul a layout that is then also SLOWER to
+        # consume than the shard it already had, bit-exact either way. So the flatten was
+        # an op for nothing. An earlier sweep missed this because it only tried sharded-in0
+        # at `cores in (32, 64)`, and the config that ships at m=64 is c16.
         #
         # Only for buckets whose swept `_PREFILL_WO` entry is 1D at exactly `num_heads` cores:
         # the 2D config m=128 uses splits K over grid_y and does not take a K-width shard, and
@@ -688,19 +683,13 @@ class Attention(LightweightModule):
                 if _nlp_cfg["concat_out"] == _want:
                     self._prefill_wo_in0_memcfg[_m] = _nlp_cfg["concat_out"]
 
-        # N150 prefill NLP + residual memcfgs per trace bucket (M varies; DRAM matmul stays M=32).
+        # N150 prefill SDPA-output shard spec per trace bucket, so the I2S in front of
+        # nlp_concat_heads never runs (see _sdpa_out_memcfg below).
         self._n150_prefill_nlp_by_m = {}
         if self._n150 and self.tp_size == 1:
             for _m in N150_DRAM_PREFILL_SEQS:
                 _nlp = _build_sharded_nlp_memcfgs(_m)
-                self._n150_prefill_nlp_by_m[_m] = {
-                    "qkv_split_in": _nlp["qkv_in"],
-                    "qkv_split_q_out": _nlp["q_out"],
-                    "qkv_split_k_out": _nlp["k_out"],
-                    "concat_in": _nlp["concat_in"],
-                    "concat_out": _nlp["concat_out"],
-                    "residual_memcfg": sharded_hidden_width_memcfg(device, hidden_size, m=_m),
-                }
+                self._n150_prefill_nlp_by_m[_m] = {"concat_in": _nlp["concat_in"]}
 
         # Pre-compute HEIGHT_SHARDED memory configs for paged_update_cache inputs.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
@@ -735,7 +724,7 @@ class Attention(LightweightModule):
         # The norm deliberately keeps running on the SAME interleaved kernel it uses
         # today, not the sharded one: at this compute_kernel_config (LoFi with
         # fp32_dest_acc_en) the sharded norm is NOT bit-equal to the interleaved one
-        # (measured rel 1.9e-2 on q, PCC 0.99998), and that difference reaches the codes.
+        # and that difference reaches the codes.
         # Feeding the same kernel one tile instead of num_heads tiles is bit-exact.
         self._dhs_hs_memcfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -866,7 +855,6 @@ class Attention(LightweightModule):
         sharded_qkv_split = use_dram_shard_qkv and not (self._decode_head_split and not _decode_head_split)
         _qkv_split_in_memcfg = self._decode_qkv_split_in_memcfg
         _qkv_split_q_out_memcfg = self._decode_qkv_split_q_out_memcfg
-        _qkv_split_k_out_memcfg = self._decode_qkv_split_k_out_memcfg
         if use_dram_shard_qkv:
             # Skip the I→S if x is already in the matching width-sharded layout
             # (e.g. piped through from a sharded layernorm in decoder_layer).
@@ -1241,9 +1229,9 @@ class Attention(LightweightModule):
             updated_kv_cache = (k_cache, v_cache)
 
         # Fused SDPA on every path: GQA-native, so no repeat_interleave, and bf16
-        # throughout, so no Q/K/V bf16<->fp32 hops. On the N300 deployed decode window
-        # that chain was 11 ops / 134 us of a 551 us layer. The `else` below is the
-        # pre-fusion graph, kept for QWEN3_TTS_TALKER_MANUAL_SDPA=1.
+        # throughout, so no Q/K/V bf16<->fp32 hops — 11 ops of the decode layer go away.
+        # The `else` below is the pre-fusion graph, kept for
+        # QWEN3_TTS_TALKER_MANUAL_SDPA=1.
         _q_seq = int(q.shape[2])
         _k_seq_inner = int(k_for_attn.shape[2])
         if self._fused_sdpa:

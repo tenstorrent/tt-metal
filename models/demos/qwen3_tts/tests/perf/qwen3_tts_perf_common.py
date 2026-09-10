@@ -180,7 +180,7 @@ def run_cp_sampling_window(
     # different Gumbel row, and reusing one would also reuse its program. ``warmup``
     # mirrors ``profile_window``'s flag — the compile call is NOT signposted, so when
     # this window runs inside an enclosing start/stop it must be skipped or a whole
-    # second sampling chain lands in the enclosing window (measured: +267 us).
+    # second sampling chain lands in the enclosing window.
     if warmup:
         sampler.append_sampling(logits, 0, out_tok)
         ttnn.synchronize_device(device)

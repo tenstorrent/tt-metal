@@ -353,14 +353,11 @@ def apply_rope_qk(
         # as a multiplier on `num_rows_per_core`, never as a parallel axis. So Q
         # [1, 16, 64, 128] gets batch=1, seq_len_t=2 -> 1 x 2 = TWO busy cores, each
         # rotating 16 head-rows, and `num_rows_per_core = 16 > 8` additionally selects
-        # `use_reload_impl`, which re-reads cos/sin per row. That is why the op measured
-        # the same 42.8 us at seq=64 and seq=128: per-core work never changed.
+        # `use_reload_impl`, which re-reads cos/sin per row. That is why the op cost the
+        # same at seq=64 and seq=128: per-core work never changed.
         #
-        # [nh, 1, S, D] gives batch=nh -> nh x seq_len_t cores and one row per core:
-        #
-        #   Q (16 heads)  42.8 us -> 14.8 us (seq 64) | 42.8 -> 18.1 (seq 128)
-        #   K ( 8 heads)  26.5 us -> 13.3 us (seq 64) | 26.5 -> 14.3 (seq 128)
-        #   Q+K per layer 69.3 -> 28.0 us, i.e. -1.16 ms over 28 Talker layers
+        # [nh, 1, S, D] gives batch=nh -> nh x seq_len_t cores and one row per core, so
+        # both Q and K get several times faster, across all 28 Talker layers.
         #
         # Prefill validation only asks for `cos.shape[0] == 1` and
         # `cos.shape[1] in (input.shape[1], 1)`, and Qwen3-TTS cos/sin are head-broadcast

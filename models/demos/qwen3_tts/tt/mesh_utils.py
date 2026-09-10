@@ -140,8 +140,8 @@ def to_torch_chip0(t: ttnn.Tensor, device=None, **kwargs) -> "torch.Tensor":
 # ─── all_gather_async plumbing (QWEN3_TTS_CCL_ASYNC) ───────────────────────────
 # ttnn.all_gather re-creates its semaphores and worker setup on every call. For the
 # payloads this model gathers (72 KB on the CP, 131 KB on the Talker) that setup is a
-# large share of the ~22-36 us cost -- the op achieves ~3 GB/s against 288 GB/s peak on
-# ONE core, i.e. ~1 % of bandwidth, so it is latency/setup bound, not bandwidth bound.
+# large share of the cost -- the op runs on ONE core at a tiny fraction of DRAM peak,
+# so it is latency/setup bound, not bandwidth bound.
 # all_gather_async takes caller-owned semaphores instead. Pattern follows
 # models/tt_transformers/tt/ccl.py (TT_CCL).
 _CCL_SEM_CACHE: dict = {}
@@ -183,8 +183,8 @@ def _int_env(name):
 
 def _all_gather_maybe_async(tensor, dim, cluster_axis, memory_config, device):
     """ttnn.all_gather, or its async form with pre-created semaphores when enabled."""
-    # Default ON: bit-exact (pure data movement), op-count neutral, -0.478 ms/frame on
-    # cp_trace. QWEN3_TTS_CCL_ASYNC=0 restores ttnn.all_gather. See PERF_NOTES 3.aa.
+    # Default ON: bit-exact (pure data movement), op-count neutral, and strictly faster
+    # per frame. QWEN3_TTS_CCL_ASYNC=0 restores ttnn.all_gather. See PERF_NOTES 3.aa.
     if os.environ.get("QWEN3_TTS_CCL_ASYNC", "1") == "0":
         return ttnn.all_gather(tensor, dim=dim, cluster_axis=cluster_axis, memory_config=memory_config)
     ent = _ccl_semaphores(device)

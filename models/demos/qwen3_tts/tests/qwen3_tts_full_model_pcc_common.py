@@ -374,9 +374,9 @@ EXPECTED_PCC: Dict[str, Dict[str, float]] = {
 }
 TOLERANCE = 0.005
 # frame_embed_device is not a model stage — it is 16 embedding lookups accumulated
-# in float32, which server.py documents as bit-exact with the host sum. Measured
-# 1.000000 on both SKUs across every frame, so it gets a gate that would actually
-# notice a change rather than one 0.005 wide.
+# in float32, which server.py documents as bit-exact with the host sum. It comes out
+# exact on both SKUs across every frame, so it gets a gate that would actually notice
+# a change rather than one 0.005 wide.
 TOLERANCE_OVERRIDE: Dict[str, float] = {"frame_embed_device": 1e-6}
 
 # Floor for EVERY walked frame, not just the gated frame 0. These are the minima
@@ -409,9 +409,9 @@ def _floor(case: str, name: str) -> float:
 # Greedy token agreement between device and reference is REPORTED, not gated.
 # It is not a property bf16 can hold: the codebooks are 2048-way and unordered, a
 # 0.997-PCC logit vector reorders near-ties, and the demo does not decode greedily
-# anyway (temperature 0.9, top_k 50). Measured 91 % over 2 frames and 77-83 % over
-# 4, falling with frame count as the chain drifts — a gate on it would be a gate on
-# how far the test happens to walk. The audio-level question ("does it still sound
+# anyway (temperature 0.9, top_k 50). Agreement falls with frame count as the chain
+# drifts, so a gate on it would really be a gate on how far the test happens to
+# walk. The audio-level question ("does it still sound
 # right and say the words") has its own gate in test_qwen3_tts_voice_quality.py,
 # which scores SIM and WER on a rendered clip. This number is here to make a gross
 # breakage obvious at a glance.

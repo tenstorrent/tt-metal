@@ -119,12 +119,9 @@ class CodePredictor(LightweightModule):
         )
         _sdpa_cg = device.compute_with_storage_grid_size()
         # The CP KV cache is always 32 deep (one tile), so a 64-wide K chunk pads
-        # against nothing: measured 20.0 -> 7.4 us per SDPA call at chunk 32.
-        # N150 used to keep 64 only because there was no single-chip board to re-measure
-        # on. Measured since, on one Wormhole die as a 1x1 mesh: the traced AR frame goes
-        # 47.23 -> 46.24 ms and the demo's steady decode 49.1 -> 48.3 ms/frame, with all
-        # 85x16 generated codes byte-identical (the cache is one tile either way, so the
-        # chunk only changes how much padding SDPA walks).
+        # against nothing and chunk 32 is strictly cheaper per SDPA call. The cache is
+        # one tile either way, so the chunk only changes how much padding SDPA walks:
+        # generated codes are byte-identical between 32 and 64 on a single Wormhole die.
         _sdpa_chunk = int(os.environ.get("QWEN3_TTS_CP_SDPA_CHUNK", "32"))
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_cg.x, _sdpa_cg.y),
@@ -135,50 +132,31 @@ class CodePredictor(LightweightModule):
         # Fused, GQA-native SDPA off N150 too. DEFAULT ON; QWEN3_TTS_CP_FUSED_SDPA=0
         # restores the manual chain for A/B.
         #
-        # The manual fp32 chain costs ~47 us/layer (2x repeat_interleave to expand KV
-        # heads, 5 typecasts, a transpose, fp32 QK^T, scale-mul, mask-add, softmax,
-        # fp32 PV, a typecast back), and one SDPA call replaces all of it. Measured on
-        # the demo's own fused CP frame (tests/test_qwen3_tts_perf_report.py -k
-        # test_decode_cp, N300 TP=2), traced, one replay per capture:
+        # The manual fp32 chain is 2x repeat_interleave to expand KV heads, 5 typecasts,
+        # a transpose, fp32 QK^T, scale-mul, mask-add, softmax, fp32 PV, and a typecast
+        # back; one SDPA call replaces all of it, so the 75 hand-built chains per frame
+        # (5 layers x 15 CP invocations) collapse to 75 SDPA calls.
         #
-        #     manual chain   4339 ops   31.23 ms device   30.32 ms wall
-        #     fused SDPA     3619 ops   28.27 ms device   27.32 ms wall
-        #                    -720 ops   -2.97 ms          -3.00 ms   (-9.9%)
-        #
-        # Per op code, the 75 hand-built chains (5 layers x 15 CP invocations per
-        # frame) become 75 SDPA calls: -285 typecast (0.97 ms), -150 matmul, i.e. the
-        # explicit QK^T and PV (0.92 ms), -75 softmax (0.56 ms), -75 binary (0.49 ms),
-        # -150 repeat_interleave (0.44 ms), -75 transpose (0.29 ms), +75 SDPA
-        # (0.66 ms). Device delta and wall-clock delta agree to 0.03 ms.
-        #
-        # Numerics, tests/test_qwen3_tts_cp_sdpa_parity.py on the REAL masked shapes
-        # with real checkpoint weights (the shapes test_qwen3_tts_pcc never reaches --
-        # it runs kv_caches=None and so takes SDPA's is_causal branch):
-        #
-        #     prefill seq=2        PCC=0.99969828  maxabs=0.195312
-        #     decode start_pos=2   PCC=0.99977070  argmax 376  == 376
-        #     decode start_pos=3   PCC=0.99975890  argmax 1741 == 1741
-        #     decode start_pos=5   PCC=0.99983436  argmax 1364 == 1364
-        #
-        # The sampled token is identical, not merely close. Both paths also start from
-        # the SAME bf16 Q/K (the manual chain only casts them up to fp32, which adds no
+        # NOTE: the dedicated parity test that gated this on the REAL masked shapes has
+        # been removed, and test_qwen3_tts_pcc does NOT cover them -- it runs
+        # kv_caches=None and so takes SDPA's is_causal branch. When it was run, the
+        # sampled token was identical rather than merely close. Both paths start from the
+        # SAME bf16 Q/K (the manual chain only casts them up to fp32, which adds no
         # information) and fused SDPA accumulates in fp32 via fp32_dest_acc_en.
         #
-        # KNOWN NOT GATED, and turned on anyway at the owner's direction. dccf18b66c4
-        # named three gates; only the parity test above is clean. What is outstanding:
+        # KNOWN NOT GATED, and turned on anyway at the owner's direction. What is
+        # outstanding:
         #   * Frame-count sweep over >=8 seeds. NOT RUN. Paired demo runs generate
-        #     consistently FEWER frames with this on -- dccf18b66c4 saw seed 7 72->65,
-        #     seed 42 87->68, seed 123 91->85, and a fresh seed-42 pair here gave
-        #     88->81 (7.04 s -> 6.48 s of audio). Direction is now 4/4. Nothing ran
-        #     away to the 256-frame cap in any of them, but the within-arm spread is
-        #     larger than the shift -- the same seed-42 ON arm measured 68 then 81 --
-        #     so n=1 per seed cannot separate a real regression from sampler chaos.
-        #   * Listen / WER check. NOT RUN. -0.56 s of audio is either slightly faster
-        #     speech (harmless) or a dropped word (not), and duration alone cannot
-        #     distinguish them.
-        # PERF_NOTES 3.4 is explicit that PCC cannot predict generation length here,
-        # and records a 0.77% embedding change flipping a render into a 256-frame
-        # runaway while PCC stayed indistinguishable. If generation quality regresses,
+        #     consistently FEWER frames with this on, and the direction has held on
+        #     every pair tried -- but the within-arm spread on a single seed is larger
+        #     than the shift, so n=1 per seed cannot separate a real regression from
+        #     sampler chaos.
+        #   * Listen / WER check. NOT RUN. Slightly less audio is either faster speech
+        #     (harmless) or a dropped word (not), and duration alone cannot distinguish
+        #     them.
+        # PERF_NOTES 3.4 is explicit that PCC cannot predict generation length here, and
+        # records a tiny embedding change flipping a render into a 256-frame runaway
+        # while PCC stayed indistinguishable. If generation quality regresses,
         # QWEN3_TTS_CP_FUSED_SDPA=0 is the first thing to try.
         # NOTE: --greedy is NOT a usable gate for this -- pristine HEAD already runs
         # away to the 256-frame cap on the en_long prompt.
@@ -250,9 +228,9 @@ class CodePredictor(LightweightModule):
                 b = state_dict[bias_key]
                 # TILE, not ROW_MAJOR: ttnn.linear's bias must be TILE, so a ROW_MAJOR
                 # upload made every call re-tilize this constant — a 1-core
-                # TilizeWithValPadding [1,1,1,1024]->[1,1,32,1024] at 88 us, x15 CP
-                # passes = 1.32 ms/frame (4% of the CP frame). Uploading it already
-                # tiled produces the identical tensor once, at init.
+                # TilizeWithValPadding [1,1,1,1024]->[1,1,32,1024] on every one of the 15
+                # CP passes per frame. Uploading it already tiled produces the identical
+                # tensor once, at init.
                 self.input_proj_bias = ttnn.from_torch(
                     b.to(torch.bfloat16).view(1, 1, 1, int(b.shape[0])),
                     device=device,
@@ -362,16 +340,14 @@ class CodePredictor(LightweightModule):
         else:
             _rows_gu, _cols_gu = find_grid_k_n(_k_tiles_gu, _n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
         # A DRAM-sharded matmul at M=1 tile reads from the 12 DRAM banks regardless of how
-        # many WORKER cores it is given, so extra workers add contention, not bandwidth.
-        # Measured in isolation on the CP decode gate/up shape (32x1024x1536, bfp8_b):
-        #   4 cores 12.8 us (130 GB/s) | 8 cores 14.4 | 16 cores (auto) 19.5 us (86 GB/s)
-        # o_proj already lands on 4 cores via find_grid_k_n and is the most efficient of the
-        # five CP matmuls, which is the same effect seen from the other side.
+        # many WORKER cores it is given, so extra workers add contention, not bandwidth --
+        # fewer cores is faster on the CP decode gate/up shape, and o_proj already lands on
+        # 4 cores via find_grid_k_n and is the most efficient of the five CP matmuls.
         # QWEN3_TTS_CP_GU_CORES / _DOWN_CORES override the auto grid (total cores, 1 row).
         # In-model the optimum is 8, NOT the 4 that wins in isolation: gate/up's in0 grid is
         # also the post-attention norm's output grid (see the _ln_mlp_memcfg assert below),
-        # so cutting to 4 cripples that norm and costs more than the matmul saves --
-        # cp_trace 25.50 -> 26.46 at 4 cores against 25.13 at 8 (PERF_NOTES 3.ab).
+        # so cutting to 4 cripples that norm and costs more than the matmul saves
+        # (PERF_NOTES 3.ab).
         if self._n300_cp_opt and _k_tiles_gu % 8 == 0 and _n_tiles_gu % 8 == 0:
             _rows_gu, _cols_gu = 1, 8
         _gu_ov = os.environ.get("QWEN3_TTS_CP_GU_CORES", "")
@@ -388,9 +364,8 @@ class CodePredictor(LightweightModule):
         _k_tiles_d = _local_intermediate // 32
         _n_tiles_d = _n_pad_d // 32
         _rows_d, _cols_d = find_grid_k_n(_k_tiles_d, _n_tiles_d, max_rows=_cg.y, max_cols=_cg.x)
-        # Same effect on down (32x1536x1152): 6 cores 13.7 us (137 GB/s) against 12 cores
-        # (auto) 16.8 us (112 GB/s).
-        # down has no norm coupling, so it just takes the faster grid.
+        # Same effect on down: fewer cores than the auto grid is faster. down has no norm
+        # coupling, so it just takes the faster grid.
         if self._n300_cp_opt and _k_tiles_d % 6 == 0 and _n_tiles_d % 6 == 0:
             _rows_d, _cols_d = 1, 6
         _d_ov = os.environ.get("QWEN3_TTS_CP_DOWN_CORES", "")
@@ -407,13 +382,13 @@ class CodePredictor(LightweightModule):
         # its DRAM-sharded QKV; this is the o_proj half alone, which needs no KV-group
         # weight permutation and so ports cleanly.
         #
-        # Why: o_proj is N=1024 = 32 output tiles, so a 1D width-split caps at 32 cores and
-        # the plain matmul measured 35.1 % of Wormhole's 288 GB/s -- the worst of the five
-        # CP matmul shapes, and the second largest by time (75 calls, 1.56 ms). The
-        # DRAM-sharded path is bank-parallel instead of core-parallel, and the two shapes
-        # already using it are the two best (down 62.8 %, gate/up 50.5 %). Every CP matmul
-        # is M=1 tile and therefore weight-bandwidth bound, so DRAM % is the metric here;
-        # FLOPs % cannot go high at this M no matter what the config is.
+        # Why: o_proj is N=1024 = 32 output tiles, so a 1D width-split caps at 32 cores,
+        # which left the plain matmul the worst DRAM-utilisation of the five CP matmul
+        # shapes and the second largest by time. The DRAM-sharded path is bank-parallel
+        # instead of core-parallel, and the two shapes already using it are the two best.
+        # Every CP matmul is M=1 tile and therefore weight-bandwidth bound, so DRAM
+        # utilisation is the metric here; FLOPs efficiency cannot go high at this M no
+        # matter what the config is.
         #
         # QWEN3_TTS_CP_DS_OPROJ=0 restores the interleaved matmul.
         self._ds_oproj = self._n300_cp_opt and os.environ.get("QWEN3_TTS_CP_DS_OPROJ", "1") != "0"
@@ -488,8 +463,8 @@ class CodePredictor(LightweightModule):
             # packing num_heads / o_proj_in0_cores heads per core on the way in makes the
             # concat land exactly in the DRAM-sharded o_proj's in0 spec, and the Reshard
             # between them disappears. PERF_NOTES 2.5 recorded this as applying to N150
-            # too but never ported; measured here it drops the 75 Reshards per frame
-            # (5 CP layers x 15 CP invocations) that the N300 path does not run.
+            # too but never ported; it drops the per-frame Reshards (5 CP layers x 15 CP
+            # invocations) that the N300 path does not run.
             _heads_per_shard = 1
             _wo_shard = self._cp_wo_in0_memcfg.shard_spec
             _wo_cores = _wo_shard.grid.num_cores()
@@ -598,10 +573,9 @@ class CodePredictor(LightweightModule):
                 ]
                 _stacked = torch.stack(_per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
                 # bf16 on purpose, NOT an oversight that QWEN3_TTS_BF8_WEIGHTS missed:
-                # bfp8_b here is measured to buy exactly nothing (PERF_NOTES 5). This
-                # matmul is interleaved on 64 cores at M=1 tile and is latency-bound, not
-                # bandwidth-bound -- halving the weight bytes moved its DRAM figure
-                # 59.4 % -> 29.7 % and its time 24.5 -> 24.6 us.
+                # bfp8_b here buys exactly nothing (PERF_NOTES 5). This matmul is
+                # interleaved on 64 cores at M=1 tile and is latency-bound, not
+                # bandwidth-bound -- halving the weight bytes leaves the time unchanged.
                 lw["wqkv_kvgi"] = ttnn.from_torch(
                     _stacked,
                     device=device,
@@ -613,8 +587,8 @@ class CodePredictor(LightweightModule):
                 ttnn.deallocate(lw.pop("wqkv"))
 
         # Sharded hidden RMSNorms on N150 and N300. Default LN parallelises over
-        # M; CP M is one tile so it lands on 1 core (~25 us). Width-shard
-        # instead. Post-norm emits gate/up in0 so the MLP I2S disappears.
+        # M; CP M is one tile so it lands on 1 core. Width-shard instead.
+        # Post-norm emits gate/up in0 so the MLP I2S disappears.
         # Input norm follows the QKV consumer: DRAM-sharded QKV (N150) keeps
         # the 4-core in0 spec; interleaved QKV (N300) uses the widest grid
         # that divides H, then S2I. Other SKUs keep the 1-core interleaved LN.
@@ -652,9 +626,9 @@ class CodePredictor(LightweightModule):
 
         # QWEN3_TTS_BF8_WEIGHTS=1 stores the DRAM-sharded matmul weights as bfloat8_b.
         # Every CP/Talker decode matmul is M=1 tile and therefore weight-bandwidth bound
-        # (the perf report puts them at 70-88 % of DRAM peak), so halving the weight
-        # bytes is the only lever with real headroom left -- no program config can beat
-        # a bandwidth wall. RMSNorm weights stay bf16 (small, dynamic-range sensitive).
+        # (the perf report already puts them near DRAM peak), so halving the weight bytes
+        # is the only lever with real headroom left -- no program config can beat a
+        # bandwidth wall. RMSNorm weights stay bf16 (small, dynamic-range sensitive).
         # This is an ACCURACY change, hence default off; see PERF_NOTES 2.8.
         _ds_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "1") != "0" else ttnn.bfloat16
 
@@ -1246,11 +1220,10 @@ class CodePredictor(LightweightModule):
                 ttnn.deallocate(attn_out)
 
             # memory_config=L1: ttnn.matmul defaults its output to DRAM interleaved,
-            # and at M=32 (a tile pad of a true M=1) in0 is ~64 KB against a 2 MB
-            # weight — so the only placement that can matter is the WRITEBACK, which
-            # was a full extra DRAM round-trip that _all_reduce then re-read.
-            # Measured 113.6 GB/s (39.5% of the 288 GB/s WH peak) on 32 cores, vs
-            # 56-71% for the DRAM-sharded MLP siblings that already land in L1.
+            # and at M=32 (a tile pad of a true M=1) in0 is tiny against the weight — so
+            # the only placement that can matter is the WRITEBACK, which was a full extra
+            # DRAM round-trip that _all_reduce then re-read. Interleaved DRAM left this
+            # op well below the DRAM utilisation its DRAM-sharded MLP siblings reach.
             o = ttnn.matmul(
                 attn_concat,
                 lw["o_proj"],
@@ -1424,8 +1397,7 @@ class CodePredictor(LightweightModule):
             # on the shard spec the layer stack already returns, then bridge out once for
             # the lm_head. Same op count as the interleaved route (which paid an S2I on the
             # way IN instead), but the norm parallelises over the hidden dim instead of
-            # landing on one core: 24.2 -> ~11 us, 14 calls/frame, -0.235 ms/frame on N300
-            # and -0.24 ms on N150 (PERF_NOTES 3.z).
+            # landing on one core (PERF_NOTES 3.z).
             #
             # The `else` below is not dead: it serves the SKUs that never build the sharded
             # RMSNorm configs (_use_sharded_ln is N150 or the N300 CP fast path only), so
@@ -1479,8 +1451,8 @@ class CodePredictor(LightweightModule):
         # NOT worth moving to L1: ttnn.topk's front end calls fill_implicit_tile_padding
         # unconditionally (topk.cpp), and its early-out needs the last two LOGICAL dims
         # tile-aligned -- the CP runs at logical M=1 padded to a tile, so the fill always
-        # runs. Placing the logits in L1 instead of DRAM was measured over the whole
-        # traced frame: FillPad 19.4 -> 18.9 us and TopK 218.1 -> 216.8 us, i.e. nothing.
+        # runs. Placing the logits in L1 instead of DRAM changes neither FillPad nor TopK
+        # over the whole traced frame; both are latency-bound, not DRAM-bandwidth-bound.
         # Both are latency-bound, not DRAM-bandwidth-bound.
         lm_idx = generation_step - 1
         logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.mm_kcfg)
