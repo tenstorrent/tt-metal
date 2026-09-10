@@ -61,9 +61,11 @@ class MiniMaxH3VSAConfig:
     # window and rows gather from the peers' L1 (larger visits); rows are dealt by static cost so the
     # dense rows do not pile onto one core. Needs streaming.
     distributed: bool = False
-    # vsa_sdpa KV streaming order: "identity" (ascending placement ids) | "canonical" | "zorder"
-    # (spatial Z-order over video cubes: bigger visits, see MiniMaxH3VSAGeometry.stream_order)
-    stream_order: str = "identity"
+    # vsa_sdpa KV streaming order: "bstrideR.S" (default: runs of R consecutive slots interleaved across S
+    # spatial segments, so one streaming window carries work for several cores -- the leader/consumer
+    # convoy, VSA_STREAM_DESIGN.md 11; measured 19.5 -> 17.7 ms on the real 15 s shard) | "identity" |
+    # "canonical" | "zorder" (see MiniMaxH3VSAGeometry.stream_order). Deterministic for a given order.
+    stream_order: str = "identity"  # bstride4.16 is -9.5% standalone but needs the leader protocol fix (log)
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:
