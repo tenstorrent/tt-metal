@@ -245,11 +245,17 @@ profiles:
       experts_block_size: 2
 
     attention:
-      # q_a and kv, replicated full-width on every rank of the 1x4 stage
+      # Same knobs as p150x8 TP4 (and therefore as ``base``): q_a and kv
+      # replicated full-width on every rank of the 1x4 stage
       # (q_a [4096, 1024] k=2 n=32, kv [4096, 512] k=4 n=16) and prefetched
       # through the shared 32-tile decode GCB. ``q_b`` stays N-sharded TP4.
-      qkv_tp_strategy: replicated
+      sdpa_causal: true
+      sdpa_q_chunk_size: 0
+      sdpa_k_chunk_size: 32
+      sdpa_max_cores_per_head_batch: 2
+      sdpa_exp_approx_mode: false
       keep_qa_kv_weights_in_l1: false
+      qkv_tp_strategy: replicated
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.
