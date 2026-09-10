@@ -31,10 +31,11 @@ bool float32_greater(uint32_t f32_a, uint32_t f32_b) {
         - Negative numbers: higher bits mean smaller value (reverse comparison).
     */
 
-    // Handle NaN cases - NaN is never greater than anything
-    if (((f32_a & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (f32_a & FLOAT32_MANTISSA_MASK) != 0) ||
-        ((f32_b & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (f32_b & FLOAT32_MANTISSA_MASK) != 0)) {
-        return false;
+    // Handle NaN cases with torch argmax semantics (NaN beats non-NaN, NaN does not beat NaN)
+    bool is_nan_a = (f32_a & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (f32_a & FLOAT32_MANTISSA_MASK) != 0;
+    bool is_nan_b = (f32_b & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (f32_b & FLOAT32_MANTISSA_MASK) != 0;
+    if (is_nan_a || is_nan_b) {
+        return is_nan_a && !is_nan_b;
     }
 
     // Handle zero cases (both +0 and -0 are equal)
@@ -56,4 +57,18 @@ bool float32_greater(uint32_t f32_a, uint32_t f32_b) {
         // Both positive: regular comparison
         return f32_a > f32_b;
     }
+}
+
+inline bool float32_equal(uint32_t f32_a, uint32_t f32_b) {
+    if (f32_a == f32_b) {
+        return true;
+    }
+    // ±0 equality
+    if ((f32_a & FLOAT32_MAGNITUDE_MASK) == 0 && (f32_b & FLOAT32_MAGNITUDE_MASK) == 0) {
+        return true;
+    }
+    // NaN equality (for tie-breaking/first-index consistency)
+    bool is_nan_a = (f32_a & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (f32_a & FLOAT32_MANTISSA_MASK) != 0;
+    bool is_nan_b = (f32_b & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (f32_b & FLOAT32_MANTISSA_MASK) != 0;
+    return is_nan_a && is_nan_b;
 }
