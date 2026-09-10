@@ -35,6 +35,7 @@ _ZEROS_CACHE: dict = {}
 # TODO: Cleanup and centralize logging.
 # Dedup noisy construction / fallback warnings across every call in this process.
 _ONCE_WARNINGS: set = set()
+_TAP_WARNED = _ONCE_WARNINGS  # name used by tests/unit/test_audio_tap_path.py
 _ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
 
 
