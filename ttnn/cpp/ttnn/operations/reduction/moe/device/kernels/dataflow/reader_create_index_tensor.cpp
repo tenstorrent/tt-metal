@@ -8,35 +8,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 #include "experimental/kernel_args.h"
-
-/**
- * add a dfb full of indices for the tile
- * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
- * first 32 elements are {0,..31}, then next 32 are {32,..64}
- * wt is which tile it is along the row [0, Wt) so j + 32*wt is the value in the tile at each element
- */
-FORCE_INLINE void generate_index_tile(const DFBBindingToken dfb_id, const uint32_t wt) {
-    // TODO: investigate moving to compile time (binary size is at risk)
-    DataflowBuffer dfb(dfb_id);
-    dfb.reserve_back(1);
-    CoreLocalMem<volatile uint32_t> ptr(dfb.get_write_ptr());
-    uint16_t wt_offset = wt << 5;
-
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < 2; ++i) {
-        for (uint32_t j = 0; j < 2; ++j) {
-            for (uint32_t k = 0; k < 16; ++k) {
-                for (uint32_t l = 0; l < 16; l += 2) {
-                    uint16_t value = l + 16 * j + wt_offset;
-                    ptr[count] = (value + 1) << 16 | value;
-                    count++;
-                }
-            }
-        }
-    }
-    dfb.push_back(1);
-}
 
 void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
@@ -82,10 +55,10 @@ void kernel_main() {
             dfb_in0.reserve_back(2);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
             tile_id++;
-            generate_index_tile(dfb::index, j);
+            dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = tile_bytes_input});
             tile_id++;
-            generate_index_tile(dfb::index, j + 1);
+            dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j + 1);
             noc.async_read_barrier();
             dfb_in0.push_back(2);
         }

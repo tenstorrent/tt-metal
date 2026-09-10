@@ -8,47 +8,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
+
 #include "experimental/kernel_args.h"
-/**
- * add a dfb full of indices for the tile
- * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
- * first 32 elements are {0,..31}, then next 32 are {32,..64}
- * wt is which tile it is along the row [0, Wt) so j + 32*wt is the value in the tile at each element
- */
-// USE_32BIT == false (WH/BH): pack two 16-bit indices per 32-bit word (UInt16 index tile, LO16
-// dest mode). USE_32BIT == true (Quasar): write one 32-bit index per element (Int32 index tile,
-// INT32 dest mode). The index width must match the top-k LLK's fp32_dest_acc_en setting.
-template <bool USE_32BIT>
-FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
-    // TODO: investigate moving to compile time (binary size is at risk)
-    DataflowBuffer dfb(dfb_id);
-    dfb.reserve_back(1);
-    CoreLocalMem<volatile uint32_t> ptr(dfb.get_write_ptr());
-    uint32_t wt_offset = wt << 5;
-
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < 2; ++i) {
-        for (uint32_t j = 0; j < 2; ++j) {
-            for (uint32_t k = 0; k < 16; ++k) {
-                if constexpr (USE_32BIT) {
-                    for (uint32_t l = 0; l < 16; ++l) {
-                        uint32_t value = l + 16 * j + wt_offset;
-                        ptr[count] = value;
-                        count++;
-                    }
-                } else {
-                    for (uint32_t l = 0; l < 16; l += 2) {
-                        uint16_t value = l + 16 * j + wt_offset;
-                        ptr[count] = (value + 1) << 16 | value;
-                        count++;
-                    }
-                }
-            }
-        }
-    }
-    dfb.push_back(1);
-}
-
 void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
@@ -80,7 +42,11 @@ void kernel_main() {
             noc.async_read(
                 s0, input_values_dfb, tile_bytes_input_values, {.page_id = tile_id_input_values}, {.offset_bytes = 0});
             tile_id_input_values++;
-            generate_index_tile<use_32bit_index>(dfb::index, j);
+            if constexpr (use_32bit_index) {
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, j);
+            } else {
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
+            }
             noc.async_read_barrier();
             input_values_dfb.push_back(onetile);
         }
