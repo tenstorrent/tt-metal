@@ -99,9 +99,15 @@ struct FwdMetadata {
     uint64_t this_addr;  // the address THIS hop writes to
 };
 
-// A forwarded packet is the token plus everything up to and including `dst_chip`, sent as one contiguous
-// run, so this bound is wire format between chips rather than a private convenience.
-constexpr uint32_t FWD_EXTRA_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
+// Wire format between chips rather than a private convenience.
+// The whole 64-byte tail goes on the wire, not just the prefix the next hop reads. A forwarded
+// packet's length has to be a whole number of NoC beats or the trailing partial beat is dropped
+// silently: at 40 the last field, dst_chip, never arrives and reads back as zero. Token pages are
+// already 64-byte aligned, so sending the full tail keeps the transfer aligned as well.
+constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
+
+// What the next hop actually consumes out of that tail.
+constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
 
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
@@ -111,8 +117,9 @@ constexpr uint32_t METADATA_WIRE_BYTES = 16;
 static_assert(sizeof(FwdMetadata) <= FORWARDING_METADATA_SIZE);
 static_assert(offsetof(FwdMetadata, meta) == 0);
 static_assert(offsetof(FwdMetadata, final_payload_addr) == 4 * sizeof(uint32_t));
-static_assert(offsetof(FwdMetadata, cmd) == FWD_EXTRA_BYTES);
-static_assert(FWD_EXTRA_BYTES == 40);
+static_assert(offsetof(FwdMetadata, cmd) == FWD_USED_BYTES);
+static_assert(FWD_USED_BYTES == 40);
+static_assert(FWD_EXTRA_BYTES % 64 == 0);
 static_assert(METADATA_WIRE_BYTES <= FORWARDING_METADATA_SIZE);
 
 constexpr uint64_t CMD_END = 0;          // end of stream; the slot carries no token
