@@ -35,6 +35,39 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.logical_shape().rank());
     validate_reduce_sharded_buffer_types(
         tensor_args.memory_config(), operation_attributes.output_mem_config, "Std/Var reduction");
+    // One program serves both correction settings, so this cannot be a compile-time check in the
+    // factory any more. The cache-hit path routes here too, so it runs on every dispatch.
+    if (operation_attributes.correction) {
+        const auto& shape = tensor_args.logical_shape();
+        const uint32_t reduce_size = operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::W ? shape[-1]
+                                     : operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H
+                                         ? shape[-2]
+                                         : shape[-1] * shape[-2] * operation_attributes.reduce_batch_size;
+        TT_FATAL(
+            reduce_size >= 2,
+            "Bessel's correction requires at least 2 elements along the reduction dimension(s), got {}",
+            reduce_size);
+    }
+}
+
+ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a WelfordReduceParams field must be a deliberate choice -- hash it below, or
+    // exclude it like `scalar` and `correction`, which the kernels read as runtime args.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 9,
+        "WelfordReduceParams gained or lost a field: add it to compute_program_hash or document why "
+        "it is excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<WelfordReduceDeviceOperation>,
+        operation_attributes.math_op,
+        operation_attributes.reduce_dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.reduce_batch_size,
+        tensor_args);
 }
 
 WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::compute_output_specs(

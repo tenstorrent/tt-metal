@@ -40,7 +40,10 @@ void kernel_main() {
         // scaler buffer entirely, so both paths apply the user scalar here per output tile.
         // reduce_post_mul_tile handles Int32 (typecast-bracketed) and float formats uniformly.
         [](uint32_t dst_idx) {
-            constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+            const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+            if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                return;
+            }
             // The data format has to be a constant expression here (it is a template argument), so it
             // is read from the JIT descriptor array indexed by the DFB handle rather than off a
             // DataflowBuffer object: DataflowBuffer's constructor is not constexpr, so no such object
