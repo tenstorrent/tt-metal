@@ -56,7 +56,7 @@ void kernel_main() {
     constexpr std::uint32_t Kt = get_compile_time_arg_val(9);
     constexpr std::uint32_t logk = get_compile_time_arg_val(10);
     constexpr std::uint32_t logWt = get_compile_time_arg_val(11);
-    constexpr std::uint32_t largest = get_compile_time_arg_val(12);
+    constexpr bool largest = get_compile_time_arg_val(12) == 1;
     constexpr std::uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
@@ -68,8 +68,8 @@ void kernel_main() {
     constexpr std::uint32_t index_dest_end = 3;
 
     constexpr std::uint32_t tiles_per_seq = (K + 31) / 32;
-    bool switch_dir = (K == 64);
-    int seq_per_2tiles = std::max((2 * 32) / K, (std::uint32_t)2);
+    const bool switch_dir = (K == 64);
+    uint32_t seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
 
     // init pack, compute and unpack
     compute_kernel_hw_startup(input_dfb_index, values_dfb_index);

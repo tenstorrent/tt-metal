@@ -31,7 +31,7 @@ def test_polyval(device, shape, coeff):
 
     output_tensor = ttnn.polyval(input_tensor_a, coeff)
     output_tensor = ttnn.to_torch(output_tensor).squeeze(0)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])

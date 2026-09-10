@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -30,6 +31,90 @@ namespace ttnn {
 
 using namespace operations;
 
+namespace {
+
+std::optional<CoreRangeSet> resolve_sub_device_workers(
+    const Tensor& input,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (!sub_device_id.has_value()) {
+        return sub_core_grids;
+    }
+
+    TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+    return input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+}
+
+void validate_scalar_typecast(
+    Layout layout, bool is_sharded, const std::optional<CoreRangeSet>& sub_core_grids, std::string_view context) {
+    TT_FATAL(layout != Layout::ROW_MAJOR || !is_sharded, "{} does not support row-major sharded tensors", context);
+    TT_FATAL(
+        !sub_core_grids.has_value() || (layout == Layout::TILE && !is_sharded),
+        "{} on a restricted grid requires a tiled interleaved tensor",
+        context);
+}
+
+struct PromotedScalarInput {
+    Tensor input;
+    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<MemoryConfig> memory_config;
+};
+
+PromotedScalarInput promote_int32_scalar_input(
+    const Tensor& input,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+    Tensor operation_input = input;
+    if ((input.layout() == Layout::ROW_MAJOR && (input.is_sharded() || operation_sub_core_grids.has_value())) ||
+        (input.is_sharded() && operation_sub_core_grids.has_value())) {
+        // Use unary TYPECAST's full-tile staging for restricted row-major/sharded grids.
+        // Sharded inputs use the existing tilize path, as binary_ng did before
+        // promotion, so later output memory-layout changes also use tile pages.
+        if (input.is_sharded() && operation_sub_core_grids.has_value()) {
+            TT_FATAL(
+                operation_sub_core_grids->contains(input.shard_spec()->grid),
+                "INT32 scalar promotion requires the requested grid to contain all input shard cores");
+        }
+        const auto typecast_input =
+            input.is_sharded()
+                ? ttnn::to_layout(input, Layout::TILE, std::nullopt, std::nullopt, operation_sub_core_grids)
+                : input;
+        operation_input = unary::detail::unary_impl(
+            typecast_input,
+            {unary::EltwiseUnaryWithParam{
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<float>(DataType::INT32), static_cast<float>(DataType::FLOAT32)}}},
+            std::nullopt,
+            std::nullopt,
+            operation_sub_core_grids);
+    } else {
+        operation_input =
+            ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
+    }
+    // Keep tilized shard pages through the arithmetic; untilize performs any
+    // requested output memory-layout conversion using the input shard workers.
+    auto operation_mem_config =
+        operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
+    return {std::move(operation_input), std::move(operation_sub_core_grids), std::move(operation_mem_config)};
+}
+
+Tensor restore_scalar_output_layout(
+    const Tensor& input,
+    Layout operation_layout,
+    const Tensor& output,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Sharded untilize selects its workers from the shard spec, not a subgrid argument.
+    const auto untilize_sub_core_grids = output.is_sharded() ? std::nullopt : sub_core_grids;
+    return operation_layout == input.layout()
+               ? output
+               : ttnn::to_layout(output, input.layout(), std::nullopt, output_mem_config, untilize_sub_core_grids);
+}
+
+}  // namespace
+
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
@@ -53,7 +138,7 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
 Tensor minimum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -63,7 +148,7 @@ Tensor minimum(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::MINIMUM,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -74,27 +159,36 @@ Tensor minimum(
 Tensor minimum(
     const Tensor& input_a,
     unary::ScalarVariant value,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
-    return std::visit(
+    // binary_ng has no tensor-scalar MINIMUM kernel, so this stays on the unary path, which packs
+    // its result in the input dtype. A requested output dtype is applied after the compare.
+    TT_FATAL(
+        !output_dtype.has_value() || !optional_output_tensor.has_value() ||
+            *output_dtype == optional_output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
+    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
+    const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
+    Tensor result = std::visit(
         [&](auto input_b) {
             return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
                 memory_config,
-                optional_output_tensor);
+                compare_output);
         },
         value);
+    return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
 }
 
 Tensor maximum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -104,7 +198,7 @@ Tensor maximum(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::MAXIMUM,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -115,21 +209,30 @@ Tensor maximum(
 Tensor maximum(
     const Tensor& input_a,
     unary::ScalarVariant value,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
-    return std::visit(
+    // binary_ng has no tensor-scalar MAXIMUM kernel, so this stays on the unary path, which packs
+    // its result in the input dtype. A requested output dtype is applied after the compare.
+    TT_FATAL(
+        !output_dtype.has_value() || !optional_output_tensor.has_value() ||
+            *output_dtype == optional_output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
+    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
+    const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
+    Tensor result = std::visit(
         [&](auto input_b) {
             return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
                 memory_config,
-                optional_output_tensor);
+                compare_output);
         },
         value);
+    return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
 }
 
 Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -160,6 +263,45 @@ Tensor div(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const bool is_int32 = input.dtype() == DataType::INT32;
+
+    if (is_int32 && std::holds_alternative<float>(value)) {
+        // Dispatch from the scalar's type, not its value: even 2.0 must promote
+        // before division/rounding, whereas an integer 2 keeps exact INT32 division.
+        // Otherwise binary_ng truncates the floating divisor to an integer.
+        TT_FATAL(
+            !(input.layout() == Layout::ROW_MAJOR && output_tensor.has_value()),
+            "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
+        const auto [operation_input, operation_sub_core_grids, operation_mem_config] =
+            promote_int32_scalar_input(input, output_mem_config, sub_core_grids, sub_device_id);
+        const std::optional<const DataType> requested_dtype =
+            output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
+        if (rounding_mode.has_value() && requested_dtype.has_value() &&
+            !tt::tt_metal::is_floating_point(*requested_dtype)) {
+            // The floating path casts integer outputs after rounding. Retain the
+            // standalone typecast's layout/grid restrictions for that final step.
+            validate_scalar_typecast(
+                operation_input.layout(),
+                output_tensor.has_value() ? output_tensor->is_sharded()
+                                          : operation_mem_config.value_or(operation_input.memory_config()).is_sharded(),
+                operation_sub_core_grids,
+                "Division output typecast");
+        }
+        const auto result = ttnn::div(
+            operation_input,
+            value,
+            fast_and_approximate_mode,
+            rounding_mode,
+            output_dtype,
+            operation_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            operation_sub_core_grids,
+            std::nullopt);
+        return restore_scalar_output_layout(
+            input, operation_input.layout(), result, output_mem_config, operation_sub_core_grids);
+    }
 
     if (is_int32) {
         TT_FATAL(
@@ -519,25 +661,93 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
-    // binary_ng, since the float kernel would reinterpret the tile.
-    if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
-        post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
-        return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
+    Tensor operation_input = input;
+    auto operation_sub_core_grids = sub_core_grids;
+    auto operation_sub_device_id = sub_device_id;
+    auto operation_mem_config = output_mem_config;
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        // binary_ng did not support preallocated outputs when tilizing row-major
+        // inputs. Preserve that restriction rather than writing tile data to them.
+        TT_FATAL(
+            !(input.layout() == Layout::ROW_MAJOR && input.is_sharded() && output_tensor.has_value()),
+            "Optional output tensor with row-major sharded scalar promotion is not supported");
+        auto [promoted_input, promoted_sub_core_grids, promoted_mem_config] =
+            promote_int32_scalar_input(input, output_mem_config, sub_core_grids, sub_device_id);
+        operation_input = std::move(promoted_input);
+        operation_sub_core_grids = std::move(promoted_sub_core_grids);
+        operation_mem_config = std::move(promoted_mem_config);
+        operation_sub_device_id = std::nullopt;
     }
-    return ttnn::detail::invoke_binary_ng(
-        input,
+
+    // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
+    // above; integral scalars must route through binary_ng.
+    if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() &&
+        !operation_sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&
+        rhs_activations.empty()) {
+        // Native floating inputs already support mixed floating-point outputs in
+        // unary_remainder; preserve their existing packing behavior.
+        if (input.dtype() != DataType::INT32 || !output_tensor.has_value() ||
+            output_tensor->dtype() == operation_input.dtype()) {
+            return restore_scalar_output_layout(
+                input,
+                operation_input.layout(),
+                ttnn::unary_remainder(
+                    operation_input, scalar, operation_mem_config, output_tensor, operation_sub_core_grids),
+                output_mem_config,
+                operation_sub_core_grids);
+        }
+
+        // Fused unary TYPECAST supports row-major interleaved subgrids without
+        // standalone typecast. Keep the existing guards for sharded outputs and
+        // for the separate output-conversion path below.
+        const bool fused_row_major_bf16 = output_tensor->dtype() == DataType::BFLOAT16 &&
+                                          operation_input.layout() == Layout::ROW_MAJOR &&
+                                          output_tensor->layout() == Layout::ROW_MAJOR &&
+                                          !operation_input.is_sharded() && !output_tensor->is_sharded();
+        if (!fused_row_major_bf16) {
+            validate_scalar_typecast(
+                operation_input.layout(),
+                output_tensor->is_sharded(),
+                operation_sub_core_grids,
+                "Remainder output typecast");
+        }
+
+        // Fuse BF16 conversion to avoid a separate pass, but retain TYPECAST's
+        // explicit rounding: direct unary packing is not bit-equivalent.
+        // Leave integer outputs and BFLOAT8_B's precise packing path unchanged.
+        if (output_tensor->dtype() == DataType::BFLOAT16) {
+            return unary::detail::unary_impl(
+                operation_input,
+                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::REMAINDER, std::get<float>(scalar)},
+                 unary::EltwiseUnaryWithParam{
+                     unary::UnaryOpType::TYPECAST,
+                     {static_cast<float>(DataType::FLOAT32), static_cast<float>(DataType::BFLOAT16)}}},
+                output_mem_config,
+                output_tensor,
+                operation_sub_core_grids);
+        }
+
+        // The intermediate inherits the input layout and the requested output's sharding.
+        const Tensor operation_output = ttnn::unary_remainder(
+            operation_input, scalar, output_tensor->memory_config(), std::nullopt, operation_sub_core_grids);
+        return ttnn::typecast(
+            operation_output, output_tensor->dtype(), std::nullopt, output_tensor, operation_sub_core_grids);
+    }
+    auto result = ttnn::detail::invoke_binary_ng(
+        operation_input,
         scalar,
         binary::BinaryOpType::REMAINDER,
         output_dtype,
-        output_mem_config,
+        operation_mem_config,
         output_tensor,
         post_activations,
         lhs_activations,
         rhs_activations,
         std::nullopt,
-        sub_core_grids,
-        sub_device_id);
+        operation_sub_core_grids,
+        operation_sub_device_id);
+    return restore_scalar_output_layout(
+        input, operation_input.layout(), result, output_mem_config, operation_sub_core_grids);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -568,9 +778,19 @@ Tensor fmod(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
-    // binary_ng, since the float kernel would reinterpret the tile. The fast path also cannot
-    // honor sub_device_id.
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        const auto [operation_input, operation_sub_core_grids, operation_mem_config] =
+            promote_int32_scalar_input(input, output_mem_config, sub_core_grids, sub_device_id);
+        const float scalar_f = std::get<float>(scalar);
+        return restore_scalar_output_layout(
+            input,
+            operation_input.layout(),
+            ttnn::unary_fmod(operation_input, scalar_f, operation_mem_config, std::nullopt, operation_sub_core_grids),
+            output_mem_config,
+            operation_sub_core_grids);
+    }
+    // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
+    // above; integral scalars must route through binary_ng, as must explicit subdevice dispatch.
     if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(
             input,
@@ -586,7 +806,7 @@ Tensor fmod(
             sub_core_grids,
             sub_device_id);
     }
-    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
+    const float scalar_f = std::visit([](auto value) -> float { return static_cast<float>(value); }, scalar);
     return ttnn::unary_fmod(input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
 }
 
@@ -726,7 +946,7 @@ Tensor polyval(
 Tensor gcd(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -736,7 +956,7 @@ Tensor gcd(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::GCD,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -747,7 +967,7 @@ Tensor gcd(
 Tensor lcm(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -757,7 +977,7 @@ Tensor lcm(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::LCM,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -797,7 +1017,7 @@ Tensor pow(
 Tensor pow(
     const Tensor& input,
     const Tensor& exponent,
-    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -807,7 +1027,7 @@ Tensor pow(
         input,
         exponent,
         binary::BinaryOpType::POWER,
-        std::nullopt,
+        dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -819,7 +1039,7 @@ Tensor pow(
 Tensor pow(
     float input_a,
     const Tensor& exponent,
-    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -832,7 +1052,7 @@ Tensor pow(
     return pow(
         input,
         exponent,
-        std::nullopt,
+        dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -915,7 +1135,7 @@ Tensor bias_gelu(
 Tensor bias_gelu(
     const Tensor& input_tensor_a,
     unary::ScalarVariant bias,
-    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
@@ -931,13 +1151,24 @@ Tensor bias_gelu(
         resolved_sub_core_grids =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
-    return ttnn::gelu(
+    // The tensor-tensor overload runs the gelu as a binary_ng postprocess whose dest accumulation
+    // follows the output dtype, so it computes at the wider of input and output and packs only at
+    // the end. Match that here: widen the operand up front when float32 is asked for, and narrow
+    // once the gelu is done. Doing either conversion on the sum instead changes the result.
+    TT_FATAL(
+        !dtype.has_value() || !optional_output_tensor.has_value() || *dtype == optional_output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
+    const bool widen = dtype.has_value() && *dtype == DataType::FLOAT32 && input_tensor_a.dtype() != DataType::FLOAT32;
+    const Tensor operand = widen ? ttnn::typecast(input_tensor_a, DataType::FLOAT32, memory_config) : input_tensor_a;
+    const bool narrow = dtype.has_value() && *dtype != operand.dtype();
+    const std::optional<Tensor> gelu_output = narrow ? std::optional<Tensor>{} : optional_output_tensor;
+    Tensor result = ttnn::gelu(
         ttnn::add(
-            input_tensor_a,
+            operand,
             bias,
             std::nullopt,
             memory_config,
-            optional_output_tensor,
+            gelu_output,
             {},
             {},
             {},
@@ -945,8 +1176,10 @@ Tensor bias_gelu(
             resolved_sub_core_grids),
         true,
         memory_config,
-        optional_output_tensor,
+        gelu_output,
         resolved_sub_core_grids);
+    return narrow ? ttnn::typecast(result, *dtype, memory_config, optional_output_tensor, resolved_sub_core_grids)
+                  : result;
 }
 
 // At/below this width the intermediates are worth keeping in L1: it skips the DRAM round-trip
