@@ -19,6 +19,8 @@ in that block. A 128-token prompt divides evenly and hides the bug entirely.
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_spec_determinism.py -v -s
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -30,6 +32,12 @@ from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 RUNS = 3
 MAX_NEW = 48
+
+# CI runs these on a truncated model: losslessness and determinism are properties of the spec-decode
+# algorithm, not of model quality, and a full 64-layer cold load (14-40 min per box) does not fit the
+# unit-test budget. Unset (the local default) loads the full model. Layers 0-7 include full-attention
+# layers 3 and 7 plus GDN layers, and the MTP head is built regardless of n_layers.
+_N_LAYERS = int(os.environ.get("QWEN36_SPEC_TEST_N_LAYERS", "0")) or None
 
 
 def _prompt_of_len(target, tokenizer):
@@ -59,7 +67,9 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len):
     device = mesh_device
     device.enable_program_cache()
     num_blocks = 64
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=num_blocks * BLOCK_SIZE)
+    model = Qwen36Model.from_pretrained(
+        device, max_batch_size=1, max_seq_len=num_blocks * BLOCK_SIZE, n_layers=_N_LAYERS
+    )
     assert model.mtp is not None, "MTP head not built"
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     token_ids = _prompt_of_len(prompt_len, tokenizer)
@@ -113,7 +123,9 @@ def test_spec_sampling_is_deterministic(mesh_device):
     device = mesh_device
     device.enable_program_cache()
     num_blocks = 64
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=num_blocks * BLOCK_SIZE)
+    model = Qwen36Model.from_pretrained(
+        device, max_batch_size=1, max_seq_len=num_blocks * BLOCK_SIZE, n_layers=_N_LAYERS
+    )
     assert model.mtp is not None, "MTP head not built"
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     token_ids = _prompt_of_len(prompt_len, tokenizer)

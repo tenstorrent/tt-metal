@@ -35,6 +35,8 @@ checks sampling plumbing ([T, vocab] logits readback, which row belongs to which
 index) rather than its math (test_spec_sampling_math.py).
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -49,6 +51,12 @@ PROMPT_LEN = 130
 MAX_NEW = 48
 NUM_BLOCKS = 64
 NEAR_TIE_GAP = 2.0
+
+# CI runs these on a truncated model: losslessness and determinism are properties of the spec-decode
+# algorithm, not of model quality, and a full 64-layer cold load (14-40 min per box) does not fit the
+# unit-test budget. Unset (the local default) loads the full model. Layers 0-7 include full-attention
+# layers 3 and 7 plus GDN layers, and the MTP head is built regardless of n_layers.
+_N_LAYERS = int(os.environ.get("QWEN36_SPEC_TEST_N_LAYERS", "0")) or None
 
 
 def _top2_gap(row):
@@ -119,7 +127,9 @@ def test_spec_decode_matches_plain_greedy_up_to_near_ties(mesh_device, sampling_
 
     device = mesh_device
     device.enable_program_cache()
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE)
+    model = Qwen36Model.from_pretrained(
+        device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE, n_layers=_N_LAYERS
+    )
     assert model.mtp is not None, "MTP head not built"
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     token_ids = _get_prompt(PROMPT_LEN, tokenizer)
