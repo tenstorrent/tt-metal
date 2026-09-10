@@ -18,12 +18,13 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
-
 static constexpr int LOGIT_SOFTCAP_ITERATIONS = 32;
 #ifndef LOGIT_SOFTCAP_POLYNOMIAL
 #define LOGIT_SOFTCAP_POLYNOMIAL false
 #endif
+// The polynomial regression streams several tiles. Quiesce MATH while PACK
+// uses the shared SFPU/DEST addressing state, then permit the next copy.
+static constexpr ckernel::DstSync DST_SYNC = LOGIT_SOFTCAP_POLYNOMIAL ? ckernel::DstSync::SyncFull : ckernel::DstSync::SyncHalf;
 
 #ifdef LLK_TRISC_UNPACK
 
