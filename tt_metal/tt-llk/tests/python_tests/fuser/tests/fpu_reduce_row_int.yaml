@@ -1,0 +1,27 @@
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [128, 128]
+    format: "Int8"
+  - name: "input_B"
+    dims: [128, 128]
+    format: "Int8"
+    const_value: 1.0
+  - name: "reduce_row_out"
+    dims: [128, 128]
+    format: "Int8"
+
+operations:
+  - math:
+      - type: "Fpu"
+        in0: "input_A"
+        in1: "input_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "SUM"
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    pack:
+      - output: "reduce_row_out"
+        packer: "Packer"

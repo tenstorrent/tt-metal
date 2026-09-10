@@ -498,6 +498,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
 {
+    static_assert(!is_int_fpu_en || REDUCE_DIMENSION == ReduceDim::REDUCE_ROW, "Integer FPU reduce is only implemented for REDUCE_ROW");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>(tensor_shape);
 
@@ -539,6 +540,7 @@ inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape)
 {
+    static_assert(!is_int_fpu_en || REDUCE_DIMENSION == ReduceDim::REDUCE_ROW, "Integer FPU reduce is only implemented for REDUCE_ROW");
     // TODO: Add SFPU reduce for INT8->Int32 Scalar SUM (https://github.com/tenstorrent/tt-metal/issues/50161)
     static_assert(
         !(is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM),
