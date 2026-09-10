@@ -870,7 +870,10 @@ fi # bh-ring-stress
 if run_group "bh-heterogeneous"; then
 
 ROUTER_PIPELINE_TIMEOUT=600
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${ROUTER_PIPELINE_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/gemma_specdecode_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+# Corner-pin checks are not run for gemma: its 4x1 meshes seat on a halftray and its 4x2 meshes on a
+# HALFTRAY_2 + HALFTRAY_1 pair, so a mesh has only one asic_location-1 chip and the corner-fold
+# invariant (both endpoints on location 1) cannot hold. The layout check validates the placement.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${ROUTER_PIPELINE_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/gemma_specdecode_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 
 # Corner-pin checks are not run for the llama ring: the corner-fold invariant does not hold for its
 # 4x2 / 2x2 mesh endpoints (same reason as the pinned variant in bh-subtorus).
