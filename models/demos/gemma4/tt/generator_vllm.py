@@ -2156,13 +2156,18 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # collapses (~1 tok/iter) at >=131072. Unbounded (<131072) leaves it unset
         # (flat table is already correct), preserving the current path.
         if self._bounded_sliding_kv_cache and page_table is not None:
-            try:
-                _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
-                _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kv_cache, authoritative=True)
-                if _ptpl:
-                    model0._active_page_tables_per_layer = _ptpl
-            except Exception as e:  # pragma: no cover - fall back to flat
-                logger.warning(f"Gemma4DFlash: bounded per-layer table install failed: {e!r}")
+            # No fallback: continuing with the flat table makes sliding layers
+            # read the wrong physical blocks and silently collapses acceptance
+            # (~1 tok/iter) -- fail the request loudly instead (review finding
+            # on tt-metal#56048).
+            _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
+            _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kv_cache, authoritative=True)
+            if not _ptpl:
+                raise RuntimeError(
+                    "Gemma4DFlash: bounded per-layer page-table install produced "
+                    "no tables; refusing to speculate against the flat table"
+                )
+            model0._active_page_tables_per_layer = _ptpl
         pt = page_table[:1] if page_table is not None else None
         horizon = self._spec_horizon
         t0 = _time.time()
@@ -2269,7 +2274,16 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             toks = torch.as_tensor(toks)
         # Greedy fallback if the base returned logits ([., vocab]) rather than
         # sampled tokens (device sampling should give tokens under decode_only).
+        # This OVERRIDES any configured sampling policy for the step, so surface
+        # it the first time it happens (review finding on tt-metal#56048).
         if toks.dim() >= 2 and toks.shape[-1] > 1:
+            if not getattr(self, "_adaptive_greedy_warned", False):
+                self._adaptive_greedy_warned = True
+                logger.warning(
+                    "Gemma4DFlash: batched baseline step returned logits, not "
+                    "tokens; applying greedy argmax (overrides sampling policy). "
+                    "Check sample_on_device_mode wiring if sampling matters."
+                )
             toks = toks.argmax(dim=-1)
         toks = toks.reshape(-1)
         return toks[:num_reqs].to(torch.int32).reshape(num_reqs, 1)
@@ -2363,7 +2377,20 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             self._spec_iters = getattr(self, "_spec_iters", 0) + 1
             self._spec_tokens = getattr(self, "_spec_tokens", 0) + produced
             committed = list(accepted) + [bonus]
-            committed = [t if 0 <= t < vocab else int(bonus if 0 <= bonus < vocab else 1) for t in committed]
+            oov = [t for t in committed if not 0 <= t < vocab]
+            if oov:
+                # The verify posterior produced an id outside the vocab -- a
+                # sign of upstream corruption, not a normal decode event.
+                # Substitute to keep the wire valid but SAY so (review finding
+                # on tt-metal#56048: never mask this silently).
+                if not getattr(self, "_spec_oov_warned", False):
+                    self._spec_oov_warned = True
+                    logger.warning(
+                        f"Gemma4DFlash: {len(oov)} out-of-vocab committed id(s) "
+                        f"(first={oov[0]}, vocab={vocab}); substituting. "
+                        "Investigate verify integrity if this repeats."
+                    )
+                committed = [t if 0 <= t < vocab else int(bonus if 0 <= bonus < vocab else 1) for t in committed]
             block.extend(committed)
             if eos_set & set(committed):
                 break
@@ -2483,15 +2510,19 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         # pre-allocates the full block table, so a one-time install per
         # bootstrap suffices (no per-block refresh needed).
         if self._bounded_sliding_kv_cache and page_table is not None:
-            try:
-                if hasattr(model0, "_active_page_tables_per_layer"):
-                    del model0._active_page_tables_per_layer
-                _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
-                _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kv_cache, authoritative=True)
-                if _ptpl:
-                    model0._active_page_tables_per_layer = _ptpl
-            except Exception as e:  # pragma: no cover - fall back to flat
-                logger.warning(f"Gemma4MTP: bounded per-layer table install failed: {e!r}")
+            # No fallback: a missing install means the fused verify reads the
+            # flat table for sliding layers and acceptance silently collapses
+            # -- fail loudly instead (review finding on tt-metal#56048).
+            if hasattr(model0, "_active_page_tables_per_layer"):
+                del model0._active_page_tables_per_layer
+            _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
+            _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kv_cache, authoritative=True)
+            if not _ptpl:
+                raise RuntimeError(
+                    "Gemma4MTP: bounded per-layer page-table install produced "
+                    "no tables; refusing to speculate against the flat table"
+                )
+            model0._active_page_tables_per_layer = _ptpl
         if self._spec_assistant is None:
             assistant_path = os.environ.get("GEMMA4_ASSISTANT_MODEL") or _assistant_default_snapshot(
                 os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
