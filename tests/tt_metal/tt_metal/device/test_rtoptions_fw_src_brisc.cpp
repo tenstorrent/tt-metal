@@ -41,7 +41,7 @@ private:
 
 }  // namespace
 
-TEST(RunTimeOptionsFirmwareSource, BriscSourceOverrideImpliesThePrecompiledFirmwareBypass) {
+TEST(RunTimeOptionsFirmwareSource, CPU_BriscSourceOverrideImpliesThePrecompiledFirmwareBypass) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "/somewhere/else/brisc.cc");
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
@@ -49,7 +49,7 @@ TEST(RunTimeOptionsFirmwareSource, BriscSourceOverrideImpliesThePrecompiledFirmw
     EXPECT_TRUE(opts.get_disable_precompiled_fw()) << "a source override without the bypass would run stock firmware";
 }
 
-TEST(RunTimeOptionsFirmwareSource, NoOverrideLeavesTheInTreeSourceAndPrecompiledFirmware) {
+TEST(RunTimeOptionsFirmwareSource, CPU_NoOverrideLeavesTheInTreeSourceAndPrecompiledFirmware) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
@@ -57,7 +57,7 @@ TEST(RunTimeOptionsFirmwareSource, NoOverrideLeavesTheInTreeSourceAndPrecompiled
     EXPECT_FALSE(opts.get_disable_precompiled_fw());
 }
 
-TEST(RunTimeOptionsFirmwareSource, AnEmptyOverrideIsNoOverride) {
+TEST(RunTimeOptionsFirmwareSource, CPU_AnEmptyOverrideIsNoOverride) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "");
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
