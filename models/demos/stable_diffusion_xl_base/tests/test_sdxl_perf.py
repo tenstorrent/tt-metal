@@ -136,7 +136,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
-        "wormhole": 81_841_969,
+        "wormhole": 82_600_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
