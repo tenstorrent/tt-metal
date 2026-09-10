@@ -17,10 +17,12 @@ name: "LLK perf gate"
 # BASELINE UPDATES: After merge to main, the sanity workflow re-runs perf tests
 # and publishes new baseline to Snowflake. Next PR's gate compares against it.
 #
-# TRIGGER: Add 'perf-gate' label to PR to run the gate
+# TRIGGER: add the 'llk-perf-gate' label to a PR. The gate then re-runs on every
+# later push to that PR, so a fix can be checked without removing and re-adding
+# the label.
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, synchronize]
 
 permissions:
   contents: read
@@ -30,6 +32,14 @@ permissions:
 jobs:
   llk-perf-gate:
     name: "LLK perf regression gate"
-    if: github.event.label.name == 'llk-perf-gate' && github.event.pull_request.head.repo.full_name == github.repository
+    # A fork PR carries no secrets and a read-only token, so Snowflake and the
+    # PR comment would both fail. Guard on the head repo, as pr-gate.yaml does.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+        (github.event.action == 'synchronize'
+         && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+      )
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     secrets: inherit

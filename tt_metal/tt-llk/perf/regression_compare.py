@@ -18,15 +18,23 @@ See tt_metal/tt-llk/docs/perf_evaluation/results/*/README.md.
 Deliberately dependency-light: reads raw perf_data CSVs directly (no Parquet).
 A "point" is (marker, sweep-config) — every column that isn't a metric or code-size.
 
-Usage:
-    from tt_metal.tt_llk.perf.regression_compare import compare_runs, render_report
-    result = compare_runs(current_csvs, baseline_csvs, threshold=0.02, min_cycles=30)
-    report = render_report(result, threshold=0.02, test='perf_x', ...)
+Both callers — the PR gate workflow and the perf-regression-check skill — run it by
+filesystem path, because ``tt_metal/tt-llk`` holds a hyphen and is not an importable
+package name.
+
+    python3 tt_metal/tt-llk/perf/regression_compare.py \
+        --current  'current_perf/**/*.csv' \
+        --baseline 'baseline_perf/**/*.csv' \
+        --report perf_gate_report.md
+
+To use it as a library, add its directory to ``sys.path`` first:
+
+    sys.path.insert(0, "tt_metal/tt-llk/perf")
+    from regression_compare import compare_runs, render_report
 """
 
 import argparse
 import glob
-from statistics import median
 
 import pandas as pd
 
@@ -59,25 +67,62 @@ def _is_ignored(col):
     return _is_metric(col) or col.startswith("TEXT_SIZE(")
 
 
-def _point_key(row, config_cols):
-    """A point's identity within one test: marker + the sweep configuration."""
-    config = tuple(sorted((c, row[c]) for c in config_cols if pd.notna(row[c])))
-    return (row.get("marker"), config)
+def _run_type_of(mean_col):
+    """``mean(L1_TO_L1)`` -> ``L1_TO_L1``."""
+    return mean_col[len("mean(") : -1]
+
+
+def _filter_run_types(medians, allowed):
+    """Keep only the metrics whose run type was asked for."""
+    return {k: v for k, v in medians.items() if _run_type_of(k[1]) in allowed}
+
+
+def _mean_cols(columns):
+    return [c for c in columns if c.startswith("mean(")]
+
+
+def _config_cols(columns):
+    return [c for c in columns if c != "marker" and not _is_ignored(c)]
+
+
+def _point_key(marker, config_pairs):
+    """A point's identity within one test: marker + the non-null sweep config."""
+    return (marker, tuple(sorted((c, v) for c, v in config_pairs if pd.notna(v))))
 
 
 def _medians(frames):
-    """{(point_key, mean_col): median value} across a list of run DataFrames."""
-    samples = {}
-    for df in frames:
-        config_cols = [c for c in df.columns if not _is_ignored(c) and c != "marker"]
-        mean_cols = [c for c in df.columns if c.startswith("mean(")]
-        for _, row in df.iterrows():
-            key = _point_key(row, config_cols)
-            for col in mean_cols:
-                val = row.get(col)
-                if pd.notna(val):
-                    samples.setdefault((key, col), []).append(float(val))
-    return {k: median(v) for k, v in samples.items()}
+    """{(point_key, mean_col): median value} across a list of run DataFrames.
+
+    One groupby over the concatenated frames, rather than a Python loop over
+    every row of every iteration. A full sweep is tens of thousands of rows and
+    the gate reads both sides of it.
+    """
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return {}
+    df = pd.concat(frames, ignore_index=True)
+    if "marker" not in df.columns:
+        df = df.copy()
+        df["marker"] = pd.NA
+    mean_cols = _mean_cols(df.columns)
+    if not mean_cols:
+        return {}
+    # Drop all-null config columns so they stay out of the key, exactly as the
+    # per-row null skip did, and so groupby is not handed an empty axis.
+    config_cols = [c for c in _config_cols(df.columns) if df[c].notna().any()]
+    grouped = df.groupby(["marker", *config_cols], dropna=False, sort=False)[
+        mean_cols
+    ].median()
+
+    out = {}
+    id_frame = grouped.reset_index()
+    n_id = 1 + len(config_cols)
+    for rec in id_frame.itertuples(index=False, name=None):
+        key = _point_key(rec[0], zip(config_cols, rec[1:n_id]))
+        for col, val in zip(mean_cols, rec[n_id:]):
+            if pd.notna(val):
+                out[(key, col)] = float(val)
+    return out
 
 
 def compare_runs(
@@ -105,19 +150,16 @@ def compare_runs(
     cur = _medians([pd.read_csv(p) for p in current_csvs])
     base = _medians([pd.read_csv(p) for p in baseline_csvs])
 
-    # Filter by run type if specified
     if run_types:
-        allowed_types = set(t.strip() for t in run_types.split(","))
-        cur = {k: v for k, v in cur.items() if k[1][len("mean(") : -1] in allowed_types}
-        base = {
-            k: v for k, v in base.items() if k[1][len("mean(") : -1] in allowed_types
-        }
+        allowed = {t.strip() for t in run_types.split(",")}
+        cur = _filter_run_types(cur, allowed)
+        base = _filter_run_types(base, allowed)
 
     records, regressions, improvements, new_points = [], [], [], []
     noise_filtered = 0
     for (key, mean_col), cval in cur.items():
         marker, config = key
-        run_type = mean_col[len("mean(") : -1]
+        run_type = _run_type_of(mean_col)
         point = {
             "marker": marker,
             "run_type": run_type,

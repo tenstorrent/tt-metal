@@ -52,5 +52,9 @@ required.
 
 ## How it works
 `sweep(HEAD)` + `sweep(merge-base(origin/main, HEAD))` → median-vs-median compare via the
-self-contained `perf_regression_compare.py`, which reads the raw `perf_data` CSVs directly (no
-Parquet, no database — works on any branch, merged or not).
+canonical `perf/regression_compare.py`, the same module the PR gate runs. It reads the raw
+`perf_data` CSVs directly (no Parquet, no database — works on any branch, merged or not).
+
+A point is a regression only when it is **both** more than `--threshold` slower **and** more
+than `--min-cycles` slower. The percentage clause alone fires on small markers such as `INIT`;
+the cycle clause alone fires on large `TILE_LOOP` values.

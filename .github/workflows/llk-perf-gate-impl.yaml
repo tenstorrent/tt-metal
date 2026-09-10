@@ -9,8 +9,10 @@ on:
         required: false
         default: wormhole
         type: string
-      baseline_run_id:
-        description: "The workflow run ID of the perf measurement to gate against"
+      perf_run_id:
+        description: >-
+          The workflow run that produced this PR's perf data. Leave empty when a
+          job in THIS run uploaded it; the download then reads the current run.
         required: false
         type: string
       run_types:
@@ -162,12 +164,25 @@ jobs:
             exit 1
           fi
 
-      # Download current run artifacts (perf_data CSVs from the build job)
-      - name: Download current run artifacts
-        uses: actions/download-artifact@v4
+      # The perf jobs upload one artifact per (arch, split group), named
+      # perf-data-<arch>-<split_group>, so this collects them all into one tree.
+      - name: Download the PR's perf data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: perf_data
+          pattern: perf-data-*
+          merge-multiple: true
           path: current_perf
+          run-id: ${{ inputs.perf_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check that perf data arrived
+        run: |
+          COUNT=$(find current_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Current-side CSVs: ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No perf CSVs for the current side. The gate measured nothing."
+            exit 1
+          fi
 
       # Run the comparison
       - name: Compare regressions
@@ -179,8 +194,6 @@ jobs:
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
             --current 'current_perf/**/*.csv' \
             --baseline 'baseline_perf/**/*.csv' \
-            --threshold 0.02 \
-            --min-cycles 30 \
             --run-types '${{ inputs.run_types }}' \
             --report perf_gate_report.md \
             --test 'LLK perf' \
@@ -200,7 +213,7 @@ jobs:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('perf_gate_report.md', 'utf8');
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
