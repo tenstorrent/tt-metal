@@ -382,12 +382,12 @@
       "category": 5,
       "validation_workflow_dispatched": "models-t3-e2e-tests",
       "dispatched": "2026-09-09",
-      "status": "dispatched-queued",
-      "reported": false,
+      "status": "resolved",
+      "reported": true,
       "nonterminal_reported": true,
-      "note": "PR #56011: dispatched run 34404305350 (models-e2e-tests) still queued as of 2026-09-10 check. Posted interim 'still running' comment naming Gemma-2-2B e2e test-execution logs as where to re-grep for the L1/DRAM downgrade warning once complete. mark-ready-for-review budget (max 1/run) was already spent on PR #55903 this run, so #56011 remains in draft; will retry marking ready next run once terminal outcome is available. Stays in flight.",
+      "note": "PR #56011 fully resolved: validation run 34404305350 (models-t3-e2e-tests) completed/failure overall (unrelated model job failures - YuNet, Phi-3-mini, EfficientDet-D0, SSD512, BERT-Large, Falcon-7B, Gemma/Qwen/Mistral variants). Target job Gemma-2-2B e2e tests [wh_n150] (job 102647509429) completed/success and exercises ttnn.split. Re-grepped full (non-truncated, 2591-line) test-execution log: both target warnings ('L1 budget exceeded' / 'migrating L1 input to DRAM') fire exactly once each (down from 500x each pre-fix), confirming std::call_once gating works. Gemma-2-2B wh_n300 job failed on unrelated action-download infra timeout, not the fix. Outcome commented (/codeowners ping) and PR marked ready for review (2026-09-10).",
       "number": 56011,
-      "last_state": "queued"
+      "last_state": "failure"
     },
     {
       "branch": "silencer/matmul-bmm-unused-tensoraccessor-args",
@@ -406,7 +406,22 @@
       "reported": false,
       "nonterminal_reported": false,
       "note": "PR opened this run: added [[maybe_unused]] to in0_args/out_args TensorAccessorArgs in two matmul dataflow kernels, matching existing idiom used in moe_gpt/moe_compute dm0.cpp/dm1.cpp. Dispatched sanity-tests (run-blackhole, run-ttnn-sanity-tests, run-ops-sanity-tests) for validation; awaiting run outcome next scan."
+    },
+    {
+      "branch": "silencer/dedupe-all-gather-l1-semaphore-warning",
+      "title": "Dedupe repeated all-gather L1-semaphore-fallback warning",
+      "pattern": "Allocating semaphores in L1, which may fragment L1 and reduce headroom - fires per op invocation from both all_gather_multicast_factory.cpp:42 and all_gather_unicast_factory.cpp:56 (19x combined in one 2630-line sample)",
+      "source_run_id": "34468470764",
+      "source_job_id": "102844630603",
+      "source_workflow": "models-t1-e2e-tests.yaml",
+      "category": 5,
+      "validation_workflow_dispatched": "models-t1-e2e-tests",
+      "dispatched": "2026-09-10",
+      "status": "dispatched",
+      "reported": false,
+      "nonterminal_reported": false,
+      "note": "PR opened this run: gated both AllGatherMulticastFactory and AllGatherUnicastFactory L1-semaphore-fallback log_warning calls with std::once_flag/std::call_once, matching existing per-process idiom in groupnorm.cpp (welford_fallback_warned) and unary_utils.cpp (warn_flag). Sampled from Gemma-4-12B e2e tests [bh_quietbox_2] job in a fresh main-branch run. Dispatched models-t1-e2e-tests for validation; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Scanned blackhole-sanity-tests run 31720311397 (main, stale since Aug 13) - found and fixed -Wunused-but-set-variable in matmul bmm kernels (in0_args/out_args, 87x combined in job sample), PR opened branch silencer/matmul-bmm-unused-tensoraccessor-args. Next: continue blackhole-sanity-tests other jobs, then models-t1/t2-e2e-tests per prior cursor. Also reconciled PR #55903 (pytest-collection, failure unrelated to fix, confirmed resolved, ready-for-review) and PR #56011 (split-l1-dram, still queued, ready-for-review budget spent on #55903 this run - retry marking ready next run)."
+  "backlog_cursor": "Scanned models-t1-e2e-tests run 34468470764 (main, 2026-09-10) job Gemma-4-12B e2e tests [bh_quietbox_2] via full four-shape parse - found and fixed log-spam 'Allocating semaphores in L1' warning (19x combined across all_gather_multicast_factory.cpp/all_gather_unicast_factory.cpp), PR opened branch silencer/dedupe-all-gather-l1-semaphore-warning. Also reconciled PR #56011 (dedupe-split-l1-dram, validation run 34404305350 completed/failure overall but target job succeeded and confirmed fix - commented and marked ready for review). Next: continue models-t1/t2-e2e-tests and blackhole-sanity-tests backlog; matmul-bmm-unused-tensoraccessor-args (PR #56065) validation dispatch to sanity-tests/pr-gate/merge-gate all show action_required/no matching run found - re-dispatch or investigate on a future scan."
 }
