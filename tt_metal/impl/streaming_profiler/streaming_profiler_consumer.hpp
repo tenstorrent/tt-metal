@@ -35,20 +35,32 @@ inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TR
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
 // the process-wide site table publishes them as ELFs load (init_site_registry).
-struct CaptureContext {
-    struct Device {
-        std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
-        std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
-    };
-    std::vector<Device> devices;
-};
-
 // The host<->device clock relation of one chip as the device layer measured it.
 struct DeviceClock {
     uint32_t chip_id = 0;
     double frequency_ghz = 0.0;  // device ticks per nanosecond
     uint64_t anchor_ticks = 0;
     int64_t anchor_host_ns = 0;  // std::chrono::steady_clock at `anchor_ticks`, in nanoseconds since its epoch
+};
+
+struct CaptureContext {
+    struct Device {
+        std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
+        std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
+        uint32_t chip_id = 0;
+        DeviceClock clock;  // the baked anchor the records carry; the d2d sync composes its term with it
+        DeviceClock eth_clock;     // the idle-eth core's own wall-clock anchor, for placing PP_CLOCK plot samples
+        uint32_t n_eth_cores = 0;  // trailing cores in `lanes` that are eth (idle + active); they use eth_clock
+    };
+    std::vector<Device> devices;
+    // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b
+    // at eth_b. The d2d-sync consumer pairs the two ends' PP_CLOCK(LINK) samples by round.
+    struct Link {
+        uint32_t dev_a = 0, dev_b = 0;
+        uint32_t chip_a = 0, chip_b = 0;
+        CoreCoord eth_a, eth_b;
+    };
+    std::vector<Link> links;
 };
 
 // What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip,
@@ -77,6 +89,7 @@ void init_site_registry();
 
 struct StreamStats {
     uint64_t records = 0, zones = 0, order_regressions = 0, epoch_fixes = 0;
+    uint64_t clock_samples = 0;  // PP_CLOCK samples decoded (idle-eth clock trackers); the drain's proof of life
 };
 
 }  // namespace tt::tt_metal::streaming_profiler
