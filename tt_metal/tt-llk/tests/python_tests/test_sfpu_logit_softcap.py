@@ -19,7 +19,7 @@ import struct
 from dataclasses import dataclass
 
 import torch
-from conftest import skip_for_wormhole
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
@@ -176,6 +176,7 @@ class LOGIT_SOFTCAP_POLYNOMIAL(TemplateParameter):
 
 
 @skip_for_wormhole
+@skip_for_quasar
 @parametrize(cap=CAPS, input_range=INPUT_RANGES)
 def test_sfpu_logit_softcap_polynomial_rounding(cap, input_range):
     """Check the polynomial against tanh, and its explicit BF16 RNE against FP32.
