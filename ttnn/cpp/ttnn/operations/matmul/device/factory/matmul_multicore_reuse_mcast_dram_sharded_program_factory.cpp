@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -329,9 +329,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             num_blocks_per_shard);
     }
 
-    // Spec-scope resource names. Declared function-local rather than at file scope: the matmul
-    // factory .cpp files share one unity-build target, so file-scope constants with these names
-    // would collide as sibling factories are ported.
     const KernelSpecName IN0_SENDER{"in0_sender"};
     const KernelSpecName IN1_SENDER_WRITER{"in1_sender_writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -392,16 +389,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
-
-    // This factory never transposes in0: the legacy compute kernel took the flag as a compile-time
-    // arg whose value here was a literal false. Metal 2.0 selects the in0 dataflow buffer from a
-    // preprocessor condition instead, because the kernel picks its in0 handle in a parse-time
-    // ternary whose both operands must resolve; leaving the define unset also leaves the
-    // in0_transposed buffer unbound, which is what this factory wants.
-    const bool in0_transpose_tile = false;
-    if (in0_transpose_tile) {
-        mm_kernel_defines["IN0_TRANSPOSE_TILE"] = "1";
-    }
+    // No IN0_TRANSPOSE_TILE: this factory never transposes in0 tiles.
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
@@ -413,10 +401,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     //                      Build DataflowBufferSpecs
     ////////////////////////////////////////////////////////////////////////////
 
-    // The output and intermediate0 buffers share one L1 region whenever the legacy factory
-    // expressed them as one buffer descriptor carrying both formats. Same total size, same bound
-    // kernel set, so they form a legal two-member alias clique; in the other branch they are
-    // independent.
     const bool share_out_interm_buffer =
         !((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1)));
 
@@ -503,10 +487,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .unique_id = IN0_MCAST_RECEIVER_SEM,
         .target_nodes = all_cores_in_rect_grid,
     });
-    // Declared but bound by no kernel: the legacy factory allocated a third semaphore and passed
-    // its id as a compile-time arg the in0 sender never reads, so nothing on device touches it.
-    // Kept so the program's semaphore allocation is byte-for-byte what it was. Its initial value
-    // is likewise unobservable, but carried across for the same reason.
     semaphores.push_back(SemaphoreSpec{
         .unique_id = IN0_MCAST_SENDER_VALID_SEM,
         .target_nodes = all_cores_in_rect_grid,
@@ -539,9 +519,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
     }
 
-    // The sender noc-x block followed by the sender noc-y block, exactly the layout the in0 kernel
-    // indexes by block id. Same on every node, but left per-node: promoting it to a common
-    // runtime arg would change dispatch semantics, which is not this port's business.
     AdvancedKernelRunArgs::Varargs in0_sender_noc_varargs;
     in0_sender_noc_varargs.reserve(in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
     in0_sender_noc_varargs.insert(
@@ -581,10 +558,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         in0_run_args.advanced_options.runtime_varargs[core] = in0_sender_noc_varargs;
     }
 
-    // in0 sender runtime args (idle cores in rect grid). The legacy factory emitted only the
-    // core-type arg here, because the kernel returns before reading anything else. Metal 2.0
-    // requires every declared runtime arg on every node the kernel runs on, so the remaining
-    // fields are zero-filled; the kernel still returns before reading them.
     for (auto core : all_cores_in_rect_grid_vec) {
         if (std::find(mcast_senders_coords.begin(), mcast_senders_coords.end(), core) == mcast_senders_coords.end() and
             std::find(mcast_receiver_coords.begin(), mcast_receiver_coords.end(), core) ==
@@ -625,8 +598,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
     uint32_t total_tensor_width_written_back = 0;
 
-    // Non-worker in1 writer nodes carry no write-back collection at all; worker nodes carry three
-    // values per shard they write back. Collected first, then padded to a single declared length.
     Table<CoreCoord, AdvancedKernelRunArgs::Varargs> in1_writer_varargs;
     uint32_t num_in1_writer_varargs = 0;
 
@@ -658,12 +629,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     }
 
     // Worker cores: in1 sender/writer runtime args.
-    //
-    // The legacy factory built one flat uint32 vector per core, with the write-back shard count
-    // spliced in at a fixed index once the variable-length tail was known. That arithmetic is kept
-    // verbatim below and the finished vector is split at the end: slots [0], [3]..[7] are the named
-    // arguments, slots [1] and [2] held buffer addresses and are now tensor bindings, and slots
-    // [8] onwards are the (bytes, noc_x, noc_y) triples the kernel walks by index.
     constexpr std::size_t num_shards_to_write_back_arg_index = 6;
     constexpr std::size_t fixed_writer_arg_count = 11;
     constexpr std::size_t writer_varargs_begin = 8;
@@ -810,8 +775,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         expected_max_total_width,
         total_tensor_width_written_back);
 
-    // One declared vararg count for the kernel, so nodes with fewer write-back shards are padded
-    // out. The kernel's loop is bounded by num_shard_to_write_back, so it never reads the padding.
+    // Cores straddle different numbers of storage-core shards, so the lists built above have
+    // different lengths — but the KernelSpec declares one vararg-buffer size for all of them
+    // (the max). Pad the short ones to it; the kernel's loop is bounded by each core's own
+    // num_shard_to_write_back, so it never reads the padding.
     for (auto& [core, varargs] : in1_writer_varargs) {
         varargs.resize(num_in1_writer_varargs, 0u);
         in1_run_args.advanced_options.runtime_varargs[core] = std::move(varargs);
@@ -969,12 +936,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in1_per_core_w = per_core_N_in1_sender;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    // The legacy ComputeConfigDescriptor set no unpack_to_dest_mode vector, so every buffer took
-    // UnpackToDestMode::Default -- the SrcA/B path, which is UnpackMode::UnpackToSrc. Stated
-    // explicitly rather than left implicit because a compute kernel that consumes a Float32
-    // dataflow buffer with a 32-bit Dest register must make the choice explicit, and the
-    // intermediate buffer's format is Float32 whenever fp32_dest_acc_en is set. The values are the
-    // legacy ones, so the lowered per-buffer vector is unchanged.
     unpack_modes(compute_hw) = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
@@ -989,9 +950,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
             "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
-        // Legacy ComputeConfigDescriptor defaults opt_level to O3; Metal 2.0's type-agnostic
-        // CompilerOptions defaults to O2, so a compute kernel must say O3 explicitly or it
-        // silently drops a level.
         .compiler_options =
             {
                 .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
@@ -1232,9 +1190,6 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
     const bool skip_in0_mcast = false;
     const bool skip_write_back = false;
 
-    // math_fidelity, math_approx_mode and dst_full_sync_en fed the legacy compute config and
-    // nothing else; the resolved ComputeHardwareConfig built at the call below now carries them,
-    // so only fp32_dest_acc_en and packer_l1_acc are still read here.
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -1252,8 +1207,6 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
         device,
         input_all_cores_storage,
         output_all_cores_storage,
-        // math_fidelity / math_approx_mode / dst_full_sync_en fed the legacy compute config and
-        // nothing else, so the resolved hardware config carries them from here on.
         ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
         fp32_dest_acc_en,
         packer_l1_acc,

@@ -21,8 +21,6 @@ void kernel_main() {
         return;
     }
 
-    // Case 2 (raw pointer): the tensor bindings supply the per-enqueue DRAM base addresses; the
-    // raw bank/offset arithmetic they feed below is unchanged from the legacy kernel.
     const uint32_t in1_tensor_addr = TensorAccessor(tensor::in1).get_bank_base_address();
 #ifdef FUSE_BIAS
     const uint32_t in3_tensor_addr = TensorAccessor(tensor::bias).get_bank_base_address();
@@ -32,9 +30,12 @@ void kernel_main() {
     const uint32_t dram_reader_index = get_arg(args::dram_reader_index);
     const uint32_t num_shard_to_write_back = get_arg(args::num_shard_to_write_back);
     const uint32_t reshard_tensor_start_offset = get_arg(args::reshard_tensor_start_offset);
-    // The write-back plan arrives as a runtime vararg block: one (bytes, noc-x, noc-y) triple per
-    // output storage shard this worker writes into. The count is num_shard_to_write_back, known
-    // only at runtime, so the block stays positional and the writer loop walks it by index.
+    // The computed output must land in the output storage cores' L1 shards, and this worker's
+    // slice of the output row spans one or more of them. The varargs say where each piece goes:
+    // one (bytes-per-row, dest-noc-x, dest-noc-y) triple per destination storage core, ordered
+    // left to right. A worker's destination count depends on where its slice falls, so it arrives
+    // as num_shard_to_write_back and the triples can't be named args — the loop below reads by
+    // index.
 
     // COMPILE TIME ARGS
     constexpr auto in1_page_size = get_arg(args::in1_page_size);
