@@ -62,10 +62,12 @@ def _to_tt_width_sharded(tensor: torch.Tensor, device, num_cores: int = 64) -> t
     return ttnn.from_torch(
         tensor,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        memory_config=width_sharded_l1_config(tensor.shape[-2], tensor.shape[-1], device, num_cores=num_cores),
+        memory_config=width_sharded_l1_config(
+            tensor.shape[-2], tensor.shape[-1], device, num_cores=num_cores, tile_height=1
+        ),
     )
 
 
@@ -173,8 +175,11 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
             mask, sdpa_cur_pos = decode_sdpa_bounds(
                 cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh, batch
             )
+            hidden_tt = _to_tt_width_sharded(hidden[:, pos : pos + 1].reshape(batch, 1, 1, cfg.hidden_size), submesh)
+            assert hidden_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+            assert hidden_tt.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
             output = attn.decode(
-                _to_tt_width_sharded(hidden[:, pos : pos + 1].reshape(batch, 1, 1, cfg.hidden_size), submesh),
+                hidden_tt,
                 cos,
                 sin,
                 neg_sin,
