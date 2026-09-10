@@ -33,7 +33,7 @@ _MARGIN = 0.05
 
 # Measured on the gated high-power host.
 _BASELINES = [
-    pytest.param("flash", DeepSeekV4FlashConfig, 5_300_000, id="flash"),
+    pytest.param("flash", DeepSeekV4FlashConfig, 5_175_000, id="flash"),
 ]
 
 # Perf is gated on the 14kW hosts. Set this to run anywhere for bring-up.
