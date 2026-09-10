@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    kda_nd_dram_memory_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
@@ -124,6 +125,10 @@ class ttKDA:
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
+        self.recurrent_state_memory_config = kda_nd_dram_memory_config(
+            mesh_device,
+            (1, 1, self.config.head_k_dim, ttnn.TILE_SIZE),
+        )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
         )
@@ -153,6 +158,7 @@ class ttKDA:
             mesh_device,
             program_config.recurrence,
             sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
+            state_memory_config=self.recurrent_state_memory_config,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -175,7 +181,7 @@ class ttKDA:
                 dtype=KDA_RECURRENT_STATE_DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+                memory_config=self.recurrent_state_memory_config,
             ),
             convolution=ttnn.zeros(
                 (batch_size, self.config.conv_kernel_size - 1, self._convolution_width),
@@ -212,6 +218,12 @@ class ttKDA:
             raise ValueError(f"convolution state shape {tuple(state.convolution.shape)} != {expected_convolution}")
         if state.recurrent.dtype != KDA_RECURRENT_STATE_DTYPE:
             raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
+        recurrent_memory = state.recurrent.memory_config()
+        if (
+            recurrent_memory.buffer_type != ttnn.BufferType.DRAM
+            or recurrent_memory.nd_shard_spec != self.recurrent_state_memory_config.nd_shard_spec
+        ):
+            raise ValueError("recurrent state must use the canonical ND-sharded DRAM layout")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
 

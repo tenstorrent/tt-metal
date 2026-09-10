@@ -21,8 +21,10 @@ struct RecurrentChunkScanParams {
     uint32_t num_chunks;
     uint32_t key_dim;
     uint32_t value_dim;
+    uint32_t state_group_count;
     RecurrentChunkScanMode mode;
     tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::MemoryConfig state_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
