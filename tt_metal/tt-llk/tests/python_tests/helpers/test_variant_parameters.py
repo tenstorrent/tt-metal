@@ -808,6 +808,10 @@ class TOPK(TemplateParameter):
     # indices riding index tracking; the unstable network sorts the tagged keys (requires
     # dest_acc=Yes; mutually exclusive with both other stable modes).
     topk_rank_stamped: bool = False
+    # Rank-stamped only: width of the rank tag field in the value word's low bits. 16 for bf16
+    # values (the whole low half is free); a narrower field leaves the upper bits of the low half
+    # untouched, which is what fp32 keys with TF32-zeroed low mantissa bits need (the MoE gate uses 6).
+    topk_tag_bits: int = 16
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -818,6 +822,7 @@ class TOPK(TemplateParameter):
             f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
             f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
             f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_rank_stamped).lower()};",
+            f"constexpr std::uint32_t TOPK_TAG_BITS = {self.topk_tag_bits};",
         ]
         return "\n".join(lines)
 
@@ -830,8 +835,9 @@ class TOPK(TemplateParameter):
             "bool TOPK_STABLE_SORT;",
             "bool TOPK_FUSED_STABLE;",
             "bool TOPK_RANK_STAMPED;",
+            "std::uint32_t TOPK_TAG_BITS;",
         ]
-        return "\n".join(lines), "IIII???"
+        return "\n".join(lines), "IIII???I"
 
 
 @dataclass

@@ -261,6 +261,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         "rank-stamped stable topk covers single-iteration widths only in this test (the bf16 L1 round-trip between "
         "iterations strips the tags a fresh-from-L1 rebuild would need; the ttnn pipeline re-stamps inside the merge "
         "and moves value words through raw Float32 CBs instead)");
+    static_assert(TOPK_RANK_STAMPED || TOPK_TAG_BITS == 16, "TOPK_TAG_BITS only applies to the rank-stamped mode");
     constexpr std::uint32_t dst_index = 0;             // base DEST index for the 4-tile group.
     const int end_phase               = TOPK_LOGK - 1; // same as other TopK call sites.
     constexpr int start_phase         = 0;
@@ -283,8 +284,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else if constexpr (TOPK_RANK_STAMPED)
     {
-        // Rank tags ride the value words' lo16; the true indices keep riding index tracking.
-        ckernel::sfpu::_init_topk_rank_stamped_();
+        // Rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking.
+        ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
     }
     else
     {
@@ -361,7 +362,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // fold -0.0 into +0.0) so the unstable network below sorts distinct keys
                     // whose tie order is the torch-stable index order; the merge re-stamps its
                     // runs internally.
-                    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_topk_stamp_local_positions, (APPROX, TOPK_LARGEST), dst_index, vector_mode);
+                    SFPU_UNARY_CALL(
+                        dest_sync, is_fp32_dest_acc_en, calculate_topk_stamp_local_positions, (APPROX, TOPK_LARGEST, TOPK_TAG_BITS), dst_index, vector_mode);
                 }
 
                 // Pick the first operation.
@@ -408,7 +410,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
-                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
+                    (APPROX,
+                     is_fp32_dest_acc_en,
+                     TOPK_SORT_DIRECTION,
+                     NETWORK_STABLE_SORT,
+                     TOPK_FUSED_STABLE,
+                     TOPK_RANK_STAMPED,
+                     TOPK_TIE_ORDER,
+                     TOPK_TAG_BITS),
                     dst_index,
                     vector_mode,
                     current_iteration,
@@ -440,7 +449,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Float16_b pack is exact, and move the u16 indices (DEST 2) into the
                         // packer-visible high half -- this harness carries u16 indices in 32-bit
                         // DEST (#50215 layout); the ttnn path packs raw u32 index words instead.
-                        ckernel::sfpu::_topk_strip_rank_tags_(0);
+                        ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(0);
                         ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(2);
                     }
                 }
