@@ -22,9 +22,9 @@ TP_SHARD_KV_DEFAULT=0
 FABRIC_MODE=2d
 
 case "${CONFIG}" in
-  sc1|sc4) ;;
+  sc1|sc2|sc4) ;;
   *)
-    echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2
+    echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2
     exit 2
     ;;
 esac
@@ -49,8 +49,11 @@ case "${MODEL}" in
     # a long way (SP x TP fits 34 at bf16, 56 at fp8), so this sits well under the edge, not on it.
     NUM_USERS_DEFAULT=28
     TP_SHARD_KV_DEFAULT=1
-    # UNTRACED, as of now
-    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
+    # Traced prefill for GLM-5.2 landed in #55085 (single galaxy). Default stays UNTRACED until the
+    # multi-galaxy perf gain is shown to match the single-galaxy one; set PREFILL_USE_TRACE=1 to
+    # measure it. Note the runner asserts USE_TRACE requires KV_ONLY_LAST_LAYER=1 (its default): the
+    # LM-head tail calls synchronize_device(), which TT_FATALs inside begin_trace_capture.
+    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1; export PREFILL_USE_TRACE=${PREFILL_USE_TRACE:-0};"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
@@ -65,8 +68,15 @@ MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 SC1_MAX_SEQ_LEN=256000
+# sc2: the 4-galaxy pipeline halved, for a 2-galaxy bring-up box. One user and 11 x 5120 = 56320
+# tokens -- exactly the golden length, so the whole prefill is PCC'd with no unverified tail, and a
+# traced-vs-untraced per-chunk comparison finishes in minutes instead of the 1M sweep's ~16.5.
+SC2_MAX_SEQ_LEN=56320
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
+  NUM_USERS_DEFAULT=1
+elif [ "${CONFIG}" = sc2 ]; then
+  MAX_SEQ_LEN=${SC2_MAX_SEQ_LEN}
   NUM_USERS_DEFAULT=1
 fi
 
@@ -75,6 +85,11 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
 PROBE_CHUNKS="0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))"
+if [ "${CONFIG}" = sc2 ]; then
+  # The sc1/sc4 probe points are chunk indices far past sc2's 11; the summarizer would report them
+  # all as missing. Probe the ends and the middle of what this config actually runs.
+  PROBE_CHUNKS="0,$((REAL_CHUNKS / 2)),$((REAL_CHUNKS - 1))"
+fi
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -139,6 +154,8 @@ python3 "${TTRUN_PY}" \
   --hosts "${RESOLVED_HOSTS}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
+    export TT_METAL_HOME='${TT_METAL_HOME}'; \
+    [ -f '${TT_METAL_HOME}/python_env/bin/activate' ] && . '${TT_METAL_HOME}/python_env/bin/activate'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
@@ -157,28 +174,43 @@ python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
-for _ in $(seq 1 360); do
+# How long to wait for the runner to publish the KV table -- i.e. how long weight load may take.
+# 30 min is enough on a CI box, but not everywhere: a multi-host run whose ranks stream the same
+# shared weight cache concurrently loads far slower (~70 s per MoE layer over NFS on a 2-galaxy
+# pair, so ~45 min for a 38-layer stage). Raise it there rather than reading the timeout as a hang.
+TABLE_WAIT_S="${PREFILL_TABLE_WAIT_S:-1800}"
+for _ in $(seq 1 $((TABLE_WAIT_S / 5))); do
   [ -f "${TABLE_PATH}" ] && break
   kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
   sleep 5
 done
-[ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
+[ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_S}s (raise PREFILL_TABLE_WAIT_S)"; exit 1; }
 
 RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
 [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
 HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
 [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
 echo "producer host order from tt-run discovery: ${HOSTS}"
+# prte's --map-by qualifier parser rejects an ABSOLUTE rankfile path ("unrecognized
+# qualifier"), so pass it relative and launch mpirun from TTRUN_CWD. Mapping by rankfile
+# is load-bearing: with --map-by slot prte always places rank 0 on the LOCAL node, which
+# is not necessarily the host holding runner rank 0 -- the producer then waits forever for
+# an H2D descriptor that was published on the other host.
+RANKFILE_REL="${RANKFILE#${TTRUN_CWD}/}"
+[ "${RANKFILE_REL}" != "${RANKFILE}" ] || { echo "rankfile ${RANKFILE} is not under ${TTRUN_CWD}"; exit 1; }
 
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 set +e
-"${MPIRUN}" \
-  --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+( cd "${TTRUN_CWD}" && "${MPIRUN}" \
+  --host "${HOSTS}" --map-by rankfile:file="${RANKFILE_REL}" --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
   --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
   bash -lc "cd '${TT_METAL_HOME}'; \
+    export TT_METAL_HOME='${TT_METAL_HOME}'; \
+    [ -f '${TT_METAL_HOME}/python_env/bin/activate' ] && . '${TT_METAL_HOME}/python_env/bin/activate'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
+    echo \"[producer] rank placement: host=\$(hostname)\"; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
@@ -191,7 +223,7 @@ set +e
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer"
+    exec python3 -m models.demos.common.prefill.runners.prefill_producer" )
 PROD_RC=$?
 set -e
 

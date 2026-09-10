@@ -1147,6 +1147,14 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # Traced prefill (#55085) on the 4-galaxy pipeline. The 2-galaxy (sc2) bring-up measured
+    # -47.0%/-47.1% per chunk on the two ranks and 5,680 -> 10,757 tok/s whole-request, with the
+    # KV PCC bit-identical to the untraced legs, so the gain is real rather than a shortcut.
+    # ALLOW_UNTESTED_TP_SHARD_TRACE: this job runs tp_sharded (28 users at 1M depends on the TP KV
+    # dedup for capacity), and the runner tripwires tp_shard+trace for having no CI row. This IS
+    # that row -- the combination is hand-validated on 8x4; retire the tripwire once this is green.
+    export PREFILL_USE_TRACE=1
+    export PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE=1
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_2, runner, kv_cache]
