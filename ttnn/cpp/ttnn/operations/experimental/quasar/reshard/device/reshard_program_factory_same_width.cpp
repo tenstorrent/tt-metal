@@ -88,7 +88,6 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
     }
-    const uint32_t total_size = local_units_per_shard * unit_size;
 
     // The scratch DFB / unaligned staging path only exists in the reader kernel source.
     const bool use_scratch = local_is_output && unaligned;
@@ -127,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
             uint32_t local_units_to_transfer = std::min(local_units_per_core, local_units_per_kernel);
             if (local_units_to_transfer != 0) {
                 pa.local_offset = local_start_offset;
-                local_start_offset += local_units_to_transfer * unit_size;
+                local_start_offset += local_units_to_transfer * (local_is_output ? local_unit_size_padded : unit_size);
                 while (local_units_to_transfer > 0) {
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;
@@ -168,6 +167,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         {"unit_size", unit_size},
     };
     if constexpr (local_is_output) {
+        compile_time_args.emplace("local_unit_size_padded", local_unit_size_padded);
         compile_time_args.emplace("remote_unit_size_padded", remote_unit_size_padded);
     }
 
@@ -219,7 +219,6 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         .data_format_metadata = data_format,
         .borrowed_from = TensorParamName{kSWLocalTensorParam},
     };
-    (void)total_size;  // == entry_size * num_entries; kept for parity with the legacy CB total_size.
 
     spec.kernels = {k0, k1};
     if (use_scratch) {

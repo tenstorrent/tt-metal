@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr bool read_from_dram = get_arg(args::interface_with_dram);
     constexpr uint32_t unit_size = get_arg(args::unit_size);
 #ifdef UNALIGNED
+    constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);
     constexpr uint32_t remote_unit_size_padded = get_arg(args::remote_unit_size_padded);
 #endif
     constexpr AllocatorBankType bank_type = read_from_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
@@ -72,7 +73,7 @@ void kernel_main() {
                  .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                  .addr = pad_align_addr},
                 {.offset_bytes = 0});
-            l1_write_addr += unit_size;
+            l1_write_addr += local_unit_size_padded;
             pad_align_addr += remote_unit_size_padded;
         }
         noc.async_read_barrier();
