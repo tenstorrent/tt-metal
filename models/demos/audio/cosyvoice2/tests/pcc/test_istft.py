@@ -139,7 +139,8 @@ needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 327
 
 
 @needs_l1_small
-def test_device_istft_matches_real_torch_istft(device):
+@pytest.mark.parametrize("n_frames", [256, 8192])
+def test_device_istft_matches_real_torch_istft(device, n_frames):
     """Device output vs. torch.istft directly -- zero inferential steps.
 
     Every other device test compares against `TtIStft.torch_reference`, which
@@ -150,12 +151,17 @@ def test_device_istft_matches_real_torch_istft(device):
     file, and the pattern later components (flow decoder, LLM) should each have one
     of: device output against the untouched framework/reference function, not just
     against this repo's own re-derivation of it.
+
+    n_frames=8192 (~1.4s of 24kHz audio, audio_len=32768) closes the backlog item
+    from the KV-cache audit: this strongest device test -- no shared derivation on
+    either side -- was previously only run at n_frames=256, well short of what
+    test_host_identity_across_lengths already covers on host (up to 8192) and what
+    a real HiFT vocoder call produces for a several-second utterance.
     """
     import ttnn
     from models.demos.audio.cosyvoice2.tt.hifigan.istft import TtIStft, periodic_hann
 
     torch.manual_seed(42)
-    n_frames = 256
     window = torch.from_numpy(periodic_hann(16))
     real_t = torch.randn(1, 9, n_frames)
     imag_t = torch.randn(1, 9, n_frames)
@@ -173,11 +179,15 @@ def test_device_istft_matches_real_torch_istft(device):
 
 
 @needs_l1_small
-@pytest.mark.parametrize("n_frames", [64, 512])
+@pytest.mark.parametrize("n_frames", [64, 512, 8192])
 def test_device_istft_matches_host(device, n_frames):
     """conv_transpose2d at H=1, in_ch=16, k=16, stride=4 -- the shape this test
     exists to de-risk. Compared against the host reference, not a golden, so a failure
-    here is unambiguously about TTNN op behaviour, not the identity."""
+    here is unambiguously about TTNN op behaviour, not the identity.
+
+    n_frames=8192 closes the same backlog item test_device_istft_matches_real_torch_istft's
+    docstring explains -- this device path (specifically the conv_transpose2d leg) was
+    previously only run to n_frames=512."""
     import ttnn
     from models.demos.audio.cosyvoice2.tt.hifigan.istft import TtIStft, periodic_hann
 

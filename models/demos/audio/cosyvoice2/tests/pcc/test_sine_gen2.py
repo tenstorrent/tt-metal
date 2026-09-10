@@ -177,11 +177,21 @@ def test_cumsum_precision_at_mel_rate(device):
 
 
 @needs_l1_small
-@pytest.mark.parametrize("mel_frames", [4, 20])
+@pytest.mark.parametrize("mel_frames", [4, 20, 250])
 def test_device_sine_gen2_matches_real_torch(device, mel_frames):
     """TtSineGen2 vs. TtSineGen2.torch_reference (built on real
     torch.nn.functional.interpolate) -- zero inferential steps, captured noise
-    draw shared on both sides."""
+    draw shared on both sides.
+
+    mel_frames=250 (~5s at CosyVoice2's ~50 mel-fps, audio_len=120000) closes
+    the backlog item from the KV-cache audit: this device path was previously
+    only exercised to mel_frames=20, well short of a real utterance length.
+    It is not a new precision regime -- test_cumsum_precision_at_mel_rate and
+    test_upsample_basis3_relative_offset_matches_torch_interpolate_at_large_phase
+    above already check the cumsum and the centering-trick identity at this
+    same mel_frames=250 -- this is the first test to run the full TtSineGen2
+    device module (cumsum + centering-trick upsample + sin + uv mask) at that
+    length end to end, rather than its pieces in isolation."""
     import ttnn
     from models.demos.audio.cosyvoice2.tt.hifigan.source import TtSineGen2
 
