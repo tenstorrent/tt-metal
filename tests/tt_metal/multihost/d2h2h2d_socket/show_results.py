@@ -101,12 +101,16 @@ def load(paths):
                 msgs = samples * 1e9 / den if den else None
 
                 file_bw = to_float(row.get("bandwidth_gb_per_s"))
-                mismatch = (bw is not None and file_bw is not None
-                            and abs(bw - file_bw) > 1e-6 * max(1.0, abs(bw)))
+                mismatch = bw is not None and file_bw is not None and abs(bw - file_bw) > 1e-6 * max(1.0, abs(bw))
 
-                if (mismatch and hop_window is None and stage != "END_TO_END"
-                        and total and file_bw is not None
-                        and abs(payload / total - file_bw) <= 1e-6 * max(1.0, payload / total)):
+                if (
+                    mismatch
+                    and hop_window is None
+                    and stage != "END_TO_END"
+                    and total
+                    and file_bw is not None
+                    and abs(payload / total - file_bw) <= 1e-6 * max(1.0, payload / total)
+                ):
                     mismatch = False
                 if mismatch:
                     problems.append(f"{where}: bandwidth column {file_bw:.6f} != "
