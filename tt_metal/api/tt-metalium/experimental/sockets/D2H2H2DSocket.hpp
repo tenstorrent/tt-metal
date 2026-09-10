@@ -404,7 +404,7 @@ private:
 
     // Per-core state. Sized to the provisioned maximum rather than cfg_.cores so an
     // out-of-range core index from a corrupt operand indexes a real slot instead of running
-    // off the end. 
+    // off the end.
     std::vector<std::vector<std::atomic<uint64_t>>> credit_out_;  // remote deliveries echoed back
     std::vector<std::atomic<uint64_t>> delivered_per_core_;       // the value rdma_signal carries
     // Single delivery at a time per core. The H2D endpoint, its write pointer and the per-core
