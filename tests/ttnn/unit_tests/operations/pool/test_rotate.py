@@ -130,25 +130,33 @@ def test_custom_center(device, center, interpolation_mode):
 
 
 @pytest.mark.parametrize("fill", [0.0, 1.0, -1.0, 0.5])
-@pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
-def test_custom_fill_values(device, fill, interpolation_mode):
+@pytest.mark.parametrize(
+    "interpolation_mode,dtype",
+    [
+        ("nearest", ttnn.bfloat16),
+        ("nearest", ttnn.float32),
+        ("bilinear", ttnn.bfloat16),
+    ],
+)
+def test_custom_fill_values(device, fill, interpolation_mode, dtype):
     """Test different fill values for out-of-bounds pixels."""
     torch.manual_seed(0)
 
     input_shape = (1, 16, 16, 64)
     angle = 45.0
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch_dtype)
 
     golden_function = ttnn.get_golden_function(ttnn.rotate)
     torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, fill=fill, interpolation_mode=interpolation_mode)
 
-    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, fill=fill, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-    assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}"
+    assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}, dtype={dtype}"
 
 
 @pytest.mark.parametrize(

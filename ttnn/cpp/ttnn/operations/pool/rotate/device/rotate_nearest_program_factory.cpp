@@ -65,7 +65,13 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
     }
 
-    const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
+    const bool is_bfloat16 = input_tensor.dtype() == DataType::BFLOAT16;
+    uint32_t fill_value_bits;
+    if (is_bfloat16) {
+        fill_value_bits = nearest_float_to_bfloat16(operation_attributes.fill);
+    } else {
+        fill_value_bits = std::bit_cast<uint32_t>(operation_attributes.fill);
+    }
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
 
     const uint32_t element_size = input_tensor.element_size();
@@ -187,7 +193,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
 
-    const bool fill_is_zero = (fill_value_bf16 == 0);
+    const bool fill_is_zero = (fill_value_bits == 0);
 
     const uint32_t effective_stick_nbytes = any_sharded ? effective_channels * element_size : input_stick_nbytes;
 
@@ -262,7 +268,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
+                    fill_value_bits,
                 });
 
             writer_desc.emplace_runtime_args(
@@ -290,7 +296,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
+                    fill_value_bits,
                 });
 
             writer_desc.emplace_runtime_args(
