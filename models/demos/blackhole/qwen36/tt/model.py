@@ -574,13 +574,14 @@ class Qwen36Model:
             lg = sliced
         idx = ttnn.argmax(lg, dim=-1)
         ttnn.deallocate(lg)
-        if self.num_devices > 1:
-            # Logits are replicated after the all-gather, so every device agrees; read replica 0.
-            t = ttnn.to_torch(idx, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
-        else:
-            t = ttnn.to_torch(idx)
+        # Logits are replicated after the all-gather, so every device agrees; read replica 0 and take
+        # the scalar straight off it (to_list, so no torch tensor is built for one index).
+        src = ttnn.get_device_tensors(idx)[0] if self.num_devices > 1 else idx
+        flat = src.to_list()
+        while isinstance(flat, list):
+            flat = flat[0]
         ttnn.deallocate(idx)
-        return int(t.reshape(-1)[0])
+        return int(flat)
 
     def _lm_head(self, x, out_dtype=None):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
@@ -1157,18 +1158,16 @@ class Qwen36Model:
 
         hidden_states : [1,1,S,dim/tp] fractured — the base per-position pre-final-norm hidden for
                         this chunk (the same tensor the base chunk forward produced).
-        tokens        : torch [1,S] int32 — the MTP input token for each slot: slot i is fused with
-                        the token at i+1 (the shift pairing the draft loop uses).
+        tokens        : list[int] of length S — the MTP input token for each slot: slot i is fused
+                        with the token at i+1 (the shift pairing the draft loop uses).
         chunk_start   : absolute position of row 0 of this chunk.
         page_table_torch : torch [1, num_blocks] page table for the MTP layer's own KV cache.
         """
         assert self.mtp is not None, "MTP head not built (has_mtp/config?)"
-        S = tokens.shape[-1]
+        S = len(tokens)
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
-        tok_tt = ttnn.from_torch(
-            tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        tok_tt = ttnn.Tensor([int(t) for t in tokens], [1, S], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev)
         # Same absolute positions as the base chunk, so the same RoPE table slice applies.
         cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, S)
         cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
@@ -1176,16 +1175,9 @@ class Qwen36Model:
         block_size = get_block_size(self._paged_kv_caches)
         blk0 = chunk_start // block_size
         blkN = num_blocks_in_seq(chunk_start + S, block_size)
-        pt_full = ttnn.from_torch(
-            page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        pt_chunk = ttnn.from_torch(
-            page_table_torch[:, blk0:blkN].contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
+        pt_row = [int(b) for b in page_table_torch.reshape(-1).tolist()]
+        pt_full = ttnn.Tensor(pt_row, [1, len(pt_row)], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev)
+        pt_chunk = ttnn.Tensor(pt_row[blk0:blkN], [1, blkN - blk0], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev)
         out = self.mtp.forward_prefill(
             hidden_states, tok_tt, cos, sin, pt_full, chunk_page_table=pt_chunk, chunk_start_idx=chunk_start
         )
@@ -1269,27 +1261,20 @@ class Qwen36Model:
             self.args.rope_head_dim,
             self.args.max_seq_len,
             self.args.rope_theta,
-            torch.tensor([position + self.rope.rope_delta], dtype=torch.int32),
+            [position + self.rope.rope_delta],
             # Permuted full-width RoPE folds its channel permutation into the drafter's own q/k at
             # load time, so it needs the widened tables; None (every other config) keeps rope_dim.
             full_head_dim=self.rope.full_head_dim,
         )
-        rep = ttnn.ReplicateTensorToMesh(self.device)
+        rm = ttnn.ROW_MAJOR_LAYOUT
         # token_id may already be a device [1,1] uint32 tensor (on-device draft chaining), in which
         # case use it directly instead of round-tripping the id through the host.
         tok = (
             token_id
             if isinstance(token_id, ttnn.Tensor)
-            else ttnn.from_torch(
-                torch.tensor([[int(token_id)]], dtype=torch.int32),
-                dtype=ttnn.uint32,
-                device=self.device,
-                mesh_mapper=rep,
-            )
+            else ttnn.Tensor([int(token_id)], [1, 1], ttnn.uint32, rm, self.device)
         )
-        cur_pos_tt = ttnn.from_torch(
-            torch.tensor([position], dtype=torch.int32), dtype=ttnn.int32, device=self.device, mesh_mapper=rep
-        )
+        cur_pos_tt = ttnn.Tensor([int(position)], [1], ttnn.int32, rm, self.device)
         return self.mtp.forward_decode(
             hidden_states,
             tok,
@@ -1323,7 +1308,7 @@ class Qwen36Model:
             return rows
         return self.spec_norm(rows, mode=Mode.PREFILL)
 
-    def verify_forward(self, draft_tokens, chunk_start, page_table, bucket=None, gdn_recurrent=False):
+    def verify_forward(self, draft_tokens, chunk_start, page_table, bucket=None, gdn_recurrent=False, argmax=False):
         """Speculative multi-token verify (TP). Runs the base model over the K candidate tokens at
         absolute positions [chunk_start, chunk_start+K) as ONE masked-bucket chunk: GDN advances in
         chunk mode (carrying the recurrent state from the anchor, since _stable_state=True), the
@@ -1342,8 +1327,7 @@ class Qwen36Model:
         K = len(draft_tokens)
         if bucket is None:
             bucket = self._mask_bucket_for(K)
-        real = torch.tensor(list(draft_tokens), dtype=torch.int32).reshape(1, K)
-        token_buf = real if bucket == K else torch.cat([real, torch.zeros(1, bucket - K, dtype=torch.int32)], dim=1)
+        token_buf = [int(t) for t in draft_tokens] + [0] * (bucket - K)
 
         # Position-exact KV write, same contract as the traced verify (_forward_verify_bucket_tp's
         # _vfy_kvpos_buf / _vfy_kvpt_buf) but built eagerly — this path runs once per request, not on
@@ -1353,20 +1337,16 @@ class Qwen36Model:
         # EARLY and overwrites real prompt KV in that block, while the chunked SDPA still reads the
         # cache absolutely. Only the K REAL rows get a write (the bucket's pad rows must not), mirroring
         # the traced path's per-candidate loop.
-        rep = ttnn.ReplicateTensorToMesh(self.device)
-        kv_pos = ttnn.from_torch(
-            torch.arange(chunk_start, chunk_start + K, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=rep,
+        pt_row = [int(b) for b in page_table.reshape(-1).tolist()]
+        kv_pos = ttnn.Tensor(
+            list(range(chunk_start, chunk_start + K)), [K], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, self.device
         )
-        kv_pt = ttnn.from_torch(
-            page_table.repeat(K, 1).contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=rep,
+        kv_pt = ttnn.Tensor(
+            pt_row * K,
+            [K, len(pt_row)],
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.device,
         )
         hidden = self._forward_prefill_chunk_masked_tp(
             token_buf,
@@ -1381,16 +1361,10 @@ class Qwen36Model:
         ttnn.deallocate(kv_pos)
         ttnn.deallocate(kv_pt)
         # Multi-row select rows 0..K-1 via a one-hot matmul (fixed program per bucket, unlike a slice).
-        sel = torch.zeros(1, 1, K, bucket, dtype=torch.float32)
+        sel = [0.0] * (K * bucket)
         for i in range(K):
-            sel[0, 0, i, i] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=hidden.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+            sel[i * bucket + i] = 1.0
+        sel_tt = ttnn.Tensor(sel, [1, 1, K, bucket], hidden.dtype, ttnn.TILE_LAYOUT, self.device)
         rows = ttnn.matmul(sel_tt, hidden)  # [1,1,K,dim/tp] fractured
         ttnn.deallocate(sel_tt)
         ttnn.deallocate(hidden)
@@ -1402,6 +1376,12 @@ class Qwen36Model:
         feed = self.spec_feed_rows(rows)
         if feed is not rows:
             ttnn.deallocate(rows)
+        if argmax:
+            # Greedy caller (the spec loop's seed, K=1): reduce on device and bring back the winning
+            # index instead of the whole vocab row -- 4 B over the bus rather than ~500 KB.
+            tok = self._argmax_device(logits)
+            ttnn.deallocate(logits)
+            return tok, feed
         # _lm_head all-gathers, so the logits are REPLICATED across the TP mesh: read ONE replica
         # rather than concatenating every rank and throwing all but the first away (the same idiom
         # process_output_decode uses; ~num_devices x less device->host traffic).
@@ -1420,37 +1400,39 @@ class Qwen36Model:
     # bakes into the trace. State carries across iterations in place (commit_verify_slot rolls to the
     # accepted slot between replays, eager).
     # ------------------------------------------------------------------------------------------
-    def _rope_tp_cos_sin_decode_torch(self, positions):
-        """Torch cos/sin [1, B, 1, rope_width] in the DECODE rope layout — one rotation per ROW.
+    def _rope_tp_cos_sin_decode_rows(self, positions):
+        """DEVICE cos/sin, each [1, B, 1, rope_width], in the DECODE rope layout — one rotation per ROW.
 
-        Byte-identical to what prepare_decode_inputs_host builds for a decode step at those positions
-        (same inv_freq / outer / cat / widening / bf16 cast). The hybrid verify pushes its candidates
-        through the DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
-        prefill [1,1,S,rd] one.
+        Straight through rot_mats_decode, i.e. the resident on-device table plus a ttnn.embedding row
+        gather, so no host trig runs and nothing crosses the bus but the [B] index vector. This is
+        the SAME call plain decode makes (decode_tp, decode_step_paged), which is what the hybrid
+        verify needs: it pushes its candidates through the DECODE attention kernel as B pseudo-users,
+        so its rotations have to be the ones a plain decode step at those positions would use. The
+        earlier host-trig version recomputed the recipe per row instead, and torch's single-row
+        float32 trig does not always agree with the big outer the table is built from -- MEASURED, 4
+        of 3200 probed positions differed by one bf16 step -- so the gather is strictly closer to
+        plain decode, not further.
 
         WIDTH IS rope_width, NOT rope_head_dim. Under permuted full-width RoPE (wh_9b_n300) the
         channel permutation is folded into the TARGET's q/k weights at load time and every cos/sin
         this model hands out is head_dim wide in permuted order — see rope.py's full_head_dim. Handing
         those layers a plain rope_head_dim-wide table would rotate the wrong channels: wrong output,
-        no error. The widening goes through the same to_full_width_rot_mats the prefill helper uses,
-        off the same rope.inv_freq, so the two agree by construction and the non-permuted path (every
-        other config, including this branch's 27B T3K target) is unchanged."""
-        rope = self.rope
-        pos_vec = positions.to(torch.int64).reshape(-1)
-        # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
-        rope_pos_vec = pos_vec + rope.rope_delta
-        B = rope_pos_vec.shape[0]
-        freqs = torch.outer(rope_pos_vec.float(), rope.inv_freq)  # [B, rope_head_dim/2], per row
-        emb = torch.cat([freqs, freqs], dim=-1)
-        cos_t, sin_t = emb.cos(), emb.sin()
-        if rope.full_head_dim:
-            from models.demos.blackhole.qwen36.tt.attention.rope_tp import to_full_width_rot_mats
+        no error. full_head_dim makes _rope_dev_tables widen the table itself, which is where every
+        other decode consumer gets its permuted rows.
 
-            cos_t, sin_t = to_full_width_rot_mats(cos_t, sin_t, rope.full_head_dim, rope.head_dim, rope.device)
-        rd = rope.rope_width
-        cos = cos_t.reshape(1, B, 1, rd).to(torch.bfloat16)
-        sin = sin_t.reshape(1, B, 1, rd).to(torch.bfloat16)
-        return cos, sin
+        Caller owns the two tensors (ttnn.copy them into the persistent buffers, then deallocate)."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
+
+        rope = self.rope
+        # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
+        return rot_mats_decode(
+            self.device,
+            self.args.rope_head_dim,
+            self.args.max_seq_len,
+            self.args.rope_theta,
+            [int(p) + rope.rope_delta for p in positions],
+            full_head_dim=rope.full_head_dim,
+        )
 
     def _forward_verify_bucket_tp(self):
         """Trace body: recurrent verify over the persistent T-token bucket buffers -> per-position
@@ -1576,9 +1558,12 @@ class Qwen36Model:
             decode_cfg = False
         assert not (decode_cfg and T > ttnn.TILE_SIZE), "decode_cfg needs T <= TILE_SIZE"
         dev = self.device
-        rep = ttnn.ReplicateTensorToMesh(dev)
         self._vfy_T, self._vfy_gdn_recurrent = T, gdn_recurrent
         self._vfy_decode_cfg = decode_cfg
+        # The page table arrives from the caller as a [1, blocks] torch tensor; flatten it once here
+        # and build every device tensor below straight from python ints.
+        pt_row = [int(b) for b in page_table.reshape(-1).tolist()]
+        nb = len(pt_row)
 
         # The commit traces bake in the address of the GDN layers' _verify_states_buf, which the
         # capture below re-allocates, so they cannot outlive the verify trace they were cut against.
@@ -1588,31 +1573,15 @@ class Qwen36Model:
             self._vfy_trace_id = None
 
         # Persistent per-replay input buffers (addresses baked into the trace).
-        self._vfy_token_buf = ttnn.from_torch(
-            torch.zeros(1, T, dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
+        self._vfy_token_buf = ttnn.zeros([1, T], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
         # Positions are staged per replay; the [T, blocks] page table is constant (T identical rows,
         # all candidates share the one sequence) so it is built once here.
         # Position-exact KV write (paged_update_cache at absolute slots) instead of
         # paged_fill_cache's block-aligned fill: required by the sub-tile decode-config bucket.
-        self._vfy_kvpos_buf = ttnn.from_torch(
-            torch.arange(warm_start, warm_start + T, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
+        self._vfy_kvpos_buf = ttnn.Tensor(
+            list(range(warm_start, warm_start + T)), [T], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev
         )
-        self._vfy_kvpt_buf = ttnn.from_torch(
-            page_table.repeat(T, 1).contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
+        self._vfy_kvpt_buf = ttnn.Tensor(pt_row * T, [T, nb], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev)
         # ...plus the SAME table with one row per CANDIDATE GROUP, for the fused spec SDPA
         # (spec_multi_pos_tiles), which splits the T candidates across spec_sdpa_groups(T) batch
         # rows (1 at T=4, 2 at T=8) and wants one aliased page-table row per group. Both tables are
@@ -1620,24 +1589,23 @@ class Qwen36Model:
         # full-span — a full-span ttnn.slice aliases its input), the SDPA read needs this one.
         _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
         _spec_groups = _att0.spec_sdpa_groups(T)
-        self._vfy_kvpt1_buf = ttnn.from_torch(
-            page_table.repeat(_spec_groups, 1).contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
+        self._vfy_kvpt1_buf = ttnn.Tensor(
+            pt_row * _spec_groups, [_spec_groups, nb], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev
         )
         # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
         # [1, B, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
         # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
         # rotations are byte-identical and near-ties round the same way.
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(torch.arange(warm_start, warm_start + T))
-        self._vfy_cos_buf = ttnn.from_torch(
-            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        self._vfy_sin_buf = ttnn.from_torch(
-            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        # Persistent buffers the trace bakes the addresses of; the gathered rows are copied in here
+        # and re-copied per replay (verify_traced), so the buffer identity never changes.
+        _rope_shape = [1, T, 1, self.rope.rope_width]
+        self._vfy_cos_buf = ttnn.zeros(_rope_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+        self._vfy_sin_buf = ttnn.zeros(_rope_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+        _cos, _sin = self._rope_tp_cos_sin_decode_rows(range(warm_start, warm_start + T))
+        ttnn.copy(_cos, self._vfy_cos_buf)
+        ttnn.copy(_sin, self._vfy_sin_buf)
+        ttnn.deallocate(_cos)
+        ttnn.deallocate(_sin)
 
         # Prep GDN layers for slot capture (fixed slot bufs; verify writes per-token state into them).
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -1832,30 +1800,22 @@ class Qwen36Model:
         T = self._vfy_T
         assert len(draft_tokens) == T, f"expected {T} tokens, got {len(draft_tokens)}"
         dev = self.device
-        rep = ttnn.ReplicateTensorToMesh(dev)
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
 
         # Stage per-replay inputs into the persistent buffers (addresses preserved).
-        tok = torch.tensor(list(draft_tokens), dtype=torch.int32).reshape(1, T)
-        _h = ttnn.from_torch(
-            tok.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
-        )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
+        tok = [int(t) for t in draft_tokens]
+        ttnn.copy_host_to_device_tensor(ttnn.Tensor(tok, [1, T], ttnn.uint32, rm), self._vfy_token_buf)
         # Hybrid verify: per-ROW decode rope at the candidates' own positions.
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(torch.arange(chunk_start, chunk_start + T))
-        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
-        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
+        _cos, _sin = self._rope_tp_cos_sin_decode_rows(range(chunk_start, chunk_start + T))
+        ttnn.copy(_cos, self._vfy_cos_buf)
+        ttnn.copy(_sin, self._vfy_sin_buf)
+        ttnn.deallocate(_cos)
+        ttnn.deallocate(_sin)
         # Absolute cache slot for each candidate: chunk_start .. chunk_start+T-1. This doubles as the
         # decode SDPA's per-row cur_pos, which is what makes the hybrid verify causal.
-        _h = ttnn.from_torch(
-            torch.arange(chunk_start, chunk_start + T, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=None,
-            mesh_mapper=rep,
+        ttnn.copy_host_to_device_tensor(
+            ttnn.Tensor(list(range(chunk_start, chunk_start + T)), [T], ttnn.int32, rm), self._vfy_kvpos_buf
         )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
 
         # Re-arm slot capture (commit_verify_slot nulls the handle after each commit; the traced
         # device ops still write the SAME baked buffers, so just re-point the handles).
@@ -1899,20 +1859,18 @@ class Qwen36Model:
         """
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
-        rep = ttnn.ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None
-        mk = dict(mesh_mapper=rep) if rep is not None else {}
-        tok = ttnn.from_torch(
-            torch.tensor([[int(token_id)]], dtype=torch.int32), dtype=ttnn.uint32, device=self.device, **mk
-        )
+        rm = ttnn.ROW_MAJOR_LAYOUT
+        tok = ttnn.Tensor([int(token_id)], [1, 1], ttnn.uint32, rm, self.device)
         cos, sin = rot_mats_decode(
             self.device,
             self.args.rope_head_dim,
             self.args.max_seq_len,
             self.args.rope_theta,
-            torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
+            [pos + self.rope.rope_delta],
         )
-        cur_pos_tt = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32, device=self.device, **mk)
-        pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        cur_pos_tt = ttnn.Tensor([int(pos)], [1], ttnn.int32, rm, self.device)
+        pt_row = [int(b) for b in page_table.reshape(-1).tolist()]
+        pt = ttnn.Tensor(pt_row, [1, len(pt_row)], ttnn.int32, rm, self.device)
         logits, hidden = self._forward_decode(tok, cos, sin, cur_pos_tt, pt, return_hidden=True)
         if self._ondev_argmax:
             # _forward_decode returned the PRE-gather vocab-sharded logits; the ranks are different
@@ -3138,12 +3096,16 @@ class Qwen36Model:
         None (the default, i.e. every ordinary prefill caller) the full-attention layers take the
         unchanged block-aligned paged_fill_cache path."""
         block_size = get_block_size(self._paged_kv_caches)
-        tok = ttnn.from_torch(
-            token_buf.to(torch.int32),
-            dtype=ttnn.uint32,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        if isinstance(token_buf, torch.Tensor):
+            tok = ttnn.from_torch(
+                token_buf.to(torch.int32),
+                dtype=ttnn.uint32,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+        else:
+            # The spec verify hands over a plain list of ids, so its staging stays torch-free.
+            tok = ttnn.Tensor([int(t) for t in token_buf], [1, bucket], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.device)
         x = self.embd(tok)
         x = ttnn.reshape(x, (1, 1, bucket, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -3908,16 +3870,16 @@ class Qwen36Model:
         mtp_cache_shape = [kv_cache_shape[0] + 1, *kv_cache_shape[1:]]
 
         def _mk():
-            if replicate:
-                return ttnn.as_tensor(
-                    torch.zeros(mtp_cache_shape, dtype=torch.bfloat16),
-                    device=self.device,
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-                )
-            return ttnn.zeros(mtp_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            # Filled on device. ttnn.zeros over a mesh gives every device the full shape, which is
+            # what ReplicateTensorToMesh gave the old host-zeros path -- so both `replicate` arms
+            # produced the same all-zero replicated cache and there is one call left.
+            return ttnn.zeros(
+                mtp_cache_shape,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         mtp_k, mtp_v = _mk(), _mk()
         self.mtp.attention.set_paged_kv_cache(mtp_k, mtp_v)

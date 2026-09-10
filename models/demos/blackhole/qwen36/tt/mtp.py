@@ -25,8 +25,11 @@ model selects (Qwen36Model.spec_feed_rows, env QWEN36_SPEC_POSTNORM):
   chain feeds back the decoder-block output BEFORE mtp.norm.
 
 Shapes and dtypes are identical in both contracts.
+
+This module is torch-free: every buffer is filled on device (ttnn.zeros) and every host->device
+staging tensor is built straight from python ints/floats via ttnn.Tensor, which is bit-identical to
+the from_torch + ReplicateTensorToMesh path it replaces (verified including tile padding).
 """
-import torch
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
@@ -209,20 +212,21 @@ class Qwen36MTP:
         """Allocate the window buffers. Must run before any trace is captured."""
         if self._dw is not None:
             return
-        mesh, rep = self.device, ttnn.ReplicateTensorToMesh(self.device)
+        mesh = self.device
         rd = self.rope_width
         rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
 
-        def dev(x, dtype, layout):
-            return ttnn.from_torch(x, dtype=dtype, layout=layout, device=mesh, mesh_mapper=rep)
+        def dev(shape, dtype, layout):
+            # Filled on device and replicated across the mesh -- no host tensor to build or upload.
+            return ttnn.zeros(shape, dtype=dtype, layout=layout, device=mesh)
 
         self._dw = {
             "w_max": w_max,
-            "pos": dev(torch.zeros(w_max, dtype=torch.int32), ttnn.int32, rm),
-            "cos": dev(torch.zeros(1, w_max, 1, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
-            "sin": dev(torch.zeros(1, w_max, 1, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
-            "tok": dev(torch.zeros(1, 1, dtype=torch.int32), ttnn.uint32, rm),
-            "h": dev(torch.zeros(1, 1, 1, hidden_dim_frac, dtype=torch.float32), hidden_dtype, tile),
+            "pos": dev([w_max], ttnn.int32, rm),
+            "cos": dev([1, w_max, 1, rd], ttnn.bfloat16, tile),
+            "sin": dev([1, w_max, 1, rd], ttnn.bfloat16, tile),
+            "tok": dev([1, 1], ttnn.uint32, rm),
+            "h": dev([1, 1, 1, hidden_dim_frac], hidden_dtype, tile),
             "pt": page_table,
             "traces": {},
             "compiled": False,
@@ -239,20 +243,15 @@ class Qwen36MTP:
 
         dw = self._dw
         assert width == dw["w_max"], f"draft window must be staged at full width {dw['w_max']}, got {width}"
-        pos = torch.arange(start_pos, start_pos + width, dtype=torch.int32)
-        src = ttnn.from_torch(
-            pos,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        pos = list(range(start_pos, start_pos + width))
+        src = ttnn.Tensor(pos, [width], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(src, dw["pos"])
         cos_tt, sin_tt = rot_mats_decode(
             self.device,
             self.args.rope_head_dim,
             self.args.max_seq_len,
             self.args.rope_theta,
-            pos.to(torch.int64) + rope_delta,
+            [p + rope_delta for p in pos],
             full_head_dim=self._rope_full_head_dim,
         )
         ttnn.copy(cos_tt, dw["cos"])
@@ -327,39 +326,41 @@ class Qwen36MTP:
     def init_reseed_window(self, T, num_blocks):
         if self._rw is not None:
             return
-        mesh, rep = self.device, ttnn.ReplicateTensorToMesh(self.device)
+        mesh = self.device
         rd = self.rope_width
         rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
 
-        def dev(x, dtype, layout):
-            return ttnn.from_torch(x, dtype=dtype, layout=layout, device=mesh, mesh_mapper=rep)
+        def dev(shape, dtype, layout):
+            return ttnn.zeros(shape, dtype=dtype, layout=layout, device=mesh)
 
         self._rw = {
             "T": T,
-            "tok": dev(torch.zeros(T, 1, dtype=torch.int32), ttnn.uint32, rm),
-            "pos": dev(torch.zeros(T, dtype=torch.int32), ttnn.int32, rm),
-            "pt": dev(torch.zeros(T, num_blocks, dtype=torch.int32), ttnn.int32, rm),
-            "cos": dev(torch.zeros(1, T, 1, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
-            "sin": dev(torch.zeros(1, T, 1, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            "num_blocks": num_blocks,
+            "tok": dev([T, 1], ttnn.uint32, rm),
+            "pos": dev([T], ttnn.int32, rm),
+            "pt": dev([T, num_blocks], ttnn.int32, rm),
+            "cos": dev([1, T, 1, rd], ttnn.bfloat16, tile),
+            "sin": dev([1, T, 1, rd], ttnn.bfloat16, tile),
             "id": None,
             "compiled": False,
         }
 
-    def stage_reseed_window(self, tok, pos, pt, cos_t, sin_t):
-        """Refresh the reseed inputs, all host torch (cos/sin from the same
-        _rope_tp_cos_sin_decode_torch the eager path used, so the reseed is unchanged)."""
+    def stage_reseed_window(self, tok, pos, pt, cos_tt, sin_tt):
+        """Refresh the reseed inputs. ``tok``/``pos``/``pt`` are FLAT row-major python int lists, so
+        their host tensors are built straight from ints; ``cos_tt``/``sin_tt`` are already ON DEVICE
+        (gathered off the resident rope table by _rope_tp_cos_sin_decode_rows) and are copied
+        device-to-device, so no rope value crosses the bus. The caller owns them."""
         rw = self._rw
-        rep = dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device))
-        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
-        for host_t, dtype, layout, dst in (
-            (tok, ttnn.uint32, rm, "tok"),
-            (pos, ttnn.int32, rm, "pos"),
-            (pt, ttnn.int32, rm, "pt"),
-            (cos_t, ttnn.bfloat16, tile, "cos"),
-            (sin_t, ttnn.bfloat16, tile, "sin"),
+        T, nb = rw["T"], rw["num_blocks"]
+        rm = ttnn.ROW_MAJOR_LAYOUT
+        for data, shape, dtype, dst in (
+            (tok, [T, 1], ttnn.uint32, "tok"),
+            (pos, [T], ttnn.int32, "pos"),
+            (pt, [T, nb], ttnn.int32, "pt"),
         ):
-            src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **rep)
-            ttnn.copy_host_to_device_tensor(src, rw[dst])
+            ttnn.copy_host_to_device_tensor(ttnn.Tensor(data, shape, dtype, rm), rw[dst])
+        ttnn.copy(cos_tt, rw["cos"])
+        ttnn.copy(sin_tt, rw["sin"])
 
     def _reseed_body(self, vhidden):
         rw = self._rw
