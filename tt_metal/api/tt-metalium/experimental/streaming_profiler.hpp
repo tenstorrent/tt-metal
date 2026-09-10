@@ -126,7 +126,7 @@ struct batch_of<F> : batch_of<decltype(&F::operator())> {};
 namespace detail {
 // This chip's time-indexed device<->device sync correction to the record's baked anchor, in nanoseconds: 0 until
 // the d2d sync publishes one, so a record converts exactly as before by default. Defined in the library.
-int64_t sync_correction_ns(uint16_t chip_id, uint64_t device_ticks) noexcept;
+int64_t sync_correction_ns(uint16_t chip_id, int64_t host_ns) noexcept;
 }  // namespace detail
 
 class Record {
@@ -150,9 +150,13 @@ protected:
     }
     std::chrono::steady_clock::time_point host_time(uint64_t ticks) const {
         const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset_);
-        // The baked scalar anchor, composed with this chip's time-indexed d2d sync term (0 until published).
-        return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(
-            static_cast<int64_t>(cycles * 1e9 / frequency_hz_) + detail::sync_correction_ns(chip_id_, ticks)));
+        // The baked scalar anchor (this record's own wall-clock domain -> host ns), composed with the chip's
+        // time-indexed d2d sync term. The term is keyed by HOST TIME, not wall ticks: eth and worker tiles keep
+        // different wall-clock totals (per-card duty cycle), so a correction measured on the eth core is applied
+        // to a worker zone through their common host reference -- each maps its own ticks to host, then looks up.
+        const int64_t base_ns = static_cast<int64_t>(cycles * 1e9 / frequency_hz_);
+        return std::chrono::steady_clock::time_point(
+            std::chrono::nanoseconds(base_ns + detail::sync_correction_ns(chip_id_, base_ns)));
     }
 
     uint64_t timestamp_;

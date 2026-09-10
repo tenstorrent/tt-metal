@@ -365,27 +365,26 @@ void TracySink::plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks) {
     if (dev >= clocks_.size()) {
         return;
     }
-    const DeviceClock& wclk = clocks_[dev];
     const DeviceClock& eclk =
         (dev < eth_clocks_.size() && eth_clocks_[dev].frequency_ghz > 0.0) ? eth_clocks_[dev] : clocks_[dev];
-    if (wclk.frequency_ghz <= 0.0) {
+    if (eclk.frequency_ghz <= 0.0) {
         return;
     }
-    const uint32_t chip = wclk.chip_id;
-    const double hz = wclk.frequency_ghz * 1e9;
+    const uint32_t chip = eclk.chip_id;
+    const double hz = eclk.frequency_ghz * 1e9;
     // The eth wall clock is a different counter from the workers, but the same AICLK rate. Take the eth TICK delta
     // since the eth anchor (session-relative, in the eth domain) and place it via the WORKER host anchor -- the
     // reliable steady-clock reference the zones use -- so plots and zones share one timeline.
     const int64_t base_ns =
-        wclk.anchor_host_ns +
+        eclk.anchor_host_ns +
         static_cast<int64_t>(
             static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(eclk.anchor_ticks)) * 1e9 /
             hz);
     const int64_t tsc = to_timeline(base_ns);
     if (kind == PP_CLOCK_LOCAL_REFCLK) {
-        tracy::Profiler::PlotDataAt(plot_name(chip, false), SyncCorrections::lookup_local_ns(chip, device_ticks), tsc);
+        tracy::Profiler::PlotDataAt(plot_name(chip, false), SyncCorrections::lookup_local_ns(chip, base_ns), tsc);
     } else if (kind == PP_CLOCK_LINK_REFCLK) {
-        tracy::Profiler::PlotDataAt(plot_name(chip, true), SyncCorrections::lookup_ns(chip, device_ticks), tsc);
+        tracy::Profiler::PlotDataAt(plot_name(chip, true), SyncCorrections::lookup_ns(chip, base_ns), tsc);
     }
 #else
     (void)dev;

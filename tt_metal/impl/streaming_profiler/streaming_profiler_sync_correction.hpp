@@ -11,14 +11,14 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// One piece of a chip's time-indexed correction to its baked host-time anchor: over wall ticks [tick_lo, tick_hi]
+// One piece of a chip's time-indexed correction, keyed by HOST TIME: over host-ns [ns_lo, ns_hi]
 // the correction is delta_ns_lo + slope_ns_per_tick * (ticks - tick_lo). The d2d sync publishes one per 1 ms
 // tracker bucket -- the AICLK that actually applied over that millisecond, and for a non-root chip the link onto the
 // root's timeline -- so a Record's host time is its static anchor composed with this term.
 struct SyncSegment {
-    uint64_t tick_lo = 0, tick_hi = 0;
+    int64_t ns_lo = 0, ns_hi = 0;
     double delta_ns_lo = 0.0;
-    double slope_ns_per_tick = 0.0;
+    double slope = 0.0;  // correction ns per host ns
 };
 
 // Per-chip published series. Readers (every consumer thread converting a record's time) are lock-free: they load the
@@ -29,15 +29,15 @@ public:
     static constexpr uint32_t kMaxChips = 256;
     // Beyond the last segment a live sink slightly ahead of the fit extends the last line, but only this far in
     // ticks (~50 ms at 1.35 GHz); further out the correction holds constant rather than extrapolating a slope.
-    static constexpr uint64_t kHoldTicks = 67'500'000;
+    static constexpr int64_t kHoldNs = 50'000'000;  // extend the last segment at most this far past its end (50 ms)
 
     static void publish(uint32_t chip_id, std::vector<SyncSegment> segments);
     static void clear(uint32_t chip_id);
-    static int64_t lookup_ns(uint32_t chip_id, uint64_t ticks) noexcept;
+    static int64_t lookup_ns(uint32_t chip_id, int64_t host_ns) noexcept;
     // A parallel LOCAL-only series (each chip's own-anchor + local-AICLK term, no cross-chip link). Used only
     // for the Tracy/CSV local-vs-linked plots; Record::host_time uses the linked series above.
     static void publish_local(uint32_t chip_id, std::vector<SyncSegment> segments);
-    static int64_t lookup_local_ns(uint32_t chip_id, uint64_t ticks) noexcept;
+    static int64_t lookup_local_ns(uint32_t chip_id, int64_t host_ns) noexcept;
     // How many segments a chip currently has published (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
 };

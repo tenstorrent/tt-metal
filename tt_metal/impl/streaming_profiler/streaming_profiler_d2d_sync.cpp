@@ -260,6 +260,17 @@ void D2dSyncConsumer::publish_all(bool final) {
             continue;
         }
         const DeviceClock& dclk = ctx_.devices[dev].clock;
+        // The correction is keyed by HOST TIME, not wall ticks: eth and worker tiles keep different wall-clock
+        // totals (per-card duty cycle), so map each segment's eth wall-tick bounds to host ns via the eth anchor.
+        // A worker zone then looks the correction up by its own base host ns and gets the cross-chip shift.
+        const DeviceClock& eclk = ctx_.devices[dev].eth_clock;
+        if (eclk.frequency_ghz <= 0.0) {
+            continue;  // no eth anchor: cannot place this chip's correction on the host timeline
+        }
+        const auto to_host = [&](double eth_tick) {
+            return static_cast<double>(eclk.anchor_host_ns) +
+                   (eth_tick - static_cast<double>(eclk.anchor_ticks)) / eclk.frequency_ghz;
+        };
         const double hz_d = static_cast<double>(baked_hz(dclk));
         const double A_d = static_cast<double>(dclk.anchor_ticks);
         // Host anchors differ by a small amount (ms): keep it in integers, then double.
@@ -301,18 +312,19 @@ void D2dSyncConsumer::publish_all(bool final) {
             }
             const double d_lo = corrected_rel(b, T_lo) - base_rel(T_lo);
             const double d_hi = corrected_rel(b, T_hi) - base_rel(T_hi);
+            const double H_lo = to_host(T_lo), H_hi = to_host(T_hi);
             segs.push_back(SyncSegment{
-                .tick_lo = static_cast<uint64_t>(T_lo),
-                .tick_hi = static_cast<uint64_t>(T_hi),
+                .ns_lo = static_cast<int64_t>(H_lo),
+                .ns_hi = static_cast<int64_t>(H_hi),
                 .delta_ns_lo = d_lo,
-                .slope_ns_per_tick = (d_hi - d_lo) / (T_hi - T_lo)});
+                .slope = (d_hi - d_lo) / (H_hi - H_lo)});
             const double l_lo = local_rel(b, T_lo) - base_rel(T_lo);
             const double l_hi = local_rel(b, T_hi) - base_rel(T_hi);
             local_segs.push_back(SyncSegment{
-                .tick_lo = static_cast<uint64_t>(T_lo),
-                .tick_hi = static_cast<uint64_t>(T_hi),
+                .ns_lo = static_cast<int64_t>(H_lo),
+                .ns_hi = static_cast<int64_t>(H_hi),
                 .delta_ns_lo = l_lo,
-                .slope_ns_per_tick = (l_hi - l_lo) / (T_hi - T_lo)});
+                .slope = (l_hi - l_lo) / (H_hi - H_lo)});
         }
         if (!segs.empty()) {
             SyncCorrections::publish(ctx_.devices[dev].chip_id, std::move(segs));
@@ -432,10 +444,16 @@ void D2dSyncConsumer::dump_csv() const {
             if (b.n < 2 || b.slope() <= 0.0) {
                 continue;
             }
-            const uint64_t T =
-                static_cast<uint64_t>(b.wall_of_refclk(static_cast<double>(bk.first * LocalClockFit::kBucketTicks)));
-            const long long loc = static_cast<long long>(SyncCorrections::lookup_local_ns(chip, T));
-            const long long lnk = static_cast<long long>(SyncCorrections::lookup_ns(chip, T));
+            const double Tw = b.wall_of_refclk(static_cast<double>(bk.first * LocalClockFit::kBucketTicks));
+            const uint64_t T = static_cast<uint64_t>(Tw);
+            const DeviceClock& eclk = ctx_.devices[dev].eth_clock;
+            const int64_t H = eclk.frequency_ghz > 0.0
+                                  ? static_cast<int64_t>(
+                                        static_cast<double>(eclk.anchor_host_ns) +
+                                        (Tw - static_cast<double>(eclk.anchor_ticks)) / eclk.frequency_ghz)
+                                  : 0;
+            const long long loc = static_cast<long long>(SyncCorrections::lookup_local_ns(chip, H));
+            const long long lnk = static_cast<long long>(SyncCorrections::lookup_ns(chip, H));
             const long long err = lnk - loc;
             std::fprintf(f, "%u,%llu,%lld,%lld,%lld\n", chip, static_cast<unsigned long long>(T), loc, lnk, err);
             rows++;
