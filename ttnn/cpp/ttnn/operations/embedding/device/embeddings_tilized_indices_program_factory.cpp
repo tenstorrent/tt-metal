@@ -40,7 +40,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
 
