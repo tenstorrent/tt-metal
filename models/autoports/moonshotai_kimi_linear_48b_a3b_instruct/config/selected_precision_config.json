@@ -1,1 +1,14 @@
-{"experts": "bfp8", "shared": "bfp8", "dense_mlp": "bfp8", "mla_proj": "bfp8", "kv_cache": "bf16", "note": "default before the datatype sweep (stage 08)"}
+{
+ "name": "bfp8_kvbfp8",
+ "experts": "bfp8",
+ "kv": "bfp8",
+ "top1": 0.96,
+ "top5": 1.0,
+ "top100": 1.0,
+ "decode_ms": 112.2,
+ "prefill_s": 0.68,
+ "degenerate": false,
+ "paris": true,
+ "meets_bars": true,
+ "note": "bfp4_kvbfp8 was only 1.9% faster; accuracy preferred"
+}
