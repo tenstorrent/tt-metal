@@ -369,6 +369,11 @@ class CMakeBuild(build_ext):
             "fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
+            # The DRISC tensor-prefetcher kernel and the two host/device shared headers it
+            # includes: a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
+            "impl/buffers/kernels/**/*",
+            "impl/buffers/dram_sender_state_block.hpp",
+            "impl/buffers/tensor_prefetcher_request.hpp",
             "impl/dispatch/kernels/**/*",
             "include/**/*",
             "kernels/**/*",
