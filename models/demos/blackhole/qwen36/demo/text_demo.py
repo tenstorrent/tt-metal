@@ -451,6 +451,10 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     profiler.start("compile_prefill")
     profiler.end("compile_prefill")
 
+    # Spec decode's verify advances GDN with the fused recurrent op, so plain decode on this model
+    # has to use it too or greedy near-ties flip between the two paths. Model-scoped and explicit.
+    model.set_gdn_fused_decode(True)
+
     # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")

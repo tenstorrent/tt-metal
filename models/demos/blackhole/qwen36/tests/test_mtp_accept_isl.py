@@ -126,6 +126,7 @@ def test_mtp_accept_vs_isl(mesh_device):
     device.enable_program_cache()
     max_seq_len = NUM_BLOCKS * BLOCK_SIZE
     model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len)
+    model.set_gdn_fused_decode(True)  # spec verify's GDN op; decode must match it
     assert model.mtp is not None, "MTP head not built"
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
@@ -209,6 +210,7 @@ def test_mtp_warm_chunk_ablation(mesh_device):
     device.enable_program_cache()
     max_seq_len = NUM_BLOCKS * BLOCK_SIZE
     model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len)
+    model.set_gdn_fused_decode(True)  # spec verify's GDN op; decode must match it
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     long4k = _get_prompt(4096, tokenizer)
     base128 = _get_prompt(128, tokenizer)
@@ -274,6 +276,7 @@ def test_mtp_warm_kv_map(mesh_device):
     device = mesh_device
     device.enable_program_cache()
     model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE)
+    model.set_gdn_fused_decode(True)  # spec verify's GDN op; decode must match it
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     long4k = _get_prompt(4096, tokenizer)
     base128 = _get_prompt(128, tokenizer)
