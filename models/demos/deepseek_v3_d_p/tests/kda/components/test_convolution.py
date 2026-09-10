@@ -10,6 +10,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
+from models.demos.deepseek_v3_d_p.tt.kda.config import kda_nd_dram_memory_config
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
@@ -28,13 +29,18 @@ def _coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
     return (sp_rank, tp_rank) if sp_axis == 0 else (tp_rank, sp_rank)
 
 
-def _to_device(tensor: torch.Tensor, device: ttnn.MeshDevice, dims: tuple[int | None, int | None]) -> ttnn.Tensor:
+def _to_device(
+    tensor: torch.Tensor,
+    device: ttnn.MeshDevice,
+    dims: tuple[int | None, int | None],
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     return ttnn.from_torch(
         tensor,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=dims, mesh_shape=tuple(device.shape)),
     )
 
@@ -75,10 +81,19 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     state_dims = [None, None]
     state_dims[tensor_parallel_axis] = 2
     qkv_tt = _to_device(qkv, mesh_device, tuple(qkv_dims))
-    state_tt = _to_device(external, mesh_device, tuple(state_dims))
+    state_memory_config = kda_nd_dram_memory_config(qkv_tt, (1, history, 32))
+    state_tt = _to_device(external, mesh_device, tuple(state_dims), state_memory_config)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return exchange_convolution_carry(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
+        entry, final = exchange_convolution_carry(
+            qkv_tt,
+            state_tt,
+            sequence_parallel_axis=sp_axis,
+            state_memory_config=state_memory_config,
+        )
+        assert final.memory_config().nd_shard_spec == state_memory_config.nd_shard_spec
+        # The generic determinism comparator requires tile-aligned shard heights.
+        return entry, ttnn.to_memory_config(final, ttnn.DRAM_MEMORY_CONFIG)
 
     (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
