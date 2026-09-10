@@ -254,7 +254,6 @@ def _distributed_affine_prefix(
 
     initial_state_4d = initial_state
     carry = ttnn.to_memory_config(initial_state_4d, working_memory)
-    final_state = ttnn.empty_like(initial_state_4d, memory_config=state_memory_config)
     entry_states = []
     for rank in range(sp_size):
         entry_states.append(carry)
@@ -288,10 +287,8 @@ def _distributed_affine_prefix(
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         )
-        if rank == sp_size - 1:
-            carry = ttnn.add(carry, rank_b_for_carry, output_tensor=final_state)
-        else:
-            carry = ttnn.add(carry, rank_b_for_carry, memory_config=working_memory)
+        carry_memory = output_memory if rank == sp_size - 1 else working_memory
+        carry = ttnn.add(carry, rank_b_for_carry, memory_config=carry_memory)
 
     replicated_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
     entry_state = ttnn.mesh_partition(
@@ -301,6 +298,11 @@ def _distributed_affine_prefix(
         memory_config=output_memory,
     )
     entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
+    final_state = ttnn.all_broadcast(
+        carry,
+        cluster_axis=sequence_parallel_axis,
+        memory_config=state_memory_config,
+    )[0]
     return entry_state, final_state
 
 
