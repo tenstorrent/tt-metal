@@ -55,6 +55,8 @@ inline constexpr bool tabulates_all_slots = NUM_BUFFERS <= MAX_TABULATED_SLOTS;
 template <uint8_t NUM_BUFFERS, bool Tabulate = tabulates_all_slots<NUM_BUFFERS>>
 struct SlotAddresses {
     FORCE_INLINE void init(size_t channel_base_address, size_t slot_stride) {
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->addresses[i] = channel_base_address + i * slot_stride;
         }
