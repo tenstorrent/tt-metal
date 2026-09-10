@@ -1,6 +1,6 @@
 # Qwen3-TTS
 
-Text-to-speech model ([Qwen/Qwen3-TTS-12Hz-1.7B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)) on Tenstorrent Blackhole hardware.
+Text-to-speech model ([Qwen/Qwen3-TTS-12Hz-1.7B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)) on Tenstorrent Blackhole and Wormhole hardware.
 
 The pipeline consists of two components running fully on-device with Metal trace:
 
@@ -14,6 +14,8 @@ Audio is encoded and decoded by [Kyutai Mimi](https://huggingface.co/kyutai/mimi
 ## Hardware
 
 - **Board:** Blackhole P150 (single chip)
+- **Board:** Wormhole N150 (single chip, `MESH_DEVICE=N150`)
+- **Board:** Wormhole N300 (two chips, TP=2, `MESH_DEVICE=N300`)
 
 ## Performance
 
@@ -25,6 +27,15 @@ Measured on Blackhole P150 with Metal trace + KV cache + 2CQ:
 | Steady-state AR step | ~43.3 ms/frame |
 | Audio sample rate | 24 kHz |
 | Codec frame rate | 12.5 Hz |
+
+Measured on Wormhole with Metal trace + KV cache + 1CQ
+
+| Metric | N150 (TP=1) | N300 (TP=2) |
+|---|---|---|
+| Prefill latency | < 17 ms | < 18 ms |
+| Steady-state AR step | ~39.3 ms/frame | ~37.8 ms/frame |
+| Audio sample rate | 24 kHz | 24 kHz |
+| Codec frame rate | 12.5 Hz | 12.5 Hz |
 
 ## Prerequisites
 
