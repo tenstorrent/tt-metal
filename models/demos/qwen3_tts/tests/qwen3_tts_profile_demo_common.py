@@ -32,7 +32,7 @@ _L1_SMALL = 32768
 _TRACED_PREFILL_BUCKETS = (32, 64, 128)
 _TILE = 32
 _MAX_CP_SEQ = 32
-_PROFILE_CACHE_DIR = REPO_ROOT / "models/demos/qwen3_tts/ops_list/.profile_cache"
+_PROFILE_CACHE_DIR = REPO_ROOT / "generated/qwen3_tts_profile_cache"
 _PROFILER_FLUSH_LAYERS = 7
 
 
