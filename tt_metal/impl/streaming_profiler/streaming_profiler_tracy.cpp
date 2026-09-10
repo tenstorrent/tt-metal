@@ -4,6 +4,7 @@
 
 #include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -340,6 +341,18 @@ void TracySink::push_marker(
 }
 
 void TracySink::emit_plots() {
+    // PP_CLOCK samples arrive in decode order, not time order; PlotDataAt wants each plot's points in increasing
+    // time. Sort per stream (dev,kind) by the eth wall timestamp -- a full-width, monotonic per-core counter -- so
+    // the curve is emitted in order and lands across the whole session instead of collapsing.
+    std::sort(plot_samples_.begin(), plot_samples_.end(), [](const PlotSample& a, const PlotSample& b) {
+        if (a.dev != b.dev) {
+            return a.dev < b.dev;
+        }
+        if (a.kind != b.kind) {
+            return a.kind < b.kind;
+        }
+        return a.ts < b.ts;
+    });
     for (const PlotSample& p : plot_samples_) {
         plot_clock(p.dev, p.kind, p.ts);
     }
@@ -380,7 +393,12 @@ void TracySink::plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks) {
         static_cast<int64_t>(
             static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(eclk.anchor_ticks)) * 1e9 /
             hz);
-    const int64_t tsc = to_timeline(base_ns);
+    // PlotDataAt writes tsc straight to the wire and the server multiplies it by m_timerMul (ns per timer tick) to
+    // get display ns -- so the argument must be in TIMER TICKS, not ns. to_timeline yields ns; divide by the same
+    // mul to invert the server step. (Device zones dodge this via a GPU context with period 1.0; a raw plot does
+    // not, which is why the curve was compressed by exactly the timer mul, ~0.42.)
+    const double timer_mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
+    const int64_t tsc = static_cast<int64_t>(static_cast<double>(to_timeline(base_ns)) / timer_mul);
     if (kind == PP_CLOCK_LOCAL_REFCLK) {
         tracy::Profiler::PlotDataAt(plot_name(chip, false), SyncCorrections::lookup_local_ns(chip, base_ns), tsc);
     } else if (kind == PP_CLOCK_LINK_REFCLK) {
