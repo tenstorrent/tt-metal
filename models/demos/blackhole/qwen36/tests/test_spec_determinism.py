@@ -60,6 +60,9 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len):
     device.enable_program_cache()
     num_blocks = 64
     model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=num_blocks * BLOCK_SIZE)
+    # Spec verify advances GDN with the fused recurrent op; decode must use the same math or
+    # greedy near-ties flip between the two paths. Model-scoped, so it is stated here.
+    model.set_gdn_fused_decode(True)
     assert model.mtp is not None, "MTP head not built"
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     token_ids = _prompt_of_len(prompt_len, tokenizer)

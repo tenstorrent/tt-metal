@@ -150,9 +150,7 @@ def test_spec_decode_is_lossless(mesh_device):
     # difference between two GDN kernels (which test_fused_recurrent_gdn.py covers). B==max_batch_size==1
     # satisfies the fused path's full-batch assert. QWEN36_SPEC_LOSSLESS_STOCK_GDN=1 opts out.
     if not int(os.environ.get("QWEN36_SPEC_LOSSLESS_STOCK_GDN", "0")):
-        for layer in model.layers:
-            if not layer.is_full_attention:
-                layer.attention.use_fused_recurrent_decode = True
+        model.set_gdn_fused_decode(True)
 
     # --- reference: plain greedy ------------------------------------------------------------- #
     ref_path = os.environ.get("QWEN36_SPEC_REF_PATH", "decode")
