@@ -18,14 +18,14 @@ class DeepSeekV4FlashConfig:
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
-    # 4096x2048 routed-expert shape (1.04x at 768, 0.92x at 896); it is the last full M_BLOCK
-    # boundary before the fused op opens another block while the composite's chunk
-    # schedule stays flat, so the two costs cross just above it.
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. On the 4096x2048 routed-expert
+    # shape the composite wins from 320 and gives the band back only at 576, where its tail
+    # per_core_M rounds 18 tile-rows up to 32. 288 is the aggregate-optimal cut over that
+    # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
     # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 288
     HEAD_DIM = 512
 
     # MoE configuration

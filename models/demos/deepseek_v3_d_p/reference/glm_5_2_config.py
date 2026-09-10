@@ -29,7 +29,7 @@ class GLM52Config:
     # measured separately: the crossover is a function of the routed-expert matmul shape, expert
     # count and activation, and this model matches 5.1 on all of them (6144x2048, 256 experts,
     # top-8, no pre-projection, SiLU). Re-measure if any of those diverge.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 1792
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
