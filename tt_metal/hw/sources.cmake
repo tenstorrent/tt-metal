@@ -33,6 +33,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
     inc/api/scratchpad.h
+    inc/api/scratchpad_binding_token.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h
@@ -199,14 +200,15 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
+    inc/api/dataflow/prefetcher_pipe.h
     inc/api/dataflow/dataflow_buffer.h
+    inc/api/dataflow/dfb_binding_token.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
     inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
-    inc/hostdev/cross_node_dfb_constants.h
     inc/hostdev/debug_ring_buffer_common.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
@@ -214,6 +216,8 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/profiler_common.h
     inc/hostdev/realtime_profiler_msgs.h
+    inc/hostdev/remote_dfb_constants.h
+    inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h
@@ -222,16 +226,19 @@ set(HW_JIT_API_HEADERS
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
     inc/internal/cross_node_dfb_init.h
+    inc/internal/prefetcher_pipe_init.h
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
     inc/internal/risc_attribs.h
+    inc/internal/template_string.h
     inc/internal/tensix_functions.h
     inc/internal/vptr_uint.h
     inc/internal/dataflow/dataflow_api_addrgen.h
     inc/internal/dataflow/dataflow_api_common.h
     inc/internal/dataflow/dataflow_cmd_bufs.h
     inc/internal/dataflow/noc_address_backend_xy.h
+    inc/internal/debug/assert_common.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
     inc/internal/debug/noc_zero_guard.h
@@ -285,7 +292,11 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
     inc/internal/tt-2xx/quasar/noc/noc_parameters.h
     inc/internal/tt-2xx/quasar/noc_address_backend.h
+    inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
+    inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
+    inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
+    inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
     inc/internal/tt-2xx/quasar/tdma_xmov.h

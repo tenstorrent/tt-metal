@@ -14,7 +14,7 @@
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_arg(args::is_all_to_all_worker) == 1;
     const uint32_t scalar_w_bits = get_arg(args::scalar_w);
-    float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
+    const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         scalar_w_f);
 
@@ -30,7 +30,7 @@ void kernel_main() {
 #ifndef USE_WELFORD
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c_bits = get_arg(args::scalar_c);
-        float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
+        const float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
         dataflow_kernel_lib::
             prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
                 scalar_c_f);

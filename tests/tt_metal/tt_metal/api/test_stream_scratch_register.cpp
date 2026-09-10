@@ -26,7 +26,7 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterTensixCores) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Execute the program
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 }
 
 // Test stream scratch register APIs on Erisc cores
@@ -54,7 +54,7 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterEriscCores) {
         EthernetConfig{.noc = NOC::NOC_0});
 
     // Execute the program
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 }
 
 }  // namespace tt::tt_metal

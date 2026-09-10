@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -48,6 +49,15 @@ REDUCE_MESH_PARAMS = [
         fabric2d_device_params(),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
+    ),
+    # Blackhole accepts 32-device meshes only, so neither shape above runs on the galaxy and every row
+    # there skips -- rc=0, which reads as coverage. This row is the only one that executes there, and
+    # so the only one covering mistral_small_4 (or any model) on Blackhole.
+    pytest.param(
+        (8, 4),
+        fabric2d_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-mesh-8x4",
     ),
 ]
 
@@ -84,6 +94,15 @@ def run_reduce(
 ):
     """Run the TTNN reduce module in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, topk) shape axis."""
+    # The ND-sharded combine output is chunked by topk across the mesh, so a topk that does not divide
+    # the device count cannot be laid out:
+    #   TT_FATAL: ND sharding requires the number of chunks 24 to match the mesh dimension size 32
+    # Observed on the 8x4 galaxy row: topk 8 and 4 lay out, topk 6 (dsv4_pro / dsv4_flash) does not.
+    # Skipped rather than xfailed because it is a property of the shape, not a defect to fix here.
+    num_devices = mesh_device.get_num_devices()
+    if num_devices % topk:
+        pytest.skip(f"topk={topk} does not divide {num_devices} devices; ND sharding cannot chunk it")
+
     torch.manual_seed(42)
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
@@ -268,6 +287,10 @@ REDUCE_MODELS = [
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
+    # Mistral-Small-4-119B: emb_dim 4096, topk 4. Top-4 is the smallest topk here that the mesh-4x2
+    # mapper can still shard across the two dispatch groups (2 each) — top-1 needs the linear-4
+    # mesh, which is why it has its own test above.
+    ("mistral4", MistralSmall4Config, True),
 ]
 
 

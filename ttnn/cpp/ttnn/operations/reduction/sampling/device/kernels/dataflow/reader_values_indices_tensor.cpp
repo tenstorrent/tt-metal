@@ -21,10 +21,10 @@
 template <bool USE_32BIT>
 FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
     // TODO: investigate moving to compile time (binary size is at risk)
-    DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(1);
-    CoreLocalMem<volatile uint32_t> ptr(dfb.get_write_ptr());
-    uint32_t wt_offset = wt << 5;
+    const CoreLocalMem<volatile uint32_t> ptr(dfb.get_write_ptr());
+    const uint32_t wt_offset = wt << 5;
 
     uint32_t count = 0;
     for (uint32_t i = 0; i < 2; ++i) {
@@ -32,14 +32,14 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
             for (uint32_t k = 0; k < 16; ++k) {
                 if constexpr (USE_32BIT) {
                     for (uint32_t l = 0; l < 16; ++l) {
-                        uint32_t value = l + 16 * j + wt_offset;
+                        const uint32_t value = l + (16 * j) + wt_offset;
                         ptr[count] = value;
                         count++;
                     }
                 } else {
                     for (uint32_t l = 0; l < 16; l += 2) {
-                        uint16_t value = l + 16 * j + wt_offset;
-                        ptr[count] = (value + 1) << 16 | value;
+                        const uint16_t value = static_cast<uint16_t>(l + (16 * j) + wt_offset);
+                        ptr[count] = (static_cast<uint32_t>(value + 1) << 16) | value;
                         count++;
                     }
                 }
@@ -66,13 +66,13 @@ void kernel_main() {
 
     const auto s1 = TensorAccessor(tensor::input_indices);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer input_values_dfb(dfb::input_values);
     DataflowBuffer input_indices_dfb(dfb::input_indices);
     const uint32_t tile_bytes_input_values = input_values_dfb.get_entry_size();
 
     uint32_t tile_id_input_values = 0;
-    uint32_t tile_id_input_indices = 0;
+    const uint32_t tile_id_input_indices = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input values TILE
         for (uint32_t j = 0; j < Wt; ++j) {
