@@ -51,21 +51,12 @@ PERF_POOLS = [ReducePool.Sum, ReducePool.Average, ReducePool.Max, ReducePool.Min
 PERF_INPUT_BOUNDS = (-100, 100)
 
 
-def _perf_axes(reduce_pool, formats):
-    """Reduce axes to time for this pool/format pair.
-
-    Defers to the functional gate so the perf sweep cannot ask for a combination the kernel
-    static_asserts away - integer row AVG being the one that matters.
-    """
-    return get_supported_reduce_axes(reduce_pool, formats)
-
-
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
     reduce_pool=PERF_POOLS,
     formats=PERF_FORMATS,
-    mathop=_perf_axes,
+    mathop=get_supported_reduce_axes,
     dimension_combinations=PERF_INPUT_DIMENSIONS_REDUCE,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
