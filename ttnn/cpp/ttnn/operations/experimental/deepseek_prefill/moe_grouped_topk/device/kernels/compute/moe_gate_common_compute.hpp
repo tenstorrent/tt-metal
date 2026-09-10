@@ -48,6 +48,12 @@ constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER = ckernel::TopkTieOrder::Des
 // factory reports that as `sort_keys_tf32`, and topk() / topk_group_scores() take the rank-tag engine
 // only when stable_sort && sort_keys_tf32. Every other configuration keeps the comparator: slower,
 // never lossy. process_and_sort_tiles (grouped path, values consumed downstream) always uses the comparator.
+//
+// The tag encodes a candidate's POSITION in the chain (tile order, then column), not its index tile,
+// so the rank-tag engine is only a stable-by-index sort when the candidates arrive in index order:
+// the single-group expert top-k (score tiles 0..width-1 with the identity index template) and the
+// group-score sort (column == group id). The grouped path's final top-k receives the winning groups
+// ordered by group sum, so it must keep the comparator, which compares the index tile on ties.
 constexpr uint32_t GATE_TAG_BITS = 6;                 // the k=32 chains use ranks below 64
 constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
 static_assert(
@@ -253,6 +259,7 @@ void sum_top_experts_per_group(
 }
 
 // rank_tag selects the rank-tag stable engine (see GATE_TAG_BITS); only meaningful with stable_sort.
+// Valid here because column j of the summed-scores tile is group j: position order is id order.
 template <bool stable_sort = false, bool rank_tag = false>
 void topk_group_scores(
     const uint32_t cb_group_summed_scores_id,
@@ -328,7 +335,10 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-// rank_tag selects the rank-tag stable engine (see GATE_TAG_BITS); only meaningful with stable_sort.
+// rank_tag selects the rank-tag stable engine (see GATE_TAG_BITS); only meaningful with stable_sort,
+// and only correct when tile j of the scores holds indices larger than every index in tiles 0..j-1
+// (the tags rank by position, see above). True for the single-group expert top-k, false for the
+// grouped path's final top-k over the sum-ordered winning groups.
 template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,

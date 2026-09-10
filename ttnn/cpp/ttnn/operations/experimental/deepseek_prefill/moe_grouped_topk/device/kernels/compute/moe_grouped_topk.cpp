@@ -106,7 +106,9 @@ void kernel_main() {
                 cb_top_experts_per_group, cb_group_summed_scores, summed_experts_per_group);
             blocks::topk_group_scores<stable_sort, rank_tag>(
                 cb_group_summed_scores, cb_group_index_template, cb_sorted_group_order, false, false, log_n_groups - 1);
-            blocks::topk<stable_sort, /*indices_pretransposed=*/false, rank_tag>(
+            // The winning groups arrive ordered by group sum, not by group id, so positional rank
+            // tags would break cross-group ties the wrong way: this top-k keeps the comparator.
+            blocks::topk<stable_sort, /*indices_pretransposed=*/false, /*rank_tag=*/false>(
                 cb_winning_group_scores,
                 cb_winning_group_indices,
                 cb_final_indices_transposed,
