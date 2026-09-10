@@ -206,7 +206,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
     const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
-    const std::uint32_t TILE_CNT       = params.TILE_CNT;
     const std::uint32_t CT_DIM         = params.CT_DIM;
     const std::uint32_t RT_DIM         = params.RT_DIM;
     const Operand& buffer_Res          = params.buffer_Res;
@@ -244,7 +243,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();
-                for (std::uint32_t i = 0; i < TILE_CNT; i++)
+                // Pack dest occupancy (RT×CT).
+                for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
                 {
                     LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
                     // Golden packs unique result tiles. Perf K=32 dest-fill Float32
