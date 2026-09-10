@@ -299,7 +299,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
 
     step_time_s = recorder.final_step_time_s
     assert step_time_s is not None, "missing metric step_time_s"
-    assert np.isfinite(step_time_s), f"metric step_time_s is not finite: {step_time_s}"
+    assert np.isfinite(step_time_s) and step_time_s > 0.0, f"step_time_s is not a positive duration: {step_time_s}"
 
     after = completer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
     assert before.shape == after.shape
