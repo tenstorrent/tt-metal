@@ -2622,6 +2622,15 @@ class ModelArgs:
         return max_prefill_chunk_size_div1024 * 1024
 
     def get_trace_prefill_supported_seq_lens(self):
+        import os as _os
+
+        if _os.environ.get("TT_METAL_DEVICE_PROFILER") == "1" or _os.environ.get("TT_PERF_TRACE") == "0":
+            # The harness asked for EAGER. The device profiler attributes per-op time from eager
+            # dispatch -- a traced region runs as one fused program and emits none, and synchronising
+            # inside a capture is fatal (`Event Synchronization is not supported during trace
+            # capture`). So nothing is traceable while it is on, and the profiler wins: the eager path
+            # can be measured and the traced one cannot.
+            return []
         default_supported_seq_lens = {
             "N150": [128],
             "N300": [128, 1024],
@@ -3214,6 +3223,15 @@ class ModelArgs:
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
         """
 
+        import os as _os
+
+        if _os.environ.get("TT_METAL_DEVICE_PROFILER") == "1" or _os.environ.get("TT_PERF_TRACE") == "0":
+            # The harness asked for EAGER. The device profiler attributes per-op time from eager
+            # dispatch -- a traced region runs as one fused program and emits none, and synchronising
+            # inside a capture is fatal (`Event Synchronization is not supported during trace
+            # capture`). So nothing is traceable while it is on, and the profiler wins: the eager path
+            # can be measured and the traced one cannot.
+            return False
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
         return (
