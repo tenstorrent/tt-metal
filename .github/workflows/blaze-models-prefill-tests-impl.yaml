@@ -316,15 +316,17 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
-      # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
+      # Keep the .md summaries and Mistral PP4 binding, rank logs, and PCC verdicts for review.
+      # Upload before cleanup; names are unique per matrix job so whole-suite runs do not collide.
       - name: ⬆️ Upload prefill summaries
         if: always() && !cancelled()
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
+          path: |
+            ${{ env.PREFILL_SUMMARIES }}/**/*.md
+            ${{ env.PREFILL_SUMMARIES }}/pcc/mistral4_pp4/**
           if-no-files-found: ignore
           retention-days: 30
 

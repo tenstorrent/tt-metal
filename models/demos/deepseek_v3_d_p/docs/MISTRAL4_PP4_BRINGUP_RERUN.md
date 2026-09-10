@@ -373,3 +373,63 @@ op tables above come from the in-tree analyzers. Both were validated first again
 captures in `$S/captures/`, where they reproduce the aug27 tables exactly.
 
 **Prefill only. No decode data of any kind.**
+
+# 6. PP4 golden-KV correctness gate (A5)
+
+The `mistral4_pp4_kv_pcc` Blaze stage runs the shared
+`models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4` harness on one
+Blackhole Galaxy (`bh_sc1`). It generates a binding on the allocated worker, then launches
+four traced `[8,1]` stages with `--rank-binding`. The controller does not open devices.
+The probe uses TorusXY to identify columns; the pipeline uses TorusY within each column.
+
+After ten warmup chunks, the producer submits eleven 5,120-token chunks and validates the
+full 56,320-token golden. The four producers each read their matching stage's nine layers
+through the merged KV table: all 36 layers are covered, including positions beyond 8,192.
+This leg checks prefill KV correctness, not logits, throughput, or the 261,120-token window.
+The golden was generated from the repository's Torch reference, so it is not an independent
+implementation oracle. The existing targeted traced-versus-eager query-scale tests remain
+necessary alongside this end-to-end gate.
+
+The gate requires exactly four successful rank verdicts, nonempty finite per-cache scores,
+positive validated slot counts, and successful producer and runner exits. It starts with
+the shared full-depth raw-PCC floor of **0.85**; this is not a newly measured PP4 threshold.
+The original A5 commit `798263fe50b` passed on 2026-09-09 in
+[CI attempt 2](https://github.com/tenstorrent/tt-metal/actions/runs/34297616970/attempts/2):
+rank minima were 0.991163, 0.973523, 0.976318 and 0.961040, each checking nine layers.
+The PP4 weight cache is now staged at the default shared CI path below. This result applies
+to that tested commit; integration onto a newer base needs its own CI run.
+An idle server intentionally does not complete device operations, so this leg disables the operation-timeout watchdog
+and bounds runner shutdown separately. Its initial CI timeout is 60 minutes.
+
+Dispatch against a pushed branch containing the stage:
+
+```bash
+gh workflow run blaze-models-prefill-tests.yaml \
+  --ref akhan/mistral4-prefill-followups -f test-type=mistral4_pp4_kv_pcc
+```
+
+For a manual run, use the same built checkout and MPI environment on controller and worker.
+Set `TT_METAL_HOME`, `PREFILL_SUMMARIES` to a writable shared directory outside `/tmp`, and
+`TTRUN_DIR` to a directory whose `hostfile` contains exactly the target Galaxy's hostname.
+The Galaxy must be idle when probing. Run the shared harness above from the repository root.
+
+Worker-side prerequisites (each path can be overridden before invoking the harness):
+
+| Environment variable | Default |
+|---|---|
+| `PREFILL_HF_MODEL` | `/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603` |
+| `PREFILL_TTNN_CACHE` | `/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI` |
+| `PREFILL_TRACE_DIR` | `/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L` |
+
+The cache root must contain `mistral_small_4_bh_8dev/8x1` with all 36 layers. The existing
+`32dev/8x4` cache cannot serve this topology; an already populated `32dev/8x1` cache contains
+the same tensors but needs staging under the `8dev/8x1` namespace. Preflight checks the cache
+directory and each golden KV layer before probing; it does not certify cache completeness.
+
+Inspect the `prefill-summaries-*` artifact's `pcc/mistral4_pp4/` directory for the generated
+binding, all rank verdict JSON files, and runner/producer logs, including after failure.
+Host orchestration can be checked without weights or devices:
+
+```bash
+python3 -m unittest discover -s models/demos/common/prefill/runners/ci -p test_run_multirank_pcc.py
+```
