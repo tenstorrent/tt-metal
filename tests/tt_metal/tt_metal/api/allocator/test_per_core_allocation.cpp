@@ -139,9 +139,6 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
     ASSERT_GE(this->devices_[0]->compute_with_storage_grid_size().x, 2);
 
     auto* mesh_device = this->devices_[0].get();
