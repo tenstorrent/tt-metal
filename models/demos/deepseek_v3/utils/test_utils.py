@@ -29,7 +29,7 @@ from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _dequantize_state_dict
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 def _chat_template_token_len(tokenizer, messages) -> int:

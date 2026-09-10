@@ -25,9 +25,9 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_bounded_sliding,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import get_padded_prefill_len
-from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
-from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
+from models.ttt_compat.tt.common import get_padded_prefill_len
+from models.ttt_compat.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
+from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
 
 
 def _vllm_force_full_isl_single_chunk() -> bool:
@@ -513,7 +513,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
         if block_size <= 0:
             return None
-        from models.tt_transformers.tt.common import num_blocks_in_seq
+        from models.ttt_compat.tt.common import num_blocks_in_seq
 
         return num_blocks_in_seq(int(sliding_window), block_size)
 
@@ -557,7 +557,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         """
         import torch
 
-        from models.tt_transformers.tt.common import num_blocks_in_seq
+        from models.ttt_compat.tt.common import num_blocks_in_seq
 
         min_bounded_cols = self._bounded_sliding_min_page_table_cols(kv_cache)
 
@@ -578,7 +578,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             use_full_prompt_len = True
 
         if use_batched_prefill:
-            from models.tt_transformers.tt.common import get_block_size
+            from models.ttt_compat.tt.common import get_block_size
 
             block_size = get_block_size(kv_cache)
             batch_dim = padded_batch_size if padded_batch_size is not None else self.model_args[0].max_batch_size
@@ -654,7 +654,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         """
         import torch
 
-        from models.tt_transformers.tt.common import num_blocks_in_seq
+        from models.ttt_compat.tt.common import num_blocks_in_seq
 
         ret = {
             "tokens": torch.zeros(batch_size, seq_len, dtype=torch.long),

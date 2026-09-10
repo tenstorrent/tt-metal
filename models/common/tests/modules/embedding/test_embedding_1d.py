@@ -386,7 +386,7 @@ def test_embedding_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
 
     Uses HF_MODEL env var or defaults to Llama-3.1-8B-Instruct.
     """
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     dtype = ttnn.bfloat16
 

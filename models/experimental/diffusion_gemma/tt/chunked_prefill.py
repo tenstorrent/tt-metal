@@ -12,7 +12,7 @@ length). This module composes over the unmodified backbone: it copies the
 gemma4 single-user prefill-attention routine, fixes those three defects
 locally, and drives the backbone one bounded chunk at a time.
 
-The chunk contract (mirrors ``models/tt_transformers/tt/attention.py`` +
+The chunk contract (mirrors ``models/ttt_compat/tt/attention.py`` +
 ``generator.py``):
 
 * ``page_table``       — the **full** per-user page table (logical blocks

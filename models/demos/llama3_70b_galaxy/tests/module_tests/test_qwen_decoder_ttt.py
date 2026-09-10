@@ -8,8 +8,8 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
@@ -183,7 +183,7 @@ def test_qwen_decoder_ttt_inference(
     freqs_cis = torch.complex(cos, sin)
 
     # Setup freqs for reference model (tt_transformers)
-    from models.tt_transformers.tt.common import precompute_freqs as tt_precompute_freqs
+    from models.ttt_compat.tt.common import precompute_freqs as tt_precompute_freqs
 
     cos_ref, sin_ref = tt_precompute_freqs(
         model_args_ref.head_dim,

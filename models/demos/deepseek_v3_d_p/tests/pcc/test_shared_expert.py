@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.tt_transformers.tt.ccl import get_num_links
+from models.ttt_compat.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

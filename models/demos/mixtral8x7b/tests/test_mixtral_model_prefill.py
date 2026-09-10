@@ -10,9 +10,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.common import PagedAttentionConfig, create_tt_model
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model_config import DecodersPrecision
 
 # pytest models/demos/mixtral8x7b/tests/test_mixtral_model_prefill.py
 

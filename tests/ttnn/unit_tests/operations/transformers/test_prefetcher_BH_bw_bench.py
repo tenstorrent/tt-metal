@@ -479,7 +479,7 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
     one warmup consumer call (drains 1 layer, primes the cached workload), then trace
     captures `trace_repeats` consumer ops (each drains one layer). Sub-device pins the
     consumer to the GCB receivers to avoid dispatch-core collision. Sender/receiver
-    layout from `models/tt_transformers/tt/prefetcher/prefetcher_config.yaml`.
+    layout from `models/ttt_compat/tt/prefetcher/prefetcher_config.yaml`.
     """
     _apply_shape(shape)
     if device.dram_grid_size().x != 8:
@@ -493,7 +493,7 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
 
     # Production sender/receiver layout (cols 0/7 senders, scattered receivers) from the
     # YAML config. The naive row-major grid collides with dispatch cores on this hardware.
-    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
+    from models.ttt_compat.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
 
     bh_cfg = ARCH_CONFIG["blackhole"]
     raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=_NUM_RECV_PER_BANK)

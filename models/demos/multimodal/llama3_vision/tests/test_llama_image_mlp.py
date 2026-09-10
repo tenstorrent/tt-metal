@@ -12,8 +12,8 @@ from transformers.models.mllama.modeling_mllama import MllamaVisionMLP
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.demos.multimodal.llama3_vision.tt.llama_image_mlp import TtLlamaImageFeedForward
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 @pytest.mark.parametrize(

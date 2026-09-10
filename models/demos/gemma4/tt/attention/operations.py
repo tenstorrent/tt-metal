@@ -542,7 +542,7 @@ def concat_heads(
         # ("bad optional access"); num_to_corerange forces a grid-width-aligned
         # rectangle (e.g. batch=8→8x1, 16→8x2, 32→8x4 on an 8-wide grid) that
         # the kernel accepts.
-        from models.tt_transformers.tt.model_config import num_to_corerange
+        from models.ttt_compat.tt.model_config import num_to_corerange
 
         compute_grid = mesh_device.compute_with_storage_grid_size() if mesh_device is not None else None
         physical_grid_x = compute_grid.x if compute_grid is not None else 8

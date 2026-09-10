@@ -23,7 +23,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
-from models.tt_transformers.tt.common import get_rot_transformation_mat
+from models.ttt_compat.tt.common import get_rot_transformation_mat
 
 # GPT-OSS-120B YaRN defaults (configs/gpt-oss-120b/config.json).
 DEFAULT_ROPE_THETA = 150000.0

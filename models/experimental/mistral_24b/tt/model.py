@@ -14,7 +14,7 @@ pass the resulting visual tokens to the text model along with text tokens.
 import ttnn
 import torch
 
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.model import Transformer
 from ttnn import ConcatMeshToTensor
 
 
@@ -219,7 +219,7 @@ def create_mistral_24b_model(
     use_paged_kv_cache=False,
     checkpoint=None,
 ):
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)

@@ -24,9 +24,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.ttt_compat.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.model_config import OpGroup, TensorGroup
 
 
 class VisionAttention(LightweightModule):

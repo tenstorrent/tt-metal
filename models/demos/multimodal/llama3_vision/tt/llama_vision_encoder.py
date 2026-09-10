@@ -14,7 +14,7 @@ from models.demos.multimodal.llama3_vision.tt.llama_image_transformer import TtL
 from models.demos.multimodal.llama3_vision.tt.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.demos.multimodal.llama3_vision.tt.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
 from models.demos.multimodal.llama_layernorm import TtLayerNorm
-from models.tt_transformers.tt.common import build_encoder_attention_mask
+from models.ttt_compat.tt.common import build_encoder_attention_mask
 
 
 def to_2tuple(x):

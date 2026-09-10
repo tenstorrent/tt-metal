@@ -60,7 +60,7 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.demos.utils.trace_region_sizes import hf_model_name_candidates, resolve_trace_region_size
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.generator import create_submeshes
+from models.ttt_compat.tt.generator import create_submeshes
 
 # =============================================================================
 # Expected metrics
@@ -1154,7 +1154,7 @@ def _contiguous_page_table(max_batch_size: int, max_seq_len: int, *, repeat_per_
 
 def _eval_repeat_prompts(batch_size: int) -> list[str]:
     return load_input_prompts(
-        Path("models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json"), batch_size
+        Path("models/ttt_compat/demo/sample_prompts/eval_repeat_prompts_batch32.json"), batch_size
     )
 
 

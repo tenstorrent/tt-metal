@@ -402,7 +402,7 @@ class _StubSamplingModule:
 
 
 def _make_stub_generator(max_batch_size=SEED_TEST_BATCH):
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     generator = Generator.__new__(Generator)
     generator.data_parallel = 1

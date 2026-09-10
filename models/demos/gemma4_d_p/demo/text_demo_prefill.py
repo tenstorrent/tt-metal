@@ -94,7 +94,7 @@ def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
 # under the same context_cache the tt_transformers demos populate, keyed by URL digest, so
 # a run needs the network once per machine and never again.
 _TOKEN_TEXT_URL = "https://www.gutenberg.org/cache/epub/135/pg135.txt"
-_TOKEN_TEXT_CACHE = pathlib.Path("models/tt_transformers/demo/context_cache")
+_TOKEN_TEXT_CACHE = pathlib.Path("models/ttt_compat/demo/context_cache")
 
 
 @functools.lru_cache(maxsize=None)

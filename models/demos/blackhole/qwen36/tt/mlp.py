@@ -214,7 +214,7 @@ class Qwen36MLP:
     def _forward_tp(self, x):
         """TP forward: replicated input; reduce-scatter output fractured on hidden dim."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
-        from models.tt_transformers.tt.ccl import tt_all_reduce
+        from models.ttt_compat.tt.ccl import tt_all_reduce
 
         w = self.weights
         args = self.args

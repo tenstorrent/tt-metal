@@ -65,7 +65,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 )
 
 _PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
-from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+from models.ttt_compat.tt.load_checkpoints import load_hf_state_dict_filtered
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 

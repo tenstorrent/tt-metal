@@ -12,7 +12,7 @@ from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -25,7 +25,7 @@ import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.generator import Generator, create_submeshes
 
 _EXPECTED_DIR = Path(__file__).resolve().parent / "sample_prompts"
 _BERTSCORE_MODEL_TYPE = "microsoft/deberta-xlarge-mnli"
@@ -167,7 +167,7 @@ def create_multimodal_model(
     checkpoint=None,
 ):
     from models.demos.multimodal.llama3_vision.tt.llama_vision_model import CrossAttentionTransformer
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
     assert tt_model_args.is_multimodal, "This model is multimodal"
@@ -258,8 +258,8 @@ def prepare_generator_args(
             False,  # enable_trace
             1,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-notrace
         (
@@ -267,8 +267,8 @@ def prepare_generator_args(
             True,  # enable_trace
             1,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-trace
         (
@@ -276,8 +276,8 @@ def prepare_generator_args(
             True,  # enable_trace
             16,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch16-trace
         (
@@ -285,8 +285,8 @@ def prepare_generator_args(
             True,  # enable_trace
             32,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch32-trace
         (
@@ -294,8 +294,8 @@ def prepare_generator_args(
             True,  # enable_trace
             4,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_w_text_only.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_w_text_only.json",
             ),  # input_prompts
         ),  # batch4-trace-with-text-prompts
     ],

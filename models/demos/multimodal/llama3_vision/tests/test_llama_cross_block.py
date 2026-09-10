@@ -15,9 +15,9 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
 from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
 from models.demos.multimodal.llama3_vision.tt.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 @pytest.mark.parametrize(

@@ -13,7 +13,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
@@ -367,7 +367,7 @@ class TPAttention:
         ragged core set is rejected by the height-sharded mem config). Output is width-sharded, then
         returned to L1-interleaved so the downstream o_proj matmul is unchanged.
         """
-        from models.tt_transformers.tt.model_config import num_to_corerange
+        from models.ttt_compat.tt.model_config import num_to_corerange
 
         NH, HD = self.NH, self.HD
         _L1 = ttnn.L1_MEMORY_CONFIG

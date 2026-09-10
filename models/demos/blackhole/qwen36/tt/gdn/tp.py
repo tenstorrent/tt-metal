@@ -20,7 +20,7 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
     create_chunk_masks_seq,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 
 def _softplus_add(a, bias):

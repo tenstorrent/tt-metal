@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransformer
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
+from models.ttt_compat.tt.ccl import TT_CCL
 
 
 @torch.no_grad()

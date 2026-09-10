@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
-from models.tt_transformers.tt.ccl import TT_CCL
+from models.ttt_compat.tt.ccl import TT_CCL
 
 
 def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:

@@ -146,7 +146,7 @@ def test_qb2_dram_budget(mesh_device, reset_seeds, request):
     import ttnn
 
     from models.demos.gemma4.tt.common import create_tt_model
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     if tp < 2:

@@ -115,13 +115,13 @@ def test_rmsnorm_2d_config_power_user_overrides():
     assert config.compute_kernel_config_prefill == mock_kernel_config
 
 
-def test_rmsnorm_2d_rejects_non_tg():
+def test_rmsnorm_2d_rejects_non_tg(expect_error):
     """Test that RMSNorm2D.from_model_args raises error for non-TG mesh shapes."""
     mock_args = MagicMock()
     mock_mesh_device = MagicMock()
     mock_mesh_device.shape = [1, 8]  # Not TG
 
-    with pytest.raises(ValueError, match="requires Galaxy topology"):
+    with expect_error(ValueError, "requires Galaxy topology"):
         RMSNorm2D.from_model_args(
             mesh_device=mock_mesh_device,
             tt_ccl=MagicMock(),
@@ -260,8 +260,8 @@ def test_rmsnorm_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     """
     Test RMSNorm2D.from_model_args() factory method.
     """
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     seed = 1234
     torch.manual_seed(seed)

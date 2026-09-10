@@ -62,10 +62,10 @@ from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.ttt_compat.tt.model_config import determine_device_name
 
-_CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
+_CONTEXT_CACHE_DIR = Path("models/ttt_compat/demo/context_cache")
 
 _MESH_DEVICE_SHAPES = {
     # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
@@ -271,7 +271,7 @@ def _device_params():
     "sampling_params, stop_at_eos, ci_only, enable_trace",
     [
         (  # batch-1 (latency) — single user, short prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             1024,
             1,
@@ -284,7 +284,7 @@ def _device_params():
             True,
         ),
         (  # batch-8 (throughput) — 8 concurrent users, short prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             1024,
             8,
@@ -302,7 +302,7 @@ def _device_params():
             # users. Hetero actual lengths in one pad bucket are OK: per-slot
             # valid_seq_lens cap KV fill so pad rows are not written (see
             # attention/prefill.py).
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             4096,
             32,
@@ -315,7 +315,7 @@ def _device_params():
             True,
         ),
         (  # long-context-4k — single user, long prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_long_4k.json",
             True,
             4096,
             1,
@@ -337,7 +337,7 @@ def _device_params():
         #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
         #   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
         (  # long-context-32k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_long_32k.json",
             True,
             32 * 1024,
             1,
@@ -350,7 +350,7 @@ def _device_params():
             True,
         ),
         (  # long-context-64k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_long_64k.json",
             True,
             64 * 1024,
             1,
@@ -363,7 +363,7 @@ def _device_params():
             True,
         ),
         (  # long-context-128k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_long_128k.json",
             True,
             128 * 1024,
             1,
@@ -376,7 +376,7 @@ def _device_params():
             True,
         ),
         (  # long-context-256k — 31B policy auto multi-chunk (DRAM)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_long_256k.json",
             True,
             256 * 1024,
             1,
@@ -389,7 +389,7 @@ def _device_params():
             True,
         ),
         (  # ci-1 — single user, fixed iteration count for perf tracking
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             8192,
             1,
@@ -1008,7 +1008,7 @@ def _run_spec_decode_batched(
 
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     B = len(prompts)
     model_path = _model_path()

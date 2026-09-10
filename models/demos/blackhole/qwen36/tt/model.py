@@ -18,7 +18,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
-from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
+from models.ttt_compat.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
 class Qwen36Model:
@@ -31,7 +31,7 @@ class Qwen36Model:
         self.num_devices = mesh_device.get_num_devices()
         # CCL for multi-device all-reduce; None on single device (ops no-op).
         if self.num_devices > 1:
-            from models.tt_transformers.tt.ccl import TT_CCL
+            from models.ttt_compat.tt.ccl import TT_CCL
 
             self.tt_ccl = TT_CCL(mesh_device)
         else:
@@ -62,7 +62,7 @@ class Qwen36Model:
             self.sampling = None
 
         # Framework Embedding (mesh-aware; replicates on 1-device mesh).
-        from models.tt_transformers.tt.embedding import Embedding
+        from models.ttt_compat.tt.embedding import Embedding
 
         self.embd = Embedding(
             mesh_device=mesh_device,
@@ -113,7 +113,7 @@ class Qwen36Model:
         )
         if self.num_devices > 1:
             # TP: DistributedNorm all-gathers fractured hidden for LM head.
-            from models.tt_transformers.tt.distributed_norm import DistributedNorm
+            from models.ttt_compat.tt.distributed_norm import DistributedNorm
 
             self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
 
@@ -497,7 +497,7 @@ class Qwen36Model:
         Single device: plain matmul."""
         logits = ttnn.linear(x, self.lm_head_weight)
         if self._lmhead_vocab_sharded:
-            from models.tt_transformers.tt.ccl import tt_all_gather
+            from models.ttt_compat.tt.ccl import tt_all_gather
 
             logits = tt_all_gather(
                 logits,
@@ -3237,7 +3237,7 @@ class Qwen36Model:
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """Host-to-device transfer for decode inputs."""
-        from models.tt_transformers.tt.common import copy_host_to_device
+        from models.ttt_compat.tt.common import copy_host_to_device
 
         host = self.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
         return copy_host_to_device(host, mesh_device=self.mesh_device)

@@ -615,7 +615,7 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     """
     Test LMHead1D.from_model_args produces valid output.
     """
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1

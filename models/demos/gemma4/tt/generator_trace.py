@@ -8,7 +8,7 @@ import os
 import torch
 from loguru import logger
 
-from models.tt_transformers.tt.generator import (
+from models.ttt_compat.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
     batched_prefill_padded_batch,
@@ -419,7 +419,7 @@ def _device_name(mesh_device) -> str | None:
     if mesh_device is None:
         return None
     try:
-        from models.tt_transformers.tt.model_config import determine_device_name
+        from models.ttt_compat.tt.model_config import determine_device_name
 
         return determine_device_name(mesh_device)
     except Exception:

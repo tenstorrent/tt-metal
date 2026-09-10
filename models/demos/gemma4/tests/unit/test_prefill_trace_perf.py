@@ -27,8 +27,8 @@ from models.demos.gemma4.tt.generator_trace import (
     can_gemma4_enable_prefill_trace,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import get_padded_prefill_len
-from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
+from models.ttt_compat.tt.common import get_padded_prefill_len
+from models.ttt_compat.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from ..test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric
 from .test_prefill_trace_parity import _PREFILL_TRACE_BATCH_SIZES, _PREFILL_TRACE_BUCKETS

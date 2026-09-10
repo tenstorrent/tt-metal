@@ -42,7 +42,7 @@ def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
     # args.CKPT_DIR is the resolved local snapshot dir (Qwen36ModelArgs downloads the hub id).
     mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
 
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     mlp = Qwen36MLP(mesh_device, mlp_state, None, args=args, tt_ccl=tt_ccl)
@@ -77,7 +77,7 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
 
     mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
 
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     mlp = Qwen36MLP(mesh_device, mlp_state, None, args=args, tt_ccl=tt_ccl)

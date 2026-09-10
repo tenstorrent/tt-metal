@@ -16,7 +16,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import skip_gemma4_full_prefill_warmup
-from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
+from models.ttt_compat.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from .test_prefill_trace_parity import _build_tokens, _create_page_table, _page_params
 

@@ -83,7 +83,7 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
 
 
 def test_trace_buffer_reuse_is_opt_in(monkeypatch):
-    from models.tt_transformers.tt.generator import _mark_trace_buffers_corruptible
+    from models.ttt_compat.tt.generator import _mark_trace_buffers_corruptible
 
     marked = []
     monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
@@ -145,7 +145,7 @@ def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
 
 
 def test_bucket_trace_teardown_releases_all_stores(monkeypatch):
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     released = []
     sampling_resets = []
@@ -193,7 +193,7 @@ def test_bucketed_host_logits_are_padded_to_serving_width(monkeypatch, width):
 def test_tp8_device_logprobs_complete_full_decode_warmup(monkeypatch):
     """TP8 returns old-path sampled-token log-probs that Qwen must read from one replica."""
     from models.common.warmup import WarmupForwardMixin
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     batch_size, sampler_batch = 4, 32
     token_output, logprob_output = object(), object()
@@ -459,7 +459,7 @@ def test_gdn_prefix_write_trace(mesh_device, reset_seeds, ensure_gc):
 @pytest.mark.parametrize("n_layers", [None], ids=["all64"])
 def test_decode_width_scaling_traced(mesh_device, n_layers, reset_seeds, ensure_gc):
     """DEVICE time vs decode width on the traced path. Full layer count for served tok/s compare."""
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     BMAX = 8
     ITERS = 50
@@ -529,7 +529,7 @@ def test_decode_capacity_width1_traced(mesh_device, reset_seeds, ensure_gc):
     """
     from tracy import signpost
 
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     bmax = int(os.environ.get("QWEN36_CAPACITY_TEST_BMAX", "8"))
     assert bmax in (1, 8), f"QWEN36_CAPACITY_TEST_BMAX must be 1 or 8, got {bmax}"
@@ -663,7 +663,7 @@ def test_decode_capacity_width1_traced(mesh_device, reset_seeds, ensure_gc):
 @_parametrize_traced()
 def test_decode_step_host_overhead(mesh_device, reset_seeds, ensure_gc):
     """Time per-step host preparation and H2D copy against device replay."""
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     BMAX, ITERS, WIDTH = 8, 50, 1
     model = Qwen36Model.from_pretrained(
@@ -727,7 +727,7 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
     logits tensor) needs a per-bucket sampling trace. ``set_trace_bucket`` is meant to provide
     that. Alternating 1 -> 8 -> 1 -> 8 is what would trip it.
     """
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     BMAX = 8
     model = Qwen36Model.from_pretrained(
@@ -824,7 +824,7 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
 @_parametrize_traced(trace_bytes=1073741824)  # exactly the b8 model spec's trace_region_size
 def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
     """Four live decode and sampling traces fit in 1 GB and remain replay-safe."""
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     BMAX = 8
     model = Qwen36Model.from_pretrained(

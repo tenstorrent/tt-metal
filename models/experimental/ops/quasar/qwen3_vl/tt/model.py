@@ -13,14 +13,14 @@ from models.experimental.ops.quasar.qwen3_vl.tt.model_config import VisionModelA
 from models.experimental.ops.quasar.qwen3_vl.tt.patch_merger import PatchMerger
 from models.experimental.ops.quasar.qwen3_vl.tt.rope import RotarySetup
 from models.experimental.ops.quasar.qwen3_vl.tt.vision_block import VisionBlock
-from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
-from models.tt_transformers.tt.load_checkpoints import (
+from models.ttt_compat.tt.common import Mode, get_rot_transformation_mat
+from models.ttt_compat.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
     standardize_hf_keys_multimodal,
 )
-from models.tt_transformers.tt.model import Transformer as TTTransformer
-from models.tt_transformers.tt.model_config import TensorGroup
+from models.ttt_compat.tt.model import Transformer as TTTransformer
+from models.ttt_compat.tt.model_config import TensorGroup
 
 
 def _mesh_partition_and_free(tensor, dim):
@@ -266,7 +266,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
+            # Calculate padded sequence length (divisible by 2048) required by models/ttt_compat/tt/attention.py::forward_prefill
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings

@@ -20,9 +20,9 @@ from models.demos.multimodal.llama3_vision.tests.utils import (
 )
 from models.demos.multimodal.llama3_vision.tt.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
 from models.demos.multimodal.llama_image_attention import TtLlamaImageAttention
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import build_encoder_attention_mask
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import build_encoder_attention_mask
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 @pytest.mark.parametrize(

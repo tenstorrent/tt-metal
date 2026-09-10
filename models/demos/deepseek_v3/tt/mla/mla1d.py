@@ -48,7 +48,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 def pad_n_to_dram_banks(n, tile_size=32, num_dram_banks=12):

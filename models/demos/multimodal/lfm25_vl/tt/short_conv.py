@@ -29,7 +29,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 
 class TtLfm2ShortConv(LightweightModule):

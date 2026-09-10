@@ -251,13 +251,13 @@ each with its own `timeout` and `tier`.
 Match the standard already used by neighbouring models:
 
 - **e2e tests** are end-to-end demos under `models/demos/...` or
-  `models/tt_transformers/demo/...`. They exercise the full prefill +
+  `models/ttt_compat/demo/...`. They exercise the full prefill +
   decode loop (or full prefill for embedding models) and assert
   performance / token-matching against a reference.
 - **Unit tests** cover module-level correctness — attention,
   decoder, MLP, prefill paths — with PCC checks against a CPU
   reference. They live alongside the model code in
-  `models/tt_transformers/tests/...` or the model's own `tests/`
+  `models/ttt_compat/tests/...` or the model's own `tests/`
   directory.
 - Tests must be **non-interactive** (no prompts), **deterministic**
   (seed where required), and **finish well within the declared
@@ -349,7 +349,7 @@ for the live version):
       http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "<your selector>"
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "<your selector>"
   model: llama3.1-8b-dp
   skus:
     bh_p300:
@@ -667,14 +667,14 @@ code — always go through the resolver or `build_trace_device_params`.
 
 #### CI coverage test
 
-[`models/tt_transformers/tests/test_trace_region_sizes.py`](./tt_transformers/tests/test_trace_region_sizes.py)
+[`models/ttt_compat/tests/test_trace_region_sizes.py`](./tt_transformers/tests/test_trace_region_sizes.py)
 checks that every tiered CI job that sets `HF_MODEL` (including per-SKU
 `hf_model` placeholders in device-perf entries) resolves to a valid size —
 either an explicit YAML entry or the dynamic-allocation fallback (`0`). Run
 locally (without hardware):
 
 ```bash
-pytest models/tt_transformers/tests/test_trace_region_sizes.py --noconftest -v
+pytest models/ttt_compat/tests/test_trace_region_sizes.py --noconftest -v
 ```
 
 ---

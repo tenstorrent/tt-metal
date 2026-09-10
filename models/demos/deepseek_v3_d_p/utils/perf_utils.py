@@ -14,7 +14,7 @@ from tracy.process_model_log import get_latest_ops_log_filename
 
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.tt_transformers.tests.test_utils import merge_device_rows
+from models.ttt_compat.tests.test_utils import merge_device_rows
 
 
 def adjust_margin_for_ddr_speed(margin: float, expected_speed: int = 16000) -> float:

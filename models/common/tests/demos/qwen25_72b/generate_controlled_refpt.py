@@ -30,7 +30,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from models.tt_transformers.tt.common import encode_prompt_hf
+from models.ttt_compat.tt.common import encode_prompt_hf
 
 DEFAULT_PROMPT = (
     "Write a short Python function that returns the n-th Fibonacci number using memoization, "
@@ -57,7 +57,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        default="models/tt_transformers/tests/reference_outputs/Qwen2.5-72B-Instruct.refpt",
+        default="models/ttt_compat/tests/reference_outputs/Qwen2.5-72B-Instruct.refpt",
         help="Output .refpt path",
     )
     parser.add_argument("--seed", type=int, default=0, help="Random seed")

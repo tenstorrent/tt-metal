@@ -12,8 +12,8 @@ import ttnn
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tt.load_checkpoints import convert_vision_meta_to_hf
 
 
 def reference_vision_rms(model_args):

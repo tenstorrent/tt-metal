@@ -39,7 +39,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` 
 otherwise ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
 Reference artifact (``.refpt``): the token-accuracy test gates on the committed book reference
-``models/tt_transformers/tests/reference_outputs/phi-4.refpt`` (real-corpus teacher-forced targets).
+``models/ttt_compat/tests/reference_outputs/phi-4.refpt`` (real-corpus teacher-forced targets).
 """
 
 import json
@@ -310,11 +310,11 @@ def ref_basename_for_hf(hf_model_id: str) -> str:
 def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``."""
     name = ref_basename_for_hf(hf_model_id)
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(
             f"Reference file not found: {ref_path}. Expected the committed book reference "
-            f"(generated via models/tt_transformers/tests/generate_reference_outputs.py)."
+            f"(generated via models/ttt_compat/tests/generate_reference_outputs.py)."
         )
     ref_data = torch.load(ref_path, map_location="cpu", weights_only=False)
     return (
@@ -327,7 +327,7 @@ def load_reference_data(hf_model_id: str):
 
 def load_input_prompts(batch_size: int) -> list[str]:
     """Load prompts for performance testing from shared sample file."""
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
     with open(prompts_path) as f:

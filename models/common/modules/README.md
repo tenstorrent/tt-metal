@@ -194,7 +194,7 @@ Multi-device modules need collective ops (reduce-scatter, all-gather). `TT_CCL` 
 
 ### `Mode`
 
-`mode`-aware modules accept either the string `"prefill"`/`"decode"` or the `Mode` enum from `models.tt_transformers.tt.common`.
+`mode`-aware modules accept either the string `"prefill"`/`"decode"` or the `Mode` enum from `models.ttt_compat.tt.common`.
 
 ---
 

@@ -7,7 +7,7 @@ Reference for two related dict formats:
 2. The on-device dict that
    [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
    produces for transfer to
-   [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
+   [`tt_transformers.tt.model.Transformer.update_weights`](../../models/ttt_compat/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
    [`WeightBridge`](../sources/examples/grpo/utils/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
@@ -118,7 +118,7 @@ lm_head.weight                                   shape=(128256, 2048)
 [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
-[`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
+[`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/ttt_compat/tt/model.py).
 Everything in this section is the contract — both the in-process call
 and the cross-rank bridge enforce it.
 
@@ -267,6 +267,6 @@ End-to-end smoke tests:
 * ttml model definition: `LlamaCompositeKV` in
   [`grpo/utils/llama_overrides.py`](../sources/examples/grpo/utils/llama_overrides.py).
 * tt-transformers dispatcher:
-  [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
+  [`Transformer.update_weights`](../../models/ttt_compat/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
   [`grpo/utils/weight_bridge.py`](../sources/examples/grpo/utils/weight_bridge.py).

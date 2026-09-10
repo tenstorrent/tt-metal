@@ -462,7 +462,7 @@ def _model_kv_metadata(model) -> tuple[tuple[Any, ...], int, int, int]:
 
 
 def _create_submeshes(mesh_device, tt_data_parallel):
-    from models.tt_transformers.tt.generator import create_submeshes
+    from models.ttt_compat.tt.generator import create_submeshes
 
     return create_submeshes(mesh_device, tt_data_parallel)
 

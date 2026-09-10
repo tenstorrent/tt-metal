@@ -12,7 +12,7 @@ from models.experimental.ops.quasar.qwen3_vl.tt.common import (
     get_max_prefill_chunk_size,
     num_blocks_in_seq,
 )
-from models.tt_transformers.tt.generator import Generator as TTTGenerator
+from models.ttt_compat.tt.generator import Generator as TTTGenerator
 
 
 class Generator(WarmupForwardMixin):

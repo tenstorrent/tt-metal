@@ -30,8 +30,8 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.gpt_oss_d_p.tt.attention import Attention, AttentionConfig, ProgramConfig
 from models.demos.gpt_oss_d_p.tt.config import MeshConfig
-from models.tt_transformers.tt.common import get_rot_transformation_mat
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.common import get_rot_transformation_mat
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 # GPT-OSS-120B attention dims.
 HIDDEN = 2880

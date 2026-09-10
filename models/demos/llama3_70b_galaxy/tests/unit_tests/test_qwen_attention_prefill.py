@@ -15,7 +15,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_rot_transformation_mat,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.ttt_compat.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.reference.qwen import Attention, precompute_freqs_cis
 from models.common.utility_functions import (
     comp_pcc,

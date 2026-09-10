@@ -12,8 +12,8 @@ import ttnn
 from models.common.utility_functions import nearest_32
 from models.demos.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.demos.multimodal.siglip.tests.common import flatten_state_dict
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import get_out_subblock_w
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import get_out_subblock_w
 
 
 def find_largest_divisor(n, max_divisor=8):

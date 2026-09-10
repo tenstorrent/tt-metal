@@ -12,8 +12,8 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.blackhole.qwen36.tt.vision.vision_mlp import MLP
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.load_checkpoints import convert_hf_to_meta
 
 
 @torch.no_grad()

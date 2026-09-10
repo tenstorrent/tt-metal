@@ -40,7 +40,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
 Reference artifact (``.refpt``): the accuracy test gates on the committed book
-reference at ``models/tt_transformers/tests/reference_outputs/<model>.refpt``
+reference at ``models/ttt_compat/tests/reference_outputs/<model>.refpt``
 (ground-truth real-text targets, single teacher-forced pass), which is the
 PERF.md-comparable methodology.
 """
@@ -384,7 +384,7 @@ def load_reference_data(hf_model_id: str):
     and the book half-split format (``reference_tokens`` + ``top5_tokens`` only).
     """
     name = hf_model_id.strip("/").split("/")[-1]
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
@@ -397,7 +397,7 @@ def load_reference_data(hf_model_id: str):
 
 
 def load_input_prompts(batch_size: int) -> list[str]:
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
     with open(prompts_path) as f:

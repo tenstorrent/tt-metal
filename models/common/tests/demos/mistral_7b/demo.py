@@ -40,7 +40,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
 Reference artifact (``.refpt``): the token-accuracy test gates on the committed book
-reference ``models/tt_transformers/tests/reference_outputs/Mistral-7B-Instruct-v0.3.refpt``
+reference ``models/ttt_compat/tests/reference_outputs/Mistral-7B-Instruct-v0.3.refpt``
 (real-corpus teacher-forced targets), shared with the TTTv1 demo. The loader supports both
 the metadata-rich format (``prompt_len``) and the book half-split format.
 """
@@ -74,7 +74,7 @@ from models.common.tests.demos.run_helpers import (
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf
+from models.ttt_compat.tt.common import encode_prompt_hf
 
 # =============================================================================
 # Expected metrics — perf gates set from a same-box TTTv1-vs-TTTv2 sweep (on-device sampling),
@@ -333,7 +333,7 @@ def load_reference_data(hf_model_id: str):
     the book half-split format (the committed reference).
     """
     name = hf_model_id.strip("/").split("/")[-1]
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
@@ -346,7 +346,7 @@ def load_reference_data(hf_model_id: str):
 
 
 def load_input_prompts(batch_size: int) -> list[str]:
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
     with open(prompts_path) as f:

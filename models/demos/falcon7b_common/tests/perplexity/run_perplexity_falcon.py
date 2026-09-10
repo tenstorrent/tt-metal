@@ -22,7 +22,7 @@ from models.datasets.llm_dataset_utils import (
 from models.demos.falcon7b_common.tests.test_utils import initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 
 
 def calculate_perplexity(

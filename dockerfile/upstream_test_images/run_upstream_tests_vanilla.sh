@@ -78,7 +78,7 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --timeout 1200
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and batch-1" --timeout 1200
 }
 
 test_suite_bh_multi_pcie_metal_unit_tests() {
@@ -128,8 +128,8 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 
     echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices" --timeout 1200
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 220 --timeout 3600
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices" --timeout 1200
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 220 --timeout 3600
 }
 
 test_suite_bh_multi_pcie_llama_stress_tests() {
@@ -147,7 +147,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
     echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000 --timeout 3600
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000 --timeout 3600
 }
 
 test_suite_wh_6u_metal_unit_tests() {
@@ -183,7 +183,7 @@ test_suite_wh_6u_llama_demo_tests() {
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
 
-    CI=true pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    CI=true pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -249,7 +249,7 @@ test_suite_bh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32 --timeout 1200
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32 --timeout 1200
 }
 
 test_suite_bh_6u_torus_xyz_health_check_tests() {

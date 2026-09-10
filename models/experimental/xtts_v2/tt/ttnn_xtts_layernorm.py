@@ -9,7 +9,7 @@ LayerNorm (weight + bias) for the XTTS-v2 GPT, with two execution paths:
   used by the prefill core (`TTNNGPTCore`).
 - **width-sharded** (`sharded=True`): a `LayerNormShardedMultiCoreProgramConfig` that shards
   the hidden dim across `shard_height` cores, for single-tile-height (batch=1 decode) inputs.
-  Adapted from `models/tt_transformers/tt/multimodal/llama_layernorm.py::TtLayerNorm`.
+  Adapted from `models/ttt_compat/tt/multimodal/llama_layernorm.py::TtLayerNorm`.
 
 The interleaved decode LayerNorm on `[1,1,1024]` runs effectively single-core, and there are 62
 LayerNorms per decode token, so sharding the reduction is worth it at equal PCC. The sharded

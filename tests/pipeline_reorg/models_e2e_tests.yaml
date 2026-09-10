@@ -19,14 +19,14 @@
 - name: Llama 3.1-8B e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
     # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
     # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
     # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
     # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
+    pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   model_family: Llama
   skus:
@@ -65,7 +65,7 @@
     wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
   model: llama3.1-8b-dp
   model_family: Llama
   skus:
@@ -80,7 +80,7 @@
 - name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.1-8b-dp
   model_family: Llama
   skus:
@@ -102,7 +102,7 @@
 - name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
   model: llama3.1-8b-dp-galaxy
   model_family: Llama
   skus:
@@ -177,8 +177,8 @@
 - name: Llama 3.3-70B e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: llama3.3-70b
   model_family: Llama
   skus:
@@ -211,7 +211,7 @@
 # - name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
 #   cmd: |
 #     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+#     pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 #   model: llama3.3-70b-dp-galaxy
 #   skus:
 #     wh_galaxy_perf:
@@ -247,8 +247,8 @@
   # simple_text_demo leg until a Blackhole TTTv2 bring-up exists — no coverage dropped.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen3-32b
   model_family: Qwen
   skus:
@@ -281,7 +281,7 @@
 - name: Qwen3-0.6B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-0.6B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-0.6B
-    pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    pytest --timeout 720 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-0.6b
   model_family: Qwen
   skus:
@@ -299,7 +299,7 @@
 - name: Qwen3-1.7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-1.7B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-1.7B
-    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    pytest --timeout 840 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-1.7b
   model_family: Qwen
   skus:
@@ -317,8 +317,8 @@
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
-    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 1500 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-32b
   model_family: Qwen
   skus:
@@ -351,8 +351,8 @@
 - name: Qwen2.5-Coder-32B e2e tests (Blackhole)
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-coder-32b
   model_family: Qwen
   skus:
@@ -451,11 +451,11 @@
   team: models
 
 # TODO Top-1/Top-5 test failing with segfaulting.
-# pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+# pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
 - name: QwQ-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/QwQ-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/QwQ-32B
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwq-32b
   model_family: Qwen
   skus:
@@ -486,11 +486,11 @@
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
 # (2B + 9B); 2B also runs on N150 (single-chip, covered by CI). Requires
-# gemma-2-{2b,9b}-it.refpt under models/tt_transformers/tests/reference_outputs/.
+# gemma-2-{2b,9b}-it.refpt under models/ttt_compat/tests/reference_outputs/.
 - name: Gemma-2-2B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
-    pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+    pytest --timeout 900 models/ttt_compat/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
   model: gemma-2-2b
   model_family: Gemma
   skus:
@@ -506,7 +506,7 @@
 - name: Gemma-2-9B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
-    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+    pytest --timeout 1200 models/ttt_compat/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
   model: gemma-2-9b
   model_family: Gemma
   skus:
@@ -710,7 +710,7 @@
   cmd: |
     export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 MESH_DEVICE=N150
     pytest --timeout 420 models/common/tests/demos/mistral_7b/demo.py -k "token-accuracy and performance"
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mistral-7b
   model_family: Mistral
   skus:
@@ -859,7 +859,7 @@
 - name: Phi-3-mini e2e tests
   cmd: |
     export HF_MODEL=microsoft/Phi-3-mini-128k-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-3-mini-128k-instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
   model: phi-3-mini
   model_family: Phi
   skus:
@@ -874,7 +874,7 @@
 # - name: Phi-4-mini e2e tests
 #   cmd: |
 #     export HF_MODEL=microsoft/Phi-4-mini-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-4-mini-instruct
-#     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+#     pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
 #   model: phi-4-mini
 #   skus:
 #     wh_n150:

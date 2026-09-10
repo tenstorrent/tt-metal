@@ -25,7 +25,7 @@ from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.model_config import determine_device_name
 
 END_OF_TEXT = 11
 SPACE = 204

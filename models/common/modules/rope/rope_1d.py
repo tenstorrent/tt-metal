@@ -288,7 +288,7 @@ class RotarySetup1D(LightweightModule):
         if args.is_galaxy:
             raise ValueError("RotarySetup1D cannot be used for Galaxy devices.")
 
-        from models.tt_transformers.tt.common import rope_scaling_model_factory
+        from models.ttt_compat.tt.common import rope_scaling_model_factory
 
         rope_scaling = None
         if hasattr(args, "rope_scaling_params") and args.rope_scaling_params is not None:
@@ -297,7 +297,7 @@ class RotarySetup1D(LightweightModule):
             )
 
         # Compute cos/sin torch tensors using TTTv1 reference
-        from models.tt_transformers.tt.rope import compute_gather_cos_sin
+        from models.ttt_compat.tt.rope import compute_gather_cos_sin
 
         cos_torch, sin_torch = compute_gather_cos_sin(
             dhead=args.head_dim, end=2 * args.max_seq_len, theta=args.rope_theta, rope_scaling=rope_scaling

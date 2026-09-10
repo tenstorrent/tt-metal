@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.ops.quasar.qwen3_vl.tt.common import get_hf_visual, nearest_multiple
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 class ModelOptimizations:

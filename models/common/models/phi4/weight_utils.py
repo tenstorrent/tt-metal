@@ -12,7 +12,7 @@ This module splits those into the per-projection tensors the TTTv2 ``Attention1D
 ``MLP1D`` modules expect, then applies the Llama/Qwen HF→Meta ``reverse_permute`` to Q/K
 (Phi-3/Phi-4 use GPT-NeoX ``rotate_half`` RoPE, identical to the Llama path). The permute
 helpers are duplicated from ``load_checkpoints.reverse_permute`` to avoid importing
-``models/tt_transformers``.
+``models/ttt_compat``.
 
 Phi-4 has **no** QKV bias (``attention_bias=false``) and **no** q/k RMSNorm.
 """

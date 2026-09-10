@@ -11,9 +11,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.multimodal.lfm25_vl.tt.load_checkpoints import convert_lfm_hf_to_meta
-from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
-from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
-from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.ttt_compat.tt.load_checkpoints import convert_meta_to_hf
+from models.ttt_compat.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
+from models.ttt_compat.tt.model_config import ModelArgs as TTModelArgs
 
 
 class ModelArgs(TTModelArgs):

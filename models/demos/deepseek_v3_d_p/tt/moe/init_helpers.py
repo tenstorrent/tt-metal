@@ -1026,7 +1026,7 @@ def load_gate_weights_from_hf(
         FileNotFoundError: If checkpoint files cannot be found
         KeyError: If the expected gate keys are missing (e.g. non-MoE layer)
     """
-    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+    from models.ttt_compat.tt.load_checkpoints import load_hf_state_dict_filtered
 
     prefix = key_prefix_template.format(layer_idx=layer_idx)
     state_dict = load_hf_state_dict_filtered(model_id, [prefix])

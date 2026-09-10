@@ -11,8 +11,8 @@ from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.gpt_oss.utils.substate import substate
-from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
-from models.tt_transformers.tt.rope import RotarySetup
+from models.ttt_compat.tt.common import copy_host_to_device, rope_scaling_model_factory
+from models.ttt_compat.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -731,7 +731,7 @@ class Model:
         inverse-permuted back to the caller-supplied user order before
         returning.
         """
-        from models.tt_transformers.tt.common import copy_host_to_device, get_block_size, num_blocks_in_seq
+        from models.ttt_compat.tt.common import copy_host_to_device, get_block_size, num_blocks_in_seq
 
         mesh_device = self.mesh_device
         num_rows = mesh_device.shape[0]

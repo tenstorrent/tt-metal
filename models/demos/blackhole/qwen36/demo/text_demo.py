@@ -35,8 +35,8 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model_config import determine_device_name
 
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
@@ -448,7 +448,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     ttft = time.time() - t0
 
     # Traced decode with GDN snapshot/restore (QWEN35_TP_DECODE_EAGER=1 for eager)
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     mesh = model.mesh_device
     eager = os.environ.get("QWEN35_TP_DECODE_EAGER") == "1"
@@ -671,7 +671,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     and restored after so the baked buffer addresses stay valid. Returns (generated_rows, perf)
     with generated_rows a list of B token lists.
     """
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     B = batch
     vocab = model.args.vocab_size

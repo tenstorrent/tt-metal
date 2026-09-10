@@ -31,10 +31,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.ttt_compat.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs
 
 
 class VisionHybridTransformer(Transformer):

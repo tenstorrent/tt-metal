@@ -14,7 +14,7 @@ import ttnn
 from loguru import logger
 import pytest
 
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     PagedAttentionConfig,
 )
 
