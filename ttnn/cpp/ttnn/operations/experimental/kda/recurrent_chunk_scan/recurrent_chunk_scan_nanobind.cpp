@@ -32,7 +32,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H, N, 32, 32]`` in FLOAT32.
-            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]``
+            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]`` or ``[B, H, K, V]``
                 in FLOAT32.
 
         Keyword Args:
@@ -47,7 +47,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
-                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state ``S[B*H,K,V]``.
+                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state. The state keeps
+                the rank-3 or rank-4 logical form of ``initial_state`` after any
+                grouped-head reduction.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be

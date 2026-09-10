@@ -70,7 +70,10 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     constexpr std::string_view operation_name = "recurrent_chunk_scan";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     check_allocated_device_tensor(initial_state, operation_name, "initial_state");
-    TT_FATAL(initial_state.logical_shape().rank() == 3, "{}: initial_state must be rank 3", operation_name);
+    TT_FATAL(
+        initial_state.logical_shape().rank() == 3 || initial_state.logical_shape().rank() == 4,
+        "{}: initial_state must be rank 3 or rank 4",
+        operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
     check_output_interleaved(output_memory_config, operation_name);
     return ttnn::experimental::prim::recurrent_chunk_scan(

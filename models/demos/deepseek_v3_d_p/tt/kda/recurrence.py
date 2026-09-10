@@ -252,7 +252,7 @@ def _distributed_affine_prefix(
         memory_config=output_memory,
     )
 
-    initial_state_4d = ttnn.reshape(initial_state, (1, batch_heads, key_dim, value_dim))
+    initial_state_4d = initial_state
     carry = ttnn.to_memory_config(initial_state_4d, working_memory)
     final_state = ttnn.empty_like(initial_state_4d, memory_config=state_memory_config)
     entry_states = []
@@ -432,10 +432,7 @@ class KDARecurrence:
             (1, 1, geometry.key_dim, ttnn.TILE_SIZE),
         )
 
-        state = ttnn.reshape(
-            initial_state,
-            (geometry.batch_heads, geometry.key_dim, geometry.value_dim),
-        )
+        state = initial_state
         prepared = _prepare_chunk_terms(
             q,
             k,
@@ -469,8 +466,10 @@ class KDARecurrence:
             scan.output,
             (geometry.batch_heads, geometry.sequence, geometry.value_dim),
         )
-        final_state = ttnn.reshape(
-            scan.final_state,
-            (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim),
+        final_shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
+        final_state = (
+            scan.final_state
+            if tuple(scan.final_state.shape) == final_shape
+            else ttnn.reshape(scan.final_state, final_shape)
         )
         return final_state, output

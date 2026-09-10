@@ -102,7 +102,12 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
         check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name, /*require_interleaved=*/false);
         check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
-        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
+        const auto& state_shape = in.initial_state->logical_shape();
+        const bool valid_state_shape =
+            (state_shape.rank() == 3 && state_shape[0] == BH && state_shape[1] == K && state_shape[2] == V) ||
+            (state_shape.rank() == 4 && state_shape[0] * state_shape[1] == BH &&
+             state_shape[1] % attrs.state_group_count == 0 && state_shape[2] == K && state_shape[3] == V);
+        TT_FATAL(valid_state_shape, "{}: initial_state shape must be [BH,K,V] or [B,H,K,V]", operation_name);
     } else {
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
@@ -110,7 +115,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
     const auto output_dtype = summary ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
@@ -118,9 +123,13 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto first_shape =
         summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
-    return {
-        TensorSpec(first_shape, output_layout),
-        TensorSpec(Shape({attrs.batch_heads / attrs.state_group_count, attrs.key_dim, attrs.value_dim}), state_layout)};
+    auto state_shape = Shape({attrs.batch_heads / attrs.state_group_count, attrs.key_dim, attrs.value_dim});
+    if (in.initial_state.has_value() && in.initial_state->logical_shape().rank() == 4) {
+        const auto& input_state_shape = in.initial_state->logical_shape();
+        state_shape = Shape(
+            {input_state_shape[0], input_state_shape[1] / attrs.state_group_count, attrs.key_dim, attrs.value_dim});
+    }
+    return {TensorSpec(first_shape, output_layout), TensorSpec(state_shape, state_layout)};
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
