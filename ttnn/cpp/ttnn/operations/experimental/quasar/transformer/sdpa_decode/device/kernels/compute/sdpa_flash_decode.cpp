@@ -118,9 +118,14 @@ void kernel_main() {
     constexpr auto dfb_sum_1 = dfb::sum_1;
     constexpr auto dfb_sum_2 = dfb::sum_2;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
-    constexpr auto dfb_prev_sum_2 = dfb::prev_sum_2;
-    constexpr auto dfb_exp_max_diff_2 = dfb::exp_max_diff_2;
-    constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
+    // Quasar tile-counter budget (max 8 intra-Tensix DFBs): these 3 tree-reduction temps reuse compute
+    // intermediates that are idle during the tree phase — qk_im/out_im are unused after the flash loop,
+    // and out_m is written only at send-to-parent (after all exp_max_diff_2 uses). Drops the intra-Tensix
+    // DFB count 11 -> 8; the factory stops allocating the originals. Each reuse is a full produce/consume
+    // cycle, so the host DFB's FIFO returns empty before its own later use.
+    constexpr auto dfb_prev_sum_2 = dfb::qk_im;
+    constexpr auto dfb_exp_max_diff_2 = dfb::out_m;
+    constexpr auto dfb_out_accumulate_im_2 = dfb::out_im;
 
     constexpr auto dfb_out_o = dfb::out_o;
     constexpr auto dfb_out_worker = dfb::out_worker;
