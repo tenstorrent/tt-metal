@@ -143,9 +143,8 @@ def ar_decode_loop(
     trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
     cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
-    # (The old ``_device_cp_sampling`` hook is gone: device CP sampling is now a real
-    # path — the fused frame by default, or per-step traces via QWEN3_TTS_CP_DEVSAMP=1.
-    # Both go through state.cp_sampler / state.fused_cp.)
+    # Device CP sampling goes through state.cp_sampler / state.fused_cp: the fused frame
+    # by default, or per-step traces via QWEN3_TTS_CP_DEVSAMP=1.
     # QWEN3_TTS_DEBUG_CODES=n prints the first n raw code rows (all 16 codebooks),
     # which is how the fused device path is compared against the host path.
     _debug_codes = int(os.environ.get("QWEN3_TTS_DEBUG_CODES", "0"))
@@ -185,9 +184,9 @@ def ar_decode_loop(
     )
 
     # QWEN3_TTS_HOST_PROF=1: per-frame host-side breakdown of everything that is NOT
-    # the two trace replays. The traced AR frame replays in 38.9 ms on N300 while the
-    # demo reports ~45 ms/frame, so ~6 ms/frame lives in these host steps; this names
-    # which ones. Off by default (adds ~12 perf_counter calls per frame).
+    # the two trace replays. The demo's reported ms/frame is meaningfully higher than
+    # the traced AR frame's replay time, so the remainder lives in these host steps;
+    # this names which ones. Off by default (adds ~12 perf_counter calls per frame).
     _host_prof = os.environ.get("QWEN3_TTS_HOST_PROF", "0") == "1"
     _hp = dict.fromkeys(
         (
@@ -291,7 +290,7 @@ def ar_decode_loop(
         # 1-CQ: no sync here. The Talker block below already ends with a full
         # synchronize_device, and nothing between it and here touches the device, so
         # this was a second (and the one at the end of the body a third) full mesh
-        # sync per frame -- ~0.4 ms each of pure fixed cost.
+        # sync per frame -- pure fixed cost.
         t_step_start = time.time()
         _step_pc = time.perf_counter()
 
@@ -372,7 +371,7 @@ def ar_decode_loop(
                 _tok_row = _all[0].flatten()[:_n_cp_tokens]
             else:
                 # Chip-0-only read: every chip holds the same sampled ids (the sampler
-                # runs on all-gathered logits), and pulling both costs ~0.4 ms/frame.
+                # runs on all-gathered logits), so pulling both is pure added cost.
                 _tok_row = _mesh_to_torch_chip0(fused_cp.tokens_out).flatten()[:_n_cp_tokens]
             code_row = [int(t) for t in _tok_row.tolist()]
             if _codec0_in_talker_trace:

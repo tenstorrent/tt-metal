@@ -111,49 +111,6 @@ def _kv_caches_to_cpu(kv_caches) -> list:
     return [(_mesh_to_torch(k).bfloat16().cpu(), _mesh_to_torch(v).bfloat16().cpu()) for k, v in kv_caches]
 
 
-def save_ar0_warmup_state(
-    *,
-    real_seq_len: int,
-    padded_seq_len: int,
-    max_talker_seq_len: int,
-    token_0: int,
-    talker_hidden_tt,
-    talker_kv_caches,
-) -> Path:
-    _PROFILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _ar0_cache_path()
-    torch.save(
-        {
-            "real_seq_len": int(real_seq_len),
-            "padded_seq_len": int(padded_seq_len),
-            "max_talker_seq_len": int(max_talker_seq_len),
-            "token_0": int(token_0),
-            "talker_hidden": _mesh_to_torch(talker_hidden_tt).bfloat16().cpu(),
-            "talker_kv": _kv_caches_to_cpu(talker_kv_caches),
-        },
-        path,
-    )
-    return path
-
-
-def load_ar0_warmup_state() -> dict:
-    path = _ar0_cache_path()
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"AR step 0 warmup cache missing at {path}. "
-            "Run: QWEN3_TTS_PROFILE_WARMUP=1 pytest .../test_qwen3_tts_profile_ar_step0.py"
-        )
-    return torch.load(path, map_location="cpu", weights_only=True)
-
-
-def restore_talker_kv_caches(device, kv_caches, saved_kv: list) -> None:
-    for (k_cache, v_cache), (k_cpu, v_cpu) in zip(kv_caches, saved_kv):
-        k_host = ttnn.from_torch(k_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        v_host = ttnn.from_torch(v_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_host_to_device_tensor(k_host, k_cache)
-        ttnn.copy_host_to_device_tensor(v_host, v_cache)
-
-
 def build_or_load_demo_icl_state(device, model, main_weights, *, use_cache: bool = None) -> Dict[str, Any]:
     """ICL state for the demo prompt, from the on-disk cache when one exists.
 
@@ -330,68 +287,6 @@ def allocate_talker_kv(device, model, padded_seq_len: int, max_new_tokens: int =
         head_dim=head_dim,
     )
     return talker_kv_caches, max_talker_seq_len
-
-
-def run_talker_prefill_untraced(
-    device,
-    model,
-    inputs_embeds_tt,
-    padded_seq_len: int,
-    real_seq_len: int,
-    talker_kv_caches,
-    *,
-    profiler_flush_layers: int = 0,
-):
-    """One untraced Talker prefill + codec_head (same kernels the demo trace captures)."""
-    from models.demos.qwen3_tts.tt.rope import get_rope_tensors, get_transformation_mat
-    from models.demos.qwen3_tts.tt.server import sample_token
-
-    head_dim = model.talker_config.head_dim
-    talker_trans_mat = get_transformation_mat(head_dim, device)
-    prefill_cos_tt, prefill_sin_tt = get_rope_tensors(
-        device,
-        head_dim,
-        padded_seq_len,
-        torch.arange(padded_seq_len),
-        model.talker_config.rope_theta,
-    )
-    if profiler_flush_layers > 0:
-        hidden_out, talker_kv_caches = _talker_prefill_with_profiler_flushes(
-            model.talker,
-            device,
-            inputs_embeds_tt,
-            prefill_cos_tt,
-            prefill_sin_tt,
-            talker_trans_mat,
-            talker_kv_caches,
-            flush_every=profiler_flush_layers,
-        )
-    else:
-        hidden_out, talker_kv_caches = model.talker.forward_from_hidden(
-            inputs_embeds_tt,
-            prefill_cos_tt,
-            prefill_sin_tt,
-            talker_trans_mat,
-            kv_caches=talker_kv_caches,
-            start_pos=0,
-            mode="prefill",
-        )
-    logits_out = model.talker.get_codec_logits(hidden_out)
-    ttnn.synchronize_device(device)
-    codec_logits_full = _mesh_to_torch(logits_out).squeeze(1).float()
-    codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
-    token_0 = sample_token(
-        codec_logits_torch,
-        temperature=1.0,
-        top_k=0,
-        greedy=False,
-        repetition_penalty=1.0,
-        generated_tokens=[],
-    )
-
-    ttnn.deallocate(prefill_cos_tt)
-    ttnn.deallocate(prefill_sin_tt)
-    return hidden_out, logits_out, talker_kv_caches, int(token_0)
 
 
 def _talker_prefill_with_profiler_flushes(
@@ -744,8 +639,8 @@ def capture_talker_prefill_trace(device, model, bucket: int, talker_kv_caches) -
         logits_out = model.talker.get_codec_logits(hidden_out)
     finally:
         ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    # Replay once so the profiled replay is not the cold-dispatch one (~10-15 ms of
-    # variance on the first execute_trace of a freshly captured trace).
+    # Replay once so the profiled replay is not the cold-dispatch one (the first
+    # execute_trace of a freshly captured trace adds real variance).
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(device)
     ttnn.mark_corruptible(hidden_out)
@@ -799,10 +694,8 @@ def capture_speaker_encoder_forward_trace(device, model, main_weights) -> Dict[s
     """Capture the ECAPA forward trace the demo uses with ``QWEN3_TTS_SE_TRACE=1``.
 
     ``SpeakerEncoder.capture_forward_trace`` forces device conv/ASP for the capture
-    region so every conv is on device inside the Metal trace. The matching
-    ``test_speaker_encoder`` in ``test_qwen3_tts_profile_single_layer`` replays that
-    same capture; ``speaker_tdnn`` / ``speaker_block`` are traced device-conv slices
-    of the same path (not the host-fuse eager default).
+    region so every conv is on device inside the Metal trace (not the host-fuse
+    eager default).
     """
     from models.demos.qwen3_tts.tt.server import encode_reference_audio
 

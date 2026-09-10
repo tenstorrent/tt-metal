@@ -30,60 +30,38 @@ from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_gri
 from models.demos.qwen3_tts.tt.mesh_utils import is_n150
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
-# Swept decode gate/up core grids, keyed by (K, per-chip N) so only the exact shapes
-# measured can match — same discipline as _N300_GATE_UP below.
+# Decode gate/up core grids, keyed by (K, per-chip N) so only the exact shapes that
+# were tuned can match — same discipline as _PREFILL_GATE_UP below.
 #
 # `find_grid_k_n` MAXIMISES the core count, and for a DRAM-sharded matmul
 # `in0_block_w = K_tiles / cores`. Maximising cores therefore MINIMISES in0_block_w,
 # which is the wrong end for a weight-bandwidth-bound M=1-tile matmul at bfloat8_b:
 # halving the bytes per tile stops hiding the per-read fixed cost. tt-perf-report says
 # it outright on these ops — "in0_block_w=1 is small, try in0_block_w=2 or above".
+# So each entry below deliberately picks a NARROWER grid than find_grid_k_n would.
 #
-# Swept in isolation at the model's shapes (bfloat8_b, LoFi + fp32 accumulate, median of
-# 4 steady-state launches):
+# Flipping _n150_gate_up_1d off without also narrowing the grid is worse than shipping
+# either path: the DRAM-sharded matmul on the full grid is the same in0_block_w=1 trap.
 #
-#   (2048, 6144)  N150 / TP=1     shipped 1D  @64  in0_block_w=1   91.7 us  146 GB/s  50.6 %
-#                                 ->  dram    @16  in0_block_w=4   58.0 us  230 GB/s  80.0 %
-#                                 (dram @64, i.e. just flipping _n150_gate_up_1d off,
-#                                  is 132.3 us / 101 GB/s — WORSE than shipping)
-#   (2048, 3072)  N300 / TP=2     shipped dram @32 in0_block_w=2   45.2 us  148 GB/s  51.3 %
-#                                 ->  dram    @8   in0_block_w=8   30.7 us  218 GB/s  75.6 %
-#                                 (dram @16 is 30.9 us — tied within noise)
+# NOT bit-exact against find_grid_k_n — a different core count splits the K reduction
+# differently. QWEN3_TTS_DECODE_GATE_UP_CORES=<n> forces a grid; =0 restores
+# find_grid_k_n.
 #
-# Both SKUs land at 218-230 GB/s, i.e. the rate down_proj already gets. NOT bit-exact:
-# a different core count splits the K reduction differently.
-# QWEN3_TTS_DECODE_GATE_UP_CORES=<n> forces a grid; =0 restores find_grid_k_n.
+# On N300 the win is in the matmuls, not the wall clock: that layer also carries CCL
+# this does not touch, each chip's matmul is half the size, and the CodePredictor
+# dominates the frame.
 #
-# In the deployed traced-decode window (median of 3 captures each):
+# TP=2 has no numerics gate in test_qwen3_tts_pcc.py — it opens
+# ttnn.open_device(device_id=0), so every test in it runs tp_size=1. On a real 2-chip
+# mesh the two arms are indistinguishable against a full-precision torch reference.
 #
-#   N150   443 -> 385 us/layer (-13.1 %), 28 -> 30 ops.  End to end 41.78 -> 39.95
-#          ms/frame (-4.4 %). PCC mlp_decode 0.999690 -> 0.999693; attention_decode
-#          and talker_chain digit-identical. Frame count 82 -> 83.  DEFAULT ON.
+# Generation length does move with these numerics, but it moves in BOTH directions
+# depending on the prompt, which is what a benign perturbation looks like. PERF_NOTES
+# 6.4's >=8-seed sweep is the honest gate.
 #
-#   N300   352 -> 329 us/layer (-6.5 %), 32 -> 34 ops; matmul total 167.0 -> 138.1 us
-#          and the four CCLs measured 19 us in BOTH arms, so this is not CCL luck.
-#          End to end is only 39.39 -> 39.13 ms/frame (-0.7 %) -- the N300 layer
-#          carries ~76 us of CCL this does not touch, each chip's matmul is half the
-#          size, and the CodePredictor still dominates the frame. Take it for the
-#          -29 us of matmul, not for the wall clock.
-#
-# TP=2 had no numerics gate at all -- test_qwen3_tts_pcc.py opens
-# ttnn.open_device(device_id=0), so every test in it runs tp_size=1. The two
-# arms are indistinguishable on a real 2-chip mesh: PCC vs a full-precision torch
-# reference 0.99965531 -> 0.99965531 (identical to 8 digits), relative RMS
-# 4.693 -> 4.716 %, arm-to-arm PCC 0.99999285.
-#
-# Generation length does move (81 -> 94 frames on the perf-gate text, 81 -> 77 on the
-# QA text, each re-measured, so it is the numerics and not sampler noise) -- but it
-# moves in BOTH directions depending on the prompt, WER was 0.0 % in both arms and SIM
-# 0.9016 -> 0.9280 sits inside the +/-0.03 noise band of PERF_NOTES 2.9. That is what a
-# benign perturbation looks like, and it is a smaller move than the bfp8 promotion
-# (85 -> 79) or the CP fused-SDPA promotion (87 -> 68) that both shipped default ON.
-# PERF_NOTES 6.4's >=8-seed sweep is still the honest gate for all three.
-#
-# NOTE for whoever re-goldens the perf gate: N300 now measures 38.86 / 39.40 ms against
-# EXPECTED_STEADY_MS_PER_FRAME=40.1 +/-5 % = [38.09, 42.11]. It passes, but it is ~0.3 ms
-# nearer the LOWER bound, and that band breaks from below (see 2.8).
+# NOTE for whoever re-goldens the perf gate: the steady-frame band is bidirectional and
+# breaks from below (see 2.8), so a win like this one moves N300 toward the lower bound.
+# test_qwen3_tts_perf_device.py goldens N150 and N300 separately for that reason.
 _DECODE_GATE_UP_CORES = {
     (2048, 6144): 16,  # N150 / TP=1
     (2048, 3072): 8,  # N300 / TP=2
@@ -279,34 +257,28 @@ class MLP(LightweightModule):
             for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
-        # Swept prefill gate/up overrides, keyed by exact (seq, K, per-chip N) so only the
-        # shapes actually measured can match. `_prefill_gate_up_progcfg` above uses the FULL
-        # grid, which drives in0_block_w to 1 (K=64 tiles / 64 cores) — the same wrong end of
-        # the tradeoff that cost 34 us/matmul in decode.
+        # Prefill gate/up overrides, keyed by exact (seq, K, per-chip N) so only the
+        # shapes actually tuned can match. `_prefill_gate_up_progcfg` above uses the FULL
+        # grid, which drives in0_block_w to 1 (K=64 tiles / 64 cores) — the same wrong end
+        # of the tradeoff as the decode grids above.
         #
         # `in0_sharded` asks for a width-sharded in0 on the matmul's own grid. It is not
         # optional for a narrower grid here: on N150 the post-attention RMSNorm hands gate/up
         # a 64-core width shard (2048/64 = 1 tile per core), and a 32-core config derives
         # in0_block_w=2, which the matmul refuses --
         #   "shard_shape[1] (32) / in0_tile width (32) must be divisible by in0_block_w (2)".
-        # The isolated sweep fed an L1-interleaved in0 and so never saw this. Resharding to
-        # the matmul's 32-core grid gives 2 tiles per core and in0_block_w=2 divides.
+        # Resharding to the matmul's 32-core grid gives 2 tiles per core and in0_block_w=2
+        # divides. An L1-interleaved in0 never hits this, so do not drop the reshard.
         #
-        # N300 / TP=2, N=3072: 64 cores gives per_core_N=1.5 worth of work and 145 GB/s,
-        # 19-26 us/matmul slower than the auto-routing it replaced; 32 cores with
-        # in0_block_w=2 recovers 22-25 %, net of the in0 reshard.
+        # N300 / TP=2, N=3072: 64 cores gives per_core_N=1.5 worth of work and is slower
+        # than the auto-routing it replaced; 32 cores with in0_block_w=2 wins net of the
+        # in0 reshard.
         #
-        # N150 / TP=1, N=6144: the full-grid choice was swept at **bf16** ("210 GB/s, 73 % of
-        # DRAM peak"). At bfp8 it is 135 GB/s. Re-swept in isolation at the model's shapes
-        # (bfloat8_b, LoFi + fp32 acc, median of 4 steady launches);
-        # isolated time tracks the in-model window
-        # to ~1 us on every shape:
-        #
-        #   m=64   c64 ibw=1 (shipped) 99.0 us 135 GB/s | c32 ibw=2 71.3 us 187 GB/s  <- best
-        #          c32 sharded-in0 72.4 (tied, so not worth the reshard) | c16 86.0 | 2D 144.4
-        #   m=128  c64 ibw=1 (shipped) 125.2 us        | c32 ibw=2 117.9 us           <- best
-        #
-        # The demo pads 61 tokens to bucket 64, so m=64 is the one on its critical path.
+        # N150 / TP=1, N=6144: the full-grid choice was originally tuned at bf16 and does
+        # not hold at bfp8, which is what this table corrects. At m=64 the 32-core
+        # in0_block_w=2 config wins and a sharded in0 is a wash, so it is not worth the
+        # reshard there; at m=128 the same 32-core config wins. The demo pads 61 tokens to
+        # bucket 64, so m=64 is the one on its critical path.
         _PREFILL_GATE_UP = {
             # (seq, K, N): (num_cores, out_subblock, in0_sharded)
             (64, 2048, 3072): (32, (2, 1), True),  # N300 / TP=2
@@ -337,12 +309,9 @@ class MLP(LightweightModule):
         # L1-INTERLEAVED from the SiLU-mul, so the mcast sender re-reads it out of
         # interleaved L1 for every K block; a width shard on the matmul's own grid hands
         # each core its 6 K-tiles up front. Same program config, only the in0 memcfg
-        # changes (median of 4 steady launches):
+        # changes.
         #
-        #   m=64   c32 interleaved-in0  85.4 us 156 GB/s -> sharded-in0  72.1 us 185 GB/s
-        #   m=128  c32 interleaved-in0 149.5 us  89 GB/s -> sharded-in0 110.7 us 121 GB/s
-        #
-        # K=6144 is TP=1 only; N300's down is 3072x2048 and was not swept, so it does not
+        # K=6144 is TP=1 only; N300's down is 3072x2048 and was not tuned, so it does not
         # match and keeps the interleaved in0. QWEN3_TTS_PREFILL_DOWN_SHARD_IN0=0 reverts.
         _PREFILL_DOWN_SHARD_IN0 = {
             # (seq, K, N): num_cores — must equal the program config's grid
@@ -495,17 +464,14 @@ class MLP(LightweightModule):
         # Without this, bucket 1024 could not run at all: at M=1024 the down-proj's
         # static circular buffers clash with L1 on BOTH N150 and N300, so the top
         # entry of PREFILL_SEQS was unreachable even though warmup_all_buckets warms
-        # it. Measured bucket by bucket, 512 was the ceiling on both SKUs.
+        # it. 512 is the largest M that fits on either SKU.
         #
-        # The cap is the largest M known to fit. Sequences at or below it take the
-        # untouched path, so no bucket that already worked changes shape or config.
         # Two separate numbers on purpose. The GATE is the longest one-shot prefill
         # that fits, and it stays at 512 on every SKU so that no bucket which already
         # worked changes shape or program config. The CHUNK is what a longer sequence
         # is cut into, and it has to be smaller on one chip: with TP=1 the down-proj
         # is K=6144 per chip against 3072 on TP=2, and its circular buffers at M=512
-        # clash with L1 once the caller's 1024-row tensors are live (measured: region
-        # ends 721632, highest L1 buffer 678848).
+        # clash with L1 once the caller's 1024-row tensors are live.
         _mm_gate = int(os.environ.get("QWEN3_TTS_MLP_MM_CAP", "512"))
         _mm_chunk = int(os.environ.get("QWEN3_TTS_MLP_MM_CHUNK", "0")) or (
             256 if self.local_intermediate > 3072 else _mm_gate
@@ -558,12 +524,7 @@ class MLP(LightweightModule):
         # taken the DRAM-sharded path at this bucket all along
         # (`use_dram_shard_qkv = ... or seq_len <= short_seq_limit`, attention.py); the MLP
         # was left on `_short_seq_*_progcfg`, which is 1D mcast on the FULL 64-core grid
-        # and therefore drives in0_block_w to K_tiles/64 = 1. Shipped bucket-32 window vs
-        # the same shapes on the DRAM-sharded chain:
-        #
-        #   gate  32x2048x6144  1D c64 ibw=1  94 us (46.5 %) -> DRAM-sharded  58 us (75.4 %)
-        #   up    32x2048x6144  1D c64 ibw=1  94 us          -> DRAM-sharded  58 us
-        #   down  32x6144x2048  1D c64        98 us (44.6 %) -> DRAM-sharded  64 us (77.0 %)
+        # and therefore drives in0_block_w to K_tiles/64 = 1.
         #
         # QWEN3_TTS_SHORT_SEQ_DRAM_MLP=0 keeps the 1D path.
         _dram_chain = is_decode or (
@@ -612,8 +573,8 @@ class MLP(LightweightModule):
             # for the SiLU·mul that follows. A DRAM-sharded matmul writes its own grid
             # and ignores the output memory_config's grid (verified: asking for 64 cores
             # still returns a 16-core shard), so the mul inherits 16 cores and, being
-            # purely parallelism-bound, costs 4x more there: 9 us on 64 cores -> 33 us
-            # on 16. Widening both operands first pays 2 reshards to get that back.
+            # purely parallelism-bound, costs several times more there. Widening both
+            # operands first pays for the 2 reshards it adds.
             _mul_memcfg = self._decode_gate_up_out_memcfg
             if self._decode_gate_up_wide_memcfg is not None:
                 gate_wide = ttnn.to_memory_config(gate_sharded, self._decode_gate_up_wide_memcfg)
@@ -681,16 +642,12 @@ class MLP(LightweightModule):
             x = ttnn.to_memory_config(x, _gu_in0)
             _own_x = True
         # gate/up's N is exactly down's K, so the width shard built for down's in0 is
-        # also a legal output layout for gate/up — and writing into it is 3.8 us cheaper
-        # per matmul than writing L1-interleaved. The SiLU-mul then READS sharded and
-        # still writes interleaved at the same cost, so the win is free of any op change
-        # (probed at m=64: gate/up 71.8 -> 68.0 us each, mul 19.7 -> 19.5 us):
+        # also a legal output layout for gate/up — and writing into it is cheaper per
+        # matmul than writing L1-interleaved. The SiLU-mul then READS sharded and still
+        # writes interleaved at the same cost, so the win is free of any op change.
         #
-        #   gu sharded + mul interleaved   m=64  167.4 -> 159.5 us  (-7.8 us/layer)
-        #                                  m=128 279.9 -> 266.8 us  (-13.1 us/layer)
-        #
-        # Asking the MUL to write sharded instead loses: it nearly doubles (19.7 -> 32.6),
-        # which costs more than the reshard it would remove. So the reshard below stays.
+        # Asking the MUL to write sharded instead loses: it nearly doubles, which costs
+        # more than the reshard it would remove. So the reshard below stays.
         _gu_out = self._prefill_down_in0_memcfg.get(seq_len) if not is_decode else None
         _gu_mem = _gu_out if _gu_out is not None else mem_cfg
         gate_out = ttnn.linear(
