@@ -381,6 +381,8 @@ class RunTimeOptions {
 
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
+    bool jit_pch_enabled = false;
+    bool jit_pch_strict = false;
 
     // Store command queues in device DRAM
     bool dram_backed_cq_env_var_set = false;
@@ -930,6 +932,8 @@ public:
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
+    bool get_jit_pch_enabled() const { return jit_pch_enabled; }
+    bool get_jit_pch_strict() const { return jit_pch_strict; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 

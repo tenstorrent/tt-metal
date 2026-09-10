@@ -28,4 +28,7 @@ void merge_pch_deps_into_kernel_d(
 
 void pch_cache_clear();
 
+// Strict validation: require GCC's -H acceptance line for this exact header.
+void require_pch_consumed(const std::string& log_path, const std::string& header);
+
 }  // namespace tt::jit_build

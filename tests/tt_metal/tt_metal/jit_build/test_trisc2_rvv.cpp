@@ -156,7 +156,36 @@ protected:
                 .compile_args = {512 * 1024, 64},
             });
         program.impl().compile(device);
-        return program.impl().get_kernel(handle);
+        auto kernel = program.impl().get_kernel(handle);
+        if (MetalContext::instance().rtoptions().get_jit_pch_strict()) {
+            EXPECT_NO_FATAL_FAILURE(require_pack_pch(kernel));
+        }
+        return kernel;
+    }
+
+    // Check the scalar and RVV pack compiles independently of build.cpp's eligibility check.
+    void require_pack_pch(const std::shared_ptr<Kernel>& kernel) {
+        const auto& rtoptions = MetalContext::instance().rtoptions();
+        ASSERT_TRUE(rtoptions.get_jit_pch_enabled());
+        ASSERT_TRUE(rtoptions.get_force_jit_compile()) << "Strict fixture checks require fresh compile logs";
+        const auto log_path = std::filesystem::path(kernel_elf_path(kernel, 2)).parent_path() / "trisck.o.log";
+        std::ifstream log(log_path);
+        ASSERT_TRUE(log.is_open()) << log_path;
+        auto& manager = BuildEnvManager::get_instance(kernel->get_context_id());
+        const auto pch_root =
+            std::filesystem::path(
+                manager.get_device_build_env(devices_.at(0)->build_id()).build_env.get_out_root_path()) /
+            "pch/trisc2";
+        for (std::string line; std::getline(log, line);) {
+            if (line.starts_with("! ")) {
+                const std::filesystem::path accepted = line.substr(2);
+                if (accepted.filename() == "trisc_pch.h.gch" && accepted.parent_path().parent_path() == pch_root) {
+                    ASSERT_TRUE(std::filesystem::is_regular_file(accepted)) << accepted;
+                    return;
+                }
+            }
+        }
+        FAIL() << "TRISC2 did not consume its PCH: " << log_path;
     }
 
     // Path of the kernel's compiled ELF for one compute processor (0=unpack, 1=math, 2=pack).
@@ -198,6 +227,8 @@ TEST_F(Trisc2RvvMockBlackholeFixture, KnobOffRecipesCarryNoVectorFlags) {
 
 TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
     if (!sfpi_supports_bh_zve32f()) {
+        ASSERT_FALSE(MetalContext::instance().rtoptions().get_jit_pch_strict())
+            << "Strict PCH validation requires SFPI with RVV support";
         GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
     }
     auto kernel_off = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
@@ -216,6 +247,8 @@ TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
 
 TEST_F(Trisc2RvvMockBlackholeFixture, VaddKernelCompilesToVectorCode) {
     if (!sfpi_supports_bh_zve32f()) {
+        ASSERT_FALSE(MetalContext::instance().rtoptions().get_jit_pch_strict())
+            << "Strict PCH validation requires SFPI with RVV support";
         GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
     }
     auto kernel_on = compile_rvv_kernel(/*enable_trisc2_rvv=*/true);

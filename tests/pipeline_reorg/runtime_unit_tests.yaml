@@ -95,7 +95,7 @@
     ./build/test/tt_metal/unit_tests_misc
     ./build/test/tt_metal/unit_tests_jit_build
     # Exercise the opt-in path with fresh kernel compiles, including RVV flag variants.
-    TT_METAL_JIT_PCH=1 TT_METAL_FORCE_JIT_COMPILE=1 ./build/test/tt_metal/unit_tests_jit_build --gtest_filter='Trisc2RvvMockBlackholeFixture.*'
+    TT_METAL_JIT_PCH=1 TT_METAL_JIT_PCH_STRICT=1 TT_METAL_FORCE_JIT_COMPILE=1 ./build/test/tt_metal/unit_tests_jit_build --gtest_filter='Trisc2RvvMockBlackholeFixture.*'
     ./build/test/tt_metal/unit_tests_noc
   skus:
     wh_n150_civ2:

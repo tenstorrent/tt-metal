@@ -25,7 +25,6 @@
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -82,38 +81,7 @@ void report_result(const string& target_name, string_view op, const string& cmd,
     }
 }
 
-// Opt-in precompiled headers for kernel targets (TT_METAL_JIT_PCH=1).
-//
-// Each kernel source re-parses a fixed prelude -- the includes ahead of the
-// generated per-kernel body -- in every target built from it. Those preludes are
-// identical across kernels and account for roughly half of a target's compile
-// time, so precompiling them about halves the compile step.
-//
-// Two GCC constraints shape the implementation:
-//  - A PCH is silently ignored once the first token has been seen, so it must be
-//    force-included ahead of the per-kernel named-ct-arg header.
-//  - GCC validates command-line macros against the state recorded in the PCH:
-//    any macro the precompiled prelude tests or expands (even just via #ifdef,
-//    which the prelude does for KERNEL_COMPILE_TIME_ARGS and FULL_KERNEL_NAME)
-//    must match exactly. One PCH is therefore needed per distinct define set,
-//    and any define whose value is unique per kernel must be kept off the
-//    command line entirely (see FULL_KERNEL_NAME in export_target_recipe).
-bool jit_pch_enabled() {
-    static const bool enabled = [] {
-        // Same convention as RunTimeOptions' is_env_enabled: only a leading '1' turns a
-        // TT_METAL_* boolean on, so "0", "false" and "" all leave it off.
-        const char* v = std::getenv("TT_METAL_JIT_PCH");
-        return v != nullptr && v[0] == '1';
-    }();
-    return enabled;
-}
-
-// Umbrella header for a kernel source's shareable prelude, relative to the tt-metal
-// root. Each one mirrors the includes its source parses before reaching the generated
-// per-kernel body. Matched on the architecture-qualified path suffix rather than the
-// bare filename, so another generation's source of the same name (tt-2xx has its own
-// trisck.cc) never picks up a tt-1xx umbrella; a source with no entry here simply
-// compiles without a PCH.
+// Match architecture-qualified sources; other targets compile without a PCH.
 std::string_view pch_umbrella_for(std::string_view kernel_src_path) {
     auto matches = [&](std::string_view suffix) {
         return kernel_src_path.size() >= suffix.size() &&
@@ -128,10 +96,6 @@ std::string_view pch_umbrella_for(std::string_view kernel_src_path) {
     if (matches("/tt-1xx/ncrisck.cc")) {
         return "tt_metal/hw/firmware/src/tt-1xx/ncrisc_pch.h";
     }
-    // active_erisck.cc deliberately has no entry. A PCH is buildable for it, but it
-    // measured as nothing (48 of 4133 targets), and the umbrella would have to omit
-    // noc_nonblocking_api.h as well: once the dataflow headers are gone it becomes the
-    // first to reach risc_common.h, which uses MY_NOC_ENCODING before it is defined.
     return {};
 }
 
@@ -724,23 +688,19 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
     std::vector<std::string> defines = recipe.defines;
-    // A PCH parses ahead of the whole translation unit, so every macro that can change
-    // how an umbrella header parses must reach the PCH build. DM targets pass kernel
-    // defines on the command line (process_defines_at_compile_), which lands them in
-    // the PCH key; TRISC routes them through a generated header (chlkc_list.h ->
-    // defines_generated.h) that the umbrella must exclude, so a kernel define like
-    // FORCE_WATCHER_OFF would go unseen by umbrella headers that the source parses
-    // after chlkc_list.h (stack_usage.h, kernel_profiler.hpp's debug subtree). Every
-    // consumer of that define is inert unless WATCHER_ENABLED is set, so the PCH stays
-    // on for the common case and those targets skip it while the watcher is on.
-    const bool pch_defines_visible =
-        this->process_defines_at_compile_ || !env_.get_rtoptions().get_watcher_enabled();
-    // pch_umbrella_for returns a view of a string literal, so this outlives the call.
-    const std::string_view pch_umbrella = (jit_pch_enabled() && pch_defines_visible)
-                                              ? pch_umbrella_for(this->srcs_[src_index])
-                                              : std::string_view{};
+    // TRISC generated defines arrive too late for Watcher's FORCE_WATCHER_OFF handling.
+    const auto& rtoptions = env_.get_rtoptions();
+    const bool pch_defines_visible = this->process_defines_at_compile_ || !rtoptions.get_watcher_enabled();
+    const bool pch_strict = rtoptions.get_jit_pch_strict();
+    const auto pch_umbrella = pch_umbrella_for(this->srcs_[src_index]);
+    const bool use_pch = rtoptions.get_jit_pch_enabled() && pch_defines_visible && !pch_umbrella.empty();
+    TT_FATAL(
+        !pch_strict || pch_umbrella.empty() || use_pch,
+        "Strict PCH mode requires PCH enabled and compatible Watcher settings for {}",
+        target_name_);
+    std::string pch_header;
     std::string pch_dep_path;
-    if (!pch_umbrella.empty()) {
+    if (use_pch) {
         // The PCH is built from the same recipe minus any force-included headers:
         // those are per-kernel, and a PCH that consumed them could not be shared.
         std::vector<std::string> pch_defines;
@@ -752,7 +712,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
             }
             pch_defines.push_back(defines[i]);
         }
-        const std::string pch_header = jit_build::ensure_pch(
+        pch_header = jit_build::ensure_pch(
             env_.gpp_,
             env_.get_root_path(),
             env_.get_out_root_path(),
@@ -762,15 +722,13 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
             cflags,
             recipe.includes,
             pch_defines);
+        TT_FATAL(!pch_strict || !pch_header.empty(), "Strict PCH mode: creation failed for {}", target_name_);
         if (!pch_header.empty()) {
             // Must precede every other -include so no token is seen first.
             defines.insert(defines.begin(), pch_header);
             defines.insert(defines.begin(), "-include");
-            // GCC falls back to plain textual inclusion, silently, whenever it rejects
-            // a PCH (flag or macro-state mismatch). Surface that in the compile log.
-            // A warning rather than an error -- the base cflags carry -Werror -- since
-            // a rejected PCH costs speed, not correctness.
-            cflags += " -Winvalid-pch -Wno-error=invalid-pch";
+            // Normal builds warn and fall back; strict validation requires actual consumption.
+            cflags += pch_strict ? " -H -Werror=invalid-pch" : " -Winvalid-pch -Wno-error=invalid-pch";
             pch_dep_path = pch_header + ".d";
         }
     }
@@ -801,6 +759,9 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
+    if (pch_strict && !pch_umbrella.empty()) {
+        jit_build::require_pch_consumed(log_file.path(), pch_header);
+    }
     if (result && !pch_dep_path.empty()) {
         jit_build::merge_pch_deps_into_kernel_d(temp_d_path, obj_temp_path, pch_dep_path);
     }
@@ -1108,16 +1069,8 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         });
     }
     if (settings) {
-        // FULL_KERNEL_NAME: consumed only by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
-        // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
-        // path does no shell expansion).
-        //
-        // With the sanitizer off the macro is dead -- sanitizer/output.h substitutes "<unknown>" --
-        // so it is omitted entirely rather than gated on TT_METAL_JIT_PCH. That keeps the exported
-        // recipe deterministic (the remote compile server sees the same recipe whichever way the
-        // client sets that variable), and keeps this per-kernel-unique value off the command line,
-        // where GCC would validate it against a shared PCH and reduce the PCH to one per kernel.
-        // With the sanitizer on, correctness wins and the define stays, costing PCH reuse.
+        // Only the sanitizer needs this unique name. Omitting it otherwise permits PCH sharing
+        // and keeps exported recipes independent of the client's PCH setting.
         if (env_.get_rtoptions().get_sanitizer_settings().enabled) {
             defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
         }

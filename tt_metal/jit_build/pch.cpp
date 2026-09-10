@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "common/stable_hash.hpp"
 #include "depend.hpp"
@@ -27,8 +28,7 @@ namespace tt::jit_build {
 namespace fs = std::filesystem;
 namespace {
 
-// One entry per staged header path, held by shared_ptr so a build already in flight
-// keeps its entry alive across a pch_cache_clear().
+// Shared ownership keeps in-flight entries alive across cache clearing.
 struct PchEntry {
     std::mutex mutex;
     bool ok = false;
@@ -38,10 +38,7 @@ struct PchEntry {
 std::mutex pch_map_mutex;
 std::unordered_map<std::string, std::shared_ptr<PchEntry>> pch_entries;
 
-// Keyed by the staged header path rather than by the recipe key alone: that path also
-// embeds out_root, so two build environments pointing at different cache roots get
-// separate entries instead of the first one reporting success for a .gch the second
-// never built.
+// The full header path separates output roots as well as recipes.
 std::shared_ptr<PchEntry> pch_entry_for(const std::string& header) {
     std::lock_guard lock(pch_map_mutex);
     std::shared_ptr<PchEntry>& entry = pch_entries[header];
@@ -51,10 +48,7 @@ std::shared_ptr<PchEntry> pch_entry_for(const std::string& header) {
     return entry;
 }
 
-// Publishes the dependency-hash sidecar that later calls in this process use to decide
-// whether a built .gch still matches its closure. Every rule in the .d is flattened
-// under one label because the target GCC records there follows the output name it was
-// given, which is a per-process temp path.
+// Flatten rules under the final target; GCC records the temporary output name.
 bool write_pch_dephash(
     const std::string& dep_path, const std::string& dir, const std::string& gch, const std::string& hash_path) {
     jit_build::ParsedDependencies parsed;
@@ -99,20 +93,27 @@ bool write_pch_dephash(
 
 }  // namespace
 
-// ClearKernelCache() also clears the file-hash cache, which is what makes a mid-run
-// header edit visible to need_compile(); an entry that survived it would keep handing
-// out a .gch built from the pre-edit contents.
+void require_pch_consumed(const std::string& log_path, const std::string& header) {
+    TT_FATAL(!header.empty(), "Strict PCH mode: no header requested (log: {})", log_path);
+    std::ifstream log(log_path);
+    TT_FATAL(log.is_open(), "Strict PCH mode: cannot read {}", log_path);
+    const std::string expected = "! " + header + ".gch";
+    for (std::string line; std::getline(log, line);) {
+        if (line == expected) {
+            return;
+        }
+    }
+    TT_THROW("Strict PCH mode: compiler did not consume {}.gch (log: {})", header, log_path);
+}
+
+// Drop completed and failed entries; existing users retain their shared ownership.
 void pch_cache_clear() {
     std::lock_guard lock(pch_map_mutex);
     pch_entries.clear();
 }
 
-// Returns the header path to force-include for this compile recipe, building the
-// PCH on first use. Returns empty if a PCH is unavailable, in which case the
-// caller simply compiles without one.
-//
-// `defines` must already have any -include pairs stripped, and must otherwise
-// match the compile exactly, or GCC will reject the result.
+// Returns the staged header to force-include, or empty to request ordinary compilation.
+// The caller must remove per-kernel -include pairs from defines.
 std::string ensure_pch(
     const std::string& gpp,
     const std::string& root,
@@ -123,13 +124,9 @@ std::string ensure_pch(
     const std::string& cflags,
     const std::string& includes,
     const std::vector<std::string>& defines) {
-    // The relative include roots ("-I.", "-I..") resolve against a kernel's own build
-    // directory and are how a compile reaches per-kernel generated headers. A PCH must
-    // not consume anything per-kernel, so they are dropped from the PCH build: if an
-    // umbrella ever grows a (transitive) dependency on a generated header, its PCH
-    // build fails loudly and every compile falls back to plain parsing, instead of one
-    // kernel's generated state -- or a negative __has_include probe -- being silently
-    // baked into all the other kernels sharing the key.
+    // These roots expose per-kernel generated headers and cannot be shared.
+    // Required generated includes then fail; umbrellas must also exclude headers
+    // whose __has_include probes would silently capture the wrong state.
     std::vector<std::string> include_args;
     for (auto& tok : tt::jit_build::utils::tokenize_flags(includes)) {
         if (tok == "-I." || tok == "-I..") {
@@ -138,10 +135,8 @@ std::string ensure_pch(
         include_args.push_back(std::move(tok));
     }
 
-    // One PCH per distinct recipe. Blaze passes compile-time args through generated
-    // headers, so this stays at one key per target type there; kernels that carry
-    // per-kernel -D defines or include paths (common in ttnn) fan out to one PCH
-    // build per distinct set, which is part of why the feature is opt-in.
+    // Distinct flags, defines or include paths require separate PCH builds.
+    // Recipes with few consumers may cost more than ordinary compilation.
     tt::StableHasher hasher;
     hasher.update(target_name);
     hasher.update(std::string(umbrella_rel));
@@ -162,30 +157,18 @@ std::string ensure_pch(
     const std::string dep = header.string() + ".d";
     const std::string dephash = gch + ".dephash";
 
-    // The map lock is held only for the entry lookup; the build runs under the entry's
-    // own mutex, so distinct keys build in parallel and compiles whose key is already
-    // built and still valid never wait. A fresh process rebuilds rather than trusting a
-    // .gch found on disk: the key does not cover header contents, so an existing file
-    // could predate a source edit. Every shared-path write goes through a unique temp
-    // file and an atomic rename -- concurrent processes rebuilding the same key never
-    // expose a partial file, and a compile holding the old .gch open keeps reading it
-    // after the rename.
+    // Serialize validation/builds per entry, allowing different recipes to proceed.
+    // Fresh processes rebuild. Atomic renames protect each file from partial reads;
+    // publication of the header, .d, .gch and sidecar is not one transaction.
     const std::shared_ptr<PchEntry> entry = pch_entry_for(header.string());
     std::lock_guard entry_lock(entry->mutex);
 
-    // A failed build is not retried: giving up on the PCH for the rest of the process
-    // costs one wasted build, retrying per compile would cost thousands.
+    // Retry failures only after cache clearing, not once per consuming kernel.
     if (entry->failed) {
         return {};
     }
 
-    // A successful build is not trusted for the rest of the process either. The key
-    // covers flags and defines but not header contents, and ClearKernelCache() drops
-    // the file-hash cache that makes a mid-run header edit visible to need_compile().
-    // An entry that outlived such an edit would keep force-including a .gch holding
-    // the pre-edit contents while every consumer wrote a dephash sidecar computed from
-    // the current ones -- marking objects compiled against stale headers as up to date
-    // on disk, for this run and every later one.
+    // Recipe keys exclude contents, so validate the dependency hashes before reuse.
     if (entry->ok && jit_build::dependencies_up_to_date_file(dephash)) {
         return header.string();
     }
@@ -210,11 +193,7 @@ std::string ensure_pch(
         const std::string gch_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(gch);
         const std::string dep_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(dep);
 
-        // Built through the same argv builder as the kernel compiles: any drift between
-        // the two flag sets makes GCC reject the PCH. The .d (via the -MMD already in
-        // cflags) records the PCH's dependency closure; a kernel compile that consumes
-        // the PCH emits a truncated .d of its own (-MMD stops at the PCH boundary), so
-        // compile_one merges this file back in to keep the dephash cache honest.
+        // Match consumer flags and record the closure that kernel -MMD output omits.
         const std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
             gpp,
             opt_level,
@@ -226,17 +205,12 @@ std::string ensure_pch(
             gch_tmp,
             dep_tmp);
 
-        // The log is per-temp (and so per-process): concurrent rebuilds of one key must
-        // not interleave writes. Removed on success, kept for the warning on failure.
+        // Keep separate logs for concurrent processes and retain failures for diagnosis.
         const std::string log = gch_tmp + ".log";
         bool ok = tt::jit_build::utils::exec_command(args, dir.string(), log);
         if (ok) {
-            // -MMD lists the staged copy the compiler was handed, never the umbrella in
-            // the source tree it was copied from. That path is recorded explicitly so it
-            // reaches every consumer's dephash through merge_pch_deps_into_kernel_d.
-            // need_compile() runs before this function, so without it an edited umbrella
-            // leaves every object built against the old one reported as up to date, and
-            // the staged copy is never refreshed.
+            // GCC sees only the staged copy. Track the source umbrella too so edits
+            // invalidate consumers before ensure_pch is called again.
             std::ofstream dep_out(dep_tmp, std::ios::app);
             dep_out << gch << ": " << (fs::path(root) / umbrella).string() << '\n';
             dep_out.flush();
@@ -275,12 +249,8 @@ std::string ensure_pch(
     return built ? header.string() : std::string{};
 }
 
-// A compile that consumed a PCH emits a truncated .d: -MMD lists only what was parsed
-// after the PCH boundary, which would blind the dephash sidecar to edits of any header
-// inside the umbrella. Append the PCH's own dependency closure (recorded at PCH build
-// time, see ensure_pch) under the kernel object's target -- parse_dependency_file
-// accumulates rules for one target across lines. On any failure the kernel .d is
-// removed, which drops the sidecar and forces a recompile next run: slower, never stale.
+// Add the PCH dependency closure omitted by the consumer's -MMD output.
+// If merging fails, drop the .d to prevent reuse with incomplete dependency hashes.
 void merge_pch_deps_into_kernel_d(
     const std::string& kernel_d_path, const std::string& kernel_obj, const std::string& pch_d_path) {
     std::ifstream pch_d(pch_d_path);

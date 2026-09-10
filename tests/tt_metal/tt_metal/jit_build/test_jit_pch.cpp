@@ -11,18 +11,18 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "jit_build/pch.hpp"
+#include "jit_test_tools.hpp"
 
 namespace tt::jit_build {
 
-// Exercise the production PCH cache with small, writable host headers. No device or
-// SFPI installation is needed. CXX can select a GCC executable on hosts where g++
-// names Clang; GCC's -H output proves that each consumer actually loaded the PCH.
+// Compile writable headers with SFPI and verify PCH consumption without a device.
 class JitPchTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -35,25 +35,7 @@ protected:
         std::filesystem::create_directories(source_);
         std::filesystem::create_directories(consumer_);
 
-        const char* cxx = std::getenv("CXX");
-        const std::vector<std::string> candidates = {cxx == nullptr ? "g++" : cxx, "g++"};
-        const auto probe_log = scratch_ / "compiler.log";
-        for (const auto& candidate : candidates) {
-            std::filesystem::remove(probe_log);
-            auto probe = utils::tokenize_flags(candidate);
-            probe.insert(probe.end(), {"-dM", "-E", "-x", "c++", "/dev/null"});
-            if (utils::exec_command(probe, scratch_.string(), probe_log.string())) {
-                const std::string macros = read(probe_log);
-                if (macros.find("#define __GNUC__ ") != std::string::npos &&
-                    macros.find("#define __clang__ ") == std::string::npos) {
-                    compiler_ = candidate;
-                    break;
-                }
-            }
-        }
-        if (compiler_.empty()) {
-            GTEST_SKIP() << "GCC is required to test .gch consumption; set CXX to a GCC executable";
-        }
+        compiler_ = test::JitTestTools{}.compiler();
         write(source_ / "umbrella.h", "#pragma once\n#include \"value.h\"\n");
         write(source_ / "value.h", "#pragma once\nconstexpr int value = 1;\n");
     }
@@ -85,10 +67,10 @@ protected:
             compiler_,
             source_.string(),
             (scratch_ / cache).string(),
-            "host",
+            "blackhole",
             "umbrella.h",
             "O0",
-            "-std=c++17 -MMD",
+            "-mcpu=tt-bh-tensix -std=c++17 -MMD",
             includes(),
             {"-DFORCE_INLINE=inline"});
     }
@@ -109,7 +91,7 @@ protected:
         const auto args = utils::build_gpp_argv(
             compiler_,
             "O0",
-            "-std=c++17 -MMD -H -Werror=invalid-pch",
+            "-mcpu=tt-bh-tensix -std=c++17 -MMD -H -Werror=invalid-pch",
             includes(),
             defines,
             source.string(),
@@ -130,26 +112,8 @@ protected:
     }
 
     void use_named_api() {
-        // Test binaries may be copied away from the build host's absolute source path.
-        const char* metal_home = std::getenv("TT_METAL_HOME");
-        const std::vector<std::filesystem::path> roots = {
-            metal_home == nullptr ? std::filesystem::current_path() : std::filesystem::path(metal_home),
-            std::filesystem::current_path(),
-            std::filesystem::path(__FILE__).parent_path()};
-        for (auto root : roots) {
-            for (root = std::filesystem::absolute(root); !root.empty(); root = root.parent_path()) {
-                const auto inc = root / "tt_metal/hw/inc";
-                if (std::filesystem::exists(inc / "api/named_compile_time_args.h")) {
-                    extra_includes_ = " -I" + inc.string();
-                    write(source_ / "umbrella.h", "#include \"api/compile_time_args.h\"\n");
-                    return;
-                }
-                if (root == root.root_path()) {
-                    break;
-                }
-            }
-        }
-        FAIL() << "cannot locate tt_metal/hw/inc; set TT_METAL_HOME to the source or installed JIT tree";
+        extra_includes_ = " -I" + test::JitTestTools{}.hw_include_dir();
+        write(source_ / "umbrella.h", "#include \"api/compile_time_args.h\"\n");
     }
 
     std::filesystem::path scratch_;
@@ -216,6 +180,22 @@ TEST_F(JitPchTest, FailedPchBuildRequestsTextualFallback) {
     write(source_ / "umbrella.h", "#include \"missing_generated_header.h\"\n");
     EXPECT_TRUE(ensure().empty());
     ASSERT_NO_FATAL_FAILURE(consume({}, "static_assert(1 + 1 == 2);\n"));
+}
+
+TEST_F(JitPchTest, StrictValidationRequiresTheExpectedPch) {
+    const auto pch = ensure();
+    ASSERT_FALSE(pch.empty());
+    const auto log = (consumer_ / "compile.log").string();
+    ASSERT_NO_FATAL_FAILURE(consume({}, "static_assert(1 + 1 == 2);\n"));
+    EXPECT_THROW(require_pch_consumed(log, pch), std::runtime_error);
+    EXPECT_THROW(require_pch_consumed(log, {}), std::runtime_error);
+    ASSERT_NO_FATAL_FAILURE(consume(pch, "static_assert(value == 1);\n"));
+    EXPECT_NO_THROW(require_pch_consumed(log, pch));
+    EXPECT_THROW(require_pch_consumed(log, pch + ".other"), std::runtime_error);
+    write(log, "x " + pch + ".gch\n");
+    EXPECT_THROW(require_pch_consumed(log, pch), std::runtime_error);
+    std::filesystem::remove(log);
+    EXPECT_THROW(require_pch_consumed(log, pch), std::runtime_error);
 }
 
 TEST_F(JitPchTest, DistinctNamedMapsShareAnAcceptedPch) {

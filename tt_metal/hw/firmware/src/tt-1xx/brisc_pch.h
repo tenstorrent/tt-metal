@@ -2,40 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Umbrella header for the optional BRISC precompiled header (TT_METAL_JIT_PCH=1).
-// These are the includes brisck.cc parses before it reaches kernel_includes.hpp
-// and that are identical for every BRISC target, in source order.
-//
-// Two headers from that prelude are deliberately omitted:
-//   internal/firmware_common.h
-//   api/dataflow/dataflow_api.h
-// dataflow_api.h (reached both directly and via firmware_common.h) decides
-// whether to define get_tile_size/get_tile_hw/get_tile_num_faces/get_dataformat
-// with __has_include("chlkc_descriptors.h"). That descriptor header is generated
-// per kernel and resolved via -I.. from the kernel's own build directory, so it
-// does not exist where the shared PCH is built: the PCH would bake in "absent"
-// and those four APIs would vanish for every kernel. Baking in one kernel's
-// descriptors instead is worse, since the tables are constexpr and differ per
-// kernel. Precompiling dataflow_api.h therefore needs it decoupled from the
-// per-kernel descriptors first.
-//
-// Omitting those two does not keep every generated file out of reach: with
-// TT_METAL_DPRINT_CORES set, kernel_profiler.hpp reaches dprint_tile.h, which
-// includes chlkc_descriptors.h unconditionally. The PCH build strips the
-// "-I."/"-I.." roots through which per-kernel files resolve, so in that
-// configuration it fails outright -- logged by ensure_pch -- and every compile
-// falls back to plain parsing rather than sharing one kernel's descriptors.
-//
-// Everything from kernel_includes.hpp onwards is also left out: that is the
-// generated per-kernel body and the conditional includes that follow it.
-//
-// <unistd.h> is absent from both this umbrella and the prelude: brisck.cc included it
-// without using any POSIX declaration, and it reached the PCH through here, costing six
-// newlib headers per build. Both copies went in one commit deliberately. Dropping it from
-// the umbrella alone would not remove that parse but relocate it into every BRISC compile,
-// since brisck.cc would still pull it in textually after the PCH boundary.
-//
-// Keep this in sync with the prelude in brisck.cc.
+// Shared BRISC prelude; keep include order in sync with brisck.cc.
+// Exclude firmware_common.h and dataflow_api.h: their __has_include checks and
+// constexpr tables depend on per-kernel chlkc_descriptors.h. The generated body
+// (kernel_includes.hpp) and subsequent includes also stay outside the PCH.
+// DPRINT can still reach descriptors through kernel_profiler.hpp; without the
+// per-kernel include roots, PCH creation then fails and normal builds fall back.
 
 #pragma once
 

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_test_tools.hpp"
 
 // The named compile-time-arg map (KERNEL_COMPILE_TIME_ARG_MAP) is delivered to kernels as a
 // force-included generated header rather than a -D define. These tests cover the formatter that
@@ -202,48 +203,13 @@ TEST(NamedCtArgMap, HeaderNameIsRelativeSoItResolvesOnBothCompileHosts) {
     EXPECT_TRUE(NAMED_CT_ARG_MAP_HEADER.ends_with(".h"));
 }
 
-// Locate the real tt_metal/hw/inc tree, which real compiles carry as an absolute -I and the
-// generated map header needs to resolve its trailing #include "api/named_compile_time_args.h".
-// TT_METAL_HOME when set (as in CI), otherwise walk up from cwd, which covers running the test
-// binary from anywhere inside the repo or its build tree.
-std::filesystem::path find_hw_inc_dir() {
-    namespace fs = std::filesystem;
-    auto probe = [](fs::path base) -> fs::path {
-        std::error_code ec;
-        for (base = fs::absolute(base, ec); !base.empty(); base = base.parent_path()) {
-            const fs::path candidate = base / "tt_metal" / "hw" / "inc";
-            if (fs::exists(candidate / "api" / "named_compile_time_args.h", ec)) {
-                return candidate;
-            }
-            if (base == base.root_path()) {
-                break;
-            }
-        }
-        return {};
-    };
-    if (const char* home = std::getenv("TT_METAL_HOME")) {
-        if (const auto found = probe(home); !found.empty()) {
-            return found;
-        }
-    }
-    return probe(std::filesystem::current_path());
-}
-
-// End-to-end check of the delivery mechanism, in the directory layout the real compiles use: the
-// generated header sits in the per-kernel dir and the compiler runs with cwd = a per-target subdir,
-// reaching it through the "-I.." on every compile. Both the local build and the JIT compile server
-// arrange things this way, which is what lets a bare -include work identically on both -- an
-// absolute client-side path would compile locally and then fail on the server.
-//
-// Uses the host compiler and only the preprocessor, so it needs neither a device nor the RISC-V
-// toolchain: what is under test is name resolution and macro visibility, not code generation.
+// SFPI must resolve the generated map through -I.. from a per-target directory.
 TEST(NamedCtArgMap, ForceIncludedHeaderResolvesFromTargetSubdirAndDefinesTheMap) {
     namespace fs = std::filesystem;
 
-    const fs::path hw_inc = find_hw_inc_dir();
-    if (hw_inc.empty()) {
-        GTEST_SKIP() << "tt_metal/hw/inc not locatable (TT_METAL_HOME unset and cwd outside the repo)";
-    }
+    const test::JitTestTools tools;
+    const std::string hw_inc = tools.hw_include_dir();
+    const std::string compiler = tools.compiler();
 
     const fs::path kernel_dir = fs::temp_directory_path() / "tt_named_ct_arg_map_test" / "kernel";
     const fs::path target_dir = kernel_dir / "ncrisc";
@@ -273,22 +239,19 @@ TEST(NamedCtArgMap, ForceIncludedHeaderResolvesFromTargetSubdirAndDefinesTheMap)
     // working directory; the absolute -I<hw/inc> replicates the include path every real compile
     // carries. The bare -include must resolve through -I.. alone.
     const std::vector<std::string> args = {
-        "c++",
+        compiler,
+        "-mcpu=tt-bh-tensix",
         "-std=c++17",
         "-fsyntax-only",
         "-I.",
         "-I..",
-        "-I" + hw_inc.string(),
+        "-I" + hw_inc,
         "-include",
         std::string(NAMED_CT_ARG_MAP_HEADER),
         "../consumer.cpp"};
     if (!exec_command(args, target_dir.string(), (target_dir / "compile.log").string())) {
         std::ifstream log(target_dir / "compile.log");
         const std::string output((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-        // A host compiler is not guaranteed at test runtime; a missing one is not a product failure.
-        if (output.find("c++") != std::string::npos && output.find("not found") != std::string::npos) {
-            GTEST_SKIP() << "no host c++ compiler available";
-        }
         FAIL() << "force-included map header failed to compile:\n" << output;
     }
 
