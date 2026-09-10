@@ -1119,7 +1119,7 @@ def test_pow_edge_pairs_include_negative_zero_exponent():
 
 # (op, range-bound high, approximation-accuracy high). The accuracy column is what the
 # merged branch had on the shared entry; the range column is what the accurate path gets
-# back. Wormhole-measured for the approximation (see _APPROX_EXP_ACCURACY_XFAIL).
+# back. Wormhole-measured for the approximation.
 _EXP_FAMILY_BOUNDS = [
     (MathOperation.Exp, 80.0, 16.0),
     (MathOperation.Exp2, 100.0, 23.0),
