@@ -177,7 +177,12 @@ void kernel_main() {
                 // Multi height block: accumulate kernel-tap in0_block_w_i of in0_num_blocks_w through a
                 // dedicated MATMUL_PARTIALS scratch, writing only the final tap to out_cb. idx is the
                 // PER-HEIGHT-BLOCK tap index (in0_block_w_i), so it restarts at 0 each height block.
-                DataflowBuffer cb_scratch(dfb::matmul_partials);
+                //
+                // dfb::matmul_partials is emitted only when the host adds the matmul_partials binding
+                // (multi-block path). Resolve it via get_token_if_present<> so the single-block/coalesced
+                // kernel variants — where the token is absent — still name-lookup and compile: the
+                // deref is only ever reached (codegen'd) in this taken branch, which implies the binding.
+                DataflowBuffer cb_scratch(*dfb::get_token_if_present<"matmul_partials">());
                 mul_and_accumulate_block(
                     cb_tilized_in0, cb_in1, cb_scratch, cb_out, in0_block_num_tiles, in0_block_w_i, in0_num_blocks_w);
             } else {
