@@ -125,10 +125,7 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
     // Absolute src/dst index 0, no increment, Packer0, ClrDatValid=0 (must not clear DEST valids). Arg 6 is
     // a 5-bit index into the 32-entry bd_table. NO_WRITE suppresses the store but NOT the descriptor
     // fetch: the entry is still read and its tile size validated, so it must be programmed. Use this
-    // thread's own pack-partition entry (llk_pack_init, via compute_kernel_hw_startup). A literal 0 is
-    // not safe -- it lands in the unpack partition [0,16), which only the unpack thread programs, so the
-    // PACR either validates against an unprogrammed entry (PACKER_0 ILLEGAL_TILE_SIZE) or races the
-    // unpack thread's init, since the two threads have no startup barrier.
+    // thread's own pack-partition entry (llk_pack_init, via compute_kernel_hw_startup).
     TT_PACR_STRIDE(0, 0, 0, 0, 0, ckernel::trisc::bfd_current<pack_bfd_resource>(), 0 /*Packer0*/, 0 /*ClrDatValid*/);
 
     // Restore pass-through so a later real pack-untilize (PACR_STRIDE) is unaffected.
