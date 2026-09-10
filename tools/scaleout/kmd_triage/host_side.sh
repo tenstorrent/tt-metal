@@ -541,9 +541,15 @@ report_verdict() {
 	# Coverage we did not get, kept out of the problem list and out of the
 	# verdict: it says nothing about the hardware, only about the invocation.
 	if (( klog_records == 0 )); then
-		printf '\n NOT CHECKED: the kernel log was unreadable%s, so PCIe, IOMMU and\n' \
-			"$( (( EUID == 0 )) || echo ' (not root)' )"
-		printf ' machine-check faults were not examined.  Re-run with sudo for those.\n'
+		printf '\n NOT CHECKED: the kernel log was unreadable, so PCIe, IOMMU and\n'
+		printf ' machine-check faults were not examined.\n'
+		if (( EUID == 0 )); then
+			# Already root, so do not send the reader after sudo.
+			printf ' Running as root, so this is not a permission problem:\n'
+			printf ' neither dmesg nor journalctl returned any records.\n'
+		else
+			printf ' Re-run with sudo for those.\n'
+		fi
 	fi
 
 	case $verdict in
@@ -759,28 +765,51 @@ KLOG_FAULT_RE+='|Completion Timeout|Unsupported Request|reset_link'
 
 klog_cmd=(dmesg -T)
 
-select_klog() {
-	if command -v journalctl >/dev/null 2>&1 && journalctl -k -n 1 >/dev/null 2>&1; then
-		klog_cmd=(journalctl -k --no-pager -o short-precise)
-	fi
-}
-
 klog_fault_count=0
 klog_records=0
 
+# How many actual records a log source yields: lines that are neither blank
+# nor a journalctl "-- ... --" placeholder.  Counting records rather than
+# trusting an exit status is the whole point; see select_klog.
+count_klog_records() {
+	local n
+	n=$(timeout 30 "$@" 2>/dev/null | grep -cvE '^(-- |$)')
+	[[ $n =~ ^[0-9]+$ ]] || n=0
+	printf '%s' "$n"
+}
+
+# Choose the log source, and keep the record count it gave us so the report
+# can tell "the log is clean" from "the log was not readable".
+#
+# The choice is not made on journalctl's exit status: it answers a caller that
+# cannot read the kernel journal with "-- No entries --" on stdout and status
+# 0.  Selecting on that swapped a working dmesg for a source that yields
+# nothing whenever journalctl is installed without a journal to read -- a
+# container being the usual case -- and the script then told a root user the
+# kernel log was unreadable and to re-run under sudo.  So require records, and
+# keep dmesg when journalctl cannot produce any.
+select_klog() {
+	local candidate=(journalctl -k --no-pager -o short-precise)
+
+	if command -v journalctl >/dev/null 2>&1; then
+		klog_records=$(count_klog_records "${candidate[@]}")
+		if (( klog_records > 0 )); then
+			klog_cmd=("${candidate[@]}")
+			return 0
+		fi
+	fi
+
+	klog_cmd=(dmesg -T)
+	klog_records=$(count_klog_records "${klog_cmd[@]}")
+	return 0
+}
+
 check_klog() {
-	# journalctl answers a caller who may not read the kernel journal with
-	# "-- No entries --" on stdout and exit status 0, so neither the exit
-	# status nor an empty-output test distinguishes "log is clean" from "log
-	# was not readable".  Count the lines that are actual records -- anything
-	# that is not a "-- ... --" placeholder or blank.  No records means
-	# nothing was read, which is not the same as nothing being wrong, so it is
-	# reported as coverage we did not get rather than as "none".
-	#
-	# It is not a problem, though: it says nothing about the hardware, only
-	# about how the script was invoked.  It must not move the verdict.
-	klog_records=$(timeout 30 "${klog_cmd[@]}" 2>/dev/null | grep -cvE '^(-- |$)')
-	[[ $klog_records =~ ^[0-9]+$ ]] || klog_records=0
+	# No records means nothing was read, which is not the same as nothing
+	# being wrong, so it is reported as coverage we did not get rather than
+	# as "none".  It is not a problem, though: it says nothing about the
+	# hardware, only about how the script was invoked, so it must not move
+	# the verdict.
 	(( klog_records > 0 )) || return 0
 
 	klog_fault_count=$(timeout 30 "${klog_cmd[@]}" 2>/dev/null | grep -Ec "$KLOG_FAULT_RE")
@@ -797,7 +826,12 @@ report_klog() {
 	subsection "PCIe, IOMMU and machine check faults ($klog_fault_count lines)"
 	if (( klog_records == 0 )); then
 		printf ' No records read, so nothing was checked -- not evidence of a clean\n'
-		printf ' log.  Re-run as root.\n'
+		if (( EUID == 0 )); then
+			printf ' log.  Already root, so not a permission problem: neither\n'
+			printf ' dmesg nor journalctl returned records.\n'
+		else
+			printf ' log.  Re-run as root.\n'
+		fi
 	elif (( klog_fault_count > 0 )); then
 		timeout 30 "${klog_cmd[@]}" 2>/dev/null | grep -E "$KLOG_FAULT_RE" | tail -n 400
 	else
