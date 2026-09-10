@@ -510,9 +510,11 @@ FORCE_INLINE void noc_async_read_one_packet(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
+#ifdef ARCH_BLACKHOLE
     // A nonzero NOC_PCIE_MASK bit here means src_noc_addr is PCIe-routed; use noc_async_read_pcie() instead,
     // since this function no longer sets NOC_TARG_ADDR_MID (see noc_cmd_buf_set_targ_addr_mid_pcie()).
     ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -538,7 +540,8 @@ FORCE_INLINE void noc_async_read_one_packet(
  * get_noc_addr function). The destination is in L1 memory on the Tensix core
  * executing this function call. Also, see \a noc_async_read_barrier.
  *
- * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ * The source node can be either a DRAM bank or a Tensix core. To read from a PCIe-routed address, use
+ * \a noc_async_read_pcie instead.
  *
  * Return value: None
  *
@@ -558,9 +561,11 @@ inline void noc_async_read(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
+#ifdef ARCH_BLACKHOLE
     // A nonzero NOC_PCIE_MASK bit here means src_noc_addr is PCIe-routed; use noc_async_read_pcie() instead,
     // since this function no longer sets NOC_TARG_ADDR_MID.
     ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -581,9 +586,10 @@ inline void noc_async_read(
 
 // clang-format off
 /**
- * Same as \a noc_async_read, but for a src_noc_addr that is routed through the PCIe core. Sets
- * NOC_TARG_ADDR_MID before the read and clears it after, since \a noc_async_read does not otherwise touch
- * that register on read_cmd_buf.
+ * Same as \a noc_async_read, but for a src_noc_addr that may be routed through the PCIe core. On architectures
+ * where the NOC address encodes PCIe routing via NOC_TARG_ADDR_MID (currently Blackhole), sets that register
+ * before the read and clears it after, since \a noc_async_read does not otherwise touch it. On other
+ * architectures this is equivalent to calling \a noc_async_read directly.
  *
  * Return value: None
  *
@@ -597,17 +603,22 @@ inline void noc_async_read(
 // clang-format on
 inline void noc_async_read_pcie(
     uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
     noc_cmd_buf_set_targ_addr_mid_pcie(noc, read_cmd_buf, src_noc_addr);
     // MID is already set above. Strip it back out here so this call doesn't trip its own assert.
     noc_async_read(src_noc_addr & ~(uint64_t(NOC_PCIE_MASK) << 32), dst_local_l1_addr, size, noc);
     noc_cmd_buf_clear_targ_addr_mid(noc, read_cmd_buf);
+#else
+    noc_async_read(src_noc_addr, dst_local_l1_addr, size, noc);
+#endif
 }
 
 // clang-format off
 /**
- * Same as \a noc_async_read_one_packet, but for a src_noc_addr that is routed through the PCIe core. Sets
- * NOC_TARG_ADDR_MID before the read and clears it after, since \a noc_async_read_one_packet does not otherwise touch
- * that register on read_cmd_buf.
+ * Same as \a noc_async_read_one_packet, but for a src_noc_addr that may be routed through the PCIe core. On
+ * architectures where the NOC address encodes PCIe routing via NOC_TARG_ADDR_MID (currently Blackhole), sets
+ * that register before the read and clears it after, since \a noc_async_read_one_packet does not otherwise
+ * touch it. On other architectures this is equivalent to calling \a noc_async_read_one_packet directly.
  *
  * Return value: None
  *
@@ -621,10 +632,14 @@ inline void noc_async_read_pcie(
 // clang-format on
 inline void noc_async_read_one_packet_pcie(
     uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
     noc_cmd_buf_set_targ_addr_mid_pcie(noc, read_cmd_buf, src_noc_addr);
     // MID is already set above. Strip it back out here so this call doesn't trip its own assert.
     noc_async_read_one_packet(src_noc_addr & ~(uint64_t(NOC_PCIE_MASK) << 32), dst_local_l1_addr, size, noc);
     noc_cmd_buf_clear_targ_addr_mid(noc, read_cmd_buf);
+#else
+    noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc);
+#endif
 }
 
 // clang-format off
@@ -831,9 +846,11 @@ FORCE_INLINE void noc_async_write_one_packet(
     std::uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
+#ifdef ARCH_BLACKHOLE
     // A nonzero NOC_PCIE_MASK bit here means dst_noc_addr is PCIe-routed; use noc_async_write_pcie() instead,
     // since this function no longer sets NOC_RET_ADDR_MID (see noc_cmd_buf_set_ret_addr_mid_pcie()).
     ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted, noc);
     }
@@ -865,8 +882,8 @@ FORCE_INLINE void noc_async_write_one_packet(
  * (x,y) and a local address created using get_noc_addr function. Also, see
  * \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
- * address or a PCIe controller.
+ * The destination node can be either a DRAM bank or a Tensix core+L1 memory
+ * address. To write to a PCIe-routed address, use \a noc_async_write_pcie instead.
  *
  * Return value: None
  *
@@ -888,9 +905,11 @@ inline void noc_async_write(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
+#ifdef ARCH_BLACKHOLE
     // A nonzero NOC_PCIE_MASK bit here means dst_noc_addr is PCIe-routed; use noc_async_write_pcie() instead,
     // since this function no longer sets NOC_RET_ADDR_MID (see noc_cmd_buf_set_ret_addr_mid_pcie()).
     ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted, noc);
     }
@@ -908,9 +927,10 @@ inline void noc_async_write(
 
 // clang-format off
 /**
- * Same as \a noc_async_write, but for a dst_noc_addr that is routed through the PCIe core. Sets
- * NOC_RET_ADDR_MID before the write and clears it after, since \a noc_async_write does not otherwise touch
- * that register on write_cmd_buf.
+ * Same as \a noc_async_write, but for a dst_noc_addr that may be routed through the PCIe core. On architectures
+ * where the NOC address encodes PCIe routing via NOC_RET_ADDR_MID (currently Blackhole), sets that register
+ * before the write and clears it after, since \a noc_async_write does not otherwise touch it. On other
+ * architectures this is equivalent to calling \a noc_async_write directly.
  *
  * Return value: None
  *
@@ -924,10 +944,14 @@ inline void noc_async_write(
 // clang-format on
 inline void noc_async_write_pcie(
     uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
     noc_cmd_buf_set_ret_addr_mid_pcie(noc, write_cmd_buf, dst_noc_addr);
     // MID is already set above. Strip it back out here so this call doesn't trip its own assert.
     noc_async_write(src_local_l1_addr, dst_noc_addr & ~(uint64_t(NOC_PCIE_MASK) << 32), size, noc);
     noc_cmd_buf_clear_ret_addr_mid(noc, write_cmd_buf);
+#else
+    noc_async_write(src_local_l1_addr, dst_noc_addr, size, noc);
+#endif
 }
 
 // clang-format off
