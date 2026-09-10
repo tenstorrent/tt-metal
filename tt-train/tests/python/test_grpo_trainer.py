@@ -49,17 +49,34 @@ from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
 # import path so this test can use it without copy-pasting the completer.
-_GRPO_EXAMPLES_DIR = os.path.join(
-    os.environ.get("TT_METAL_HOME", os.path.join(os.path.dirname(__file__), "..", "..", "..")),
-    "tt-train",
-    "sources",
-    "examples",
-    "grpo",
-)
-if _GRPO_EXAMPLES_DIR not in sys.path:
-    sys.path.insert(0, _GRPO_EXAMPLES_DIR)
+_GRPO_EXAMPLES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "sources", "examples", "grpo"))
+# Force the grpo example dir to the front of sys.path so ``import utils`` resolves
+# here even if a sibling example dir is already on the path.
+if _GRPO_EXAMPLES_DIR in sys.path:
+    sys.path.remove(_GRPO_EXAMPLES_DIR)
+sys.path.insert(0, _GRPO_EXAMPLES_DIR)
 
-from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+# The grpo example ships a top-level ``utils`` package, and so do sibling example
+# dirs (examples/grpo_remote_rollout -- whose tests under grpo_remote_rollout/ are
+# collected before this module and put their own ``utils`` on sys.path -- and
+# examples/qwen3). In a single pytest session another test module may have already
+# imported its own ``utils`` first, caching it in sys.modules and shadowing ours
+# (sys.path.insert cannot override an already-imported module), which surfaces as
+# ``ModuleNotFoundError: No module named 'utils.llama_completer'``. Evict any cached
+# ``utils*`` so the imports below resolve against _GRPO_EXAMPLES_DIR, then restore the
+# sibling's modules so we do not break whichever test imported them.
+#
+# Everything is imported *here*, not lazily inside fixtures: after the restore below a
+# runtime ``from utils import llama_completer`` would resolve against the sibling
+# package again and fail.
+_saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils" or k.startswith("utils.")}
+try:
+    from utils import llama_completer  # noqa: E402
+    from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+finally:
+    for _k in [k for k in list(sys.modules) if k == "utils" or k.startswith("utils.")]:
+        del sys.modules[_k]
+    sys.modules.update(_saved_utils)
 
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -177,9 +194,12 @@ class _RecordingCallback(TrainerCallback):
 
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch):
-    """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    from utils import llama_completer
+    """Skip the HF download / safetensors load so the tiny model keeps random init.
 
+    Patches the ``llama_completer`` module object bound at import time above; a
+    ``from utils import llama_completer`` here would hit the sibling ``utils`` that
+    was restored into sys.modules.
+    """
     monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
     monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
 
@@ -263,14 +283,15 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     }
 
     recorder = _RecordingCallback()
-    GRPOTrainer(
+    trainer = GRPOTrainer(
         completer=completer,
         dataset=dataset,
         config=grpo_cfg,
         reward_func=reward_func,
         optimizer_dict=optimizer_dict,
         callbacks=[recorder],
-    ).train()
+    )
+    trainer.train()
 
     assert recorder.train_begin == 1, "on_train_begin should fire exactly once"
     assert recorder.before_step == 1, "on_before_optimizer_step should fire once for the single step"
@@ -290,9 +311,17 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
-    for key in ("reward_mean", "reward_std", "mean_completion_len", "step_time_s", "generation_time_s"):
+    # ``step_time_s`` is deliberately absent from this list. The trainer seals it only
+    # after every non-monitor ``on_step_end`` has returned (so the timing covers them)
+    # and forwards the sealed value to ``GRPOMonitor`` alone, so a plain callback like
+    # the recorder never sees it in its kwargs. It is checked on the trainer below.
+    for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
+
+    step_time_s = trainer.metrics.get("step_time_s")
+    assert step_time_s is not None, "trainer.metrics is missing step_time_s after the step completed"
+    assert np.isfinite(step_time_s) and step_time_s > 0.0, f"step_time_s is not a positive duration: {step_time_s}"
 
     after = completer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
     assert before.shape == after.shape

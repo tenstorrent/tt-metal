@@ -18,6 +18,13 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[3]
 EXAMPLE_DIR = REPO_ROOT / "tt-train" / "sources" / "examples" / "grpo_remote_rollout"
 
+# NOTE: EXAMPLE_DIR ships a top-level ``utils`` package, and so do sibling example
+# dirs (examples/grpo, examples/qwen3). This directory sorts before the test_*.py
+# modules in tests/python, so the tests here (via _completer_utils) are what bind
+# ``sys.modules["utils"]`` for the whole session. Any test module elsewhere that
+# imports a *different* example's ``utils`` must use the evict-and-restore idiom in
+# tests/python/test_grpo_trainer.py, or it fails with
+# ``ModuleNotFoundError: No module named 'utils.<submodule>'``.
 for _p in (str(HERE), str(EXAMPLE_DIR), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
