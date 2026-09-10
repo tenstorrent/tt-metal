@@ -261,7 +261,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         log_warning(
             tt::LogMetal,
             "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
-            "consider using CreateDevices API.");
+            "consider using distributed::MeshDevice::create_unit_meshes().");
     }
 
     // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state

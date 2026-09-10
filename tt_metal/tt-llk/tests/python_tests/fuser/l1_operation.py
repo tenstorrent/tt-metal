@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from helpers.llk_params import (
@@ -22,8 +22,10 @@ from .compute_pipeline import ComputePipeline
 class L1Operation:
     math: ComputePipeline
     max_output_dimensions: Tuple[int, int]
-    tile_shape: TileShape = construct_tile_shape(
-        (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+    tile_shape: TileShape = field(
+        default_factory=lambda: construct_tile_shape(
+            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
     )
     stage_id: int = 0
     needs_pack_sync: bool = False

@@ -8,10 +8,6 @@
 #include "tensix_types.h"
 #include "internal/vptr_uint.h"
 
-#ifndef CPU_JAWBRIDGE
-#include <stdarg.h>
-#endif
-
 /**
  * Notify compiler that any memory address could have been written by external processes or could be read by external
  * process.
@@ -269,11 +265,7 @@ inline void execute_kernel_sync(vptr_pc_buf pc_buf, vptr_mailbox mailbox) {
 
     *fooptr = pc_buf[1];  // sync read - block until everything is idle
 
-    // Clear the mailbox if it was set by one of the previous kernels
     clobber_all_memory();
-#ifdef CPU_JAWBRIDGE
-    *fooptr = mailbox[0];
-#endif
 
 #else
     modelt_accessor_mailbox& mbox = reinterpret_cast<modelt_accessor_mailbox&>(mailbox.acc);

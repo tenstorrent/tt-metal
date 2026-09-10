@@ -54,12 +54,37 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+// The kernel streams whole blocks, so the row's last tile — the only one carrying
+// width padding — is always a block's last tile. The masking helpers below borrow
+// the next DST slot, which relies on this.
+static_assert(Wt % block_size == 0, "block_size must divide Wt");
+
+// Zero the padding lanes of the tile in data_register. mask_tile requires the mask
+// in the DST slot right after the data tile, so data_register + 1 must be free.
+void mask_w_padding(uint32_t data_register) {
+    const uint32_t mask_register = data_register + 1U;
+    copy_init(cb_mask);
+    copy_tile(cb_mask, /* tile_idx */ 0, /* register_idx */ mask_register);
+    mask_tile_init();
+    mask_tile(data_register, mask_register);
+}
+
+// Drive the already-zeroed padding lanes to -inf so they never win the row max.
+// Zeroing must happen first: raw padding may hold NaN, and NaN + (-inf) = NaN.
+void add_max_mask_to_padding(uint32_t data_register) {
+    const uint32_t mask_register = data_register + 1U;
+    copy_init(cb_max_mask);
+    copy_tile(cb_max_mask, /* tile_idx */ 0, /* register_idx */ mask_register);
+    add_binary_tile_init();
+    add_binary_tile(data_register, mask_register, data_register);
+}
+
 #ifdef EVERYTHING_FITS_IN_L1
 
 void find_max_value_in_row() {
     const uint32_t max_value_register = 0;
     const uint32_t tile_register = 1U;
-    // cb_reserve_back(cb_max_value_before_reduction, onetile);
+    cb_reserve_back(cb_max_value_before_reduction, onetile);
     tile_regs_acquire();
     reconfig_data_format(cb_input, cb_input);
     for (uint32_t col = 0; col < Wt;) {
@@ -67,30 +92,13 @@ void find_max_value_in_row() {
         cb_wait_front(cb_input, col + block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? max_value_register : tile_register;
-            copy_tile_init(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register =
-                        working_register + 1U;  // mask register should be next to data register
-
-                    // the next 4 lines are important because we overwrite what's in the trash padding.
-                    // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
-                    // instead of the expected -inf. similarly, -inf * 0 = NaN.
-                    copy_tile_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(working_register, mask_register);  // mask should be next to tile register.
-
-                    copy_tile_init(cb_max_mask);
-                    copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    add_binary_tile_init();
-                    add_binary_tile(working_register, mask_register, working_register);
+                    mask_w_padding(working_register);
+                    add_max_mask_to_padding(working_register);
                 }
             }
 
@@ -120,30 +128,13 @@ void find_max_value_in_row() {
         cb_wait_front(cb_input, block_size);  // wait until reader kernel has written block_size tiles to input buffer
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? max_value_register : tile_register;
-            copy_tile_init(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register =
-                        working_register + 1U;  // mask register should be next to data register
-
-                    // the next 4 lines are important because we overwrite what's in the trash padding.
-                    // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
-                    // instead of the expected -inf. similarly, -inf * 0 = NaN.
-                    copy_tile_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(working_register, mask_register);  // mask should be next to tile register.
-
-                    copy_tile_init(cb_max_mask);
-                    copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    add_binary_tile_init();
-                    add_binary_tile(working_register, mask_register, working_register);
+                    mask_w_padding(working_register);
+                    add_max_mask_to_padding(working_register);
                 }
             }
 
@@ -218,14 +209,7 @@ void calculate_sum_exp_x() {
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register = block_idx + 1U;  // mask register should be next to data register
-                    copy_tile_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(block_idx, mask_register);  // mask should be next to tile register
+                    mask_w_padding(block_idx);
                 }
             }
         }
@@ -246,7 +230,7 @@ void calculate_sum_exp_x() {
     tile_regs_acquire();
     for (uint32_t col = 0; col < Wt; ++col) {
         auto tile_register = col == 0 ? working_register : working_register + 1U;
-        copy_tile_init(cb_exp);
+        copy_init(cb_exp);
         copy_tile(cb_exp, /* tile_idx */ col, /* register_idx */ tile_register);
 
         if (col > 0) {
@@ -289,7 +273,7 @@ void calculate_sum_exp_x() {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? accum_register : tile_register;
 
-            copy_tile_init(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
 
             sub_binary_tile_init();
@@ -301,15 +285,7 @@ void calculate_sum_exp_x() {
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register =
-                        working_register + 1U;  // mask register should be next to data register
-                    copy_tile_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(working_register, mask_register);  // mask should be next to tile register
+                    mask_w_padding(working_register);
                 }
             }
 
@@ -381,9 +357,8 @@ void kernel_main() {
     }
     cb_wait_front(cb_reduction_scaler, onetile);
 
-    init_sfpu(cb_input, cb_output);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_input, cb_input, cb_output);
+    copy_init(cb_input);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
@@ -396,7 +371,6 @@ void kernel_main() {
 
         const uint32_t working_register = 0;
         const uint32_t sum_exp_register = block_size;
-        // const uint32_t max_value_register = block_size + 1U;
 
         for (uint32_t col = 0; col < Wt; col += block_size) {
 #ifndef EVERYTHING_FITS_IN_L1
@@ -417,7 +391,7 @@ void kernel_main() {
                 const uint32_t input_tile_idx = col + block_idx;
 
                 reconfig_data_format(cb_exp, cb_exp);
-                copy_tile_init(cb_exp);
+                copy_init(cb_exp);
                 copy_tile(cb_exp, /* tile_idx */ input_tile_idx, /* register_idx */ block_idx);
 #else
                 const uint32_t input_tile_idx = block_idx;
@@ -436,6 +410,19 @@ void kernel_main() {
 
                 mul_binary_tile_init();
                 mul_binary_tile(block_idx, sum_exp_register, block_idx);  // multiply by scaler
+
+#ifndef EVERYTHING_FITS_IN_L1
+                // The L1 path reads already-masked tiles from cb_exp; here exp(x - max) is
+                // recomputed, so the row's last tile must be masked again or padding lanes
+                // leave nonzero output. The mask lands in sum_exp_register — safe after the
+                // multiply, since the sum is re-broadcast every acquire window — keeping
+                // DST usage at block_size + 1 tiles.
+                if constexpr (do_mask_w) {
+                    if (col + block_idx + 1 == Wt) {
+                        mask_w_padding(block_idx);
+                    }
+                }
+#endif
             }
             tile_regs_commit();
 

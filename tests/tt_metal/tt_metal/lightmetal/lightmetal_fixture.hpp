@@ -69,7 +69,7 @@
 //             binary.save_to_file(this->trace_bin_path_);
 //         }
 
-//         tt::tt_metal::CloseDevice(this->device_);
+//         this->device_->close();
 
 //         // We could gaurd this to not attempt to replay empty binary, and still allow test to pass
 //         // but, would rather catch the case if the feature gets disabled at compile time.
@@ -79,7 +79,7 @@
 //             } else {
 //                 this->create_device(trace_region_size_);
 //                 RunLightMetalBinary(std::move(binary), this->device_);
-//                 tt::tt_metal::CloseDevice(this->device_);
+//                 this->device_->close();
 //             }
 //         }
 //     }

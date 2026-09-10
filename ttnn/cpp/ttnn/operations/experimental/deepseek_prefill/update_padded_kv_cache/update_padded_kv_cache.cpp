@@ -18,7 +18,9 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t kv_actual_global,
-    uint32_t cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> valid_global,
+    std::optional<uint32_t> tp_axis) {
     return ttnn::prim::update_padded_kv_cache(
         cache,
         input,
@@ -28,7 +30,10 @@ ttnn::Tensor update_padded_kv_cache(
         kv_actual_global,
         layer_idx,
         num_layers,
-        cluster_axis);
+        cluster_axis,
+        /*valid_global_tensor=*/std::nullopt,
+        valid_global,
+        tp_axis);
 }
 
 // Per-element-tensor form: slot_idx/kv_actual_global read on-device from the two 1-element tensors
@@ -40,7 +45,9 @@ ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::Tensor>& valid_global,
+    std::optional<uint32_t> tp_axis) {
     return ttnn::prim::update_padded_kv_cache(
         cache,
         input,
@@ -50,7 +57,10 @@ ttnn::Tensor update_padded_kv_cache(
         /*kv_actual_global=*/0,
         layer_idx,
         num_layers,
-        cluster_axis);
+        cluster_axis,
+        valid_global,
+        /*valid_global=*/std::nullopt,
+        tp_axis);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache

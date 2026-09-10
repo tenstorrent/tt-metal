@@ -12,9 +12,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
-CSG = 5120
+CSG = PREFILL_CHUNK_TOKENS
 SEQ = 10240  # global cache length (2 slabs); seq_local = 1280
 NUM_LAYERS = 61
 NUM_USERS = 2

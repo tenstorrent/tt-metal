@@ -43,6 +43,38 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
         ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
         ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
         tensor_shape);
+
+    // Column reduce (GAPOOL) consumes MxFp4 SrcA as the 2x-packed src-register format, like matmul.
+    // Override only the unpacker gasket OUT_DATA_FORMAT to MxFp4_2x_B (shadow register; unpacker idle
+    // at init before the first UNPACR; buffer descriptor keyed on the MxFp4 L1 format is unchanged).
+    // operandA -> SrcA -> UNP_A. Only REDUCE_COL supports 2x. EN_32BIT_DEST does not affect the
+    // MxFp4->MxFp4_2x_B reconfig validity, so pass false.
+    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+        if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+                get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+        }
+    }
+}
+
+/**
+ * @brief Undo the MxFp4 -> MxFp4_2x_B unpacker OUT_DATA_FORMAT override from @ref llk_unpack_AB_reduce_init.
+ *
+ * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
+ *
+ * Restores SrcA's unpacker OUT_DATA_FORMAT to the op-agnostic unpack_dst_format[] value (Float16_b),
+ * so a following NON-reduce op on the same MxFp4 buffer unpacks correctly. Needed because non-reduce
+ * unpack inits never reprogram OUT_DATA_FORMAT and reconfig_data_format is silently skipped for a
+ * same-format operand. Only column reduce overrode it (SrcA -> UNP_A); restoring an operand that was
+ * never overridden just reprograms it to the same table value (harmless), so this gates on MxFp4 only
+ * and needs no reduce_dim template. Pair with the ALU restore in @ref llk_math_reduce_uninit.
+ */
+inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
+    }
 }
 
 /**

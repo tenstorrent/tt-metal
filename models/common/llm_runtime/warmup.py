@@ -16,7 +16,7 @@ from models.common.llm_runtime.config import PageTableLayout, TraceConfig, Warmu
 from models.common.llm_runtime.decode import DecodeRuntimeConfig
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.program_compiler import CompiledProgram
-from models.common.sampling import SamplingParams
+from models.common.sampling.sampling_params import SamplingParams
 
 
 @dataclass(frozen=True)

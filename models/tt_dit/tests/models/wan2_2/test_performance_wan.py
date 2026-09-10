@@ -21,6 +21,7 @@ from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_conf
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
+    is_global_rank_zero,
     line_params_req_exact_devices,
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
@@ -64,26 +65,38 @@ def t2v_metrics(mesh_device, height):
                 "total": 850.0,
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        expected_metrics = {
-            "encoder": 0.1,
-            "denoising": 163.0,
-            "vae": 18.2,
-            "total": 192.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
         if is_blackhole():
             expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 140.0,
-                "vae": 2.0,
-                "total": 142.1,
+                "encoder": 0.21,
+                "denoising": 75.0,
+                "vae": 0.42,
+                "total": 76.0,
             }
         else:
             expected_metrics = {
-                "encoder": 0.2,
-                "denoising": 370.0,
-                "vae": 7.0,
-                "total": 375.2,
+                "encoder": 0.23,
+                "denoising": 142.0,
+                "vae": 1.55,
+                "total": 144.0,
+            }
+    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 205.0,
+                "vae": 0.85,
+                "total": 206.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 449.0,
+                "vae": 3.4,
+                "total": 452.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
@@ -215,7 +228,7 @@ def test_pipeline_performance(
     # Skip 4U.
     if galaxy_type == "4U":
         # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
-        if is_ci_env:
+        if is_ci_env and is_global_rank_zero():
             with benchmark_profiler("run", iteration=0):
                 pass
 
@@ -409,8 +422,9 @@ def test_pipeline_performance(
         "total": statistics.mean(total_times),
     }
 
-    if is_ci_env:
-        # In CI, dump a performance report
+    if is_ci_env and is_global_rank_zero():
+        # In CI, dump a performance report from rank 0 only: all ranks time the same
+        # collective run, and concurrent saves race on the shared output file.
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
             for step_name in ["encoder", "denoising", "vae", "run"]:

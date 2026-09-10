@@ -16,7 +16,7 @@ so each (tensor, head) needs its OWN config with a single-member device group; `
     config 2N       -> index_k         (replica group: all TP columns of the SP row)
 
 The per-chip DRAM addressing (32-token blocks round-robin across the DRAM banks, block-cyclic positions,
-user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_kimi``, just
+user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_block_cyclic``, just
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
 """
 

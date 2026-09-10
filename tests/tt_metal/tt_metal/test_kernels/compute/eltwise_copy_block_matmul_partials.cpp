@@ -17,7 +17,8 @@ void kernel_main() {
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
-    unary_op_init_common(dfb::in, dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
 
     for (uint32_t b = 0; b < outer_loop; ++b) {
         dfb_in.wait_front(num_single_transfer);

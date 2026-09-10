@@ -180,8 +180,9 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         # keeps any element from being its own reciprocal, which would be written yet compare
         # equal to the input and read as a footprint gap.
 
-        # RecipIter returns 1/x, RecipLegacy returns |1/x|. Goldens are written to match that.
-        # Sign alternates by row, not by flat index, because the kernel writes every other row.
+        # Both bodies return 1/x, so the sign has to survive the kernel; RecipLegacy used to
+        # return |1/x| and no longer does. Sign alternates by row, not by flat index, because
+        # the kernel writes every other row.
         magnitudes = _ramp(1.25, 5.0)
         rows = torch.arange(ELEMENTS_PER_TILE) // TILE_DIM
         signs = torch.where(rows % 2 == 0, torch.tensor(1.0), torch.tensor(-1.0))

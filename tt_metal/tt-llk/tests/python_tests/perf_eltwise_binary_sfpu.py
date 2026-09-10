@@ -4,6 +4,7 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -30,7 +31,11 @@ from helpers.test_variant_parameters import (
 def get_dest_accum_modes(formats):
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
         return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
+    # for both would record two rows with an identical key (the same kernel twice).
+    return distinct_dest_accumulation_modes(
+        formats, [DestAccumulation.Yes, DestAccumulation.No]
+    )
 
 
 @pytest.mark.perf
@@ -55,10 +60,7 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement

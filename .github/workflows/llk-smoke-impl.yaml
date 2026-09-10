@@ -16,6 +16,14 @@ on:
         required: false
         type: string
         default: "not perf and not nightly and not quasar"
+      test-category:
+        required: false
+        type: string
+        default: pr_gate
+        description: >-
+          Time-budget workflow key passed to verify_time_budget.py — the pipeline whose
+          hardware allowance this run is charged against (pr_gate for the PR gate, sanity
+          for sanity-tests). Must exist under `llk` in .github/time_budget.yaml.
       per-test-timeout:
         required: false
         type: string
@@ -32,6 +40,15 @@ on:
           Optional logical SKU allowlist (comma-separated) for change gating.
           Default "*" means no extra filter. Empty string skips all tests.
           Any other value is forwarded as --sku-allowlist.
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Commit SHA to test. Empty means github.sha, which is what the PR gate
+          wants (on pull_request that is the merge commit). Pipelines that can
+          target an arbitrary commit — sanity-tests.yaml — pass their own ref so
+          the LLK legs test the same tree as every other leg.
 
 permissions:
   checks: write
@@ -52,6 +69,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             .github
             tests/pipeline_reorg
@@ -68,7 +86,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            pr_gate \
+            "${{ inputs.test-category }}" \
             "${extra[@]}"
       - name: Build test matrix
         id: build-matrix
@@ -104,6 +122,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}

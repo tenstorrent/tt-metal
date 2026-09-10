@@ -3,12 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+// device.hpp is needed for IDevice::arch() in matches_quasar_native_slice. Do NOT rely on it arriving
+// transitively: this target is a unity build, so a missing include here compiles clean in build_Release
+// and only breaks with TT_UNITY_BUILDS=OFF.
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 
 using namespace tt::tt_metal;
 
@@ -643,8 +649,116 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     return true;
 }
 
+bool BinaryNgDeviceOperation::matches_quasar_native_slice(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Strict subset of matches_metal_v2_slice. kernels_qsr/ holds only the four no-broadcast FPU
+    // sources, so every rejection below is also a precondition of create_no_bcast_artifacts.
+    const NativeTuning& tuning = native_tuning();
+    // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
+    if (!tuning.enabled) {
+        return false;
+    }
+    const auto& a = tensor_args.input_tensor_a;
+    // device()->arch(), not the host arch-name helper: that returns "invalid" under the simulator.
+    if (a.device()->arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    // MUST precede every input_tensor_b dereference below.
+    if (!tensor_args.input_tensor_b.has_value()) {
+        return false;
+    }
+    const auto& b = *tensor_args.input_tensor_b;
+
+    // where-op / quantization carry their own kernels, none of which were copied.
+    if (attributes.is_where_op || attributes.is_quant_op) {
+        return false;
+    }
+    // Implied by bf16 ADD, but asserted: the gate is the sole guarantor of the factory's precondition.
+    if (attributes.is_sfpu) {
+        return false;
+    }
+    if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
+        return false;
+    }
+    if (attributes.binary_op_type != BinaryOpType::ADD) {
+        return false;
+    }
+    // Each activation adds a self-loop DFB whose multi-thread behaviour is unproven.
+    if (!attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
+        !attributes.post_activations.empty()) {
+        return false;
+    }
+    // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
+    if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
+        attributes.output_layout != Layout::TILE) {
+        return false;
+    }
+    if (a.dtype() != DataType::BFLOAT16 || b.dtype() != DataType::BFLOAT16) {
+        return false;
+    }
+    const auto& a_tile = a.tensor_spec().tile();
+    const auto& b_tile = b.tensor_spec().tile();
+    if (a_tile.get_height() != tt::constants::TILE_HEIGHT || a_tile.get_width() != tt::constants::TILE_WIDTH ||
+        b_tile.get_height() != tt::constants::TILE_HEIGHT || b_tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+
+    // The factory splits work off the OUTPUT, so the output spec is the authority for every check below.
+    const spec_return_value_t out_spec = compute_output_specs(attributes, tensor_args);
+
+    // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
+    // is_sfpu false. data_type(), not dtype(), on TensorSpec.
+    if (out_spec.data_type() != DataType::BFLOAT16) {
+        return false;
+    }
+
+    // NONE covers H/W only, so a leading-dim broadcast also reads as NONE. Require full-rank equality.
+    if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
+        return false;
+    }
+    // Borrowed shards use a different work split than the divisibility check below assumes.
+    if (a.memory_config().is_sharded() || b.memory_config().is_sharded() || out_spec.memory_config().is_sharded()) {
+        return false;
+    }
+    if (tensor_args.output_tensor.has_value() && tensor_args.output_tensor->memory_config().is_sharded()) {
+        return false;
+    }
+
+    // Must match the factory's c.physical_volume(); input_a diverges under leading-dim broadcast.
+    const uint32_t tile_hw = out_spec.tile().get_tile_hw();
+    if (tile_hw == 0) {
+        return false;
+    }
+    const uint64_t total_tiles = out_spec.padded_shape().volume() / tile_hw;
+    if (total_tiles == 0) {
+        return false;
+    }
+    // split_work_to_cores(worker_grid, total_tiles) caps the core count at the tile count.
+    const uint64_t num_cores = std::min<uint64_t>(total_tiles, attributes.worker_grid.num_cores());
+    if (num_cores == 0) {
+        return false;
+    }
+    const uint32_t lcm_rcw = std::lcm(std::lcm(tuning.reader_threads, tuning.compute_threads), tuning.writer_threads);
+    // Unreachable (native_tuning() rejects 0), but the failure mode would be SIGFPE.
+    if (lcm_rcw == 0) {
+        return false;
+    }
+    if (total_tiles % (num_cores * lcm_rcw) != 0) {
+        return false;
+    }
+    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
+    const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
+    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
+           ratio_ok(tuning.compute_threads, tuning.writer_threads);
+}
+
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Order matters for the hot path: this runs on EVERY dispatch, cache hits included, and the native
+    // gate's first check is a cached bool that is false unless TTNN_QSR_NATIVE is set.
+    if (matches_quasar_native_slice(attributes, tensor_args)) {
+        return ProgramFactoryQuasarNative{};
+    }
     // DFB / Metal 2.0 is the default for the matching slice (arch-portable: CB-backed on WH/BH,
     // overlay-backed on Quasar). Everything else uses the descriptor path.
     if (matches_metal_v2_slice(attributes, tensor_args)) {

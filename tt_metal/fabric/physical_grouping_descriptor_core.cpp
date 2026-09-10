@@ -329,8 +329,12 @@ void PhysicalGroupingDescriptor::populate() {
     // Set of preset names that don't need to exist (can be auto-populated)
     std::unordered_set<std::string> preset_names = {"HOSTS", "MESH", "meshes"};
 
+    // Stable per-descriptor handle for each resolved grouping instance, assigned in population order.
+    PhysicalGroupingId next_grouping_id = 0;
+
     for (const auto& grouping : proto_->groupings()) {
         GroupingInfo info = convert_grouping_to_info(grouping);
+        info.id = next_grouping_id++;
 
         // Track dependencies (skip preset names that don't exist)
         std::set<std::string> deps;
