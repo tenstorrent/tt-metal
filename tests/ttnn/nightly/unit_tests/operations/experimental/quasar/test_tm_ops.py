@@ -90,3 +90,20 @@ def test_quasar_tilize_dram_sharded_input_to_l1_sharded_output(device):
     result = ttnn.experimental.quasar.tilize(ttnn_in, memory_config=omc)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=x, actual_result=got, ulp_threshold=0)
+
+
+def test_quasar_to_layout_height_sharded_batched_unpad(device):
+    ncores, shard_h, shard_w = 64, 512, 64
+    imc = _explicit_height_shard_config(device, ncores, shard_h, shard_w)
+    torch.manual_seed(12345)
+    x = torch.rand((32, 32, 17, 64), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=imc)
+    result = ttnn.experimental.quasar.to_layout(ttnn_in, ttnn.ROW_MAJOR_LAYOUT)
+    actual = result.memory_config()
+    assert actual.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert actual.shard_spec is not None
+    padded_h, padded_w = ttnn_in.padded_shape[-2], ttnn_in.padded_shape[-1]
+    batch = (shard_h * shard_w) // (padded_h * padded_w)
+    assert tuple(actual.shard_spec.shape) == (batch * x.shape[-2], x.shape[-1])
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=x, actual_result=got, ulp_threshold=0)
