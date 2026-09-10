@@ -1369,7 +1369,7 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
 }
 
 uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
-    experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
+    experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
     TT_FATAL(this->compiled_.empty(), "Cannot attach PrefetcherPipe to an already compiled program {}", this->id);
 
     for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
@@ -1441,7 +1441,7 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
     return prefetcher_pipe_id;
 }
 
-const experimental::PrefetcherPipe& detail::ProgramImpl::get_prefetcher_pipe_attachment(
+const experimental::PrefetcherPipeImpl& detail::ProgramImpl::get_prefetcher_pipe_attachment(
     uint8_t prefetcher_pipe_id) const {
     auto it = prefetcher_pipe_attachments_.find(prefetcher_pipe_id);
     TT_FATAL(
@@ -1467,7 +1467,7 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
     TT_FATAL(
         this->compiled_.empty(), "Cannot register a PrefetcherPipe relay on an already compiled program {}", this->id);
 
-    const experimental::PrefetcherPipe& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
+    const experimental::PrefetcherPipeImpl& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
 
     auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
     TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);

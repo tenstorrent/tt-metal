@@ -28,9 +28,9 @@ void kernel_main() {
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
     constexpr auto block_h_const = get_arg(args::block_h);
-    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    const volatile uint32_t block_h_volatile = get_arg(args::block_h);
     constexpr auto subblock_w_const = get_arg(args::subblock_w);
-    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
@@ -77,12 +77,7 @@ void kernel_main() {
         num_blocks_reduce = num_blocks_first_stage;
     }
 
-    bool enable_sqrt;
-    if (use_two_stage_reduce and not is_second_stage_reader) {
-        enable_sqrt = false;
-    } else {
-        enable_sqrt = true;
-    }
+    const bool enable_sqrt = not(use_two_stage_reduce and not is_second_stage_reader);
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
@@ -153,11 +148,11 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #ifndef RMSNORM
-    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    const DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
 #endif
-    DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
+    const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
@@ -180,9 +175,9 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
-    int index_subblock_w_offset = 0;
-    int index_h_offset = 0;
-    int index = 0;
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index_h_offset = 0;
+    uint32_t index = 0;
 
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
@@ -194,7 +189,8 @@ void kernel_main() {
     constexpr uint32_t dfb_in_id = dfb_in0;
 #endif
     DataflowBuffer dfb_in(dfb_in_id);
-    constexpr uint32_t dfb_im_id = do_gamma ? dfb_x : (do_beta ? dfb_fusion_id : dfb_out_id);
+    constexpr uint32_t dfb_im_no_gamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
+    constexpr uint32_t dfb_im_id = do_gamma ? dfb_x : dfb_im_no_gamma_id;
     DataflowBuffer dfb_im(dfb_im_id);
     constexpr uint32_t dfb_outgamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
@@ -284,7 +280,7 @@ void kernel_main() {
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external_id, dfb_scaler_global_id, dfb_ex_id);
-        dfb_ex.reserve_back(num_tiles_per_allgather_worker);
+        dfb_ex.reserve_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             dfb_scaler_global.wait_front(1);
@@ -305,9 +301,9 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        dfb_ex.push_back(num_tiles_per_allgather_worker);
+        dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
-        dfb_ex.wait_front(num_tiles_per_allgather_worker);
+        dfb_ex.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
     }
 
     // x - E[x]
@@ -329,8 +325,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_xmm_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -376,8 +372,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_xmm2_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm2_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -426,7 +422,7 @@ void kernel_main() {
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_ex2_id);
-        dfb_ex2.reserve_back(num_tiles_per_allgather_worker);
+        dfb_ex2.reserve_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             dfb_scaler_global.wait_front(1);
@@ -448,7 +444,7 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        dfb_ex2.push_back(num_tiles_per_allgather_worker);
+        dfb_ex2.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
 
         if (enable_sqrt) {
@@ -471,7 +467,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
+    if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out_id);
     }
 // (x - Ex) * 1/[sqrt(Var + eps)]
@@ -502,7 +498,7 @@ void kernel_main() {
                 // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
                 // activation will be applied after the gamma/beta multiplication/addition.
                 // Otherwise, we can apply the activation here.
-                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                if constexpr (!do_gamma && !do_beta) {
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
                 }
@@ -511,8 +507,8 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_im_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_im_id);
             }
             tile_regs_release();
 
@@ -529,7 +525,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
     {
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
-        if constexpr (do_beta == 0) {
+        if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out_id);
         }
         mul_bcast_rows_init(dfb_im_id, dfb_gamma_id);

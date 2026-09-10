@@ -35,7 +35,7 @@ namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 
 void kernel_main() {
-    uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
@@ -228,7 +228,7 @@ void kernel_main() {
 
         // x - E[x]
         reconfig_data_format(dfb_x_id, dfb_ex_id);
-        dfb_xmm.reserve_back(total_buffer_size);
+        dfb_xmm.reserve_back(static_cast<uint16_t>(total_buffer_size));
         sub_bcast_cols_init(dfb_x_id, dfb_ex_id);
         for (auto block : generic::blocks(Wt, block_size)) {
             tile_regs_acquire();
@@ -237,7 +237,7 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            dfb_x.pop_front(block.full_block_size());
+            dfb_x.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
             tile_regs_wait();
             for (auto i : block.local()) {
@@ -245,7 +245,7 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            dfb_xmm.push_back(block.full_block_size());
+            dfb_xmm.push_back(static_cast<uint16_t>(block.full_block_size()));
         }
         dfb_ex.pop_front(1);
 
@@ -260,7 +260,7 @@ void kernel_main() {
         mul_init(dfb_xmm_id, dfb_xmm_id);
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
-            dfb_xmm.wait_front(block.start() + block.size());
+            dfb_xmm.wait_front(static_cast<uint16_t>(block.start() + block.size()));
 #else
             dfb_xmm.wait_front(block.start() + block.full_block_size());
 #endif
@@ -271,7 +271,7 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            dfb_xmm2.reserve_back(block.full_block_size());
+            dfb_xmm2.reserve_back(static_cast<uint16_t>(block.full_block_size()));
 
             tile_regs_wait();
             for (auto i : block.local()) {
@@ -279,7 +279,7 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            dfb_xmm2.push_back(block.full_block_size());
+            dfb_xmm2.push_back(static_cast<uint16_t>(block.full_block_size()));
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
@@ -321,7 +321,7 @@ void kernel_main() {
 #else
             pack_reconfig_data_format(dfb_fusion_id);
 #endif
-            dfb_im_or_out.reserve_back(block.full_block_size());
+            dfb_im_or_out.reserve_back(static_cast<uint16_t>(block.full_block_size()));
             // Restore SrcA to the deviation buffer's format after the previous iteration's
             // gamma/beta step left it on the streaming intermediate. With neither gamma nor beta
             // there is no such step to undo.
@@ -352,8 +352,8 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            dfb_im_or_out.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
+            dfb_im_or_out.push_back(static_cast<uint16_t>(
+                block.full_block_size()));  // if no gamma/beta are provided, this will be passed on to the writer
 
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
 #if defined RMSNORM and not defined FUSE_PRE_ADD
@@ -451,7 +451,7 @@ void kernel_main() {
 #endif
         }
         dfb_ex2pe.pop_front(1);
-        dfb_xmm.pop_front(total_buffer_size);
+        dfb_xmm.pop_front(static_cast<uint16_t>(total_buffer_size));
 
 #ifdef UNTILIZE_OUT
         constexpr auto dfb_out_rm_id = dfb::out_rm;

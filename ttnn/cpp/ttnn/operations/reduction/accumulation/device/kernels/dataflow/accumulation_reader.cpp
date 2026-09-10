@@ -23,9 +23,9 @@ void kernel_main() {
     // This is the offset of all dimensions above the accumulation axis (HtWt for last two axes)
     uint32_t high_rank_offset = get_arg(args::high_rank_offset);
     // backward flag (from n-1 to 0)
-    const uint32_t flip = get_arg(args::flip);
+    const bool flip = get_arg(args::flip) == 1;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in_obj(dfb::in);
 
     const uint32_t ublock_size_bytes = dfb_in_obj.get_tile_size();
