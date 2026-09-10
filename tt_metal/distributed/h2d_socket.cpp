@@ -886,6 +886,7 @@ bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
         bytes_acked_ = bytes_acked_value;
         bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
         if (bytes_free < num_bytes) {
+            advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
             return false;
         }
     }

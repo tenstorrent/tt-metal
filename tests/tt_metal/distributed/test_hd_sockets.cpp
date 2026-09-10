@@ -16,6 +16,7 @@
 #include <exception>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -235,7 +236,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
-    uint32_t num_txns = data_size / page_size;
+    const uint32_t num_txns = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
 
@@ -318,18 +319,22 @@ void test_hd_socket_multithreaded_loopback(
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
 
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t page_size_words = page_size / sizeof(uint32_t);
+    const uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t total_pages = num_iterations * num_txns;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
-    auto retry_until_deadline = [deadline](auto&& operation, const char* timeout_message) {
-        while (!operation()) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                throw std::runtime_error(timeout_message);
+    auto retry_until_deadline =
+        [deadline](auto&& operation, const char* timeout_message, uint32_t completed_pages, uint32_t total_pages) {
+            while (!operation()) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    throw std::runtime_error(
+                        std::string(timeout_message) + " after " + std::to_string(completed_pages) + "/" +
+                        std::to_string(total_pages) + " pages completed");
+                }
+                std::this_thread::yield();
             }
-            std::this_thread::yield();
-        }
-    };
+        };
 
     std::exception_ptr write_error;
     std::exception_ptr read_error;
@@ -346,7 +351,9 @@ void test_hd_socket_multithreaded_loopback(
                                 src_vec.data() + (i * data_size_words) + (j * page_size_words),
                                 /*num_pages=*/1);
                         },
-                        "Timed out waiting for space in the H2D socket");
+                        "Timed out waiting for space in the H2D socket",
+                        i * num_txns + j,
+                        total_pages);
                 }
             }
         } catch (...) {
@@ -365,7 +372,9 @@ void test_hd_socket_multithreaded_loopback(
                                 dst_vec.data() + (i * data_size_words) + (j * page_size_words),
                                 /*num_pages=*/1);
                         },
-                        "Timed out waiting for data in the D2H socket");
+                        "Timed out waiting for data in the D2H socket",
+                        i * num_txns + j,
+                        total_pages);
                 }
             }
         } catch (...) {

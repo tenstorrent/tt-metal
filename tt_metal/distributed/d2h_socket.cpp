@@ -766,6 +766,7 @@ bool D2HSocket::try_read_impl(void* data, uint32_t num_pages, bool notify_sender
     }
     bytes_sent_ = bytes_sent_value;
     if (bytes_sent_value - bytes_acked_ < bytes_required) {
+        advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         return false;
     }
 
