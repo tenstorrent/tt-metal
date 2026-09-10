@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -283,6 +284,9 @@ def _t_neighbor_pad(
     )
 
 
+# MINIMAX_H3_TAP_TABLE: "1" (default) use the tables; "formulation" use the formulation rows but let conv1d slice
+# itself; "0" ignore the tables and probe as before.
+_TAP_TABLE_MODE = os.environ.get("MINIMAX_H3_TAP_TABLE", "1")
 _TAP_WARNED: set = set()
 
 
@@ -364,11 +368,11 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     known = cache.get(shape_key)
     if known is not None:
         add(known[0], known[1], "cached")
-    else:
+    elif _TAP_TABLE_MODE != "0":
         tabled = tap_formulation(device_key, C, K, stride)
         if tabled in applicable_formulations(C):
             channels = C if tabled == "direct" else tabled
-            explicit = tap_slice_config(device_key, channels, K, stride, T_out)
+            explicit = tap_slice_config(device_key, channels, K, stride, T_out) if _TAP_TABLE_MODE == "1" else None
             if explicit is not None:
                 add(tabled, explicit, "table")
             add(tabled, None, "table")
@@ -402,6 +406,9 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
                 )
             continue
         cache[shape_key] = (formulation, slice_config)
+        logger.debug(
+            f"tap filter plan: {shape} -> {formulation!r} / {slice_signature(slice_config) or 'auto'} ({source})"
+        )
         if source == "trial":
             if formulation == "mac":
                 _warn_once(

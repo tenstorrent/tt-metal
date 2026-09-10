@@ -352,6 +352,9 @@ def main() -> None:
     ap.add_argument("--mac", action="store_true", help="also time the MAC fallback")
     ap.add_argument("--json", help="write every measurement here")
     ap.add_argument(
+        "--no-table", action="store_true", help="clear this device class's table first (A/B against the probe chain)"
+    )
+    ap.add_argument(
         "--merge-json",
         nargs="*",
         default=[],
@@ -382,6 +385,11 @@ def main() -> None:
     try:
         device_key = tap_device_key(mesh_device)
         logger.info(f"device class {device_key}, mesh {rows}x{cols}, l1_small_size {args.l1_small}")
+        if args.no_table:
+            from models.tt_dit.utils.tap_filter_configs import clear_tap_configs
+
+            clear_tap_configs(device_key)
+            logger.info(f"table cleared for {device_key}: the filter probes as before")
         shapes: Counter = Counter({tuple(s): 0 for s in args.shapes})
         if args.record:
             seen = record_decoder_shapes(mesh_device, num_latent_frames=args.frames, factor=args.factor, axis=args.axis)
