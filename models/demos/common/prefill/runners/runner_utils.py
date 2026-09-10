@@ -126,6 +126,24 @@ def load_trace_token_ids(trace_dir, total_len=None) -> list:
     return tids[:total_len] if total_len is not None else tids
 
 
+def load_trace_golden_span(trace_dir) -> tuple[int, int]:
+    """Absolute prompt positions ``[start, end)`` that a trace's per-token streams describe.
+
+    ``capture_rows`` marks a trace that covers a window of a longer prefill: its streams are stored
+    from row 0 while row ``r`` stands for position ``start + r``, so a reader that ignores the window
+    compares the right row count against the wrong tokens. Without it the streams start at position
+    0 and row index and position coincide.
+    """
+    import json
+
+    with open(Path(trace_dir) / "metadata.json") as f:
+        md = json.load(f)
+    rows = md.get("capture_rows")
+    if rows is not None:
+        return int(rows[0]), int(rows[1])
+    return 0, int(md.get("n_prompt_tokens") or len(md["token_ids"]))
+
+
 def _snap_counts_to_starts(counts, valid_starts, num_layers):
     valid = sorted(valid_starts)
     boundaries, s = [], 0

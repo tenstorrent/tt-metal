@@ -13,8 +13,8 @@ MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
 CHUNK_SIZE=5120
-GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
+PCC_WINDOW_TOKENS=0
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
@@ -34,6 +34,7 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     MAX_SEQ_LEN=256000
+    GOLDEN_LEN=56320
     # Users are bounded by per-bank KV capacity, and that bound has to be bisected, not computed --
     # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
     # just above this and wanders between ranks, so re-bisect before raising it.
@@ -51,8 +52,12 @@ case "${MODEL}" in
     TP_SHARD_KV_DEFAULT=1
     # UNTRACED, as of now
     RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
+    GLM52_TRACE=/mnt/models/deepseek-prefill-cache/glm-traces/glm52-1M-last5k
+    GOLDEN_LEN=0
+    PCC_WINDOW_TOKENS=${CHUNK_SIZE}
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
+        export PREFILL_TRACE_DIR=${GLM52_TRACE}; \
+        export PREFILL_PRODUCER_SLOT_TRACES=${GLM52_TRACE};"
     ;;
   *)
     echo "unknown model key '${MODEL}'" >&2
@@ -183,6 +188,7 @@ set +e
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
+    export PREFILL_PCC_WINDOW_TOKENS=${PCC_WINDOW_TOKENS}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
