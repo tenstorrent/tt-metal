@@ -4,6 +4,7 @@
 #pragma once
 
 #include <tuple>
+#include <cstdlib>  // std::abs
 
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
