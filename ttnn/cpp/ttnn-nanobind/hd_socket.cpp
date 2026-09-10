@@ -192,6 +192,22 @@ void py_module_types(nb::module_& mod) {
                         written to the socket.
             )doc")
         .def(
+            "write_pages_tensor",
+            [](tt::tt_metal::distributed::H2DSocket& self,
+               const nb::ndarray<nb::pytorch, nb::c_contig, nb::device::cpu>& tensor) {
+                uint32_t page_size = self.get_page_size();
+                TT_FATAL(page_size > 0, "write_pages_tensor: page size must be set");
+                size_t nbytes = tensor.nbytes();
+                TT_FATAL(
+                    nbytes % page_size == 0,
+                    "write_pages_tensor: tensor data size ({}) is not a multiple of page size ({})",
+                    nbytes,
+                    page_size);
+                self.write(const_cast<void*>(tensor.data()), nbytes / page_size);
+            },
+            nb::arg("tensor"),
+            "Writes all pages in one contiguous CPU tensor as one socket transaction.")
+        .def(
             "barrier",
             &tt::tt_metal::distributed::H2DSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
