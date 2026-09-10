@@ -38,8 +38,9 @@ void kernel_main() {
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
         dfb.reserve_back(1);
-        // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back; a no-write dummy pack
-        // issues a real PACR to order push_back after reserve_back without clobbering the increments above.
+        // TEN-4746: a real packer op must sit between reserve_back's WAIT_FREE and push_back's
+        // PUSH_TILES. The host pre-fills the ring, so a no-write dummy pack supplies that op
+        // without modifying the payload.
         ckernel::dummy_pack(dfb::out);
         dfb.push_back(1);
     }
