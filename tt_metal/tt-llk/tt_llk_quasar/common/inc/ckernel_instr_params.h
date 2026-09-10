@@ -433,16 +433,18 @@ struct p_sfpu
 
     struct cc
     {
-        constexpr static std::uint32_t SET_CC    = 0x2;
-        constexpr static std::uint32_t CLR_CC    = 0x1;
-        constexpr static std::uint32_t SET_CC_EN = 0x1;
-        constexpr static std::uint32_t CLR_CC_EN = 0x0;
+        constexpr static std::uint32_t SET_CC       = 0x2;
+        constexpr static std::uint32_t CLR_CC       = 0x1;
+        constexpr static std::uint32_t SET_CC_EN    = 0x1;
+        constexpr static std::uint32_t CLR_CC_EN    = 0x0;
+        constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
     struct sfp_sfpcast_mod
     {
-        constexpr static std::uint32_t SM32_TO_2SC  = 0x3; // sign+magnitude int32 -> 2's complement
-        constexpr static std::uint32_t TWO_SC_TO_SM = 0x2; // 2's complement -> sign+magnitude int32
+        constexpr static std::uint32_t SM32_TO_2SC      = 0x3; // sign+magnitude int32 -> 2's complement
+        constexpr static std::uint32_t TWO_SC_TO_SM     = 0x2; // 2's complement -> sign+magnitude int32
+        constexpr static std::uint32_t FP32_SM32_TO_2SC = 0x4; // FP32/SMAG32 -> 2's complement
     };
 
     struct sfp_binary_mod

@@ -28,14 +28,14 @@ inline void _calculate_typecast_fp32_to_uint16_rows()
     // previous enable, which leaves the block's behaviour dependent on incoming CC state.
     // SFPSETCC imm12_math bit 11 selects how src_c is read: it must be set for an FP32 LREG,
     // otherwise the float bits are compared as two's-complement int32.
-    TTI_SFPENCC(1, 2);                     // CC_en <= 1, CC_res <= 1
-    TTI_SFPSETCC(0x800, p_sfpu::LREG0, 0); // CC_res <= (LREG0 < 0), src read as FP32
-    TTI_SFPLOADI(p_sfpu::LREG0, 0, 0);     // loads zeros where lreg[0] is negative
-    TTI_SFPENCC(0, 2);                     // CC_en <= 0, subsequent lanes all active
+    TTI_SFPENCC(1, 2);                                                 // CC_en <= 1, CC_res <= 1
+    TTI_SFPSETCC(ckernel::p_sfpu::cc::FP32_SM32_EN, p_sfpu::LREG0, 0); // CC_res <= (LREG0 < 0), src read as FP32
+    TTI_SFPLOADI(p_sfpu::LREG0, 0, 0);                                 // loads zeros where lreg[0] is negative
+    TTI_SFPENCC(0, 2);                                                 // CC_en <= 0, subsequent lanes all active
 
-    // Same two-step convert as calculate_typecast: fp32 → sign-mag int32 (SFPCAST 0x4 = RNE),
+    // Same two-step convert as calculate_typecast: fp32 → sign-mag int32
     // then a 16-bit store that names the Dest half-word. Do not use SFP_STOCH_RND FP32_TO_UINT16.
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, 0x4);
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, ckernel::p_sfpu::sfp_sfpcast_mod::FP32_SM32_TO_2SC);
 
     // sfpmem::UINT16 is the unsigned-16 store mode: it narrows the int32 in lreg[1] and places it
     // where the packer reads UInt16 from, the same mode calculate_typecast and
