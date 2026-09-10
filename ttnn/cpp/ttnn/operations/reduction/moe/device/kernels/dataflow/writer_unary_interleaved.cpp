@@ -12,7 +12,7 @@
 void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto K = get_arg(args::K);
-    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
+    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : (K / 32) + 1;
 
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;
@@ -23,7 +23,7 @@ void kernel_main() {
 
     const auto interleaved_accessor0 = TensorAccessor(tensor::output);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_out(dfb::out);
 
     const uint32_t tile_bytes = dfb_out.get_tile_size();
