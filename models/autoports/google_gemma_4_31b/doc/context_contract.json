@@ -11,11 +11,11 @@
     "full_model": 262144,
     "optimized_full_model": 262144,
     "datatype_selected_full_model": 262144,
-    "vllm_serving": 113280,
-    "optimized_vllm_serving": 113280
+    "vllm_serving": 135168,
+    "optimized_vllm_serving": 135168
   },
-  "vllm_supported_context": 113280,
-  "vllm_context_status": "verified_hardware_max_length_request",
+  "vllm_supported_context": 135168,
+  "vllm_context_status": "hardware_verified_135168_on_p300c_qb2_120_needle_recall_130785_tokens",
   "vllm_capability_reduction": {
     "reason": "full-depth HMA serving cache exceeds per-bank P150b DRAM at 262144",
     "failed_context": 262144,
