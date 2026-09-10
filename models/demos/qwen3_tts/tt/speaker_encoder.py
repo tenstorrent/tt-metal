@@ -111,7 +111,7 @@ class SpeakerEncoder(LightweightModule):
         # k>1 reflect-pad convs as im2col + matmul, so nothing leaves the device.
         # Off by default: it is a large win *only* when the forward is captured as a
         # trace, and a larger loss eager, because it trades 8 transfers for ~310 small
-        # ops. See PERF_NOTES 3.4.
+        # ops.
         self._se_device_conv = os.environ.get("QWEN3_TTS_SE_DEVICE_CONV", "0") != "0"
         # How a tap's reflected row order is materialised. "slice" decomposes it into
         # ascending runs and concatenates them; "gather" is one ttnn.gather, which is
@@ -127,7 +127,7 @@ class SpeakerEncoder(LightweightModule):
         # path already does in ``forward``. ON by default; QWEN3_TTS_SE_MEL_TRACE=0
         # restores the pre-fix behaviour, where the device mel went straight to
         # ``_forward_device`` and the trace captured by QWEN3_TTS_SE_TRACE=1 was never
-        # replayed. See _forward_from_device_mel and PERF_NOTES 3.4.
+        # replayed. See _forward_from_device_mel.
         self._se_mel_trace = os.environ.get("QWEN3_TTS_SE_MEL_TRACE", "1") != "0"
         self._device_mel_cache = {}
         # Option A: one captured forward per mel length, with the host path as the
@@ -152,7 +152,7 @@ class SpeakerEncoder(LightweightModule):
         # embedding, and it is FREE -- these shapes are not math-bound, so LoFi buys no
         # time. LoFi also cost text fidelity at the demo's default seed, inserting an
         # article where HiFi4 and the untraced host-conv path are both clean across every
-        # seed tried. See PERF_NOTES 3.ac.
+        # seed tried.
         #
         # fp32_dest_acc_en is NOT available on top: it halves the DEST budget and the
         # existing SE program configs then violate out_subblock_h * out_subblock_w <= 4.
@@ -382,10 +382,9 @@ class SpeakerEncoder(LightweightModule):
         shape and refill it with ``copy_host_to_device_tensor``.
 
         ROW_MAJOR, deliberately. A ``[1, N]`` waveform in TILE layout pads its single row
-        out to 32, so the host tensor and the transfer are 32x the real bytes: at
-        N=96256 that measured 6.66 ms in ``from_torch`` plus 4.18 ms of H2D, against
-        0.03 ms row-major. ``_mel_from_device_waveform`` tilizes on device instead, which
-        inside a trace costs nothing per call.
+        out to 32, so the host tensor and the transfer are 32x the real bytes, which
+        dominates both the ``from_torch`` and the H2D. ``_mel_from_device_waveform``
+        tilizes on device instead, which inside a trace costs nothing per call.
         """
         return ttnn.from_torch(
             (audio if audio.dim() > 1 else audio.unsqueeze(0)).float(),
@@ -658,28 +657,22 @@ class SpeakerEncoder(LightweightModule):
         """One-hot row selector ``P`` for a tap, ``[1, 1, L, L]``, so ``P @ x == x[rows]``.
 
         Independent of channel count, so the cache key drops it: at mel T=384 the whole
-        encoder needs ten of these (k=5 d=1 has four shifted taps, each k=3 block two),
-        ~294 KB apiece.
+        encoder needs ten of these (k=5 d=1 has four shifted taps, each k=3 block two).
 
         DRAM placement is deliberate, and ``QWEN3_TTS_SE_PERM_L1=1`` is the measured
-        alternative rather than a guess. What this matmul spends is the in0 read: 294 KB
-        per tap, 46 taps per replay, 13.6 MB of DRAM traffic to move 2.2 MB of
-        activation. It is neither math- nor FLOP-bound — HiFi4, HiFi3, HiFi2 and LoFi all
-        measure the same 16.3 us in the same program config, so the HiFi4 above is free
-        as well as exact. Holding the matrices in L1 removes the read:
-
-            per tap    10.0 -> 7.1 us isolated (C=64, 12 cores); 10.0 -> 8.5 us in-model
-            per replay 1603 -> 1533 us for the whole encoder, -70 us, bit-exact
-
-        It stays OFF because it does not fit the path the demo takes.
+        alternative rather than a guess. What this matmul spends is the in0 read of the
+        selector matrix, once per tap. It is neither math- nor FLOP-bound — HiFi4, HiFi3,
+        HiFi2 and LoFi all measure the same time in the same program config, so the HiFi4
+        above is free as well as exact. Holding the matrices in L1 removes that read and
+        is bit-exact, but stays OFF because it does not fit the path the demo takes.
         ``capture_audio_forward_trace`` runs the mel STFT inside the same capture region,
         and ~1.8 MB of permanent L1 (six k=3 matrices) makes its row-major reshapes throw
         "Statically allocated dataflow buffers in program 39 clash with L1 buffers ...
         static dataflow buffer region ends at 1168912". That surfaces as a
         ``tt::exception`` from a LATER op, not as a failed allocation here, so there is no
-        allocation-time fallback to lean on — and it is not worth engineering around: the
-        whole encoder is 5.0 ms of a 6.26 s request, so -70 us is 0.001 % end to end.
-        Turn it on for a host-mel deployment, where the L1 is free.
+        allocation-time fallback to lean on — and it is not worth engineering around,
+        since the whole encoder is a negligible share of a request. Turn it on for a
+        host-mel deployment, where the L1 is free.
 
         Two other tap ideas were measured and rejected, recorded so nobody re-derives
         them. Shrinking the matrix: a one-hot holds only 1.0 and 0.0, but bfloat8_b is NOT
@@ -714,10 +707,10 @@ class SpeakerEncoder(LightweightModule):
         The reason this beats ``_tap_by_slice`` is program count, not device time. A
         reflect tap is one ascending run plus a reversed edge, and a reversal costs one
         ``ttnn.slice`` per row (negative steps return empty), so the slice path emits a
-        different shape per dilation and a different concat arity per edge width: 39 of
-        the traced forward's 101 program-cache entries came from its slices and 26 more
-        from its concats, at ~8 ms of capture-time program creation each. Every tap here
-        is the same ``[384,384] x [384,C]`` matmul instead, whatever the dilation.
+        different shape per dilation and a different concat arity per edge width, so most
+        of the traced forward's program-cache entries came from its slices and concats,
+        each paying capture-time program creation. Every tap here is the same
+        ``[384,384] x [384,C]`` matmul instead, whatever the dilation.
 
         HiFi4 is required, not a default: the selector's entries are 1.0 and 0.0 and each
         output row sums exactly one product, so the copy is bit-exact at HiFi4, while LoFi
@@ -1409,7 +1402,7 @@ class SpeakerEncoder(LightweightModule):
         on for the capture and restored afterwards. The nested SE-block / FC traces
         are disabled during capture because traces cannot nest.
 
-        A capture costs roughly a second; a replay is ~5 ms against ~25 ms for the
+        A capture costs roughly a second and a replay is several times cheaper than the
         host path. Lengths with no trace fall back to the host path, so it is safe to
         capture only the lengths you expect (in a service, one per registered voice).
         """
@@ -1452,12 +1445,12 @@ class SpeakerEncoder(LightweightModule):
     def capture_audio_forward_trace(self, audio: torch.Tensor) -> None:
         """Capture mel + forward as ONE trace, keyed by waveform sample count.
 
-        ``capture_forward_trace`` starts at the mel, leaving the mel itself eager: 53 ops
-        whose 1.86 ms of device kernel time takes 8.51 ms of wall clock, the rest being
-        per-op host dispatch, and whose programs are still cold on the demo's single call
-        (370 ms of the ~380 ms speaker-embedding stage). Pulling it inside the trace
-        removes the dispatch and moves the program creation into the warm pass, which is
-        paid once at capture either way.
+        ``capture_forward_trace`` starts at the mel, leaving the mel itself eager: dozens
+        of small ops whose wall clock is mostly per-op host dispatch, and whose programs
+        are still cold on the demo's single call — which is nearly the whole
+        speaker-embedding stage. Pulling it inside the trace removes the dispatch and
+        moves the program creation into the warm pass, which is paid once at capture
+        either way.
 
         Keyed by samples, not mel frames, because the waveform is what the caller hands
         us; one entry per registered voice, same as the forward cache. Falls back to
@@ -1519,7 +1512,7 @@ class SpeakerEncoder(LightweightModule):
         the host-conv fallback with every k>1 conv back on the host. Gated on
         ``QWEN3_TTS_SE_MEL_TRACE`` (default on) because taking the trace switches the
         encoder onto device-conv numerics, which reseeds AR sampling and changes the
-        generated audio -- same words, different draw. See PERF_NOTES 3.4. The mel is
+        generated audio -- same words, different draw. The mel is
         deallocated before the replay: a captured trace replays into the L1 addresses
         recorded at capture, which do not account for a live mel buffer.
 

@@ -69,7 +69,7 @@ class Talker(LightweightModule):
         # Codec embedding (for audio codec tokens). Stored ROW_MAJOR so
         # ttnn.embedding can index it directly without a per-call untilize of
         # the [vocab, hidden] table. (CodePredictor's codec_embeddings_tt do the
-        # same; the inconsistency was costing ~3.2 ms one-time on text_embedding.)
+        # same; the inconsistency cost a one-time untilize on text_embedding.)
         codec_embedding_weight = state_dict["talker.model.codec_embedding.weight"]
         self.codec_embedding = ttnn.as_tensor(
             codec_embedding_weight.unsqueeze(0).unsqueeze(0),

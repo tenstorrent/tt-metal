@@ -56,11 +56,11 @@ from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 # mesh the two arms are indistinguishable against a full-precision torch reference.
 #
 # Generation length does move with these numerics, but it moves in BOTH directions
-# depending on the prompt, which is what a benign perturbation looks like. PERF_NOTES
-# 6.4's >=8-seed sweep is the honest gate.
+# depending on the prompt, which is what a benign perturbation looks like. An
+# >=8-seed sweep is the honest gate.
 #
 # NOTE for whoever re-goldens the perf gate: the steady-frame band is bidirectional and
-# breaks from below (see 2.8), so a win like this one moves N300 toward the lower bound.
+# breaks from below, so a win like this one moves N300 toward the lower bound.
 # test_qwen3_tts_perf_device.py goldens N150 and N300 separately for that reason.
 _DECODE_GATE_UP_CORES = {
     (2048, 6144): 16,  # N150 / TP=1
@@ -94,9 +94,8 @@ def _wide_intermediate_memcfg(n_tiles, swept_cores, cg):
     A DRAM-sharded matmul writes ITS OWN grid and ignores the grid in the output
     memory_config (verified: ask for 64 cores, get the 16-core shard back). So after a
     narrow-grid gate/up the SiLU-mul inherits that narrow grid — and unlike RMSNorm the
-    mul is purely parallelism-bound, so it costs proportionally more there (measured on
-    N150: 9 us on 64 cores -> 33 us on 16). Resharding both operands wide first pays 2
-    ops to get that back, which measured net -18 us/layer.
+    mul is purely parallelism-bound, so it costs proportionally more there. Resharding
+    both operands wide first pays 2 ops to get that parallelism back, and is a net win.
 
     None when gate/up kept its original grid, or nothing wider is legal.
     QWEN3_TTS_DECODE_GATE_UP_WIDEN=0 leaves the mul on the matmul's grid.
