@@ -1,0 +1,277 @@
+name: Blaze Merge Gate
+
+# Runs tt-blaze's ENTIRE merge gate (its ci.yaml) against the tt-metal build this
+# release pipeline just produced, so a tt-metal change that breaks tt-blaze is
+# caught while the release is being cut rather than by the next uplift.
+#
+# Scope is tt-blaze's whole gate -- unit + P150 + craq-sim + every gate-tier BH
+# Loudbox bucket -- because nothing downstream waits on this job: it hangs off
+# release-build-test-publish.yaml's `build-artifact` and runs alongside the
+# release demo tests. tt-blaze's ci.yaml defaults every bucket selector to "run
+# all", so the dispatch below passes only the plumbing inputs and gets the full
+# gate. (Earlier revisions of this workflow ran one Loudbox bucket because they
+# sat in tt-metal's merge queue and could not hold it for hours.)
+#
+# tt-blaze cannot build tt-metal itself -- its CI consumes prebuilt tarball+wheel
+# artifacts. So this workflow does NOT hand tt-blaze a branch to go resolve: it
+# hands over `metal-run-id`, the id of the top-level run whose `build-artifact`
+# job has already published the tarball and wheel for this exact commit. tt-blaze's
+# download-build-artifact.yaml takes that run id verbatim and skips pin
+# resolution entirely. `metal-ref` then moves tt-blaze's tt-metal submodule to the
+# same commit, so JIT-compiled kernels and the linked libraries come from one
+# tt-metal rather than two.
+#
+# The release build is tracy=false, so tt-blaze runs against the plain variant
+# (its pin-driven runs are profiler-only). The gate-tier tests that touch tracy at
+# all today do so defensively (an `import tracy` in a try/except, a
+# TT_METAL_DEVICE_PROFILER env probe), so widening the scope to the whole gate is
+# safe -- but a blaze test that comes to REQUIRE tracy at runtime cannot run here,
+# and would show up as a failure of this job rather than of anything in tt-metal.
+#
+# Auth: dispatching and polling a workflow in another repo needs a PAT with
+# `actions: write` (dispatch, cancel) and `actions: read` (poll) on
+# tenstorrent/tt-blaze, stored in THIS repo as the `TT_BLAZE_PAT` secret. The
+# default GITHUB_TOKEN is scoped to tt-metal and cannot dispatch tt-blaze.
+#
+# `gh workflow run` returns no run id, so the run is correlated by echoing a
+# unique `dispatch-id` into tt-blaze's `run-name` and matching it back. That token
+# is also tt-blaze's concurrency key, which is what keeps concurrent dispatches
+# from cancelling each other's blaze run.
+
+on:
+  workflow_call:
+    inputs:
+      metal-run-id:
+        description: >-
+          Run id holding the tt-metal build artifacts tt-blaze should test
+          against. Normally `github.run_id` -- artifacts belong to the TOP-LEVEL
+          run, so that is the right value even from a nested reusable workflow.
+        required: true
+        type: string
+      metal-ref:
+        description: >-
+          tt-metal commit those artifacts were built from. tt-blaze checks its
+          tt-metal submodule out here. Must be a commit fetchable from
+          tenstorrent/tt-metal for as long as the blaze run lasts.
+        required: true
+        type: string
+      blaze-ref:
+        description: "tt-blaze branch/tag/SHA to run the gate from."
+        required: false
+        type: string
+        default: main
+      wait-timeout-minutes:
+        description: >-
+          How long to wait for the tt-blaze run. Includes 1 hour of running the gate
+          and 2 hours to find runners, though most cases should find runners within 30 min
+          given blaze stats, especially at night. Internal timeouts make it fail fast on hangs.
+        required: false
+        type: number
+        default: 180
+    outputs:
+      blaze-run-url:
+        description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
+        value: ${{ jobs.blaze-ci.outputs.blaze-run-url }}
+    secrets:
+      TT_BLAZE_PAT:
+        description: "PAT with actions:read+write on tenstorrent/tt-blaze."
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  blaze-ci:
+    name: tt-blaze CI (full merge gate)
+    runs-on: ubuntu-latest
+    # The 3-hour deadline plus slack: the poll loop must outlive its own deadline
+    # so it can report WHY it gave up. If the runner killed it first, the failure
+    # would read as an infra timeout instead of "no Loudbox came free".
+    timeout-minutes: 195
+    outputs:
+      blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
+    env:
+      BLAZE_REPO: tenstorrent/tt-blaze
+      BLAZE_WORKFLOW: ci.yaml
+    steps:
+      - name: Dispatch tt-blaze ci.yaml and wait for it
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          METAL_RUN_ID: ${{ inputs.metal-run-id }}
+          METAL_REF: ${{ inputs.metal-ref }}
+          BLAZE_REF: ${{ inputs.blaze-ref }}
+          TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          POLL_SECONDS=60
+          # A dispatched run is not immediately visible to `gh run list`. Until this
+          # is up, "no matching run" means "not indexed yet", not "dispatch failed".
+          GRACE_SECONDS=300
+          # Below this job's fixed 195-minute cap, with room for the loop to report
+          # a timeout instead of the runner killing it mid-wait. Raising the
+          # deadline past this means raising `timeout-minutes` above too.
+          MAX_WAIT_MINUTES=180
+
+          # `number` inputs are not integer inputs -- 1.5 reaches the arithmetic
+          # below and fails there as a bare bash syntax error naming nothing.
+          if [[ ! "${TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] || [ "$TIMEOUT_MINUTES" -lt 1 ]; then
+            echo "::error::wait-timeout-minutes must be a positive whole number of minutes (got '${TIMEOUT_MINUTES:-}')."
+            exit 1
+          fi
+          if [ "$TIMEOUT_MINUTES" -gt "$MAX_WAIT_MINUTES" ]; then
+            echo "::error::wait-timeout-minutes=${TIMEOUT_MINUTES} exceeds ${MAX_WAIT_MINUTES}. This job's timeout-minutes caps it, so a longer deadline would be cut short by the runner instead of reported here -- raise timeout-minutes in this workflow alongside it."
+            exit 1
+          fi
+
+          # Unique per run AND per re-run of that run, so a re-run never latches
+          # onto the blaze run its previous attempt started.
+          DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "dispatch-id: ${DISPATCH_ID}"
+
+          # Scope: tt-blaze's WHOLE merge gate. Its `bh-loudbox-run-all` and
+          # `p150-run-all` selectors both default to true, so passing only the
+          # plumbing inputs below is what asks for every gate-tier bucket. To
+          # narrow it again, pass the `bh-loudbox-*` / `p150-*` booleans from
+          # tt-blaze's ci.yaml explicitly.
+          # Preflight the token before dispatching. tt-blaze is PRIVATE, and
+          # GitHub answers 404 (never 403) for anything a token cannot see there,
+          # so `gh workflow run` reports a missing workflow when the real fault is
+          # a PAT that cannot read the repo. These two probes separate the cases so
+          # the log names the actual problem.
+          # Probe 1: is the credential live at all? Separated from the repo probe
+          # because "expired/revoked token" and "valid token that cannot see
+          # tt-blaze" have completely different fixes but look identical once the
+          # repo lookup 404s.
+          if ! PAT_LOGIN=$(gh api user --jq .login 2>/dev/null) || [ -z "$PAT_LOGIN" ]; then
+            echo "::error::TT_BLAZE_PAT is not a usable credential -- GitHub rejected it outright (401 Bad credentials), so this is not about repo access. It is expired, revoked, or was stored with stray whitespace/quotes when the secret was set. Reissue it and update the secret in ${GITHUB_REPOSITORY}."
+            echo "- ❌ tt-blaze — TT_BLAZE_PAT rejected (bad credentials)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # Not a secret; naming it turns "wrong account / stale bot" into a
+          # one-line diagnosis instead of a hunt.
+          echo "TT_BLAZE_PAT authenticates as: ${PAT_LOGIN}"
+
+          if ! gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
+            echo "::error::TT_BLAZE_PAT is valid (authenticates as '${PAT_LOGIN}') but cannot see ${BLAZE_REPO}. ${BLAZE_REPO} is private, so GitHub answers 404 rather than 403 for anything this token is not entitled to. Either '${PAT_LOGIN}' has no access to ${BLAZE_REPO}, or the token is scoped away from it: a fine-grained PAT must list ${BLAZE_REPO} in its selected repositories AND be approved by the tenstorrent org (pending approval also reads as 404); a classic PAT needs the 'repo' scope to see private repos at all."
+            echo "- ❌ tt-blaze — TT_BLAZE_PAT ('${PAT_LOGIN}') cannot see ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if ! gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
+            echo "::error::TT_BLAZE_PAT can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}. That is an Actions-permission gap, not a missing file: a fine-grained PAT needs Actions: Read and write (plus Metadata: Read); a classic PAT needs the 'repo' scope for a private repository."
+            echo "- ❌ tt-blaze — TT_BLAZE_PAT lacks Actions access on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Dispatching needs actions:WRITE, which neither probe above proves --
+          # both are reads. A 403 here (rather than 404) means the token can see
+          # Actions but not trigger them.
+          if ! gh workflow run "$BLAZE_WORKFLOW" \
+            --repo "$BLAZE_REPO" \
+            --ref "$BLAZE_REF" \
+            -f metal-run-id="$METAL_RUN_ID" \
+            -f metal-ref="$METAL_REF" \
+            -f dispatch-id="$DISPATCH_ID"; then
+            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
+            echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (full merge gate)"
+          echo "  tt-metal commit:  ${METAL_REF}"
+          echo "  tt-metal build:   https://github.com/${GITHUB_REPOSITORY}/actions/runs/${METAL_RUN_ID}"
+
+          started=$(date +%s)
+          deadline=$(( started + TIMEOUT_MINUTES * 60 ))
+          run_id=""
+          run_url=""
+
+          while :; do
+            elapsed=$(( $(date +%s) - started ))
+
+            if [ -z "$run_id" ]; then
+              # Correlate on the token echoed into tt-blaze's run-name. Matching on
+              # "newest dispatch" instead would be wrong: the release pipeline is
+              # dispatched on a schedule AND by hand, so two runs can be dispatching
+              # onto the same ref at once.
+              #
+              # `displayTitle` is where a computed `run-name` lands; `name` is the
+              # workflow's own name. Both are searched so this keeps working if gh
+              # ever changes which one carries it.
+              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+                         --event workflow_dispatch --limit 100 \
+                         --json databaseId,displayTitle,name \
+                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
+                       2>/dev/null || echo "")
+
+              if [ -z "$run_id" ]; then
+                if [ "$elapsed" -gt "$GRACE_SECONDS" ]; then
+                  echo "::error::Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} but no run carrying '${DISPATCH_ID}' appeared within ${elapsed}s. Most likely ${BLAZE_REF} does not echo dispatch-id into run-name (the tt-blaze side of this plumbing is missing or older than this workflow)."
+                  echo "- ❌ tt-blaze — dispatched run never appeared" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                fi
+                echo "waiting for the dispatched run to be indexed (${elapsed}s)"
+                sleep "$POLL_SECONDS"
+                continue
+              fi
+
+              run_url="https://github.com/${BLAZE_REPO}/actions/runs/${run_id}"
+              echo "tt-blaze run: ${run_url}"
+              echo "blaze-run-url=${run_url}" >> "$GITHUB_OUTPUT"
+              # Read by the cancel step below, which runs only if THIS job is
+              # cancelled and so cannot rely on any of the locals here.
+              echo "BLAZE_RUN_ID=${run_id}" >> "$GITHUB_ENV"
+              echo "- ⏳ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            read -r status conclusion <<< "$(gh run view "$run_id" --repo "$BLAZE_REPO" \
+                                               --json status,conclusion \
+                                               --jq '"\(.status) \(.conclusion // "-")"')"
+
+            if [ "$status" = "completed" ]; then
+              case "$conclusion" in
+                success)
+                  echo "✅ tt-blaze CI passed: ${run_url}"
+                  echo "- ✅ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                  ;;
+                skipped)
+                  echo "::error::tt-blaze CI was skipped, so the required merge-gate validation did not run. ${run_url}"
+                  echo "- ❌ tt-blaze — skipped; no validation ran ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                  ;;
+                *)
+                  echo "::error::tt-blaze CI concluded '${conclusion}' — this tt-metal change breaks tt-blaze, or the blaze run itself is broken. ${run_url}"
+                  echo "- ❌ tt-blaze — \`${conclusion}\` ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                  ;;
+              esac
+            fi
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out after ${TIMEOUT_MINUTES} min with the tt-blaze run still '${status}'. Raise wait-timeout-minutes or check runner availability. ${run_url}"
+              echo "- ⏱️ tt-blaze — timed out after ${TIMEOUT_MINUTES} min ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            echo "tt-blaze run ${run_id}: ${status} (${elapsed}s elapsed)"
+            sleep "$POLL_SECONDS"
+          done
+
+      # Cancelling this run (or the release pipeline around it) stops this job but
+      # not the run it started, which would otherwise keep occupying constrained
+      # P150/Loudbox runners for hours on behalf of a release nobody is cutting.
+      #
+      # failure() is here for the TIMEOUT path specifically: giving up on the wait
+      # exits 1, which is not cancelled(), so without this a timed-out gate leaves
+      # the blaze run holding those runners with nobody watching it anymore.
+      - name: Cancel the tt-blaze run if this job was cancelled or timed out
+        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != ''
+        env:
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+        shell: bash
+        run: |
+          echo "Cancelling tt-blaze run ${BLAZE_RUN_ID}"
+          gh run cancel "$BLAZE_RUN_ID" --repo "$BLAZE_REPO" || true

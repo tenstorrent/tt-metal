@@ -81,7 +81,7 @@ void check_per_tensor_scale(const std::variant<Ts...>&) = delete;
 
 // Ignore all other types of inputs
 template <typename T>
-void check_per_tensor_scale(const T&) {}
+[[maybe_unused]] void check_per_tensor_scale(const T&) {}
 
 void check_per_tensor_zero_point(const ttnn::Tensor& zero_point) {
     const auto dtype = zero_point.dtype();
@@ -93,7 +93,7 @@ template <typename... Ts>
 void check_per_tensor_zero_point(const std::variant<Ts...>&) = delete;
 
 template <typename T>
-void check_per_tensor_zero_point(const T&) {}
+[[maybe_unused]] void check_per_tensor_zero_point(const T&) {}
 
 void check_scale_tensor_args(
     const ttnn::Tensor& input_tensor,

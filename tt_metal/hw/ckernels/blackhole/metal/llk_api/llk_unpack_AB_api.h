@@ -3,16 +3,45 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB
  *************************************************************************/
 
+// Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). They take the
+// already-resolved tile geometry / runtime addresses; the per-source prologue (resolving these from a CB id,
+// or from an LLKMemDescriptor) lives in the callers. AB unpack is format-free at the op level: the src/dst
+// formats are programmed once at compute_kernel_hw_startup, so the op needs only the two L1 addresses (plus
+// the SrcB source format for the ROW-broadcast path).
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_init_impl(const ckernel::TensorShape& tensor_shape, const ckernel::Transpose transpose) {
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_impl(
+    const std::uint32_t address_a,
+    const std::uint32_t address_b,
+    [[maybe_unused]] const std::uint32_t bcast_row_idx,
+    [[maybe_unused]] const std::uint32_t operandB_src_format) {
+    WAYPOINT("UABW");
+    if constexpr (BType == BroadcastType::ROW) {
+        _llk_unpack_AB_<BType>(address_a, address_b, bcast_row_idx, operandB_src_format);
+    } else {
+        _llk_unpack_AB_<BType>(address_a, address_b);
+    }
+    WAYPOINT("UABD");
+}
+
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
@@ -26,11 +55,12 @@ inline void llk_unpack_AB_init(
         get_operand_num_faces(operandA_id),
         get_operand_num_faces(get_operand_id(operandB))));
 
-    _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
+    llk_unpack_AB_init_impl<BType>(tensor_shape, transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
@@ -40,7 +70,8 @@ inline void llk_unpack_AB(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
-    [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
+    const std::uint32_t bcast_row_idx = 0) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -63,11 +94,5 @@ inline void llk_unpack_AB(
         get_operand_num_faces(operandA_id),
         get_operand_num_faces(operandB_id)));
 
-    WAYPOINT("UABW");
-    if constexpr (BType == BroadcastType::ROW) {
-        _llk_unpack_AB_<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
-    } else {
-        _llk_unpack_AB_<BType>(address_a, address_b);
-    }
-    WAYPOINT("UABD");
+    llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }

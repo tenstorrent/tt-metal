@@ -263,6 +263,12 @@ constexpr uint32_t large_k_route_k_multiple = 16;
 // Lifting it is a separate, perf-validated change.
 constexpr uint32_t large_k_route_max_width = 1u << 19;
 
+// Python sampling queries this exact predicate through the nanobind helper
+// ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices
+// before relaxing its call shape (the binding lives on the reduction
+// submodule; only registered ttnn operations are hoisted to top-level ttnn).
+// Keep that helper wired to this implementation so policy changes cannot
+// drift.
 bool should_route_to_topk_large_indices(
     const Tensor& transformed_tensor,
     const uint32_t k,
@@ -388,6 +394,24 @@ std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tenso
 }  // namespace
 
 }  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn::operations::reduction::topk::detail {
+
+bool sampling_topk_would_route_to_large_indices(const Tensor& input_tensor, const uint32_t k) {
+    TT_FATAL(is_device_tensor(input_tensor), "Sampling top-k route query requires an on-device tensor");
+    return CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+        input_tensor,
+        k,
+        /*largest=*/true,
+        /*stable=*/false,
+        /*is_dim_last_idx=*/true,
+        /*has_user_indices_tensor=*/false,
+        /*has_preallocated_outputs=*/false,
+        /*has_sub_core_grids=*/false,
+        /*user_memory_config=*/std::nullopt);
+}
+
+}  // namespace ttnn::operations::reduction::topk::detail
 
 namespace ttnn {
 

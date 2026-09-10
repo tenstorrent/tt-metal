@@ -13,9 +13,10 @@ import ttnn
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.inputs import PrefillPositionInputs
 from models.common.llm_runtime.prefill.plan import PrefillRequest
-from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE, SamplingPath, _formatted_sampling_values
+from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE, SamplingPath
 from models.common.llm_runtime.prefill.signatures import PreparedPrefill
-from models.common.sampling import SamplingParams
+from models.common.modules.sampling.params import PreparedSamplingParams, prepare_sampling_params
+from models.common.sampling.sampling_params import SamplingParams
 
 KPTSignature = tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...]] | None
 
@@ -37,6 +38,22 @@ class PrefillPostprocessor:
     def configure(self, config: PrefillRuntimeConfig) -> None:
         self.config = config
 
+    def prepared_sampling(self, prepared: Any) -> PreparedSamplingParams | None:
+        """Return native prepared state, adapting older test collaborators."""
+
+        value = getattr(prepared, "prepared_sampling", None)
+        if value is not None:
+            return value
+        raw = getattr(prepared, "sampling_params", None)
+        if raw is None:
+            return None
+        return prepare_sampling_params(
+            raw,
+            self.sampling_output_rows(prepared),
+            max_device_top_k=self.config.max_device_top_k,
+            allow_force_argmax=self.config.allow_force_argmax,
+        )
+
     def validate_sampling_request(self, sampling_params: SamplingParams | None) -> None:
         if sampling_params is not None and not self.config.device_sampling_enabled:
             raise ValueError("sampling parameters were supplied while device sampling is disabled")
@@ -44,15 +61,13 @@ class PrefillPostprocessor:
     def classify_sampling_path(
         self,
         request: PrefillRequest,
-        sampling_params: SamplingParams | None,
+        sampling_params: PreparedSamplingParams | None,
     ) -> SamplingPath:
         if sampling_params is None:
             return "logits"
-        if self.config.allow_force_argmax and request.kind == "single":
-            values = _formatted_sampling_values(sampling_params, self.sampling_batch_size(request))
-            if values[3]:
-                return "argmax"
-        return "topk"
+        if request.kind != "single":
+            return "topk"
+        return sampling_params.sampling_path
 
     def sampling_batch_size(self, request: PrefillRequest) -> int:
         if self.config.device_sampling_enabled:
@@ -82,7 +97,7 @@ class PrefillPostprocessor:
 
     def make_device_kpt(
         self,
-        sampling_params: SamplingParams | None,
+        sampling_params: PreparedSamplingParams | None,
         batch_size: int,
         force_topk: bool,
     ) -> tuple[Any, Any, Any] | None:
@@ -93,16 +108,17 @@ class PrefillPostprocessor:
 
     def make_host_kpt(
         self,
-        sampling_params: SamplingParams | None,
+        sampling_params: PreparedSamplingParams | None,
         batch_size: int,
         force_topk: bool,
     ) -> tuple[Any, Any, Any] | None:
         if sampling_params is None:
             return None
-        values = _formatted_sampling_values(sampling_params, batch_size)
-        if self.config.allow_force_argmax and not force_topk and values[3]:
+        if not force_topk and sampling_params.sampling_path == "argmax":
             return None
-        k, p, temperature, _ = values
+        if batch_size > sampling_params.batch_size:
+            raise ValueError("prepared sampling parameters do not cover the physical prefill batch")
+        k, p, temperature = self.kpt_values(sampling_params, batch_size)
         mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         return (
             ttnn.from_torch(
@@ -128,10 +144,26 @@ class PrefillPostprocessor:
             ),
         )
 
+    @staticmethod
+    def kpt_values(sampling_params: PreparedSamplingParams, batch_size: int):
+        active_rows = tuple(row for row, active in enumerate(sampling_params.active_mask) if active)
+        if len(active_rows) == 1 and batch_size > 1:
+            row = active_rows[0]
+            return (
+                (sampling_params.top_k[row],) * batch_size,
+                (sampling_params.top_p[row],) * batch_size,
+                (sampling_params.temperature[row],) * batch_size,
+            )
+        return (
+            sampling_params.top_k[:batch_size],
+            sampling_params.top_p[:batch_size],
+            sampling_params.temperature[:batch_size],
+        )
+
     def refresh_kpt(
         self,
         device_kpt: tuple[Any, Any, Any] | None,
-        sampling_params: SamplingParams | None,
+        sampling_params: PreparedSamplingParams | None,
         batch_size: int,
         force_topk: bool,
     ) -> None:
@@ -151,15 +183,16 @@ class PrefillPostprocessor:
         if prepared.sampling_path != "topk":
             return kpt_signature
         sampling_batch_size = self.sampling_output_rows(prepared)
-        if prepared.sampling_params is None:
+        prepared_sampling = self.prepared_sampling(prepared)
+        if prepared_sampling is None:
             kpt_value = None
         else:
-            k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
-            kpt_value = k, p, temperature
+            sampling = prepared_sampling
+            kpt_value = self.kpt_values(sampling, sampling_batch_size)
         if kpt_signature != kpt_value:
             self.refresh_kpt(
                 kpt,
-                prepared.sampling_params,
+                prepared_sampling,
                 sampling_batch_size,
                 force_topk=True,
             )
@@ -180,16 +213,36 @@ class PrefillPostprocessor:
         self,
         logits: Any,
         kpt: tuple[Any, Any, Any] | None,
+        sampling: PreparedSamplingParams,
         sampled_output: Any | None = None,
+        *,
+        count_tokens: bool = True,
     ) -> Any:
+        controller = self.config.sampling_state_controller
+        if controller is not None:
+            return controller.prefill_forward(
+                logits,
+                self.config.sampling_state,
+                sampling,
+                k=None if kpt is None else kpt[0],
+                p=None if kpt is None else kpt[1],
+                temp=None if kpt is None else kpt[2],
+                tt_out_tok=sampled_output,
+                count_tokens=count_tokens,
+            )
         if kpt is None:
-            return self.config.model.sampling.decode_forward(logits, tt_out_tok=sampled_output)
+            return self.config.model.sampling.decode_forward(
+                logits,
+                tt_out_tok=sampled_output,
+                enable_log_probs=sampling.enable_log_probs,
+            )
         return self.config.model.sampling.decode_forward(
             logits,
             k=kpt[0],
             p=kpt[1],
             temp=kpt[2],
             tt_out_tok=sampled_output,
+            enable_log_probs=sampling.enable_log_probs,
         )
 
     def finish_regular_prefill(
@@ -201,6 +254,7 @@ class PrefillPostprocessor:
         *,
         sampled_output: Any | None = None,
         owned: list[Any] | None = None,
+        count_tokens: bool = True,
     ) -> Any:
         request = prepared.request
         relative_last = [last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens)]
@@ -243,7 +297,13 @@ class PrefillPostprocessor:
         if prepared.sampling_params is not None:
             selected = fit_prefill_sampling_logits(logits, self.sampling_output_rows(prepared))
             retain_owned(owned, selected)
-            output = self.sample_device(selected, kpt, sampled_output)
+            output = self.sample_device(
+                selected,
+                kpt,
+                self.prepared_sampling(prepared),
+                sampled_output,
+                count_tokens=count_tokens,
+            )
         else:
             output = ttnn.untilize(logits, use_multicore=True)
             if request.kind == "single" and not request.uses_chunked_prefill:
@@ -262,6 +322,7 @@ class PrefillPostprocessor:
         *,
         sampled_output: Any | None,
         owned: list[Any],
+        count_tokens: bool = True,
     ) -> Any:
         if not prepared.request.uses_chunked_prefill:
             return self.finish_regular_prefill(
@@ -271,11 +332,18 @@ class PrefillPostprocessor:
                 position_inputs,
                 sampled_output=sampled_output,
                 owned=owned,
+                count_tokens=count_tokens,
             )
         if prepared.sampling_params is not None:
             selected = fit_prefill_sampling_logits(final_step_output, self.sampling_output_rows(prepared))
             retain_owned(owned, selected)
-            output = self.sample_device(selected, kpt, sampled_output)
+            output = self.sample_device(
+                selected,
+                kpt,
+                self.prepared_sampling(prepared),
+                sampled_output,
+                count_tokens=count_tokens,
+            )
         else:
             output = ttnn.untilize(final_step_output, use_multicore=True)
         retain_owned(owned, output)

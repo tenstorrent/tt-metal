@@ -43,6 +43,8 @@ enum class SparseKVFormat : uint8_t {
 //   block_cyclic_chunk_local: the per-shard chunk length (chunk_size_global / sp). Cross-checked at the entry
 //                             against q's per-chip seq length: must equal q_isl or tp*q_isl (tp = mesh/sp),
 //                             the only two values it can legally take (post-reshard q is sliced by tp).
+//   block_cyclic_cache_tp_sharded : true = the cache is striped across ALL sp*tp devices (linear chip = sp_coord*tp
+//                             + tp_coord), so stripes = sp*tp and per-stripe chunk = chunk_local/tp.
 //
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, and all non-sentinel indices are < T.
@@ -62,6 +64,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool block_cyclic_cache_tp_sharded = false);
 
 }  // namespace ttnn::transformer

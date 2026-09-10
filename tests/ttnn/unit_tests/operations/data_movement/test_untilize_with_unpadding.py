@@ -211,6 +211,40 @@ def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, 
     assert_equal(result, torch_input)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("output_width", [30, 31, 32])
+def test_untilize_with_unpadding_interleaved_to_height_sharded_unaligned_row(device, dtype, output_width):
+    """INTERLEAVED input -> HEIGHT_SHARDED output whose row size is not a multiple of the
+    buffer alignment (16 bytes in L1).
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 256, 64]
+    output_end = [0, 0, 255, output_width - 1]
+    torch_input = torch.rand(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
+
+    # Shard width tracks the unpadded output width, so the output row size in bytes stays
+    # unaligned - padding the shard out to a tile width would hide the mis-striding.
+    num_cores = 4
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
+    output_shard_spec = ttnn.ShardSpec(
+        shard_core_grid, (shape[2] // num_cores, output_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+
+    tile_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
+    )
+    result = ttnn.to_torch(untilized)
+
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+    assert_equal(result, torch_input[slices])
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shape, output_end, shard_shape, num_cores",
@@ -909,3 +943,50 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
     torch_result = torch_tensor[slices]
 
     assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "padded_shape, output_shape",
+    [
+        ((1, 1, 32, 7328), (1, 1, 30, 7300)),
+        ((1, 1, 128, 7328), (1, 1, 100, 7328)),
+        ((1, 1, 64, 8192), (1, 1, 60, 8192)),
+        ((1, 1, 96, 7392), (1, 1, 90, 7392)),
+        ((1, 1, 160, 6304), (1, 1, 150, 6301)),
+        ((2, 1, 64, 7328), (2, 1, 60, 7328)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_untilize_with_unpadding_block_per_node_cb_size(
+    device, padded_shape, output_shape, dtype, isolate_program_cache
+):
+    torch.manual_seed(42)
+    dram_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    keep_alive = []
+    entries = None
+    for i in range(2):
+        torch_input = torch.randn(padded_shape, dtype=torch.bfloat16)
+        tt_tiled = ttnn.from_torch(
+            torch_input,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=dram_cfg,
+            device=device,
+        )
+
+        output_end = [d - 1 for d in output_shape]
+        tt_rm = ttnn.untilize_with_unpadding(tt_tiled, output_end, use_multicore=True)
+        keep_alive += [tt_tiled, tt_rm]
+
+        assert tt_rm.layout == ttnn.ROW_MAJOR_LAYOUT
+        torch_golden = torch_input[: output_shape[0], : output_shape[1], : output_shape[2], : output_shape[3]]
+        assert_equal(torch_golden, ttnn.to_torch(tt_rm))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "untilize_with_unpadding must reuse the cached program on a cache hit"

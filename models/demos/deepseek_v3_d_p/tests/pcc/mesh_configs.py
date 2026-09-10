@@ -58,25 +58,6 @@ def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliabilit
 
 
 ALL_MESH_CONFIGS = [
-    # Existing two-chip rows cannot form a useful ring; migrate them one-for-one to Fabric2D.
-    _mesh_param(
-        (2, 1),
-        ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
-        1,
-        "linear",
-        "fabric2d-2x1-1link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
-    _mesh_param(
-        (2, 1),
-        ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
-        2,
-        "linear",
-        "fabric2d-2x1-2link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
     # Local policy: one 2x2 QuietBox case, canonical 2x4 LoudBox, and one 4x2 axis diagnostic.
     _mesh_param(
         (2, 2),

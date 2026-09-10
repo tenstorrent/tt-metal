@@ -25,6 +25,9 @@ class _LanePrefillKwargs(TypedDict):
     empty_slots: Sequence[int] | None  # ↓ Lane routing
     kv_cache: Any  # ↓ Borrowed resources
     sampling_params: Any  # ↓ Sampling
+    prompt_tokens: Any  # ↓ Request-owned sampling state
+    output_tokens: Any
+    slot_remap: Any
     execution: EagerExecutor | TracedExecutor | None  # ↓ Internal dispatch
 
 
@@ -34,6 +37,9 @@ class _LaneDecodeKwargs(TypedDict):
     page_table: torch.Tensor
     kv_cache: Any  # ↓ Borrowed resources
     sampling_params: Any  # ↓ Sampling
+    prompt_tokens: Any  # ↓ Request-owned sampling state
+    output_tokens: Any
+    slot_remap: Any
     reset_batch: bool  # ↓ State transition
     execution: EagerExecutor | TracedExecutor | None  # ↓ Internal dispatch
 
@@ -153,6 +159,9 @@ class LaneGroupExecutor:
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
     ) -> None:
         def operation() -> None:
@@ -164,6 +173,9 @@ class LaneGroupExecutor:
                 empty_slots=empty_slots,
                 kv_cache=kv_cache,
                 sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
                 execution=execution,
             )
             for lane_idx, _, lane_kwargs in lane_requests:
@@ -179,6 +191,9 @@ class LaneGroupExecutor:
         *,
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
     ) -> None:
@@ -189,6 +204,9 @@ class LaneGroupExecutor:
                 page_table,
                 kv_cache=kv_cache,
                 sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
                 reset_batch=reset_batch,
                 execution=execution,
             ):
@@ -246,6 +264,9 @@ class LaneGroupExecutor:
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
     ) -> Any:
         """Fan out prefill rows by slot and restore their source-row order."""
@@ -260,6 +281,9 @@ class LaneGroupExecutor:
                     empty_slots=empty_slots,
                     kv_cache=kv_cache,
                     sampling_params=sampling_params,
+                    prompt_tokens=prompt_tokens,
+                    output_tokens=output_tokens,
+                    slot_remap=slot_remap,
                     execution=execution,
                 )
             )
@@ -319,6 +343,9 @@ class LaneGroupExecutor:
         *,
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         read_from_device: bool = True,  # ↓ Output policy
         execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
@@ -333,6 +360,9 @@ class LaneGroupExecutor:
                 page_table,
                 kv_cache=kv_cache,
                 sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
                 reset_batch=reset_batch,
                 execution=execution,
             ):
@@ -406,10 +436,6 @@ class LaneGroupExecutor:
             operation()
             return
         coordinators = tuple(getattr(lane, "warmup", None) for lane in self.lanes)
-        if all(coordinator is None for coordinator in coordinators):
-            # Lightweight eager/dispatch contract doubles have no coordinator.
-            operation()
-            return
         required = ("defer_capture", "activate_pending_capture", "capture_pending", "trace_activated")
         if any(
             coordinator is None or any(not hasattr(coordinator, name) for name in required)
@@ -422,11 +448,13 @@ class LaneGroupExecutor:
                 stack.enter_context(coordinator.defer_capture())
             operation()
             states = tuple(
-                "activated"
-                if coordinator.trace_activated
-                else "pending"
-                if coordinator.capture_pending
-                else "incomplete"
+                (
+                    "activated"
+                    if coordinator.trace_activated
+                    else "pending"
+                    if coordinator.capture_pending
+                    else "incomplete"
+                )
                 for coordinator in coordinators
             )
             if len(set(states)) != 1:
@@ -463,6 +491,9 @@ class LaneGroupExecutor:
                     start_pos=lane_kwargs["start_pos"],
                     empty_slots=lane_kwargs["empty_slots"],
                     sampling_params=lane_kwargs["sampling_params"],
+                    prompt_tokens=lane_kwargs.get("prompt_tokens"),
+                    output_tokens=lane_kwargs.get("output_tokens"),
+                    slot_remap=lane_kwargs.get("slot_remap"),
                 )
                 try:
                     traced_calls[lane_idx] = (selected, selected.preflight_prefill(prepared))
@@ -494,6 +525,9 @@ class LaneGroupExecutor:
         empty_slots: Sequence[int] | None,  # ↓ Lane routing
         kv_cache: Any,  # ↓ Borrowed resources
         sampling_params: Any,  # ↓ Sampling
+        prompt_tokens: Any,  # ↓ Request-owned sampling state
+        output_tokens: Any,
+        slot_remap: Any,
         execution: Sequence[EagerExecutor | TracedExecutor] | None,  # ↓ Internal dispatch
     ) -> Iterator[tuple[int, list[int], _LanePrefillKwargs]]:
         if not isinstance(tokens, torch.Tensor) or tokens.ndim < 1:
@@ -514,6 +548,28 @@ class LaneGroupExecutor:
             lane_prompt_lens = None if prompt_lens is None else _slice_rows(prompt_lens, rows)
             lane_start_pos = None if start_pos is None else _slice_rows(start_pos, rows)
             lane_sampling_params = None if sampling_params is None else _slice_sampling_params(sampling_params, rows)
+            lane_prompt_tokens = _slice_prefill_request_state(
+                prompt_tokens,
+                rows=rows,
+                global_slots=[int(slots[row]) for row in rows],
+                global_capacity=self.max_batch_size,
+                local_slots=local_slots,
+                lane_capacity=self.per_lane_max_batch_size,
+            )
+            lane_output_tokens = _slice_prefill_request_state(
+                output_tokens,
+                rows=rows,
+                global_slots=[int(slots[row]) for row in rows],
+                global_capacity=self.max_batch_size,
+                local_slots=local_slots,
+                lane_capacity=self.per_lane_max_batch_size,
+            )
+            lane_slot_remap = _slice_lane_slot_remap(
+                slot_remap,
+                lane_idx=lane_idx,
+                lane_capacity=self.per_lane_max_batch_size,
+                lane_count=self.tt_data_parallel,
+            )
             lane_kv_cache = None if kv_cache is None else self._lane_value(kv_cache, lane_idx, "KV caches")
             lane_execution = None if execution is None else self._lane_value(execution, lane_idx, "executions")
             lane_kwargs: _LanePrefillKwargs = {
@@ -526,6 +582,12 @@ class LaneGroupExecutor:
                 "sampling_params": lane_sampling_params,
                 "execution": lane_execution,
             }
+            if lane_prompt_tokens is not None:
+                lane_kwargs["prompt_tokens"] = lane_prompt_tokens
+            if lane_output_tokens is not None:
+                lane_kwargs["output_tokens"] = lane_output_tokens
+            if lane_slot_remap is not None:
+                lane_kwargs["slot_remap"] = lane_slot_remap
             yield lane_idx, rows, lane_kwargs
 
     def _decode_lane_requests(
@@ -536,6 +598,9 @@ class LaneGroupExecutor:
         *,
         kv_cache: Any,  # ↓ Borrowed resources
         sampling_params: Any,  # ↓ Sampling
+        prompt_tokens: Any,  # ↓ Request-owned sampling state
+        output_tokens: Any,
+        slot_remap: Any,
         reset_batch: bool,  # ↓ State transition
         execution: Sequence[EagerExecutor | TracedExecutor] | None,  # ↓ Internal dispatch
     ) -> Iterator[tuple[int, _LaneDecodeKwargs]]:
@@ -556,6 +621,14 @@ class LaneGroupExecutor:
             lane_sampling_params = (
                 None if sampling_params is None else _slice_contiguous_sampling_params(sampling_params, start, end)
             )
+            lane_prompt_tokens = _slice_optional_contiguous(prompt_tokens, start, end)
+            lane_output_tokens = _slice_optional_contiguous(output_tokens, start, end)
+            lane_slot_remap = _slice_lane_slot_remap(
+                slot_remap,
+                lane_idx=lane_idx,
+                lane_capacity=self.per_lane_max_batch_size,
+                lane_count=self.tt_data_parallel,
+            )
             lane_kv_cache = None if kv_cache is None else self._lane_value(kv_cache, lane_idx, "KV caches")
             lane_execution = None if execution is None else self._lane_value(execution, lane_idx, "executions")
             lane_kwargs: _LaneDecodeKwargs = {
@@ -567,6 +640,12 @@ class LaneGroupExecutor:
                 "reset_batch": reset_batch,
                 "execution": lane_execution,
             }
+            if lane_prompt_tokens is not None:
+                lane_kwargs["prompt_tokens"] = lane_prompt_tokens
+            if lane_output_tokens is not None:
+                lane_kwargs["output_tokens"] = lane_output_tokens
+            if lane_slot_remap is not None:
+                lane_kwargs["slot_remap"] = lane_slot_remap
             yield lane_idx, lane_kwargs
 
     def _prefill_lane_groups(self, empty_slots: list[Any]):
@@ -680,8 +759,124 @@ class LaneGroupExecutor:
             return failures
 
 
+def _slice_prefill_request_state(
+    value: Any,
+    *,
+    rows: list[int],
+    global_slots: list[int],
+    global_capacity: int,
+    local_slots: list[int],
+    lane_capacity: int,
+) -> Any:
+    if value is None:
+        return None
+    length = _row_scoped_length(value)
+    if length == 1:
+        selected = _slice_rows(value, [0] * len(rows))
+    elif length == global_capacity:
+        selected = _slice_rows(value, global_slots)
+    else:
+        selected = _slice_rows(value, rows)
+    return _place_prefill_request_state(
+        selected,
+        local_slots=local_slots,
+        lane_capacity=lane_capacity,
+    )
+
+
+def _place_prefill_request_state(
+    value: Any,
+    *,
+    local_slots: list[int],
+    lane_capacity: int,
+) -> Any:
+    if len(local_slots) != _row_scoped_length(value):
+        raise ValueError("prefill sampling state row count must match destination slots")
+    if isinstance(value, torch.Tensor):
+        fill = False if value.dtype == torch.bool else -1
+        placed = torch.full(
+            (int(lane_capacity), *value.shape[1:]),
+            fill,
+            dtype=value.dtype,
+            device=value.device,
+        )
+        indices = torch.tensor(local_slots, dtype=torch.long, device=value.device)
+        placed.index_copy_(0, indices, value)
+        return placed
+    values = list(value)
+    exemplar = values[0]
+    if isinstance(exemplar, tuple):
+        inactive = tuple(-1 for _ in exemplar)
+    elif isinstance(exemplar, list):
+        inactive = [-1 for _ in exemplar]
+    else:
+        inactive = -1
+    placed = [inactive for _ in range(int(lane_capacity))]
+    for row, slot in enumerate(local_slots):
+        placed[int(slot)] = values[row]
+    return tuple(placed) if isinstance(value, tuple) else placed
+
+
+def _slice_optional_contiguous(value: Any, start: int, end: int) -> Any:
+    if value is None:
+        return None
+    length = _row_scoped_length(value)
+    count = end - start
+    if length == 1:
+        return _slice_rows(value, [0] * count)
+    if length < end:
+        raise ValueError(f"row-scoped sampling state has {length} rows, expected at least {end}")
+    return _slice_rows(value, list(range(start, end)))
+
+
+def _slice_lane_slot_remap(
+    value: Any,
+    *,
+    lane_idx: int,
+    lane_capacity: int,
+    lane_count: int,
+) -> Any:
+    if value is None:
+        return None
+    length = _row_scoped_length(value)
+    global_capacity = lane_capacity * lane_count
+    lane_start = lane_idx * lane_capacity
+    lane_end = lane_start + lane_capacity
+    if length == lane_capacity:
+        local = _slice_rows(value, list(range(lane_capacity)))
+        sources = local.reshape(-1).tolist() if isinstance(local, torch.Tensor) else list(local)
+        if any(int(source) < 0 or int(source) >= lane_capacity for source in sources):
+            raise ValueError("lane-local slot_remap contains an invalid source slot")
+        return local
+    if length != global_capacity:
+        raise ValueError(f"slot_remap has {length} rows, expected {lane_capacity} or {global_capacity}")
+    selected = _slice_rows(value, list(range(lane_start, lane_end)))
+    sources = selected.reshape(-1).tolist() if isinstance(selected, torch.Tensor) else list(selected)
+    if any(int(source) < lane_start or int(source) >= lane_end for source in sources):
+        raise ValueError("slot_remap cannot move request-owned sampling state across DP lanes")
+    if isinstance(selected, torch.Tensor):
+        return selected - lane_start
+    if isinstance(selected, tuple):
+        return tuple(int(source) - lane_start for source in sources)
+    return [int(source) - lane_start for source in sources]
+
+
+def _row_scoped_length(value: Any) -> int:
+    if isinstance(value, torch.Tensor):
+        if value.ndim == 0:
+            return 1
+        return int(value.shape[0])
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    raise TypeError(f"Cannot slice row-scoped value of type {type(value).__name__}")
+
+
 def _slice_rows(value: Any, rows: list[int]) -> Any:
     if isinstance(value, torch.Tensor):
+        if value.ndim == 0:
+            if any(row != 0 for row in rows):
+                raise ValueError("cannot select multiple distinct rows from a scalar tensor")
+            return value.expand(len(rows))
         indices = torch.tensor(rows, dtype=torch.long, device=value.device)
         return value.index_select(0, indices)
     if isinstance(value, list):
@@ -758,17 +953,18 @@ def _aggregate_prefill_outputs(lane_results: list[tuple[list[int], Any]], batch_
     if not lane_results:
         return torch.empty((0,), dtype=torch.int64)
     unwrapped = []
+    lane_log_probs = []
     had_tuple = False
     for rows, result in lane_results:
         output, log_probs, was_tuple = _unwrap_output(result)
-        if log_probs is not None:
-            raise NotImplementedError("DP log probabilities are not implemented")
         had_tuple = had_tuple or was_tuple
         unwrapped.append((rows, output))
+        lane_log_probs.append((rows, log_probs))
     if all(output is None for _, output in unwrapped):
-        return (None, None) if had_tuple else None
+        return (None, _aggregate_log_probs_by_rows(lane_log_probs, batch_size)) if had_tuple else None
     if not all(isinstance(output, torch.Tensor) for _, output in unwrapped):
-        return [output for _, output in unwrapped]
+        output = [output for _, output in unwrapped]
+        return (output, _aggregate_log_probs_by_rows(lane_log_probs, batch_size)) if had_tuple else output
 
     first = unwrapped[0][1]
     assert isinstance(first, torch.Tensor)
@@ -780,22 +976,22 @@ def _aggregate_prefill_outputs(lane_results: list[tuple[list[int], Any]], batch_
         output = torch.empty((batch_size, *first.shape[1:]), dtype=first.dtype, device=first.device)
         for rows, lane_output in unwrapped:
             output[rows] = lane_output
-    return (output, None) if had_tuple else output
+    return (output, _aggregate_log_probs_by_rows(lane_log_probs, batch_size)) if had_tuple else output
 
 
 def _aggregate_contiguous_outputs(lane_results: list[Any], *, force_tokens: bool = False) -> Any:
     unwrapped = []
+    lane_log_probs = []
     had_tuple = False
     for result in lane_results:
         output, log_probs, was_tuple = _unwrap_output(result)
-        if log_probs is not None:
-            raise NotImplementedError("DP log probabilities are not implemented")
         had_tuple = had_tuple or was_tuple
         unwrapped.append(output)
+        lane_log_probs.append(log_probs)
     if all(output is None for output in unwrapped):
-        return (None, None) if had_tuple else None
+        return (None, _aggregate_log_probs_contiguous(lane_log_probs, unwrapped)) if had_tuple else None
     if not all(isinstance(output, torch.Tensor) for output in unwrapped):
-        return unwrapped
+        return (unwrapped, _aggregate_log_probs_contiguous(lane_log_probs, unwrapped)) if had_tuple else unwrapped
 
     first = unwrapped[0]
     assert isinstance(first, torch.Tensor)
@@ -803,7 +999,51 @@ def _aggregate_contiguous_outputs(lane_results: list[Any], *, force_tokens: bool
         output = torch.cat([lane_output.reshape(-1) for lane_output in unwrapped], dim=0).to(torch.int64)
     else:
         output = torch.cat(unwrapped, dim=0)
-    return (output, None) if had_tuple else output
+    return (output, _aggregate_log_probs_contiguous(lane_log_probs, unwrapped)) if had_tuple else output
+
+
+def _aggregate_log_probs_contiguous(values: list[Any], lane_outputs: list[Any]) -> Any:
+    if all(value is None for value in values):
+        return None
+    merged = []
+    for value, lane_output in zip(values, lane_outputs):
+        if not isinstance(lane_output, torch.Tensor) or lane_output.ndim == 0:
+            raise TypeError("lane output must expose its row count when logprobs are present")
+        lane_rows = int(lane_output.shape[0])
+        if value is None:
+            merged.append(torch.ones(lane_rows, dtype=torch.float32))
+        else:
+            merged.append(_sampled_log_probs_for_rows(value, lane_rows))
+    return torch.cat(merged, dim=0)
+
+
+def _aggregate_log_probs_by_rows(values: list[tuple[list[int], Any]], batch_size: int) -> Any:
+    if all(value is None for _, value in values):
+        return None
+    ordered = torch.ones(int(batch_size), dtype=torch.float32)
+    for rows, value in values:
+        if value is None:
+            continue
+        payload = _sampled_log_probs_for_rows(value, len(rows))
+        indices = torch.tensor(tuple(int(row) for row in rows), dtype=torch.long)
+        ordered.index_copy_(0, indices, payload)
+    return ordered
+
+
+def _sampled_log_probs_for_rows(value: Any, row_count: int) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        output = value.reshape(-1)
+    elif isinstance(value, (float, int)):
+        output = torch.full((int(row_count),), float(value), dtype=torch.float32)
+    elif isinstance(value, (list, tuple)):
+        output = torch.as_tensor(value).reshape(-1)
+    else:
+        raise TypeError("lane logprobs must be a Torch tensor or numeric sequence")
+    if int(output.numel()) == 1 and int(row_count) > 1:
+        output = output.expand(int(row_count))
+    if int(output.numel()) < int(row_count):
+        raise ValueError(f"lane logprobs contain {output.numel()} rows, expected at least {row_count}")
+    return output[: int(row_count)].to(torch.float32)
 
 
 def _unwrap_output(result: Any) -> tuple[Any, Any, bool]:

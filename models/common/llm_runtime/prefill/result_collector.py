@@ -16,7 +16,7 @@ from models.common.llm_runtime.prefill.postprocess import PrefillPostprocessor
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE, _merge_log_probs, _select_sample_log_prob
 from models.common.llm_runtime.prefill.signatures import PreparedPrefill
 from models.common.llm_runtime.tensor_resources import attach_cleanup_failures, raise_cleanup_failures
-from models.common.sampling import SamplingParams
+from models.common.sampling.sampling_params import SamplingParams
 
 
 @dataclass(frozen=True)

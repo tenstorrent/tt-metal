@@ -481,7 +481,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     ring_.emplace(std::min(kMaxRingCapacity, max_consumer_batch_records * kRingHeadroomBatches));
 
     for (const auto& dev_state : devices_) {
-        tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
+        tt::NotifyProgramRealtimeProfilerActivated(context_id_, dev_state.chip_id);
     }
 
     run_init_sync();
@@ -1297,7 +1297,7 @@ void RealtimeProfilerManager::shutdown() {
     // Clear activation state before destroying per-device records so concurrent
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
-        tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
+        tt::NotifyProgramRealtimeProfilerDeactivated(context_id_, dev_state.chip_id);
     }
     devices_.clear();
 }

@@ -3157,3 +3157,51 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warm
         assert_equal(input_torch_tensor, ttnn.to_torch(output))
     finally:
         ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [
+        (1, 1, 32, 7328),
+        (1, 1, 128, 7328),
+        (1, 1, 64, 8192),
+        (1, 1, 96, 7392),
+        (1, 1, 160, 6304),
+        (2, 1, 64, 7328),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_untilize_block_per_node_cb_size(device, tensor_shape, dtype):
+    torch.manual_seed(42)
+    dram_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    keep_alive = []
+    entries = None
+    for i in range(2):
+        torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        tt_tiled = ttnn.from_torch(
+            torch_input,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=dram_cfg,
+            device=device,
+        )
+
+        tt_rm = ttnn.untilize(tt_tiled, use_multicore=True)
+        keep_alive += [tt_tiled, tt_rm]
+
+        assert tt_rm.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(torch_input, ttnn.to_torch(tt_rm))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "untilize must reuse the cached program on a cache hit"
+
+    device.disable_and_clear_program_cache()

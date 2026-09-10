@@ -63,7 +63,7 @@ void py_module(nb::module_& mod) {
     namespace lightmetal = tt::tt_metal::experimental::lightmetal;
 
     auto py_config = static_cast<nb::class_<ttnn::Config>>(mod.attr("Config"));
-    py_config.def(nb::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
+    py_config.def(nb::init<>()).def(nb::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
         return fmt::format("{}", config);
     });
     reflect::for_each<ttnn::Config::attributes_t>([&py_config](auto I) {
@@ -73,6 +73,15 @@ void py_module(nb::module_& mod) {
             &ttnn::Config::set<I>);
     });
     py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
+    py_config.def(
+        "apply_json_overrides",
+        &ttnn::Config::apply_json_overrides,
+        nb::arg("json_text"),
+        nb::arg("strict") = true,
+        nb::arg("source") = "");
+    py_config.def_static("keys", &ttnn::Config::keys);
+    py_config.def("load_from_file", &ttnn::Config::load_from_file, nb::arg("path"));
+    py_config.def("save_to_file", &ttnn::Config::save_to_file, nb::arg("path"));
 
     nb::class_<lightmetal::LightMetalBinary>(mod, "LightMetalBinary")
         .def(nb::init<>())

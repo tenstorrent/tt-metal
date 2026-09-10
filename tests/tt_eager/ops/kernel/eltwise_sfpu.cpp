@@ -13,7 +13,8 @@ void kernel_main() {
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     uint32_t tile_factor = get_compile_time_arg_val(2);
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
     uint32_t block_index = 0;
     cb_reserve_back(tt::CBIndex::c_16, per_core_block_dim);
     uint32_t tile_index = 0;
