@@ -85,6 +85,14 @@ private:
         CoreCoord logical, virt, phys;
         std::unique_ptr<Program> program;
         uint32_t sock_idx = 0;  // index into out.sockets, after the relays
+        // The chip's active eth cores this pusher drains (their rings are NoC-read, their heads written back):
+        // they run the fabric router and can spend no cycles on egress, so the idle sibling carries them.
+        struct Linked {
+            CoreCoord logical, virt;
+            uint32_t xy = 0;       // packed virtual XY, the frame identity the decoder resolves
+            uint32_t prof_l1 = 0;  // that core type's profiler L1 base (ACTIVE_ETH)
+        };
+        std::vector<Linked> linked;
     };
     struct DeviceCtx {
         uint32_t chip_id = 0;
@@ -131,6 +139,10 @@ private:
         const distributed::MeshCoordinate& coord,
         uint32_t k);
     void write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
+    // One-shot device<->device link sync at boot: the eth sync kernels on every connected active-eth pair of local
+    // devices, whose SYNC-ZONE zones the idle pushers then drain. Only when fabric is DISABLED: after fabric init
+    // those cores hold live routers, and a launch onto one would write a launch message into a router.
+    void launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
     // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
     void set_producers_armed(const DeviceCtx& ctx, bool armed);
@@ -148,7 +160,9 @@ private:
     // ctrl words (done/heartbeat, stop), one frame slot.
     bool eth_ok_ = false;
     uint64_t eth_prof_l1_ = 0;
-    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0;
+    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0;
+    bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
+    uint64_t aeth_prof_l1_ = 0;
     // GDDR spool: one replicated mesh buffer with one interleaved page per DRAM bank, so the same window is
     // reserved in every bank of every device. Bytes 0 = direct push.
     std::shared_ptr<distributed::MeshBuffer> spool_buffer_;

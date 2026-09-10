@@ -294,6 +294,13 @@ int __attribute__((noinline)) main(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            // Resolve the SPSC publish gate, as erisc.cc does and as idle_erisc.cc now does. AERISC is a
+            // PROFILER_VALIDATES_ZONE RISC, so init_profiler() (DeviceProfilerInit above) defers its first publish
+            // until this call -- and nothing on this path made it. Left unresolved, publish_tail() early-returns
+            // forever: a kernel on an active eth core fills its ring, its tail never advances, and it reads to any
+            // drainer as permanently idle (the eth sync kernels published nothing). Gate on the launch message
+            // like the other validators: a core may get GO with enables 0 to keep its launch messages in sync.
+            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 

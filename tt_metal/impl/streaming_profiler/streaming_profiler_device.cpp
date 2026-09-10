@@ -26,6 +26,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
@@ -64,6 +65,15 @@ constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 constexpr uint32_t kEthFifoBytes = 1u << 20;
 constexpr uint32_t kEthStrideUs = 3;
 constexpr uint32_t kEthCtrlBytes = 128;  // done(+0)/heartbeat(+4) at 0, stop at 64
+// Pusher scratch for one linked core: its control vector, then its two ring images (BH eth has DM0 and DM1).
+constexpr uint32_t kEthScratchBytes = 4608;
+static_assert(
+    kEthScratchBytes >= kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + 2 * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
+    "the pusher scratch must hold a control vector and two whole rings");
+// The legacy profiler's eth sync geometry (tt_metal_profiler.cpp), reused verbatim for the one-shot link sync.
+constexpr uint32_t kLinkSyncChannels = 1;
+constexpr uint32_t kLinkSyncSamples = 240;
+constexpr uint32_t kLinkSyncSampleSize = 16;
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
 // the stall site.
@@ -273,6 +283,15 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     // (the same slot geometry as a relay, since the eth core is enumerated as a standard 5-lane core). Too small a
     // region, or no such core type, disables the eth pushers only; the relays are unaffected.
     eth_ok_ = false;
+    aeth_ok_ = false;
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
+        try {
+            aeth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+            aeth_ok_ = aeth_prof_l1_ != 0;
+        } catch (const std::exception&) {
+            aeth_ok_ = false;
+        }
+    }
     if (hal.has_programmable_core_type(HalProgrammableCoreType::IDLE_ETH)) {
         eth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
         const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -282,7 +301,8 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
             eth_cfg_ = ebase + esize - kCfgReserve;
             eth_ctrl_ = eth_cfg_ - kEthCtrlBytes;
             eth_stage_ = (eth_ctrl_ - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
-            eth_ok_ = eth_stage_ >= ebase;
+            eth_scratch_ = (eth_stage_ - kEthScratchBytes) & ~(kPageSize - 1u);
+            eth_ok_ = eth_scratch_ >= ebase;
         }
         if (!eth_ok_) {
             log_warning(
@@ -315,6 +335,9 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
             static_cast<int>(MetalContext::instance(context_id_).get_cluster().get_numa_node_for_device(ctx.chip_id));
         out.push_back(std::move(ctx.out));
         devices_.push_back(std::move(ctx));
+    }
+    if (!devices_.empty()) {
+        launch_link_sync(mesh_device);
     }
     if (!devices_.empty()) {
         log_info(
@@ -733,6 +756,35 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
             .chip_id = chip,
             .risc = static_cast<experimental::streaming_profiler::Risc>(r)});
     }
+    // The chip's active eth cores join the decode roster the same way (padded 5-lane cores, zeroed, unarmed for
+    // now) and become this pusher's linked set. Only cores no dispatch tunnel reserved; lowest (y, x) first.
+    if (aeth_ok_) {
+        const auto active_set = ctx.device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true);
+        std::vector<CoreCoord> active(active_set.begin(), active_set.end());
+        std::sort(active.begin(), active.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.y != b.y ? a.y < b.y : a.x < b.x;
+        });
+        for (const CoreCoord& al : active) {
+            EthPusher::Linked ln;
+            ln.logical = al;
+            ln.virt = cluster.get_virtual_coordinate_from_logical_coordinates(chip, al, CoreType::ETH);
+            const CoreCoord aphys =
+                cluster.get_physical_coordinate_from_logical_coordinates(chip, al, CoreType::ETH, /*no_warn=*/true);
+            ln.xy = packed_xy(ln.virt);
+            ln.prof_l1 = static_cast<uint32_t>(aeth_prof_l1_);
+            cluster.write_core(
+                zero_ctrl.data(), static_cast<uint32_t>(zero_ctrl.size()), tt_cxy_pair(chip, ln.virt), aeth_prof_l1_);
+            cap.core_xy.push_back(ln.xy);
+            for (uint32_t r = 0; r < kNRisc; r++) {
+                cap.lanes.push_back(experimental::streaming_profiler::Core{
+                    .logical = al,
+                    .physical = aphys,
+                    .chip_id = chip,
+                    .risc = static_cast<experimental::streaming_profiler::Risc>(r)});
+            }
+            e.linked.push_back(std::move(ln));
+        }
+    }
     ctx.eth.push_back(std::move(e));
 }
 
@@ -761,8 +813,9 @@ bool Devices::launch_eth_pusher(
         cluster.write_core(zero_words, sizeof(zero_words), tt_cxy_pair(chip, e.virt), eth_ctrl_);
 
         auto program = std::make_unique<Program>(CreateProgram());
-        const std::vector<uint32_t> ca = {kEthStrideUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt)};
-        CreateKernel(
+        const std::vector<uint32_t> ca = {
+            kEthStrideUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt), eth_scratch_};
+        auto kid = CreateKernel(
             *program,
             "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
             e.logical,
@@ -774,7 +827,14 @@ bool Devices::launch_eth_pusher(
         // A binary that failed to compile must NEVER reach LaunchProgram: launching onto an idle eth core holding no
         // valid binary once wedged the core and took the box down. CompileProgram throws into the catch below, and
         // the pusher is dropped instead.
+        std::vector<uint32_t> rt = {static_cast<uint32_t>(e.linked.size())};
+        for (const EthPusher::Linked& ln : e.linked) {
+            rt.push_back(ln.xy);
+            rt.push_back(ln.prof_l1);
+        }
+        SetRuntimeArgs(*program, kid, e.logical, rt);
         detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
+        detail::WriteRuntimeArgsToDevice(ctx.device, *program, /*force_slow_dispatch=*/true);
         detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
         if (!relay_heartbeat_advanced(cluster, chip, e.virt, eth_ctrl_ + 4, 100 + k)) {
             return false;
@@ -782,6 +842,16 @@ bool Devices::launch_eth_pusher(
         e.sock_idx = static_cast<uint32_t>(ctx.out.sockets.size());
         ctx.out.sockets.push_back(std::move(socket));
         e.program = std::move(program);
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: idle-eth clock pusher on eth ({},{}) up; drains {} active eth core(s) "
+            "(idle profiler L1 {:#x}, active profiler L1 {:#x})",
+            chip,
+            e.logical.x,
+            e.logical.y,
+            e.linked.size(),
+            eth_prof_l1_,
+            aeth_prof_l1_);
     } catch (const std::exception& ex) {
         log_warning(
             tt::LogMetal,
@@ -805,6 +875,90 @@ void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
     }
     for (const EthPusher& e : ctx.eth) {
         write_eth_ctrl_word(ctx, e.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
+        for (const EthPusher::Linked& ln : e.linked) {
+            const uint32_t v = armed ? 1u : 0u;
+            MetalContext::instance(context_id_)
+                .get_cluster()
+                .write_core(
+                    &v,
+                    sizeof(v),
+                    tt_cxy_pair(ctx.chip_id, ln.virt),
+                    ln.prof_l1 + kernel_profiler::PROFILER_ARMED * sizeof(uint32_t));
+        }
+    }
+}
+
+void Devices::launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    (void)mesh_device;
+    auto& mc = MetalContext::instance(context_id_);
+    if (mc.get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] fabric is enabled: the active eth cores hold live routers, so the boot-time link "
+            "sync is skipped (link data must come from the router's own hook)");
+        return;
+    }
+    auto& cluster = mc.get_cluster();
+    uint32_t pairs = 0;
+    for (size_t a = 0; a < devices_.size(); a++) {
+        const uint32_t chip_a = devices_[a].chip_id;
+        const auto connected = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_a);
+        for (size_t b = a + 1; b < devices_.size(); b++) {
+            const uint32_t chip_b = devices_[b].chip_id;
+            const auto it = connected.find(chip_b);
+            if (it == connected.end() || it->second.empty()) {
+                continue;
+            }
+            const CoreCoord eth_sender = it->second[0];
+            const CoreCoord eth_receiver =
+                std::get<1>(cluster.get_connected_ethernet_core(std::make_tuple(chip_a, eth_sender)));
+            const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
+            Program ps = CreateProgram();
+            Program pr = CreateProgram();
+            CreateKernel(
+                ps,
+                "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
+                eth_sender,
+                EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+            CreateKernel(
+                pr,
+                "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
+                eth_receiver,
+                EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+            // Never launch a binary that failed to compile (an eth core with no valid binary wedges).
+            try {
+                detail::CompileProgram(devices_[a].device, ps, /*force_slow_dispatch=*/true);
+                detail::CompileProgram(devices_[b].device, pr, /*force_slow_dispatch=*/true);
+            } catch (const std::exception& ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] link sync {}<->{}: sync kernels failed to compile ({}); pair skipped",
+                    chip_a,
+                    chip_b,
+                    ex.what());
+                continue;
+            }
+            detail::LaunchProgram(
+                devices_[a].device, ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+            detail::LaunchProgram(
+                devices_[b].device, pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+            detail::WaitProgramDone(devices_[a].device, ps, /*read_device_profiler_results=*/false);
+            detail::WaitProgramDone(devices_[b].device, pr, /*read_device_profiler_results=*/false);
+            pairs++;
+            log_info(
+                tt::LogMetal,
+                "[streaming profiler] link sync {} eth({},{}) <-> {} eth({},{}): {} rounds",
+                chip_a,
+                eth_sender.x,
+                eth_sender.y,
+                chip_b,
+                eth_receiver.x,
+                eth_receiver.y,
+                kLinkSyncSamples);
+        }
+    }
+    if (pairs == 0 && devices_.size() > 1) {
+        log_warning(tt::LogMetal, "[streaming profiler] link sync: no eth connection between the local devices");
     }
 }
 
@@ -850,6 +1004,29 @@ void Devices::quiesce(const RelayStateFn& on_state) {
         // host's view). One that does not finish is a fault, like a relay that does not.
         for (uint32_t k = 0; k < ctx.eth.size(); k++) {
             const EthPusher& e = ctx.eth[k];
+            // Diagnostic: each linked core lane state as the pusher last left it (tail 0 = that core never
+            // published; head < tail = words the pusher has not drained).
+            for (const EthPusher::Linked& ln : e.linked) {
+                std::vector<uint32_t> lcv(kernel_profiler::SPSC_CONTROL_END, 0);
+                cluster.read_core(
+                    lcv.data(),
+                    kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),
+                    tt_cxy_pair(ctx.chip_id, ln.virt),
+                    ln.prof_l1);
+                log_info(
+                    tt::LogMetal,
+                    "[streaming profiler] Device {}: linked active eth ({},{}) lanes: dm0 tail {} head {}, dm1 tail {} "
+                    "head {}, "
+                    "armed {}",
+                    ctx.chip_id,
+                    ln.logical.x,
+                    ln.logical.y,
+                    lcv[kernel_profiler::SPSC_RING_TAIL_0],
+                    lcv[kernel_profiler::SPSC_RING_HEAD_0],
+                    lcv[kernel_profiler::SPSC_RING_TAIL_0 + 1],
+                    lcv[kernel_profiler::SPSC_RING_HEAD_0 + 1],
+                    lcv[kernel_profiler::PROFILER_ARMED]);
+            }
             const tt_cxy_pair core(ctx.chip_id, e.virt);
             const uint32_t stop_word = kernel_profiler::kRelayStopQuiesce;
             cluster.write_core(&stop_word, sizeof(stop_word), core, eth_ctrl_ + 64);
