@@ -6,7 +6,6 @@ The current version is verified to work with the following models:
 | Model                                                                                            | Hardware                    | <org/model>                                      |
 |--------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------|
 | [DeepSeek R1 Distill Llama 70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)| LoudBox / QuietBox / Galaxy | ```deepseek-ai/DeepSeek-R1-Distill-Llama-70B``` |
-| [EXAONE 4.5 33B](https://huggingface.co/LGAI-EXAONE/EXAONE-4.5-33B) (text; host-vision hybrid demo) | P150x8 (BH LoudBox)  | ```LGAI-EXAONE/EXAONE-4.5-33B```                |
 | [Llama 3.1 8B](https://huggingface.co/meta-llama/Llama-3.1-8B)                                   | n150 / p100 / p150          | ```meta-llama/Llama-3.1-8B```                   |
 | [Llama 3.1 70B](https://huggingface.co/meta-llama/Llama-3.1-70B)                                 | LoudBox / QuietBox / Galaxy | ```meta-llama/Llama-3.1-70B```                  |
 | [Llama 3.2 1B](https://huggingface.co/meta-llama/Llama-3.2-1B)                                   | n150                        | ```meta-llama/Llama-3.2-1B```                   |
@@ -344,7 +343,7 @@ Max Prefill Chunk Sizes (text-only):
 
 **Chunked prefill (Mistral-Small-3.1-24B multimodal)**: Mistral-Small-3.1-24B-Instruct-2503 (Pixtral vision) is currently supported on T3000. On T3000, a max prefill context length of 128k is supported.
 
-**Chunked prefill (EXAONE-4.5-33B multimodal)**: EXAONE-4.5-33B is supported on P150x8 as a text decoder. Image input is experimental: the hybrid demo [exaone_45_vision_hybrid.py](demo/exaone_45_vision_hybrid.py) runs the vision tower on the host (or on device with `--vision-device tt`, using [models/experimental/exaone45_vl](../experimental/exaone45_vl)) and the text decoder on P150x8, with trace disabled for the vision prefill. Vision input is not wired through vLLM.
+**EXAONE-4.5-33B**: text decoder still lives here (`force_text_only` / hybrid RoPE-NoPE). Not in pipeline CI, so it is no longer listed as verified. Image input is experimental: [exaone_45_vision_hybrid.py](../experimental/exaone45_vl/demo/exaone_45_vision_hybrid.py) (host or `--vision-device tt`) + the on-device tower in [models/experimental/exaone45_vl](../experimental/exaone45_vl). Vision is not wired through vLLM.
 
 ---
 

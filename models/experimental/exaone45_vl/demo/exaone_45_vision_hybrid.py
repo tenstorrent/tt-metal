@@ -20,7 +20,7 @@ Validated 2026-08-25 on P150x8: prefill-logit PCC vs the full HF CPU forward
 
 Usage:
     export HF_MODEL=LGAI-EXAONE/EXAONE-4.5-33B MESH_DEVICE=P150x8
-    python models/tt_transformers/demo/exaone_45_vision_hybrid.py \
+    python models/experimental/exaone45_vl/demo/exaone_45_vision_hybrid.py \
         [--image path.jpg] [--prompt "What is in this image?"] \
         [--max-new-tokens 200] [--enable-thinking]
 """
