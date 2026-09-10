@@ -42,6 +42,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 #include "api/tensor/noc_traits.h"
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/msda_tile_layout.hpp"
@@ -100,9 +101,10 @@ inline int32_t bf16_to_q16(uint16_t bf16, int32_t clamp_q16) {
     return negative ? -magnitude : magnitude;
 }
 
-// Precondition: v != 0. __builtin_clz(0) is undefined, and the fallback loop
-// below would never terminate. Both callers check for zero first.
+// __builtin_clz(0) is undefined, and the fallback loop below would never
+// terminate on zero.
 inline uint32_t count_leading_zeros(uint32_t v) {
+    ASSERT(v != 0);
 #if defined(__GNUC__) || defined(__clang__)
     return static_cast<uint32_t>(__builtin_clz(v));
 #else
