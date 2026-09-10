@@ -8,8 +8,9 @@
 
 namespace ttnn::experimental::deepseek {
 
-// Untilize and gather a WIDTH_SHARDED input, or multicast a single-core HEIGHT_SHARDED
-// input, replicating a full row-major M x K copy onto every matmul core.
+// Gather a WIDTH_SHARDED input, or multicast a single-core HEIGHT_SHARDED input,
+// replicating a full row-major M x K copy onto every matmul core. TILE inputs are
+// untilized; ROW_MAJOR inputs skip untilize.
 ttnn::Tensor all_gather_for_matmul(
     const ttnn::Tensor& input_tensor,
     const CoreRangeSet& output_core_range_set,

@@ -20,9 +20,9 @@ void bind_all_gather_for_matmul(nb::module_& mod) {
         R"doc(
         Gather a WIDTH_SHARDED input, or multicast a single-core HEIGHT_SHARDED input, for matmul.
 
-        WIDTH_SHARDED: each input core untilizes its width shard and sends it to a hub. The hub
-        assembles the complete input tensor and broadcasts one full row-major copy to every core
-        in ``output_core_range_set``.
+        WIDTH_SHARDED: each input core sends its width shard to a hub (untilizing TILE data first;
+        ROW_MAJOR input is already dense and skips untilize). The hub assembles the complete input
+        tensor and broadcasts one full row-major copy to every core in ``output_core_range_set``.
 
         HEIGHT_SHARDED: the full tensor already lives on one core, so that core untilizes if needed
         and multicasts the replica (no gather). TILE and ROW_MAJOR inputs are accepted.
@@ -31,8 +31,8 @@ void bind_all_gather_for_matmul(nb::module_& mod) {
         input tensor (tile padding is dropped), matching matmul_decode full-width hub mode for A.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): L1 TILE WIDTH_SHARDED input, or a single-core
-              HEIGHT_SHARDED TILE / ROW_MAJOR input
+            * :attr:`input_tensor` (ttnn.Tensor): L1 WIDTH_SHARDED or single-core HEIGHT_SHARDED
+              input in TILE or ROW_MAJOR layout
             * :attr:`output_core_range_set` (CoreRangeSet): receiver cores for the output
 
         Returns:
