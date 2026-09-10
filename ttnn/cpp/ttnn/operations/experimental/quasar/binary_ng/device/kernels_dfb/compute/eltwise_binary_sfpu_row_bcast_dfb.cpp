@@ -100,16 +100,16 @@ void kernel_main() {
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
 #endif
 
-    compute_kernel_hw_startup(dfb_bcast_id, dfb_llk_post_id);
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         // --- Broadcast pass: partial tile (from the reader) -> full tile in the intermediate llk_post. ---
         dfb_bcast.wait_front(num_tiles_per_cycle);
@@ -142,11 +142,6 @@ void kernel_main() {
         // writes the wrong buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
         pack_init(dfb_out_id);
 #endif
-#if defined(ARCH_BLACKHOLE)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#endif
 
         // --- Binary op (SFPU path; mirrors eltwise_binary_sfpu_no_bcast_dfb.cpp's body, single tile). ---
         PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, num_tiles_per_cycle);
@@ -167,17 +162,19 @@ void kernel_main() {
         // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
         // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
         // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-        copy_tile_to_dst_init_short(dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
 #else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
 #ifdef ARCH_QUASAR
-        copy_tile_to_dst_init_short(dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
 #else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);

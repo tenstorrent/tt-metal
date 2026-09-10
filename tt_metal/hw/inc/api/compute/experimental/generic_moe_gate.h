@@ -38,17 +38,15 @@ template <
     int num_total_experts = 256,
     bool zero_tail = false,
     bool full_sort = false,
-    bool generate_indices = true>
-ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
-    // NOTE: only num_selected_experts == 16 selects the top-16 SFPU path; every other value routes to
-    // top-8, which emits at most eight winners, so 9..15 silently yield 8 rather than the requested
-    // count. Deliberately not static_assert'd here: callers currently advertise a wider contract (blaze's
-    // gptoss_moe_router validates 1..16 and forwards it straight through), so constraining it here alone
-    // would turn a reachable-but-wrong configuration into a build break. Caller validation and this
-    // template have to be tightened together.
+    bool generate_indices = true,
+    bool do_extra_scale = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
+    static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
+
     // Copy add (FPU)
     UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
-    MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
+    MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
         icb0, icb1, 0, true)));
 
     // Topk SFPU
@@ -58,7 +56,8 @@ ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t 
           num_total_experts,
           zero_tail,
           full_sort,
-          generate_indices>(eps, scale)));
+          generate_indices,
+          do_extra_scale>(eps, scale, extra_scale)));
 }
 
 #endif

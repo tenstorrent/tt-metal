@@ -64,6 +64,7 @@ FROM scratch AS ccache-layer
 FROM scratch AS mold-layer
 FROM scratch AS doxygen-layer
 FROM scratch AS clangbuildanalyzer-layer
+FROM scratch AS iwyu-layer
 FROM scratch AS gdb-layer
 FROM scratch AS cmake-layer
 FROM scratch AS yq-layer
@@ -209,6 +210,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# The LLVM packages install versioned names only. CodeChecker resolves the
+# unversioned ones, and consults ClangSA.analyzer_binary() even when only
+# clang-tidy runs, where a None crashes compilation-database parsing. Three
+# workflows each fixed that up themselves before running it; do it once here.
+# Nothing in the build picks a compiler by bare name: build_metal.sh passes an
+# explicit path, CMakePresets pins clang-tidy-20, and CMake's own default probe
+# looks for cc/c++.
+RUN for tool in clang clang++ clang-tidy; do \
+        update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
+    done && \
+    clang --version && clang-tidy --version
+
 #############################################################
 # CI Build image
 #############################################################
@@ -255,6 +268,22 @@ RUN curl -fsSL -o /usr/local/bin/tt-smi \
     "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" && \
     chmod a+rx /usr/local/bin/tt-smi && \
     tt-smi --version | grep -q "${TT_SMI_VERSION}"
+
+# include-what-you-use. Here rather than with the other tools in ci-build-light
+# because nothing in the build needs it: this is the first stage shared by the
+# CI test images and the dev images, which are the two consumers.
+#
+# IWYU reads Clang's builtin headers from the LLVM prefix it was built against,
+# which is the same /usr/lib/llvm-<major> the apt packages above install. The
+# check below analyzes a file that needs those headers, so that coupling breaks
+# the image build rather than the first analysis run.
+COPY --from=iwyu-layer --link /install/ /usr/local/
+RUN test -x /usr/local/bin/include-what-you-use || \
+      { echo "ERROR: include-what-you-use not found in iwyu-layer" >&2; exit 1; }; \
+    printf '#include <stddef.h>\nsize_t f(void) { return 0; }\n' > /tmp/iwyu-check.c; \
+    include-what-you-use -xc /tmp/iwyu-check.c 2>&1 | grep -q 'has correct #includes' || \
+      { echo "ERROR: include-what-you-use cannot find Clang's builtin headers" >&2; exit 1; }; \
+    rm -f /tmp/iwyu-check.c
 
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
@@ -367,10 +396,6 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # permissions verbatim. Do NOT add --chmod: it disables the --link fast path.
 COPY --from=ci-test-venv-layer --link /install/venv /opt/venv
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-# IWYU (Include What You Use) could be useful to developers.
-# Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh
-# To add: create iwyu tool target in Dockerfile.tools using install-iwyu.sh
 
 #############################################################
 # Release image

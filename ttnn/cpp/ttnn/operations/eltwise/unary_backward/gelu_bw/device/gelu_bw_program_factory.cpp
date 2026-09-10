@@ -128,9 +128,15 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
     }
     std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float32>";
+        compute_defines["COPY_DEST_DATA_FORMAT"] = "DataFormat::Float32";
     } else {
-        compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float16_b>";
+        compute_defines["COPY_DEST_DATA_FORMAT"] = "DataFormat::Float16_b";
+    }
+
+    if (output.dtype() == DataType::BFLOAT16) {
+        compute_defines["BF16_ROUNDING_MODE"] = "ckernel::DstRoundingMode::NearestEven";
+    } else {
+        compute_defines["BF16_ROUNDING_MODE"] = "ckernel::DstRoundingMode::Default";
     }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;

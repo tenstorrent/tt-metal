@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "kernels/topk_large_indices_compute_body_mode.hpp"
 #include "topk_large_indices_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -33,5 +34,7 @@ struct TopkLargeIndicesProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 };
+
+ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim);
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

@@ -41,6 +41,8 @@ DataflowBufferSpec make_dfb(
     };
 }
 
+// TILE-native factory (unreachable): tile-index math only correct for (N,32,32,C≤32); composite untilizes before
+// dispatch. Rewrite would remove the untilize hop.
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
@@ -316,16 +318,21 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     uint32_t patches_per_core = tt::div_up(total_patches, num_cores_total);
+    // Only launch cores that actually hold work; per-core work is a runtime arg so the cliff core carries a partial
+    // tail without over-reading past total_patches.
+    uint32_t num_active_cores = tt::div_up(total_patches, patches_per_core);
 
     log_debug(
         tt::LogOp,
-        "total_patches: {}, num_cores_total: {}, patches_per_core: {}",
+        "total_patches: {}, num_cores_total: {}, patches_per_core: {}, num_active_cores: {}",
         total_patches,
         num_cores_total,
-        patches_per_core);
+        patches_per_core,
+        num_active_cores);
 
-    CoreRangeSet all_cores{CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})};
-    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
+    CoreRangeSet all_cores =
+        tt::tt_metal::num_cores_to_corerangeset(num_active_cores, compute_grid_size, /*row_wise=*/true);
+    auto cores = grid_to_cores(num_active_cores, num_cores_x, num_cores_y, /*row_wise=*/true);
 
     uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(dfb_data_format);
     // Align to DRAM read alignment.
@@ -352,13 +359,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
+    // work_per_core is per-core runtime (see active-core split above); every other arg is uniform across cores.
     const KernelSpec::CompileTimeArgs common_cta{
         {"stick_nbytes", stick_nbytes},
         {"aligned_stick_nbytes_dram", aligned_stick_nbytes},
         {"stride_h", stride_h},
         {"stride_w", stride_w},
         {"input_width", input_width},
-        {"work_per_core", patches_per_core},
     };
 
     // Emit the NOT_L1_ALIGNED define to the writer only when the src1 scratch is bound
@@ -375,7 +382,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
             .dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args = common_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"src_index", "curr_src_row_index"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "src_index", "curr_src_row_index"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
@@ -395,7 +402,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "dst_index"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
@@ -407,32 +414,36 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     const uint32_t output_width = input_width / stride_w;
     const uint32_t patch_size = stride_h * stride_w;
     const uint32_t output_hw = output_height * output_width;
-    uint32_t curr_patches = 0;
-    uint32_t src_idx = 0;
-    uint32_t dst_idx = 0;
-    uint32_t src_col_offset = 0;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
 
-        if (curr_patches < total_patches) {
-            uint32_t output_offset = i * patches_per_core;
-            uint32_t batch_idx = output_offset / output_hw;
-            uint32_t batch_offset = output_offset % output_hw;
-            uint32_t out_height = batch_offset / output_width;
-            uint32_t out_width = batch_offset % output_width;
+        const uint32_t output_offset = i * patches_per_core;
+        // Cliff core carries a partial tail: patches_this_core = min(patches_per_core, total_patches - output_offset).
+        const uint32_t patches_this_core =
+            (output_offset + patches_per_core <= total_patches) ? patches_per_core : (total_patches - output_offset);
 
-            uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
-            uint32_t src_row_offset = out_height * stride_h * input_width;
-            src_col_offset = out_width * stride_w;
+        const uint32_t batch_idx = output_offset / output_hw;
+        const uint32_t batch_offset = output_offset % output_hw;
+        const uint32_t out_height = batch_offset / output_width;
+        const uint32_t out_width = batch_offset % output_width;
 
-            src_idx = src_batch_offset + src_row_offset + src_col_offset;
-            dst_idx = output_offset;
-        }
+        const uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
+        const uint32_t src_row_offset = out_height * stride_h * input_width;
+        const uint32_t src_col_offset = out_width * stride_w;
 
-        curr_patches += patches_per_core;
+        const uint32_t src_idx = src_batch_offset + src_row_offset + src_col_offset;
+        const uint32_t dst_idx = output_offset;
+
         AddRuntimeArgsForNode(
-            reader_run.runtime_arg_values, core, {{"src_index", src_idx}, {"curr_src_row_index", src_col_offset}});
-        AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"dst_index", dst_idx}});
+            reader_run.runtime_arg_values,
+            core,
+            {{"work_per_core", patches_this_core},
+             {"src_index", src_idx},
+             {"curr_src_row_index", src_col_offset}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            core,
+            {{"work_per_core", patches_this_core}, {"dst_index", dst_idx}});
     }
 
     ProgramSpec spec{

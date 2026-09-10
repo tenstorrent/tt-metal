@@ -4,6 +4,8 @@
 
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
+#include "kernels/high_bw_all_gather_metadata.hpp"
+#include "kernels/high_bw_all_gather_partition.hpp"
 
 #include <array>
 #include <cstddef>
@@ -12,6 +14,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -27,6 +30,7 @@ struct PageGeometry {
     uint32_t num_input_pages;
     uint32_t num_output_chunks;
     uint32_t output_chunks_per_stripe;
+    uint32_t input_page_base;
 };
 
 enum class ReaderRtArg : std::size_t {
@@ -44,6 +48,31 @@ enum class ReaderRtArg : std::size_t {
     InputPageEnd,
     ReadySemaphore,
     DataValidSemaphore,
+    OutputChunksPerStripe,
+    // Metadata slot select only. Always present so the scalar and metadata forms share one
+    // runtime-argument layout; 0 and unread on the scalar path.
+    //   BatchIndexMetaAddress -- address of the 1-element uint32 slot-id (user id) tensor.
+    //   BatchSlotNumLayers / BatchSlotLayerIdx -- the recomposition terms, both re-patched every
+    //   dispatch. LayerIdx must be runtime: it varies per layer, and hashing it would give one program
+    //   per layer, each allocating two more global semaphores than L1_SMALL affords. NumLayers is
+    //   constant per cache and could have been compile-time; it stays runtime so the two travel as one
+    //   block with one patch site, and so a single cached program can serve caches of different depth
+    //   (a 78-layer KVPE cache and a 21-layer index cache) instead of forking per depth. Both are
+    //   constant within a captured op instance, so a capture may freeze them.
+    BatchIndexMetaAddress,
+    BatchSlotNumLayers,
+    BatchSlotLayerIdx,
+    // Active-extent metadata path only. Always present so both forms share one layout.
+    //   GatheredPrefixMetaAddress -- address of the 1-element uint32 chunk-start tensor.
+    //   SliceIdx / Link / Worker / IsForward / NumRecv -- this core's position in the schedule, which the
+    //   on-device derivation needs and which the host otherwise folded into the values above. Per-core
+    //   constants, so a capture may freeze them.
+    GatheredPrefixMetaAddress,
+    SliceIdx,
+    Link,
+    Worker,
+    IsForward,
+    NumRecv,
     Count,
 };
 
@@ -64,8 +93,10 @@ enum class WriterRtArg : std::size_t {
     DataValidNocX,
     DataValidNocY,
     NumGranularSends,
+    DataValidGranularity,
     NeighborDeviceId,
     NeighborMeshId,
+    OutputChunksPerStripe,
     Count,
 };
 
@@ -74,7 +105,19 @@ constexpr std::size_t rt_arg_index(Enum value) {
     return static_cast<std::size_t>(value);
 }
 
-PageGeometry derive_page_geometry(const Tensor& input_tensor, const Tensor& output_tensor, int32_t gather_dim) {
+PageGeometry derive_page_geometry(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    const HighBwAllGatherParams& operation_attributes,
+    // Metadata slot select behaves like a selected batch for SIZING (one contiguous slot's worth of
+    // pages, singleton dims between batch and dim) but contributes NO host page base -- the reader adds
+    // the base itself from the on-device slot id. Passing the scalar's has_value() alone would size the
+    // range as if the whole multi-slot cache were the source.
+    bool batch_index_from_metadata = false,
+    // Metadata active-extent also makes this a PARTIAL gather (singleton dims between batch and dim,
+    // per-stripe page sizing) even though the host keeps sizing for the worst case: the kernels narrow
+    // the range at runtime, so the program must be built for the maximum.
+    bool extent_from_metadata = false) {
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
     const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
@@ -86,33 +129,102 @@ PageGeometry derive_page_geometry(const Tensor& input_tensor, const Tensor& outp
         output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
         "concat requires an unpadded input page");
 
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_chunks = num_input_pages * split_factor;
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t rank = input_shape.rank();
+    int32_t gather_dim = operation_attributes.dim;
     if (gather_dim < 0) {
         gather_dim += rank;
     }
+
+    const bool has_runtime_extent = operation_attributes.gathered_dim_size.has_value();
+    const uint32_t active_dim_size = has_runtime_extent
+                                         ? *operation_attributes.gathered_dim_size / operation_attributes.num_devices
+                                         : input_shape[gather_dim];
 
     const auto tile_spec =
         input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
-        uint32_t extent;
+        uint32_t extent = i == gather_dim ? active_dim_size : input_shape[i];
         if (i == rank - 1) {
-            extent = input_tensor.layout() == Layout::TILE
-                         ? input_shape[i] / tile_spec.get_width()
-                         : (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
+            if (input_tensor.layout() == Layout::TILE) {
+                TT_FATAL(
+                    extent % tile_spec.get_width() == 0,
+                    "high_bw_all_gather active gather extent {} must be tile-width aligned ({})",
+                    extent,
+                    tile_spec.get_width());
+                extent /= tile_spec.get_width();
+            } else {
+                TT_FATAL(
+                    (static_cast<uint64_t>(extent) * input_tensor.element_size()) % input_unaligned_page_size == 0,
+                    "high_bw_all_gather active innermost gather extent {} must occupy whole input pages",
+                    extent);
+                extent = (extent * input_tensor.element_size()) / input_unaligned_page_size;
+            }
         } else if (input_tensor.layout() == Layout::TILE && i == rank - 2) {
-            extent = input_shape[i] / tile_spec.get_height();
-        } else {
-            extent = input_shape[i];
+            TT_FATAL(
+                extent % tile_spec.get_height() == 0,
+                "high_bw_all_gather active gather extent {} must be tile-height aligned ({})",
+                extent,
+                tile_spec.get_height());
+            extent /= tile_spec.get_height();
         }
         input_pages_per_stripe *= extent;
     }
 
-    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
+    // A runtime extent controls how many source pages are transferred, not the placement stride in
+    // the preallocated output. Keeping the maximum per-rank stride leaves address-indexed caches
+    // (such as sparse MLA's block-cyclic KV cache) at their stable physical offsets.
+    uint32_t max_input_pages_per_stripe = 1;
+    for (int32_t i = gather_dim; i < rank; i++) {
+        uint32_t extent = input_shape[i];
+        if (i == rank - 1) {
+            extent = input_tensor.layout() == Layout::TILE
+                         ? extent / tile_spec.get_width()
+                         : (extent * input_tensor.element_size()) / input_unaligned_page_size;
+        } else if (input_tensor.layout() == Layout::TILE && i == rank - 2) {
+            extent /= tile_spec.get_height();
+        }
+        max_input_pages_per_stripe *= extent;
+    }
+    const uint32_t output_chunks_per_stripe = max_input_pages_per_stripe * split_factor;
     TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
+    const bool selected_batch = operation_attributes.input_batch_index.has_value() || batch_index_from_metadata;
+    const bool selected_or_partial = selected_batch || has_runtime_extent || extent_from_metadata;
+    uint32_t input_page_base = 0;
+    uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    if (selected_or_partial) {
+        // A partial all-gather is sourced from one contiguous batch slot. Its active pages are
+        // placed in each rank's fixed worst-case output slot, preserving stable cache offsets.
+        for (int32_t i = 1; i < gather_dim; ++i) {
+            TT_FATAL(
+                input_shape[i] == 1,
+                "high_bw_all_gather selected/partial gather requires singleton dimensions between batch and dim; "
+                "input shape {}, dim {}",
+                input_shape,
+                gather_dim);
+        }
+        if (selected_batch) {
+            TT_FATAL(
+                input_tensor.buffer()->num_pages() % input_shape[0] == 0,
+                "high_bw_all_gather input batch slots must occupy equal page ranges");
+            // Metadata form: base stays 0 here and the reader adds slot * pages_per_slot on-device.
+            input_page_base =
+                operation_attributes.input_batch_index.has_value()
+                    ? *operation_attributes.input_batch_index * (input_tensor.buffer()->num_pages() / input_shape[0])
+                    : 0;
+        } else {
+            TT_FATAL(
+                input_shape[0] == 1,
+                "high_bw_all_gather gathered_dim_size without input_batch_index requires input batch 1, got {}",
+                input_shape[0]);
+        }
+        num_input_pages = input_pages_per_stripe;
+        TT_FATAL(
+            input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
+            "high_bw_all_gather selected range exceeds input allocation");
+    }
+    const uint32_t num_output_chunks = num_input_pages * split_factor;
     return {
         input_page_size,
         output_chunk_size,
@@ -120,7 +232,15 @@ PageGeometry derive_page_geometry(const Tensor& input_tensor, const Tensor& outp
         split_factor,
         num_input_pages,
         num_output_chunks,
-        output_chunks_per_stripe};
+        output_chunks_per_stripe,
+        input_page_base};
+}
+
+uint32_t derive_data_valid_granularity(const PageGeometry& geometry, uint32_t packet_size, uint32_t total_slices) {
+    // Delegates to the header the KERNELS also include, so the host and the on-device derivation cannot
+    // drift -- they sit on opposite sides of a semaphore protocol, where a mismatch hangs.
+    return partition::data_valid_granularity_pages(
+        geometry.input_page_size, geometry.output_chunk_size, geometry.num_output_chunks, packet_size, total_slices);
 }
 
 bool can_use_output_bank_owned_schedule(
@@ -182,7 +302,7 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     auto data_valid_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
@@ -223,23 +343,45 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         !fabric_is_2d || operation_attributes.neighbor_unicast_eligible,
         "Fabric2D high_bw_all_gather neighbor unicast requires a host-proved direct physical line/ring");
 
+    const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology = operation_attributes.axis_topology[axis];
+    const auto topology =
+        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
     TT_FATAL(
         !is_ring || num_devices > 2,
-        "high_bw_all_gather ring schedule requires more than two devices on cluster_axis {}; "
-        "a size-two axis has no distinct wrap edge",
+        "high_bw_all_gather ring schedule requires more than two participating devices; got {}, "
+        "linearized_mesh_ring={}, cluster_axis={}",
+        num_devices,
+        linearized_mesh_ring,
         axis);
-    const uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, sender_device_coord, std::optional<uint32_t>{operation_attributes.cluster_axis});
-
-    auto fwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, 1, topology, axis);
-    auto bwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(
+        !linearized_mesh_ring ||
+            (operation_attributes.mesh_rows == mesh_shape[0] && operation_attributes.mesh_cols == mesh_shape[1]),
+        "cached full mesh-ring shape {}x{} does not match live mesh shape {}",
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
+        mesh_shape);
+    const ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
+        .cluster_axis = linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
+        .full_mesh = linearized_mesh_ring,
+        .orientation = operation_attributes.snake_ring_orientation,
+        .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
+        .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
+        .ring_size = num_devices,
+        .num_links = operation_attributes.num_links,
+        .topology = topology,
+        .fabric_config = operation_attributes.fabric_config,
+        .axis_topology = operation_attributes.axis_topology,
+        .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
+    const auto mesh_ring_position =
+        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+    const uint32_t device_idx = mesh_ring_position.transport_rank;
+    auto fwd_coord = mesh_ring_position.forward_coord;
+    auto bwd_coord = mesh_ring_position.backward_coord;
 
     // Stripes a direction sends from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint.
     // Also queried for the downstream device to choose granular vs single data_valid signalling.
@@ -273,16 +415,44 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.axis_num_links[axis];
-    const auto page_geometry = derive_page_geometry(input_tensor, output_tensor, operation_attributes.dim);
+    const uint32_t num_links = operation_attributes.num_links;
+    // The metadata forms are runtime controls too: their values live in tensors the kernels read, so the
+    // cached worker tier must likewise be sized from the MAXIMUM geometry rather than from whatever extent
+    // happens to be active. Omitting them here would pick the tier from a possibly smaller page count
+    // whenever split_factor > 1.
+    const bool has_runtime_controls =
+        operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value() ||
+        tensor_args.has_batch_index_metadata() || tensor_args.has_gathered_prefix_metadata();
+    const auto page_geometry = derive_page_geometry(
+        input_tensor,
+        output_tensor,
+        operation_attributes,
+        tensor_args.has_batch_index_metadata(),
+        tensor_args.has_gathered_prefix_metadata());
+    // gathered_dim_size is deliberately cache-key-independent. Runtime controls reuse the compiled
+    // schedule and patch its selected page base and active ranges below from page_geometry.
     const uint32_t input_page_size = page_geometry.input_page_size;
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     TT_FATAL(num_dram_banks > 0, "high_bw_all_gather requires at least one allocator-managed DRAM bank");
+    // Size the cached worker topology for the maximum output allocation. Runtime prefix lengths are excluded
+    // from the program hash, so every cache hit must reuse this worst-case tier.
     const uint64_t total_output_bytes =
         (uint64_t)output_tensor.buffer()->num_pages() * output_tensor.buffer()->aligned_page_size();
     const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
     constexpr uint64_t bank_owned_min_link_bytes = 1500000ULL;
     constexpr uint64_t high_parallelism_min_link_bytes = 32000000ULL;
+    // Select the worker tier from the maximum per-slot geometry. Runtime prefixes retain the same fixed
+    // output-rank stride, and both their source and destination page sequences remain bank-stridable; only
+    // the number of active pages changes. This lets one cached program keep the bank-owned fast path while
+    // input_batch_index/gathered_dim_size patch its page base and active slice counts at dispatch time.
+    auto scheduling_geometry = page_geometry;
+    if (has_runtime_controls) {
+        scheduling_geometry.num_input_pages = page_geometry.output_chunks_per_stripe;
+    }
+    const auto can_use_bank_owned = [&](uint32_t workers_per_direction) {
+        return can_use_output_bank_owned_schedule(
+            input_tensor, output_tensor, scheduling_geometry, num_links, workers_per_direction, num_dram_banks);
+    };
     uint32_t workers_per_dir = 1;
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         workers_per_dir = 2;
@@ -292,27 +462,21 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         // scatter fallback. Keep two workers for small messages, where additional core/mux setup is not amortized.
         const uint32_t bank_covering_workers =
             scheduler::workers_per_direction_to_cover_banks(num_links, num_dram_banks);
-        if (per_link_bytes >= bank_owned_min_link_bytes &&
-            can_use_output_bank_owned_schedule(
-                input_tensor, output_tensor, page_geometry, num_links, bank_covering_workers, num_dram_banks)) {
+        if (per_link_bytes >= bank_owned_min_link_bytes && can_use_bank_owned(bank_covering_workers)) {
             workers_per_dir = bank_covering_workers;
         }
 
         // Large messages benefit from additional in-flight DRAM reads after every bank is covered.
         const uint32_t high_parallelism_workers = std::max(8u, bank_covering_workers);
-        if (per_link_bytes >= high_parallelism_min_link_bytes &&
-            can_use_output_bank_owned_schedule(
-                input_tensor, output_tensor, page_geometry, num_links, high_parallelism_workers, num_dram_banks)) {
+        if (per_link_bytes >= high_parallelism_min_link_bytes && can_use_bank_owned(high_parallelism_workers)) {
             workers_per_dir = high_parallelism_workers;
         }
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
         // Measured on Blackhole across every qualified page format and line/ring schedules. Four workers amortize
         // their mux/core overhead once a bank-owned message reaches roughly 1.5 MB/link. Eight workers do not
         // consistently pull ahead of four until roughly 32 MB/link.
-        const bool four_workers_bank_owned = can_use_output_bank_owned_schedule(
-            input_tensor, output_tensor, page_geometry, num_links, 4, num_dram_banks);
-        const bool eight_workers_bank_owned = can_use_output_bank_owned_schedule(
-            input_tensor, output_tensor, page_geometry, num_links, 8, num_dram_banks);
+        const bool four_workers_bank_owned = can_use_bank_owned(4);
+        const bool eight_workers_bank_owned = can_use_bank_owned(8);
 
         workers_per_dir = 2;
         if (per_link_bytes >= bank_owned_min_link_bytes && four_workers_bank_owned) {
@@ -337,8 +501,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         available_worker_cores = available_worker_cores.intersection(operation_attributes.sub_core_grid.value());
     }
     const uint32_t preferred_workers_per_dir = workers_per_dir;
-    const bool preferred_schedule_is_bank_owned = can_use_output_bank_owned_schedule(
-        input_tensor, output_tensor, page_geometry, num_links, preferred_workers_per_dir, num_dram_banks);
+    const bool preferred_schedule_is_bank_owned = can_use_bank_owned(preferred_workers_per_dir);
     const auto worker_count_fits = [&](uint32_t count) {
         return scheduler::worker_count_fits(
             count, num_links, static_cast<uint32_t>(available_worker_cores.num_cores()));
@@ -356,9 +519,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
             static_cast<uint32_t>(available_worker_cores.num_cores()),
             reduction_tiers);
     }
-    if (preferred_schedule_is_bank_owned &&
-        !can_use_output_bank_owned_schedule(
-            input_tensor, output_tensor, page_geometry, num_links, workers_per_dir, num_dram_banks)) {
+    if (preferred_schedule_is_bank_owned && !can_use_bank_owned(workers_per_dir)) {
         // Do not spend almost as many cores on the scatter fallback when a restricted grid falls just short of
         // covering every bank.
         workers_per_dir = std::min(2u, workers_per_dir);
@@ -502,7 +663,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const uint32_t output_chunk_size = page_geometry.output_chunk_size;
     const uint32_t output_chunks_per_page = page_geometry.output_chunks_per_page;
     const uint32_t num_input_pages = page_geometry.num_input_pages;
-    const uint32_t num_output_chunks = page_geometry.num_output_chunks;
     const uint32_t output_chunks_per_stripe = page_geometry.output_chunks_per_stripe;
 
     ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
@@ -521,9 +681,14 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // when the input uses an ND-sharded/block-cyclic DRAM layout. Keeping the
     // destination pages bank-local lets the writer coalesce small pages into a
     // full Fabric packet instead of falling back to four-entry scatter writes.
-    const bool output_bank_owned_schedule = can_use_output_bank_owned_schedule(
-        input_tensor, output_tensor, page_geometry, num_links, workers_per_dir, num_dram_banks);
+    // The output stride is already the maximum per-rank slot width. Runtime prefixes patch their active
+    // bank-owned page ranges below without changing that stride or the compiled worker topology.
+    const bool output_bank_owned_schedule = can_use_bank_owned(workers_per_dir);
     const uint32_t slice_step = output_bank_owned_schedule ? num_dram_banks : 1;
+    // Runtime controls change the selected source base and active page count, but every rank retains its
+    // maximum output slot. Its stripe width is therefore structural and can stay baked into the iterator,
+    // avoiding dynamic divide/modulo on both fixed-shape and selected-prefix paths.
+    const uint32_t static_output_chunks_per_stripe = output_chunks_per_stripe;
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -536,6 +701,35 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
+    // Metadata slot select only: a tiny UInt32 CB whose page base is the NoC landing slot for the
+    // 1-element slot-id read. A dedicated CB rather than borrowing cb0's write pointer, because cb0 is
+    // the data path -- and because these single-word reads only land correctly at a CB page base on some
+    // platforms (see trace_metadata::read_metadata_scalar_u32). Reader-only: the writer never addresses
+    // input pages, so there is no mailbox to publish.
+    const bool batch_index_from_metadata = tensor_args.has_batch_index_metadata();
+    const bool extent_from_metadata = tensor_args.has_gathered_prefix_metadata();
+    constexpr uint32_t kMetaCbPageSize = 64;
+    static_assert(kMetaCbPageSize >= sizeof(HighBwAllGatherMetadataSchedule));
+    uint32_t cb_meta_id = tt::CB::c_in1;
+    uint32_t cb_meta_writer_id = tt::CB::c_in2;
+    if (extent_from_metadata) {
+        // Reader -> writer mailbox. The writer needs slice_start / slice_count / final_start /
+        // final_count / data_valid_granularity, every one of them a function of the active page count.
+        // Reader and writer share a core, so the reader derives once and publishes rather than both
+        // deriving: two derivations of the same formula could drift, and they sit on opposite sides of a
+        // semaphore protocol where drift HANGS instead of returning wrong data.
+        tt::tt_metal::CircularBufferConfig cb_meta_writer_config =
+            tt::tt_metal::CircularBufferConfig(kMetaCbPageSize, {{cb_meta_writer_id, tt::DataFormat::UInt32}})
+                .set_page_size(cb_meta_writer_id, kMetaCbPageSize);
+        CreateCircularBuffer(program, worker_core_range, cb_meta_writer_config);
+    }
+    if (batch_index_from_metadata || extent_from_metadata) {
+        tt::tt_metal::CircularBufferConfig cb_meta_config =
+            tt::tt_metal::CircularBufferConfig(kMetaCbPageSize, {{cb_meta_id, tt::DataFormat::UInt32}})
+                .set_page_size(cb_meta_id, kMetaCbPageSize);
+        CreateCircularBuffer(program, worker_core_range, cb_meta_config);
+    }
+
     // data_valid_granularity:
     // data_valid is signalled once per this many CB pages so a downstream can start relaying before the whole
     // stripe arrives. Larger = fewer syncs, smaller = finer pipelining.
@@ -543,36 +737,129 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Auto-selected to half the per-worker stripe: enough pipelining without the over-signalling that hurts
     // small-page tensors at scale. Kept as a fraction of the stripe so it self-scales with tensor size, links,
     // and workers.
-    const uint32_t outputs_per_cb_page = std::max(1u, cb_page_size / output_chunk_size);
-    const uint32_t cb_pages_per_stripe = std::max(1u, (num_output_chunks / total_slices) / outputs_per_cb_page);
-    const uint32_t data_valid_granularity = std::max(1u, cb_pages_per_stripe / 2u);
+    const uint32_t data_valid_granularity = derive_data_valid_granularity(page_geometry, packet_size, total_slices);
 
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        input_page_size,           // input tensor page size
-        output_chunk_size,         // NOC write size = min(input, output)
-        output_chunks_per_page,    // chunks per output page (1 unless concat)
-        output_chunks_per_stripe,  // stripe length in chunks
-        num_devices,               // device count (stripe indexing)
-        cb0_id,                    // cb id
-        cb_page_size,              // cb entry size
-        slice_step,                // one means contiguous slices; >1 owns one interleaved DRAM bank
+        input_page_size,         // input tensor page size
+        output_chunk_size,       // NOC write size = min(input, output)
+        output_chunks_per_page,  // chunks per output page (1 unless concat)
+        num_devices,             // device count (stripe indexing)
+        cb0_id,                  // cb id
+        cb_page_size,            // cb entry size
+        slice_step,              // one means contiguous slices; >1 owns one interleaved DRAM bank
+        static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    // Metadata slot-select block, appended LAST so the two accessor blocks above keep their positional
+    // offsets (the kernel resolves them with next_compile_time_args_offset()). The flag is always pushed,
+    // including 0 on the scalar path, so one kernel binary serves both forms with a stable layout.
+    reader_compile_args.push_back(batch_index_from_metadata ? 1u : 0u);
+    if (batch_index_from_metadata) {
+        // pages_per_batch_slot: the input cache's per-slot page stride. Shape-derived, so hashed already.
+        const auto& input_padded_shape = input_tensor.padded_shape();
+        TT_FATAL(
+            input_tensor.buffer()->num_pages() % input_padded_shape[0] == 0,
+            "high_bw_all_gather input batch slots must occupy equal page ranges");
+        reader_compile_args.push_back(input_tensor.buffer()->num_pages() / input_padded_shape[0]);
+        reader_compile_args.push_back(cb_meta_id);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.input_batch_index_tensor->buffer()).append_to(reader_compile_args);
+    }
+    // Active-extent block, appended after the slot block. The 14 scalars are pushed UNCONDITIONALLY
+    // (zeros when unused) because the kernel's guarded-index trick -- collapsing the block base to 0 on
+    // the off path -- only works when at least that many arguments exist at index 0, and this block is
+    // far wider than the reader's fixed prefix. Only the tensor accessor stays conditional, since it has
+    // no meaningful zero form; its index is guarded instead.
+    reader_compile_args.push_back(extent_from_metadata ? 1u : 0u);
+    {
+        uint32_t pages_per_slab = 0;
+        uint32_t full_gathered_dim_size = 0;
+        if (extent_from_metadata) {
+            const auto& out_shape = output_tensor.padded_shape();
+            int32_t gdim = operation_attributes.dim;
+            if (gdim < 0) {
+                gdim += static_cast<int32_t>(out_shape.rank());
+            }
+            full_gathered_dim_size = out_shape[gdim];
+            // Count in whole slabs, not rows: a TILE page spans 32 gathered rows, so pages-per-row is
+            // fractional there, while pages-per-slab is an integer for every layout this op accepts.
+            TT_FATAL(
+                full_gathered_dim_size % operation_attributes.gathered_slab_global == 0,
+                "high_bw_all_gather gathered_slab_global {} must divide the full gathered extent {}",
+                operation_attributes.gathered_slab_global,
+                full_gathered_dim_size);
+            const uint32_t num_slabs = full_gathered_dim_size / operation_attributes.gathered_slab_global;
+            TT_FATAL(
+                num_slabs > 0 && page_geometry.num_input_pages % num_slabs == 0,
+                "high_bw_all_gather metadata extent needs whole pages per slab; num_input_pages {} over {} "
+                "slabs (slab {} of full extent {}). Choose a slab width whose page count is integral -- for "
+                "TILE layouts the slab must be a multiple of the tile height.",
+                page_geometry.num_input_pages,
+                num_slabs,
+                operation_attributes.gathered_slab_global,
+                full_gathered_dim_size);
+            pages_per_slab = page_geometry.num_input_pages / num_slabs;
+            // A worker that receives ZERO active pages still takes part in the ready/data_valid semaphore
+            // protocol, so an extent small enough to starve one would risk a HANG rather than a wrong
+            // result. The smallest extent this program can ever be asked for is ONE slab (chunk start 0),
+            // so the bound is checkable here even though the per-dispatch value is not: fail at build
+            // time instead of hanging at replay.
+            const uint32_t min_active_pages = partition::active_num_input_pages(
+                operation_attributes.gathered_slab_global, operation_attributes.gathered_slab_global, pages_per_slab);
+            TT_FATAL(
+                min_active_pages >= total_slices,
+                "high_bw_all_gather metadata extent is too small for this worker topology: the minimum "
+                "active page count is {} (one {}-element slab at {} pages/slab) but the schedule has {} "
+                "slices ({} links x {} workers). Raise gathered_slab_global, or reduce num_links / workers "
+                "so every worker owns at least one page.",
+                min_active_pages,
+                operation_attributes.gathered_slab_global,
+                pages_per_slab,
+                total_slices,
+                num_links,
+                workers_per_dir);
+        }
+        reader_compile_args.push_back(pages_per_slab);
+        reader_compile_args.push_back(full_gathered_dim_size);
+        reader_compile_args.push_back(operation_attributes.gathered_slab_global);
+        reader_compile_args.push_back(page_geometry.split_factor);
+        reader_compile_args.push_back(total_slices);
+        reader_compile_args.push_back(num_links);
+        reader_compile_args.push_back(workers_per_dir);
+        reader_compile_args.push_back(num_dram_banks);
+        reader_compile_args.push_back(output_bank_owned_schedule ? 1u : 0u);
+        reader_compile_args.push_back(slice_step);
+        reader_compile_args.push_back(ring_even_split ? 1u : 0u);
+        reader_compile_args.push_back(input_page_size);
+        reader_compile_args.push_back(output_chunk_size);
+        reader_compile_args.push_back(static_cast<uint32_t>(packet_size));
+        reader_compile_args.push_back(cb_meta_writer_id);
+        if (extent_from_metadata) {
+            tt::tt_metal::TensorAccessorArgs(tensor_args.gathered_prefix_tensor->buffer())
+                .append_to(reader_compile_args);
+        }
+    }
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        output_chunk_size,         // NOC write size = min(input, output)
-        output_chunks_per_page,    // chunks per output page (1 unless concat)
-        output_chunks_per_stripe,  // stripe length in chunks
-        num_devices,               // device count (stripe indexing)
-        cb0_id,                    // cb id
-        cb_page_size,              // cb entry size
-        packet_size,               // packet_size
-        data_valid_granularity,    // signal data_valid once per this many CB pages
-        slice_step,                // one means scatter packets; >1 enables contiguous full packets
+        output_chunk_size,       // NOC write size = min(input, output)
+        output_chunks_per_page,  // chunks per output page (1 unless concat)
+        num_devices,             // device count (stripe indexing)
+        cb0_id,                  // cb id
+        cb_page_size,            // cb entry size
+        packet_size,             // packet_size
+        slice_step,              // one means scatter packets; >1 enables contiguous full packets
+        static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -590,6 +877,12 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         // Unused by the direct-EDM constexpr branch. One buffer keeps the discarded mux sender type valid.
         writer_compile_args.insert(writer_compile_args.end(), {1, 0, 0, 0, 0});
     }
+    // Active-extent mailbox, appended AFTER the fixed 6-entry mux block: the kernel resolves that block
+    // positionally from the accessor's end, so anything inserted before it silently shifts every mux
+    // argument. When set, the writer takes its N-dependent values from the reader's mailbox instead of
+    // from its own runtime arguments, which a trace replay would have frozen at the captured extent.
+    writer_compile_args.push_back(extent_from_metadata ? 1u : 0u);
+    writer_compile_args.push_back(cb_meta_writer_id);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -635,30 +928,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
             const uint32_t slice_idx = (link * workers_per_dir) + w;
-            const uint32_t input_pages_per_slice = num_input_pages / total_slices;
-            const uint32_t remainder = num_input_pages % total_slices;
-            uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
-            uint32_t worker_input_page_count = input_pages_per_slice + (slice_idx < remainder ? 1u : 0u);
-            if (output_bank_owned_schedule) {
-                const auto bank_owned_slice = scheduler::derive_bank_owned_slice(
-                    num_input_pages, num_links, workers_per_dir, num_dram_banks, link, w);
-                input_tile_id_start = bank_owned_slice.input_page_start;
-                worker_input_page_count = bank_owned_slice.page_count;
-            }
-            const uint32_t input_tile_id_end =
-                output_bank_owned_schedule
-                    ? input_tile_id_start + worker_input_page_count * num_dram_banks
-                    : ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
-            const uint32_t local_output_start =
-                output_bank_owned_schedule
-                    ? input_tile_id_start
-                    : (static_cast<uint64_t>(input_tile_id_start) * num_output_chunks) / num_input_pages;
-            const uint32_t local_output_end =
-                output_bank_owned_schedule
-                    ? local_output_start + worker_input_page_count
-                    : (static_cast<uint64_t>(input_tile_id_end) * num_output_chunks) / num_input_pages;
-            const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
-            const uint32_t half = num_worker_output_chunks / 2;
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the
             // data_valid_sem target on the neighbor's mirror core; partner_core is the opposite-direction worker
@@ -693,17 +962,34 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                     num_granular = downstream_iters > 0 ? downstream_iters - 1 : 0;
                 }
 
-                uint32_t final_start = local_output_start;
-                uint32_t final_count = num_worker_output_chunks;
-                if (ring_even_split) {
-                    final_start = is_forward ? local_output_start : (local_output_start + half * slice_step);
-                    final_count = is_forward ? half : (num_worker_output_chunks - half);
-                }
-
-                // Chunks the upstream delivers into our output (relayed full stripes + sink). The even-ring
-                // antipode arrives as a half, so it contributes final_count instead of a full stripe.
-                const uint32_t total_chunks = num_recv * num_worker_output_chunks -
-                                              (ring_even_split ? (num_worker_output_chunks - final_count) : 0);
+                // Whole per-worker schedule from the shared closed form (high_bw_all_gather_partition.hpp).
+                // The kernels evaluate the SAME function against an on-device page count on the trace-safe
+                // path, so the three sides of the semaphore protocol agree by construction.
+                const auto sched = partition::worker_schedule(
+                    num_input_pages,
+                    page_geometry.split_factor,
+                    total_slices,
+                    slice_idx,
+                    output_bank_owned_schedule,
+                    num_links,
+                    workers_per_dir,
+                    num_dram_banks,
+                    link,
+                    w,
+                    slice_step,
+                    ring_even_split,
+                    is_forward,
+                    num_recv,
+                    input_page_size,
+                    output_chunk_size,
+                    packet_size);
+                const uint32_t input_tile_id_start = sched.input_page_start;
+                const uint32_t input_tile_id_end = sched.input_page_end;
+                const uint32_t local_output_start = sched.local_output_start;
+                const uint32_t num_worker_output_chunks = sched.slice_count;
+                const uint32_t final_start = sched.final_start;
+                const uint32_t final_count = sched.final_count;
+                const uint32_t total_chunks = sched.total_chunks;
 
                 std::vector<uint32_t> reader_rt_args(rt_arg_index(ReaderRtArg::Count));
                 reader_rt_args[rt_arg_index(ReaderRtArg::InputAddress)] = input_addr;
@@ -716,10 +1002,26 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 reader_rt_args[rt_arg_index(ReaderRtArg::SliceCount)] = num_worker_output_chunks;
                 reader_rt_args[rt_arg_index(ReaderRtArg::FinalStart)] = final_start;
                 reader_rt_args[rt_arg_index(ReaderRtArg::FinalCount)] = final_count;
-                reader_rt_args[rt_arg_index(ReaderRtArg::InputPageStart)] = input_tile_id_start;
-                reader_rt_args[rt_arg_index(ReaderRtArg::InputPageEnd)] = input_tile_id_end;
+                reader_rt_args[rt_arg_index(ReaderRtArg::InputPageStart)] =
+                    page_geometry.input_page_base + input_tile_id_start;
+                reader_rt_args[rt_arg_index(ReaderRtArg::InputPageEnd)] =
+                    page_geometry.input_page_base + input_tile_id_end;
                 reader_rt_args[rt_arg_index(ReaderRtArg::ReadySemaphore)] = ready_sem.address();
                 reader_rt_args[rt_arg_index(ReaderRtArg::DataValidSemaphore)] = data_valid_sem.address();
+                reader_rt_args[rt_arg_index(ReaderRtArg::OutputChunksPerStripe)] = output_chunks_per_stripe;
+                reader_rt_args[rt_arg_index(ReaderRtArg::BatchIndexMetaAddress)] =
+                    batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
+                reader_rt_args[rt_arg_index(ReaderRtArg::BatchSlotNumLayers)] =
+                    operation_attributes.batch_slot_num_layers;
+                reader_rt_args[rt_arg_index(ReaderRtArg::BatchSlotLayerIdx)] =
+                    operation_attributes.batch_slot_layer_idx;
+                reader_rt_args[rt_arg_index(ReaderRtArg::GatheredPrefixMetaAddress)] =
+                    extent_from_metadata ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u;
+                reader_rt_args[rt_arg_index(ReaderRtArg::SliceIdx)] = slice_idx;
+                reader_rt_args[rt_arg_index(ReaderRtArg::Link)] = link;
+                reader_rt_args[rt_arg_index(ReaderRtArg::Worker)] = w;
+                reader_rt_args[rt_arg_index(ReaderRtArg::IsForward)] = is_forward ? 1u : 0u;
+                reader_rt_args[rt_arg_index(ReaderRtArg::NumRecv)] = num_recv;
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
                 std::vector<uint32_t> writer_rt_args(rt_arg_index(WriterRtArg::Count));
@@ -739,10 +1041,12 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidNocX)] = static_cast<uint32_t>(mirror_core.x);
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidNocY)] = static_cast<uint32_t>(mirror_core.y);
                 writer_rt_args[rt_arg_index(WriterRtArg::NumGranularSends)] = num_granular;
+                writer_rt_args[rt_arg_index(WriterRtArg::DataValidGranularity)] = data_valid_granularity;
                 writer_rt_args[rt_arg_index(WriterRtArg::NeighborDeviceId)] =
                     static_cast<uint32_t>(neighbor_node.chip_id);
                 writer_rt_args[rt_arg_index(WriterRtArg::NeighborMeshId)] =
                     static_cast<uint32_t>(*neighbor_node.mesh_id);
+                writer_rt_args[rt_arg_index(WriterRtArg::OutputChunksPerStripe)] = output_chunks_per_stripe;
                 if (num_iters > 0) {
                     if (use_mux) {
                         // Connect this worker to its channel (== worker index w) on the direction's mux.
@@ -784,6 +1088,16 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .writer_kernel_id = writer_kernel_id,
         .ready_sem = ready_sem,
         .data_valid_sem = data_valid_sem,
+        .num_links = num_links,
+        .workers_per_direction = workers_per_dir,
+        .num_devices = num_devices,
+        .device_idx = device_idx,
+        .forward_iterations = fwd_iters,
+        .backward_iterations = bwd_iters,
+        .num_dram_banks = num_dram_banks,
+        .is_ring = is_ring,
+        .ring_even_split = ring_even_split,
+        .output_bank_owned_schedule = output_bank_owned_schedule,
     };
 
     return {std::move(program), std::move(shared_variables)};
@@ -791,11 +1105,21 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
 void HighBwAllGatherUnicastFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const HighBwAllGatherParams& /*operation_attributes*/,
+    const HighBwAllGatherParams& operation_attributes,
     const HighBwAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
     const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
+    const bool has_runtime_controls =
+        operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value() ||
+        tensor_args.has_batch_index_metadata() || tensor_args.has_gathered_prefix_metadata();
+    const auto page_geometry = has_runtime_controls ? derive_page_geometry(
+                                                          tensor_args.input_tensor,
+                                                          output_tensor,
+                                                          operation_attributes,
+                                                          tensor_args.has_batch_index_metadata(),
+                                                          tensor_args.has_gathered_prefix_metadata())
+                                                    : PageGeometry{};
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -810,10 +1134,111 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
+            if (tensor_args.has_gathered_prefix_metadata()) {
+                reader_args.at(rt_arg_index(ReaderRtArg::GatheredPrefixMetaAddress)) =
+                    tensor_args.gathered_prefix_tensor->buffer()->address();
+            }
+            if (tensor_args.has_batch_index_metadata()) {
+                // The VALUE is read on-device; only the buffer address is host-side state, and an eager
+                // caller may hand over a freshly allocated metadata tensor per dispatch.
+                reader_args.at(rt_arg_index(ReaderRtArg::BatchIndexMetaAddress)) =
+                    tensor_args.input_batch_index_tensor->buffer()->address();
+                reader_args.at(rt_arg_index(ReaderRtArg::BatchSlotNumLayers)) =
+                    operation_attributes.batch_slot_num_layers;
+                reader_args.at(rt_arg_index(ReaderRtArg::BatchSlotLayerIdx)) =
+                    operation_attributes.batch_slot_layer_idx;
+            }
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args.at(rt_arg_index(WriterRtArg::OutputAddress)) = output_addr;
             writer_args.at(rt_arg_index(WriterRtArg::ReadySemaphore)) = ready_addr;
             writer_args.at(rt_arg_index(WriterRtArg::DataValidSemaphore)) = data_valid_addr;
+        }
+
+        if (!has_runtime_controls) {
+            continue;
+        }
+
+        // Patch only scalar runtime arguments: no program rebuild, worker re-selection, allocation, or
+        // tensor view/slice is involved on a cache hit. The compiled schedule may be bank-owned; in that
+        // case each worker keeps one output DRAM bank while the selected input base and active count vary.
+        const uint32_t total_slices = shared_vars.num_links * shared_vars.workers_per_direction;
+        const uint32_t data_valid_granularity =
+            derive_data_valid_granularity(page_geometry, operation_attributes.packet_size, total_slices);
+        const uint32_t slice_step = shared_vars.output_bank_owned_schedule ? shared_vars.num_dram_banks : 1;
+        for (uint32_t link = 0; link < shared_vars.num_links; ++link) {
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                const bool is_forward = dir == 0;
+                const uint32_t num_recv =
+                    shared_vars.is_ring
+                        ? shared_vars.num_devices / 2
+                        : (is_forward ? shared_vars.device_idx : shared_vars.num_devices - 1 - shared_vars.device_idx);
+                for (uint32_t w = 0; w < shared_vars.workers_per_direction; ++w) {
+                    const uint32_t slice_idx = link * shared_vars.workers_per_direction + w;
+                    const auto even_range =
+                        partition::even_worker_page_range(page_geometry.num_input_pages, total_slices, slice_idx);
+                    uint32_t input_page_start = even_range.input_page_start;
+                    uint32_t worker_input_page_count = even_range.page_count;
+                    if (shared_vars.output_bank_owned_schedule) {
+                        const auto bank_owned_slice = scheduler::derive_bank_owned_slice(
+                            page_geometry.num_input_pages,
+                            shared_vars.num_links,
+                            shared_vars.workers_per_direction,
+                            shared_vars.num_dram_banks,
+                            link,
+                            w);
+                        input_page_start = bank_owned_slice.input_page_start;
+                        worker_input_page_count = bank_owned_slice.page_count;
+                    }
+                    const uint32_t input_page_end =
+                        shared_vars.output_bank_owned_schedule
+                            ? input_page_start + worker_input_page_count * shared_vars.num_dram_banks
+                            : even_range.input_page_end;
+                    const uint32_t local_output_start =
+                        shared_vars.output_bank_owned_schedule
+                            ? input_page_start
+                            : (static_cast<uint64_t>(input_page_start) * page_geometry.num_output_chunks) /
+                                  page_geometry.num_input_pages;
+                    const uint32_t local_output_end =
+                        shared_vars.output_bank_owned_schedule
+                            ? local_output_start + worker_input_page_count
+                            : (static_cast<uint64_t>(input_page_end) * page_geometry.num_output_chunks) /
+                                  page_geometry.num_input_pages;
+                    const uint32_t slice_count = local_output_end - local_output_start;
+                    const uint32_t half = slice_count / 2;
+                    const uint32_t final_start =
+                        shared_vars.ring_even_split
+                            ? (is_forward ? local_output_start : local_output_start + half * slice_step)
+                            : local_output_start;
+                    const uint32_t final_count =
+                        shared_vars.ring_even_split ? (is_forward ? half : slice_count - half) : slice_count;
+                    const uint32_t total_chunks =
+                        num_recv * slice_count - (shared_vars.ring_even_split ? slice_count - final_count : 0);
+                    const auto& core =
+                        shared_vars.worker_cores[(link * 2 + dir) * shared_vars.workers_per_direction + w];
+
+                    auto& reader_args = reader_args_by_core[core.x][core.y];
+                    reader_args.at(rt_arg_index(ReaderRtArg::TotalChunks)) = total_chunks;
+                    reader_args.at(rt_arg_index(ReaderRtArg::SliceStart)) = local_output_start;
+                    reader_args.at(rt_arg_index(ReaderRtArg::SliceCount)) = slice_count;
+                    reader_args.at(rt_arg_index(ReaderRtArg::FinalStart)) = final_start;
+                    reader_args.at(rt_arg_index(ReaderRtArg::FinalCount)) = final_count;
+                    reader_args.at(rt_arg_index(ReaderRtArg::InputPageStart)) =
+                        page_geometry.input_page_base + input_page_start;
+                    reader_args.at(rt_arg_index(ReaderRtArg::InputPageEnd)) =
+                        page_geometry.input_page_base + input_page_end;
+                    reader_args.at(rt_arg_index(ReaderRtArg::OutputChunksPerStripe)) =
+                        page_geometry.output_chunks_per_stripe;
+
+                    auto& writer_args = writer_args_by_core[core.x][core.y];
+                    writer_args.at(rt_arg_index(WriterRtArg::SliceStart)) = local_output_start;
+                    writer_args.at(rt_arg_index(WriterRtArg::SliceCount)) = slice_count;
+                    writer_args.at(rt_arg_index(WriterRtArg::FinalStart)) = final_start;
+                    writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
+                    writer_args.at(rt_arg_index(WriterRtArg::OutputChunksPerStripe)) =
+                        page_geometry.output_chunks_per_stripe;
+                    writer_args.at(rt_arg_index(WriterRtArg::DataValidGranularity)) = data_valid_granularity;
+                }
+            }
         }
     }
 }

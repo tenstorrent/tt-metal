@@ -20,6 +20,11 @@
  * Configures UNP_A stride registers and programs the MOP for tilizing
  * block_ct_dim tiles from row-major L1 data into face format in SrcA.
  *
+ * The operand gets a BFD id allocated from the unpack partition (Unp0 / UNPACR0) and its table
+ * entry is programmed here; the DFB id is used only to fetch buffer info, never as the BFD id.
+ * One init burns 1 unpack-partition id — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor.
  * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
@@ -36,17 +41,13 @@ inline void llk_unpack_tilize_init(
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
-        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), full_ct_dim, block_ct_dim, tensor_shape);
     } else {
-        const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-            tensor_shape,
-            get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
-            unpack_src_format[operand_id],
-            operand_id,
-            unpack_dst_format[operand_id]);
-        ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operand_id);
         _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            operand_id, tensor_shape, full_ct_dim, block_ct_dim);
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, full_ct_dim, block_ct_dim);
     }
 }
 
@@ -72,21 +73,34 @@ inline void llk_unpack_tilize_block(
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
-    const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
-
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
+
+    // Compute how many l1_index units fit in one DFB entry.
+    const std::uint32_t entry_size_16B = local_dfb.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                          // Buffer Descriptor granularity in 16B
+        SCALE_DATUM_SIZE(unpack_src_format[operand_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
+        entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
 
     // TODO (SK) #42757: Remove ct_dim loop when block_ct_dim unpacking optimization implemented.
     // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
     // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
     // structural pattern as BH/WH llk_unpack_tilize_block
-    const std::uint32_t l1_base_idx = (rd_entry_idx + input_tile_index) * faces_per_entry;
+    const std::uint32_t block = input_tile_index / block_c_tiles;
+    const std::uint32_t offset = input_tile_index % block_c_tiles;
+    const std::uint32_t l1_base_idx =
+        rd_entry_idx * l1_index_per_entry + block * (block_c_tiles * tensor_shape.total_row_dim());
+
+    if (tensor_shape.total_num_faces() == NUM_FACES) {
+        _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
+    }
+
     for (std::uint32_t t = 0; t < block_c_tiles; t++) {
         if (tensor_shape.total_num_faces() == NUM_FACES) {
-            _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+            _llk_unpack_tilize_<p_unpacr::UNP_A>(t + offset);
         } else {
-            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t);
+            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t + offset);
         }
     }
 }
@@ -107,9 +121,9 @@ inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operan
  * path) and UNP_B (scalar path) so that each subsequent llk_unpack_tilizeA_B call produces one
  * tilized srcA tile alongside the reloaded srcB scalar tile required by the reduce math op.
  *
- * On Quasar, operand A's buffer descriptor is reprogrammed to y_dim=1, z_dim=1
- * required by the UNPACR_STRIDE tilize sequence, overriding the configuration
- * set by llk_unpack_hw_configure.
+ * On Quasar, operand A's buffer descriptor is programmed in Strided mode (y_dim=1, z_dim=1)
+ * required by the UNPACR_STRIDE tilize sequence; operand B gets a normal Continuous descriptor.
+ * Both ids come from the unpack BFD partition — DFB ids never double as BFD ids.
  *
  * @tparam neginf_srcA      No effect on Quasar; accepted for API compatibility with WH/BH.
  * @tparam reload_srcB      Must be true on Quasar (asserted true, srcB is reloaded every iteration for reduce);
@@ -138,18 +152,17 @@ inline void llk_unpack_tilizeA_B_init(
 
     const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operandA_id);
 
-    // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires the following buffer descriptor configuration:
-    // Overwrite the buffer descriptor configuration from llk_unpack_hw_configure for operandA.
-    const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-        tensor_shape_A,
-        get_local_dfb_interface(operandA_id).tc_slots[0].base_addr,
-        unpack_src_format[operandA_id],
-        operandA_id,
-        unpack_dst_format[operandA_id]);
-    ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+    // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires a Strided buffer descriptor
+    // (y_dim=1, z_dim=1) for operandA; operandB (scalar srcB) uses a Continuous descriptor.
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
 #if defined(REDUCE_OP)
-    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ct_dim,
+        tensor_shape_A);
 #endif
 }
 

@@ -55,6 +55,9 @@ noc_estimator:
     "Loopback":
       0: false
       1: true
+atomic_semaphore:
+  attributes:
+    "NoC Index": "noc_index"
 quasar_cache_write:
   attributes:
     "Write path": "write_path"

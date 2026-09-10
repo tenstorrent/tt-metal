@@ -15,7 +15,6 @@ on:
           - multiprocess
 #          - prefetcher
           - distributed-ops
-          - tttv2
       platform:
         required: false
         type: choice
@@ -49,6 +48,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -63,6 +63,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   galaxy-unit-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:

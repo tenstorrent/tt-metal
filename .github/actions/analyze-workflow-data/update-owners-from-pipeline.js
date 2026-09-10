@@ -6,7 +6,7 @@ const path = require('path');
  * Convert YAML filename to workflow prefix format used in owners.json
  * Examples:
  *   t3k_unit_tests.yaml -> t3000-unit-tests
- *   t3k_demo_tests.yaml -> t3000-demo-tests
+ *   t3k_integration_tests.yaml -> t3000-integration-tests
  */
 function getWorkflowPrefix(filePath) {
   const relativePath = path.relative(path.join(__dirname, '../../..', 'tests/pipeline_reorg'), filePath);

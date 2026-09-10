@@ -13,7 +13,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -168,8 +167,8 @@ create_mesh_workloads(
             .set_page_size(reader_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, reader_cb_config);
 
-    auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
+    auto global_cb = tt_metal::experimental::GlobalCircularBuffer(
+        *device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
     tt_metal::CircularBufferConfig writer_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     writer_cb_config.remote_index(writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
     tt_metal::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, global_cb);

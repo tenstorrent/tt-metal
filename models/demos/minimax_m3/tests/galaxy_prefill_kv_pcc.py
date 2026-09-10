@@ -52,6 +52,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
+from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
 
 
 def _raise_nproc_limit():
@@ -93,9 +95,13 @@ def plan(n_tokens, chunk_size, chunked):
 
 
 def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
-    """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
-    stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
-    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle).
+    """Per-layer K / V / index_k PCC: device cache vs the golden trace. The device stores K / index_k
+    Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so permute the golden's
+    rotary slice (identity tail) before comparing. V is raw (no swizzle).
+
+    The whole slot is read back ONCE (``read_slot_kv``: a device-side slot slice plus one mesh compose
+    per cache) and each layer is un-rotated on host. Reading per layer instead would re-copy the packed
+    cache num_layers times over PCIe.
 
     Fails if overall min PCC is below PREFILL_STANDALONE_CHUNKED_PCC (default 0.88), matching
     models/demos/minimax_m3/tt/runners/prefill_kv_validation.py.
@@ -103,6 +109,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
     from safetensors import safe_open
 
     from models.common.utility_functions import comp_pcc
+    from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
 
     threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
@@ -116,8 +123,12 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
     kv_dir = Path(golden_dir) / "kv_cache"
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, 0)  # still block-cyclic; un-rotated per layer below
+    sp, chunk, seq = runtime.config.sp_factor, runtime.config.chunk_size, runtime.config.max_seq_len
     for L in range(num_layers):
-        dev_k, dev_v, dev_ik = runtime.gather_layer(kv_cache, slot_id=0, layer_idx=L, n_tokens=n_tokens)
+        dev_k = naturalize_kv_block(k_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
+        dev_v = naturalize_kv_block(v_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
+        dev_ik = naturalize_kv_block(ik_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
         with safe_open(str(kv_dir / f"layer_{L}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
@@ -207,9 +218,17 @@ def main():
             flush=True,
         )
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
-    print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
+    # M3_FABRIC / M3_CCL_TOPOLOGY (utils/fabric_env.py): fabric config and legacy-CCL topology. Defaults
+    # match the production runner (1d, linear). 1d_ring / 2d_torus_xy need the torus_xy mesh graph
+    # descriptor (the wrapper scripts pick it); measurements in PR #55668.
+    ccl_topology = ccl_topology_from_env()
+    ttnn.set_fabric_config(fabric_config_from_env())
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE)
+    print(
+        f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "
+        f"fabric={ttnn.get_fabric_config()} ccl_topology={ccl_topology}",
+        flush=True,
+    )
     try:
         model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
         hf_config = model_args.hf_config
@@ -276,6 +295,7 @@ def main():
             num_users=1,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
+            topology=ccl_topology,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict

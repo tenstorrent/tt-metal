@@ -96,13 +96,13 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
 
     for (int i = 0; i < kWarmupIterations; ++i) {
         run_once();
-        distributed::Synchronize(device.get(), std::nullopt);
+        distributed::Synchronize(*device, std::nullopt);
     }
 
     for (auto _ : state) {
         auto start = std::chrono::high_resolution_clock::now();
         run_once();
-        distributed::Synchronize(device.get(), std::nullopt);
+        distributed::Synchronize(*device, std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         double time_us = std::chrono::duration<double, std::micro>(end - start).count();
         state.SetIterationTime(time_us / 1e6);

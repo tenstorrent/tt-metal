@@ -246,7 +246,6 @@ void kernel_main() {
     Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
     Semaphore<> previous_chunk_sent_sem(previous_chunk_sent_semaphore_id);
 
-    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
 
     // Noc typed wrapper
@@ -744,20 +743,15 @@ void kernel_main() {
             // First, set the local semaphore to 1 - this is the value that will be multicast
             metadata_ready_sem.set(1);
 
-            uint64_t semaphore_mcast_addr = get_safe_multicast_noc_addr(
+            // Multicast the value 1 to all non-drain tilize cores
+            set_multicast_safe(
+                metadata_ready_sem,
+                noc_obj,
                 tilize_mcast_start_x,
                 tilize_mcast_start_y,
                 tilize_mcast_end_x,
                 tilize_mcast_end_y,
-                metadata_ready_semaphore_addr);
-
-            // Multicast the value 1 to all non-drain tilize cores
-            // Device 2.0 migration: legacy primitive retained: noc_semaphore_set_multicast targets a
-            // precomposed multicast uint64_t NoC address (semaphore_mcast_addr) and uses raw local
-            // sem address as source; Semaphore<>::set_multicast does not provide a wrapper that takes
-            // both
-            noc_semaphore_set_multicast(
-                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
+                tilize_bounding_box_num_cores - 1);
 
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
@@ -807,17 +801,15 @@ void kernel_main() {
 
         metadata_ready_sem.set(1);
 
-        uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+        // multicast semaphore
+        set_multicast_safe(
+            metadata_ready_sem,
+            noc_obj,
             matmul_mcast_start_x,
             matmul_mcast_start_y,
             matmul_mcast_end_x,
             matmul_mcast_end_y,
-            metadata_ready_semaphore_addr);
-
-        // Device 2.0 migration: legacy primitive retained: noc_semaphore_set_multicast targets a
-        // precomposed multicast uint64_t NoC address
-        noc_semaphore_set_multicast(
-            metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
+            matmul_bounding_box_num_cores);
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========

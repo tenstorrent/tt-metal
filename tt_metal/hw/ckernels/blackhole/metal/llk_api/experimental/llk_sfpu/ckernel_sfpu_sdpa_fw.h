@@ -14,12 +14,13 @@
 
 namespace ckernel::sfpu {
 
+template <bool is_fp32_dest_acc_en>
 inline void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat out;
-        if constexpr (DST_ACCUM_MODE) {
+        if constexpr (is_fp32_dest_acc_en) {
             out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
         } else {
             out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
@@ -30,12 +31,12 @@ inline void calculate_recip_first_column() {
     }
 }
 
-template <uint16_t scale_bf16>
+template <uint16_t scale_bf16, bool is_fp32_dest_acc_en>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, DST_ACCUM_MODE>(val, scale_bf16);
+        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, is_fp32_dest_acc_en>(val, scale_bf16);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg += 2;
     }

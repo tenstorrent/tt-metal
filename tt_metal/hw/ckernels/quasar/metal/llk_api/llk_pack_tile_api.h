@@ -19,12 +19,16 @@
  *
  * This function initializes packer0 to pack a single tile from the destination register to the output
  * DataFlow Buffer.
+ *
+ * Allocates a BFD id from the pack partition and programs its table entry from the output DFB's
+ * info (shape, L1 base, formats); the DFB id never doubles as the BFD id.
  */
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    _llk_pack_init_(output_id, tensor_shape);
+    llk_pack_program_bfd(output_id);
+    _llk_pack_init_(ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
 
     // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
     // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.
@@ -86,11 +90,47 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
 template <bool out_of_order_output = false>
 inline void llk_pack(
     const std::uint32_t tile_index, const std::uint32_t pack_output, const std::uint32_t output_tile_index = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     _llk_pack_(tile_index, l1_tile_index, tensor_shape);
+}
+
+/**
+ * @brief Order a PUSH after its WAIT on the pack thread with one no-write PACR_STRIDE. Writes nothing to L1.
+ *
+ * Call between cb_reserve_back and cb_push_back on an output buffer that is being pushed but whose packed
+ * data is not needed. Like llk_unpack_dummy on the unpack thread, this is a required Quasar primitive: the
+ * PACR_STRIDE is a real packer TDMA that orders the PUSH_TILES after its WAIT_TILES on pack_output
+ * (TEN-4746 / #48552). PACK_STRIDE_NO_WRITE=1 is the enable that makes masked rows skipped rather than
+ * written with the mask value; with every row masked (PACK_STRIDE_ROW_MASK=0xF) the two together suppress
+ * the store entirely, so the output buffer is left untouched. ClrDatValid is 0, so the DEST valid bits are
+ * preserved for a later real pack. The strided-pack config is restored to pass-through afterwards so a
+ * subsequent pack-untilize (also PACR_STRIDE) is unaffected.
+ *
+ * With the store suppressed the buffer descriptor is never read, so PACR_STRIDE's descriptor operand is a
+ * literal 0 (a 5-bit index into the 32-entry bd_table, not a table select). This primitive needs no pack
+ * init and touches neither the BFD allocator nor the DFB.
+ *
+ * @param pack_output  The output dataflow buffer whose WAIT/PUSH this orders; not used to address L1.
+ */
+inline void llk_pack_dummy(const std::uint32_t pack_output) {
+    // No-write + mask every row so the PACR_STRIDE below stores nothing to L1.
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xF);
+
+    // Absolute src/dst index 0, no increment, Packer0, ClrDatValid=0 (must not clear DEST valids). Arg 6 is
+    // a 5-bit index into the 32-entry bd_table; a literal 0 is safe only because NO_WRITE suppresses the
+    // store so the descriptor is never read (0 otherwise falls in the unpack partition [0,16), not pack's).
+    TTI_PACR_STRIDE(0, 0, 0, 0, 0, 0 /*bd_table index*/, 0 /*Packer0*/, 0 /*ClrDatValid*/);
+
+    // Restore pass-through so a later real pack-untilize (PACR_STRIDE) is unaffected.
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 0);
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0);
+
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: PACR_STRIDE orders PUSH after WAIT -> disarm this dfb
 }
 
 /**

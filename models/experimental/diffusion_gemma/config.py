@@ -6,12 +6,8 @@
 Hyperparameters for the DiffusionGemma text backbone (identical to the Gemma-4
 26B-A4B MoE) and the discrete-diffusion generation procedure.
 
-Provenance of each field is marked:
-  * ``# verified`` — confirmed against the HF ``config.json`` / model card /
-    vLLM blog during plan review (see ``plan.md`` §2).
-  * ``# TODO(confirm)`` — not surfaced from a primary source yet; the value is a
-    Gemma-lineage default or a plan-stated value to reconcile against the real
-    ``config.json`` during the #47461 weight-mapping pass.
+Fields marked ``# verified`` are confirmed against the HF ``config.json`` /
+model card.
 
 This is plain config — no torch / ttnn import — so it is importable without the
 gated checkpoint, transformers ``diffusion_gemma``, or hardware.
@@ -40,10 +36,10 @@ class TextConfig:
     intermediate_size: int = 2112  # verified (config.json text_config.intermediate_size)
 
     # --- MoE --------------------------------------------------------------
-    num_experts: int = 128  # verified
-    num_experts_per_tok: int = 8  # verified (top-8)
-    num_shared_experts: int = 1  # verified via model card ("+1 shared MLP")
-    moe_intermediate_size: int = 704  # verified
+    num_experts: int | None = 128  # verified
+    num_experts_per_tok: int | None = 8  # verified (top-8)
+    num_shared_experts: int | None = 1  # verified via model card ("+1 shared MLP")
+    moe_intermediate_size: int | None = 704  # verified
 
     # --- attention -------------------------------------------------------
     sliding_window: int = 1024  # verified (sliding layers; full-attn interleaved)
@@ -57,13 +53,10 @@ class TextConfig:
     # for the 30-layer 26B-A4B (configs/gemma-4-26B-A4B-it/config.json).
     sliding_window_pattern: int = 6  # verified (derived from layer_types)
     # K=V tying applies to full-attn (global) layers ONLY; sliding/local layers
-    # keep a real separate V. See gemma4 tt/attention/__init__.py:34.
-    # PROVENANCE: this is the **gemma-4-26B-A4B base** config value (the backbone we
-    # reuse — its config.json has attention_k_eq_v=True). The *DiffusionGemma* config
-    # OMITS the key (modular_diffusion_gemma.py:101 sets attention_k_eq_v=AttributeError(),
-    # i.e. DG deletes it and derives K=V tying from layer geometry). We keep True
-    # because the backbone loads through the gemma4 path; the weight diff confirms it
-    # (v_proj present on 25 sliding layers, absent on the 5 K=V-tied full layers).
+    # keep a real separate V. This is the gemma-4-26B-A4B base config value: the
+    # DiffusionGemma config omits the key and derives K=V tying from layer
+    # geometry, but the backbone loads through the gemma4 path, so True is kept
+    # (the checkpoint has v_proj on sliding layers only).
     attention_k_eq_v: bool = True  # verified (gemma-4-26B-A4B base config.json + weight-key diff)
 
     # --- RoPE (dual theta, per layer type) -------------------------------
@@ -108,6 +101,15 @@ class TextConfig:
             "hidden_activation",
         ]
         kwargs = {k: text[k] for k in field_map if text.get(k) is not None}
+        if "top_k_experts" in text:
+            kwargs["num_experts_per_tok"] = text["top_k_experts"]
+        if "num_shared_experts" in text:
+            kwargs["num_shared_experts"] = text["num_shared_experts"]
+        if text.get("num_experts") is None and "num_experts" in text:
+            kwargs["num_experts"] = None
+            kwargs["num_experts_per_tok"] = None
+            kwargs["num_shared_experts"] = None
+            kwargs["moe_intermediate_size"] = None
         layer_types = text.get("layer_types")
         if layer_types:
             full = [i for i, t in enumerate(layer_types) if t == "full_attention"]
@@ -126,10 +128,10 @@ class DiffusionConfig:
     """
 
     # All values below are the **released** defaults from the checkpoint's
-    # generation_config.json, cross-checked against the canonical
-    # transformers `generation_diffusion_gemma.py` (DiffusionGemmaGenerationConfig
-    # defaults, lines ~224-229). Field names are kept descriptive; the HF
-    # generation_config key each maps to is noted in parentheses.
+    # generation_config.json, cross-checked against the canonical transformers
+    # `generation_diffusion_gemma.py` (DiffusionGemmaGenerationConfig defaults).
+    # Field names are kept descriptive; the HF generation_config key each maps
+    # to is noted in parentheses.
     canvas_length: int = 256  # verified (config.json canvas_length / generation_config max_new_tokens)
     max_denoise_steps: int = 48  # verified (generation_config: max_denoising_steps)
 
@@ -164,6 +166,10 @@ class DiffusionConfig:
     # denoise, zeroed on encoder passes.
     use_self_conditioning: bool = True  # verified
 
+    def __post_init__(self) -> None:
+        if self.max_denoise_steps <= 0:
+            raise ValueError("max_denoise_steps must be positive")
+
 
 @dataclass(frozen=True)
 class VisionConfig:
@@ -176,9 +182,10 @@ class VisionConfig:
     hidden_size: int = 1152  # verified
     patch_size: int = 16  # verified (config.json patch_size)
     soft_tokens_per_image: int = 280  # verified (config.json vision_soft_tokens_per_image)
-    # Variable-resolution token budgets (#47467). "SigLIP" is an author-applied
-    # family label; the config model_type is gemma4_vision.
-    resolution_token_budgets: tuple[int, ...] = (70, 140, 280, 560, 1120)  # verified
+    # Variable-resolution token budgets from the #47467 plan, not current
+    # config.json keys. "SigLIP" is an author-applied family label; the config
+    # model_type is gemma4_vision.
+    resolution_token_budgets: tuple[int, ...] = (70, 140, 280, 560, 1120)
 
 
 @dataclass(frozen=True)
@@ -191,6 +198,13 @@ class DiffusionGemmaConfig:
 
     # Max context = canvas_length * max_blocks (256 * 1024 = 256K).
     max_blocks: int = 1024  # verified (256K / 256)
+
+    def __post_init__(self) -> None:
+        if self.text.canvas_length != self.diffusion.canvas_length:
+            raise ValueError(
+                f"text.canvas_length ({self.text.canvas_length}) must match "
+                f"diffusion.canvas_length ({self.diffusion.canvas_length})"
+            )
 
     @property
     def max_context(self) -> int:

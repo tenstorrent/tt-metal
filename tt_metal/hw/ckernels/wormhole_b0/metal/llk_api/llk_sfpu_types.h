@@ -164,6 +164,7 @@ enum class SfpuType {
     addcdiv,
     lerp,
     snake_beta,
+    mac,
     xielu,
     lgamma,
     polygamma,
@@ -174,5 +175,6 @@ enum class SfpuType {
     sqrt_custom,
     tanh_derivative_lut,
     rsqrt_compat,
+    reciprocal_compat,
     expm1_cw,
 };

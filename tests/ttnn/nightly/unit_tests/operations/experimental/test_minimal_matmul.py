@@ -202,6 +202,137 @@ def test_linear_granular_write_ordering(
 
 
 @pytest.mark.parametrize(
+    "M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Realistic FLUX.2 proj_out shape (per device): in0 = [attn 768 | mlp 2304] -> 96 K-tiles.
+        # k_split (Ka/32 = 24) aligns to K_block (8) -> no K-block straddles the seam.
+        (1152, 768, 2304, 768, 8, 8, 8, 2, 2),
+        # Seam falls INSIDE a K-block: k_split=3 tiles, K_block=4 -> block [0,4) is part x_a (0..2),
+        # part x_b (3). Exercises the per-tile source switch across the boundary.
+        (256, 96, 160, 128, 4, 4, 4, 2, 2),
+        # M < N -> transpose_core_grid=False, so in0 is the output-writer + mcaster AND the two-source
+        # reader in the same kernel (the config MMRS uses). M=256, Ka=768(24t), Kb=2304(72t), N=768.
+        (256, 768, 2304, 768, 8, 8, 8, 2, 2),
+    ],
+    ids=["proj_out_aligned", "seam_in_block", "transpose_false_in0_writer"],
+)
+def test_linear_fused_concat(device, M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    """Fused concatenation of in0 over K: minimal_matmul([x_a, x_b], weight) (a 2-element input list)
+    must equal matmul(concat([x_a, x_b], -1), weight) without materializing the concat. The split point
+    is x_a's K width; weight is [Ka+Kb, N] in matching K order."""
+    torch_dtype = torch.float32
+    torch.manual_seed(0)
+    x_a = torch.randn((M, Ka), dtype=torch_dtype)
+    x_b = torch.randn((M, Kb), dtype=torch_dtype)
+    weight = torch.randn((Ka + Kb, N), dtype=torch_dtype)
+
+    with torch.no_grad():
+        torch_output = torch.cat([x_a, x_b], dim=-1) @ weight
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_x_a = ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_x_b = ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        [tt_x_a, tt_x_b],  # 2-element list -> virtual concat of in0 over K (concat-free)
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    result = assert_quality(torch_output, tt_output_torch)
+    assert result["pcc"] > 0.999_000
+    assert result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Ka=94 (Ka%32=30 != 0, padded to 96=3t), Kb=20 (Kb%32=20 != 0, padded to 32=1t).
+        # Total K_padded=128=4t. Weight is per-segment tile-padded (device_count=1).
+        (256, 94, 20, 128, 4, 4, 4, 2, 2),
+        # Ka=752 (Ka%32=16 != 0, padded to 768=24t), Kb=100 (Kb%32=4 != 0, padded to 128=4t).
+        # K_tiles=28, K_block_size=4 (divides 28).
+        (256, 752, 100, 128, 4, 4, 4, 2, 2),
+    ],
+    ids=["small_non_aligned", "large_non_aligned"],
+)
+def test_linear_fused_concat_non_aligned(
+    device, M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    """Fused concat with non-tile-aligned segment K (Ka % 32 != 0 and/or Kb % 32 != 0).
+
+    The weight is built via prepare_weight_for_concatenated_input (device_count=1) which inserts
+    zero-padding rows at each segment's tile boundary.  The golden is exact matmul of the
+    concatenated logical activations against the original (un-padded) weight; the padding rows
+    must contribute zero to the contraction to match.
+    """
+    from models.tt_dit.utils.tensor import prepare_weight_for_concatenated_input
+
+    torch_dtype = torch.float32
+    torch.manual_seed(42)
+    x_a = torch.randn((M, Ka), dtype=torch_dtype)
+    x_b = torch.randn((M, Kb), dtype=torch_dtype)
+    # Reference weight in [K, N] form (un-padded); golden uses the logical entries only.
+    weight_ref = torch.randn((Ka + Kb, N), dtype=torch_dtype)
+
+    with torch.no_grad():
+        torch_output = torch.cat([x_a, x_b], dim=-1) @ weight_ref
+
+    # Build per-segment tile-padded weight: transpose to [N, K], prep, transpose back to [K_padded, N].
+    weight_padded = prepare_weight_for_concatenated_input(weight_ref.T, [Ka, Kb], device_count=1).T
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_x_a = ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_x_b = ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_padded, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        [tt_x_a, tt_x_b],
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    result = assert_quality(torch_output, tt_output_torch)
+    assert result["pcc"] > 0.999_000
+    assert result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
     "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(512, 512, 512, 1, 1, 1, 1, 1)],
 )
@@ -438,6 +569,236 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
     result = assert_quality(golden, tt_output)
     logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}: PCC={result['pcc']:.7f}")
     assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
+
+
+def _cache_hit_config(device, block_size=1, subblock=1, core_grid=None):
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=block_size,
+        K_block_size=block_size,
+        N_block_size=block_size,
+        subblock_h=subblock,
+        subblock_w=subblock,
+        compute_with_storage_grid_size=core_grid or device.compute_with_storage_grid_size(),
+    )
+    return compute_config, matmul_config
+
+
+def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
+    """Run `dispatch` twice on freshly allocated buffers of one hashed configuration.
+
+    `make_inputs()` yields one (tt_args, torch_args) set; `dispatch` returns torch outputs, `golden` the expected.
+    Set A stays alive while B is allocated, so B gets fresh addresses: a slot the override forgets still reads A.
+
+    A third dispatch back on set A catches the mirror-image bug, where a slot is patched once and
+    then frozen at the second dispatch's address.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    tt_a, torch_a = make_inputs()
+    out_a = dispatch(tt_a)
+    entries = device.num_program_cache_entries()
+    assert entries == 1, f"{label}: expected 1 cache entry after the first dispatch, got {entries}"
+    for i, (got, want) in enumerate(zip(out_a, golden(torch_a))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, f"{label}: cache-miss output[{i}] PCC {result['pcc']:.7f}"
+
+    # tt_a stays referenced, so set B cannot be handed set A's addresses.
+    tt_b, torch_b = make_inputs()
+    out_b = dispatch(tt_b)
+    assert device.num_program_cache_entries() == 1, (
+        f"{label}: the second dispatch has the same hashed configuration and must reuse the cached "
+        "program. A new entry means something address- or allocation-dependent leaked into "
+        "compute_program_hash."
+    )
+    for i, (got, want) in enumerate(zip(out_b, golden(torch_b))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, (
+            f"{label}: cache-hit output[{i}] PCC {result['pcc']:.7f} -- the cache hit did not "
+            "re-patch every buffer address, so a kernel read or wrote the first dispatch's buffers."
+        )
+
+    out_a_again = dispatch(tt_a)
+    assert device.num_program_cache_entries() == 1, f"{label}: third dispatch must also be a cache hit"
+    for i, (got, want) in enumerate(zip(out_a_again, golden(torch_a))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, (
+            f"{label}: re-dispatch on the first input set gave PCC {result['pcc']:.7f} -- addresses "
+            "are patched once and then frozen instead of on every dispatch."
+        )
+
+    device.disable_and_clear_program_cache()
+
+
+def test_program_cache_hit_bias(device):
+    """in0 / in1 / bias / output addresses must all be re-patched on a cache hit."""
+    M, K, N = 256, 256, 256
+    compute_config, matmul_config = _cache_hit_config(device)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        bias_input = torch.randn((1, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(bias_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, bias_input),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_bias = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.minimal_matmul(
+                    tt_input,
+                    tt_weight,
+                    bias_tensor=tt_bias,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, bias_input = torch_args
+        with torch.no_grad():
+            return [torch_input @ weight_input + bias_input]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "bias")
+
+
+def test_program_cache_hit_fused_concat(device):
+    """The two-source in0 path additionally carries the optional input's address (kIn0SecondSourceIdx)."""
+    # Same shape/blocking as the seam_in_block case of test_linear_fused_concat.
+    M, Ka, Kb, N = 256, 96, 160, 128
+    compute_config, matmul_config = _cache_hit_config(device, block_size=4, subblock=2)
+
+    def make_inputs():
+        x_a = torch.randn((M, Ka), dtype=torch.float32)
+        x_b = torch.randn((M, Kb), dtype=torch.float32)
+        weight = torch.randn((Ka + Kb, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (x_a, x_b, weight),
+        )
+
+    def dispatch(tt_args):
+        tt_x_a, tt_x_b, tt_weight = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.minimal_matmul(
+                    [tt_x_a, tt_x_b],
+                    tt_weight,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        x_a, x_b, weight = torch_args
+        with torch.no_grad():
+            return [torch.cat([x_a, x_b], dim=-1) @ weight]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_concat")
+
+
+@pytest.mark.parametrize("chunks", [2, 4])
+def test_program_cache_hit_split_outputs(device, chunks):
+    """Split outputs put N output addresses at the tail of every in0/in1 arg list."""
+    M, K, N = 256, 256, 512
+    compute_config, matmul_config = _cache_hit_config(device)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight = tt_args
+        tt_chunks = ttnn.experimental.minimal_matmul_split(
+            tt_input,
+            tt_weight,
+            chunks=chunks,
+            dim=-1,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+        assert len(tt_chunks) == chunks
+        return [ttnn.to_torch(c) for c in tt_chunks]
+
+    def golden(torch_args):
+        torch_input, weight_input = torch_args
+        with torch.no_grad():
+            return list(torch.chunk(torch_input @ weight_input, chunks, dim=-1))
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, f"split_{chunks}")
+
+
+def test_program_cache_hit_fused_ternary(device):
+    """The fused-addcmul path adds ternary_a / ternary_b addresses ahead of the output tail."""
+    # Same shape/blocking as test_dit_minimal_matmul_addcmul_fused_basic.
+    M, K, N = 256, 512, 1024
+    scalar = 1.0
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        addcmul_a = torch.randn((M, N), dtype=torch.float32)
+        addcmul_b = torch.randn((1, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, addcmul_a, addcmul_b),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_addcmul_a, tt_addcmul_b = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    tt_input,
+                    tt_weight,
+                    scalar,
+                    tt_addcmul_a,
+                    tt_addcmul_b,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, addcmul_a, addcmul_b = torch_args
+        with torch.no_grad():
+            return [torch.addcmul(addcmul_a, torch_input @ weight_input, addcmul_b, value=scalar)]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_ternary")
 
 
 def test_run_performance(device):

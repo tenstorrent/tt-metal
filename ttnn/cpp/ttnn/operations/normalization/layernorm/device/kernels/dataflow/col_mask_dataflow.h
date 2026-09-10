@@ -17,9 +17,9 @@
 // comes from width_shard_tile_start_id (its first tile index along the normalized dimension); block_w is
 // the per-core width in tiles and logical_K the un-padded normalized width in columns.
 FORCE_INLINE void generate_col_mask(
-    uint32_t cb_col_mask, uint32_t block_w, uint32_t logical_K, uint32_t width_shard_tile_start_id) {
+    uint32_t dfb_col_mask, uint32_t block_w, uint32_t logical_K, uint32_t width_shard_tile_start_id) {
     constexpr uint32_t tile_w = 32;
-    DataflowBuffer dfb_col_mask_obj(cb_col_mask);
+    DataflowBuffer dfb_col_mask_obj(dfb_col_mask);
     // A width shard always starts on a block boundary, so this offset is an exact multiple of block_w.
     ASSERT(width_shard_tile_start_id % block_w == 0);
     const uint32_t core_start_col = width_shard_tile_start_id * tile_w;

@@ -22,11 +22,11 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
 
 using namespace tt::tt_metal;

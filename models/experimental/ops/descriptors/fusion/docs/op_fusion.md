@@ -329,9 +329,9 @@ buffer backing) onto the same slot where possible.
 
 **Barrier insertion.**  At every op boundary, all participating cores must
 synchronize before the next op begins.  The barrier protocol uses
-per-core L1 semaphores for local (same-core, cross-RISC) synchronization and
-GlobalSemaphores for cross-core synchronization.  A designated coordinator
-RISC (NCRISC) orchestrates the handshake.
+per-core L1 counter words for local (same-core, cross-RISC) synchronization
+and NOC atomic operations on bank words for cross-core synchronization. A
+designated coordinator RISC (NCRISC) orchestrates the handshake.
 
 **Inter-op state reset.**  Circular buffer FIFO pointers and op-specific
 semaphores accumulate state during an op that would corrupt the next op
@@ -377,7 +377,7 @@ parent and before their children.
 A segment is a contiguous portion of a root-to-leaf path where the barrier
 scope (set of participating cores) remains constant. Consecutive nodes with
 the same core range are grouped into one segment. Each segment has its own
-`arrive`/`release` `GlobalSemaphore` pair for cross-core synchronization.
+`arrive`/`release` bank-word pair for cross-core synchronization.
 
 For example, in a tree where the root and one intermediate node share the same
 core range (0-7), but the leaf uses cores 0-3, the path has two segments:
@@ -411,7 +411,7 @@ These answer: *"who signals?"* and *"who waits?"*
 
 These three concepts are orthogonal but interact at barrier transitions.
 At a given barrier transition, multiple groups may share
-the same barrier scope (same GlobalSemaphore).  Cores that completed real
+the same barrier scope (the same bank words). Cores that completed real
 work both arrive (signal done) and wait for release.  Cores that had no
 work in the just-completed phase only wait.  The arrive threshold equals
 `|arrive set|`, so only cores that did real work count toward the release
@@ -433,7 +433,7 @@ At the root→branches transition:
 | Release set | 8 cores (all need to proceed) |
 | Core groups | 3 groups: {0-1}, {2-3}, {4-7} (different phase sequences) |
 
-All three groups share the same GlobalSemaphore at this transition, but each
+All three groups share the same bank words at this transition, but each
 group's binary has its own dispatch table entry calling `sync()` on it.
 
 ## Representing Fused Op Structure
@@ -893,7 +893,7 @@ This produces three segments:
 - **segment 2** (8 cores): transitions within the right branch. Only the right
   8 cores participate.
 
-Each segment has its own `arrive`/`release` GlobalSemaphore pair.
+Each segment has its own `arrive`/`release` bank-word pair.
 
 The simple stem/leaf example above only has one transition per group (stem →
 leaf), so each kernel binary has just one segment. A deeper tree creates
@@ -922,17 +922,18 @@ routing for one fused kernel binary:
 @dataclass
 class MultiBarrierSpec:
     segments: List[BarrierSegment]       # ordered segment list for this kernel
-    compute_done_addr: int               # shared GlobalSemaphore L1 address
-    writer_done_addr: int                # shared GlobalSemaphore L1 address
-    reset_done_addr: int                 # shared GlobalSemaphore L1 address
+    compute_done_addr: int               # shared bank-word L1 address
+    writer_done_addr: int                # shared bank-word L1 address
+    reset_done_addr: int                 # shared bank-word L1 address
+    pack_drained_addr: int               # shared bank-word L1 address
+    math_drained_addr: int               # shared bank-word L1 address
     transition_map: Dict[int, Tuple[int, int]]  # transition_idx → (seg_idx, call_idx)
-    _sem_refs: List[Any]                 # prevent GC of GlobalSemaphore objects
 ```
 
 Each `BarrierSegment` holds a `BarrierConfig` with the physical core geometry
 (`core0_phys_x/y`, `other_core_phys_coords`, `num_release_cores`,
 `num_arrive_cores`) and the
-`arrive`/`release` GlobalSemaphore L1 addresses for that scope.
+`arrive`/`release` semaphore-bank word addresses for that scope.
 
 `_build_group_barriers()` (`graph.py`) converts a group's barrier scopes into
 the `MultiBarrierSpec`. It walks the scopes in order, creating a new segment
@@ -953,8 +954,8 @@ For **Group A** (barrier scopes = `[16-core, 8-left]`):
 ```python
 MultiBarrierSpec(
     segments=[
-        BarrierSegment(config=cfg_16, arrive_addr=0x1000, release_addr=0x1004),
-        BarrierSegment(config=cfg_8L, arrive_addr=0x2000, release_addr=0x2004),
+        BarrierSegment(config=cfg_16, arrive_addr=0x1000, release_addr=0x1010),
+        BarrierSegment(config=cfg_8L, arrive_addr=0x2000, release_addr=0x2010),
     ],
     transition_map={0: (0, 0), 1: (1, 0)},
     ...
@@ -975,8 +976,8 @@ namespace barrier {
         }
     }
     namespace group {
-        namespace seg_0 { /* 16 cores, arrive=0x1000, release=0x1004 */ }
-        namespace seg_1 { /* 8 left cores, arrive=0x2000, release=0x2004 */ }
+        namespace seg_0 { /* 16 cores, arrive=0x1000, release=0x1010 */ }
+        namespace seg_1 { /* 8 left cores, arrive=0x2000, release=0x2010 */ }
         void sync() {
             if (done == 1) { seg_0::sync(); resync_cbs(phase_0_cbs); }  // LN→GeLU
             if (done == 2) { seg_1::sync(); resync_cbs(phase_1_cbs); }  // GeLU→RMS
@@ -994,16 +995,16 @@ looked up from arrays at runtime.
 
 ### Segment Cache
 
-Groups A and B both need a 16-core barrier at transition 0. If each group
-independently allocated its own 16-core GlobalSemaphores, they would get
-different L1 addresses and never synchronize — group A's cores would wait on
-one semaphore while group B's cores signal a different one.
+Groups A and B both need a 16-core barrier at transition 0. They must resolve
+that logical barrier to the same two bank words; otherwise group A's cores
+would wait at addresses different from those signaled by group B.
 
 `OpGraphBuilder._build_internal()` solves this with a `segment_cache` keyed
 on `(release_scope_key, arrive_scope_key)` — a tuple of two frozensets.
 Different arrive scopes need different arrive thresholds, so the cache key
 includes both. Before building any group, it pre-scans all barrier scopes
-across all groups and allocates one `BarrierConfig` per unique scope pair:
+across all groups and creates one `BarrierConfig` geometry record per unique
+scope pair:
 
 ```python
 segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig] = {}
@@ -1018,23 +1019,58 @@ for group in groups:
             )
 ```
 
-`_create_barrier_segment_config()` (`builder.py`) allocates a pair of
-GlobalSemaphores (`arrive`, `release`) on the given core range and computes
-the physical core coordinates for NOC unicast release.
+`_create_barrier_segment_config()` (`builder.py`) computes physical core
+coordinates for NOC unicast release. After every unique segment is known,
+`OpGraphBuilder` creates `_SemaphoreSpec` entries for the five local flags and
+each segment's `arrive`/`release` pair, then allocates one build-time
+`FusionSemaphoreBank`. Each logical word occupies a 16-byte-aligned slot
+(same stride as `CreateSemaphore` / L1 alignment) and is assigned
+to the configs in deterministic insertion order.
 
-For the example tree, the cache ends up with three entries:
+For the example tree, the cache ends up with three entries. Word `i` lives at
+`base_address + 16 * i`. The five local flags occupy slots 0-4; segment
+`arrive`/`release` pairs follow in insertion order. With base `0x1000`:
 
-| Cache Key | Scope | Semaphores |
+| Cache Key | Scope | Bank words |
 |-----------|-------|------------|
-| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1000, release=0x1004 |
-| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x2000, release=0x2004 |
-| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x3000, release=0x3004 |
+| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1050, release=0x1060 |
+| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x1070, release=0x1080 |
+| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x1090, release=0x10a0 |
 
-When `_build_group_barriers()` runs for each group, it looks up the cache
-rather than allocating new semaphores. Both groups' seg_0 resolves to the
+When `_build_group_barriers()` runs for each group, it looks up the cache.
+Both groups' seg_0 resolves to the
 same `BarrierConfig` (the 16-core entry), so both kernel binaries emit
 `seg_0::sync()` calls that target the same L1 addresses. The 16 cores
 converge on a single barrier despite running two different kernel binaries.
+
+### Command-Lifetime Semaphore Bank
+
+Fusion does not allocate one `GlobalSemaphore` object per logical flag.
+Instead, all logical barrier words for a build are packed into one
+lockstep-sharded L1 tensor:
+
+- Tensor shape: `[1, 1, num_union_cores, num_semaphores * 4]`
+- Per-core shard shape: `[1, num_semaphores * 4]` (four `uint32_t`s per slot)
+- Word `i` address: `base_address + 16 * i`
+- Initial contents: one caller-supplied `uint32_t` value per logical
+  semaphore at the start of its 16-byte slot (remaining words zero),
+  repeated on every participating core
+
+`MeshBuffer` lockstep allocation gives every core and physical mesh device the
+same local base address. `FusionSemaphoreBank` verifies full-mesh storage and
+explicitly rejects experimental per-core allocation before exposing
+addresses. Initialization is one queued host-to-device write; the following
+fused launch uses the same mesh command queue, so no blocking host
+synchronization is required.
+
+The build pipeline allocates a temporary bank to assign concrete, distinct
+addresses while generating the descriptor. Slot discovery subsequently matches
+those saved address values; the temporary bank itself is not retained or
+dispatched. `FusedOp.launch()` and `FusionDispatchState.dispatch()` each
+allocate a fresh command-lifetime bank, patch its addresses, enqueue the
+program, and release the bank after submission. The build cache stores only
+`_SemaphoreSpec` and `TensorSpec` metadata—never the bank tensor—so no L1 is
+pinned between forward passes.
 
 ### Two-Level Barrier
 
@@ -1042,8 +1078,8 @@ Phase synchronization uses a two-level protocol:
 
 1. **Local RISC sync** (per-core, L1 flags): Coordinator (NCRISC/Reader) waits
    for compute and writer to finish the current phase before resetting CBs.
-2. **Cross-core NOC barrier** (across cores, GlobalSemaphore): All cores in the
-   barrier scope must complete before any core proceeds to the next phase.
+2. **Cross-core NOC barrier** (across cores, semaphore-bank words): All cores
+   in the barrier scope must complete before any core proceeds to the next phase.
 
 Both levels use monotonically increasing counters — never reset during kernel
 execution.
@@ -1054,9 +1090,9 @@ State variables live at `namespace barrier` scope, accessible by both
 ```c++
 namespace barrier {
     uint32_t done;                                  // monotonic counter, incremented each transition
-    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore) — coordinator + compute
-    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore) — coordinator + writer
-    volatile tt_l1_ptr uint32_t* reset_done;        // L1 ptr (GlobalSemaphore) — all RISCs
+    volatile tt_l1_ptr uint32_t* compute_done;      // bank word — coordinator + compute
+    volatile tt_l1_ptr uint32_t* writer_done;       // bank word — coordinator + writer
+    volatile tt_l1_ptr uint32_t* reset_done;        // bank word — all RISCs
     ...
 }
 ```
@@ -1147,7 +1183,7 @@ coordinator hasn't finished resetting op semaphores, clobbering in-flight
 
 After local RISC sync and CB reset, the reader executes a cross-core barrier.
 One designated core ("core 0") acts as the coordinator. `arrive` and `release`
-are `GlobalSemaphore` L1 words. `arrive` accumulates on core 0 via NOC atomic
+are semaphore-bank L1 words. `arrive` accumulates on core 0 via NOC atomic
 increments. `release` is unicast from core 0 to each other core individually.
 Both are **monotonic** — `call_count` tracks invocations so each `sync()`
 waits for a strictly increasing threshold, preventing stale semaphore values
@@ -1932,10 +1968,10 @@ After allocation, `build_merged_cb_descriptors()` constructs the final
    each member's `source_fmt`.
 
 3. **Buffer-backed slots**: If any member of an alias group is buffer-backed
-   (has an L1 Buffer allocation), the merged CBDescriptor inherits the buffer
-   via `set_buffer_from_cb()`. The buffer source is taken from the earliest
-   phase that has a buffer-backed CB in the group, matching the rebind logic
-   which computes address diffs relative to phase 0.
+   (has an L1 Buffer allocation or tensor backing), the merged CBDescriptor
+   inherits that backing via `_copy_cb_backing()`. The source is taken from
+   the earliest phase that has a backed CB in the group, matching the rebind
+   logic which computes address diffs relative to phase 0.
 
 4. **Mutation contract**: The method mutates `source_fmt.buffer_index` on the
    original `CBFormatDescriptor` C++ objects (setting them to the remapped
@@ -2750,21 +2786,21 @@ hit without re-running codegen:
 | Field | Type | Purpose |
 |-------|------|---------|
 | `cached_descriptor` | `ProgramDescriptor` | The fused descriptor — dispatched via `fusion_dispatch_op` on every launch |
-| `semaphores` | `tuple` | Keeps `GlobalSemaphore` objects alive (pinning their L1 addresses) |
+| `sem_specs` | `tuple[_SemaphoreSpec]` | Logical barrier geometry and initial values; no live L1 object |
 | `kernel_labels` | `tuple` | Op name labels for `_apply_kernel_dir` file naming |
 | `output_sources` | `tuple((op_idx, tensor_idx), ...)` or `None` | Maps each merged output to its source branch op and tensor index |
 | `merged_input_len` | `int` or `None` | Length of deduped input list; enables preallocated list on cache hit |
-| `address_slots` | `AddressSlots` (opaque C++) | Maps every descriptor position (CB buffer pointers, runtime args) to an IO tensor index for address patching |
+| `address_slots` | `AddressSlots` (opaque C++) | Maps descriptor CB/runtime-arg positions to IO tensors and logical semaphore indices |
 | `output_specs` | `list[TensorSpec]` or `None` | Cached output tensor metadata (output_sources order) for ephemeral allocation on the hot path |
 | `shared_output_map` | `list[int]` | Maps shared outputs to their canonical index (empty = all unique) |
 | `result_reorder` | `tuple[int, ...]` or `None` | Reorders outputs from output_sources order to default_results order |
+| `dispatch_state` | `FusionDispatchState` | Caches descriptor/output metadata and semaphore-bank configuration for C++ warm/hot dispatch |
 
-**No IO tensors are stored.**  The cache holds only the descriptor,
-`TensorSpec` metadata, and index mappings — never references to `Tensor`
-objects.  Output tensors are **ephemeral**: allocated fresh each hot-path
-call from the cached `TensorSpec` list and returned to the caller.  This
-avoids pinning device buffers in the cache and prevents stale-buffer bugs
-when activations are reallocated between forward passes.
+**No IO or semaphore tensors are stored.** The cache holds only the
+descriptor, specs, index mappings, and C++ dispatch metadata. Output tensors
+and the semaphore bank are allocated fresh per call. This avoids pinning
+device buffers in the cache and prevents stale-buffer bugs when activations
+are reallocated between forward passes.
 
 
 ### Cache Hit: Two Fast Paths
@@ -2778,21 +2814,18 @@ constructs a `FusedOp`, and the `.descriptor` property of deferred branch
 #### Warm path (first call on a container instance)
 
 Used by inline containers (new each call) and on the first `run()` of a
-persistent container.  Dispatches via the 3-arg `fusion_dispatch_op`
-overload with the branch ops' pre-existing output tensors:
+persistent container. The eagerly-created `FusionDispatchState` allocates
+ephemeral outputs and a fresh semaphore bank:
 
 ```python
 entry = _build_cache_get(cache_key)     # promotes key to MRU on hit
 if entry is not None:
     inputs = <identity-deduplicated branch input_tensors>
-    outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
-    io_tensors = inputs + outputs
-    fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
+    outputs = entry.dispatch_state.dispatch(inputs)
 ```
 
-After dispatch, `_container_run` creates a `FusionDispatchState` on the
-shared `_CacheEntry` (if not already present) and sets `_cached_entry` on
-the container so subsequent calls take the hot path.
+After dispatch, `_container_run` sets `_cached_entry` on the container so
+subsequent calls take the hot path without recomputing the cache key.
 
 #### Persistent hot path (call 2+ on the same container)
 
@@ -2825,9 +2858,10 @@ building, the result is stored:
 
 ```python
 r = self._build_internal(device)                # slow: full codegen pipeline
-fused = FusedOp(op=..., semaphores=r.semaphores, kernel_labels=r.kernel_labels, ...)
+fused = FusedOp(op=..., sem_specs=r.sem_specs, kernel_labels=r.kernel_labels, ...)
 
-_build_cache_put(cache_id, _cache_build_result(fused, ops, r.output_source_map))
+entry = _cache_build_result(fused, ops, r.output_source_map, ..., sem_specs=r.sem_specs)
+_build_cache_put(cache_id, entry)
 ```
 
 `_build_cache_put` inserts the entry and evicts the least-recently-used
@@ -2849,43 +2883,38 @@ entry if the cache exceeds `_BUILD_CACHE_MAX`.
 
 ### Dispatch: fusion_dispatch_op
 
-`fusion_dispatch_op` has three overloads, each used by a different dispatch
-path.  All patch the cached descriptor's stale addresses via `AddressSlots`
+Direct dispatch uses a flat-IO `fusion_dispatch_op` overload. It patches the
+cached descriptor's stale tensor and semaphore addresses via `AddressSlots`
 before dispatching.
 
-**3-arg (warm path):** Takes a flat `io_tensors` list (inputs + outputs
-concatenated).  Used by `_container_run` on a build-cache hit when the
-container has pre-existing output tensors from the branch ops:
+**Flat-IO direct path:** Takes `io_tensors` (inputs + outputs concatenated)
+and an optional list of fresh semaphore-bank addresses. `FusedOp.launch()`
+uses it with pre-allocated outputs from `build()`:
 
 ```python
-fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
-```
-
-**4-arg (cold path):** Dispatches into pre-allocated output tensors passed
-as a separate vector.  Used by `FusedOp.launch()` on the cold path where
-outputs already exist from `build()`:
-
-```python
+bank = FusionSemaphoreBank(device, core_ranges, initial_values)
 fusion_dispatch_op(
-    list(self.input_tensors), list(self.output_tensors),
-    self.descriptor, self._address_slots,
+    io_tensors, self.descriptor, self._address_slots, bank.addresses,
 )
 ```
 
-**`FusionDispatchState` (persistent hot path):** A C++ class that caches
+**`FusionDispatchState` (warm and persistent-hot paths):** A C++ class that caches
 output `TensorSpec` metadata, `shared_output_map`, `result_reorder`, and
-the `MeshProgramDescriptor`.  Its `dispatch(inputs)` method allocates
-ephemeral output tensors, patches the descriptor, dispatches, and applies
-result reordering — all in one C++ call with no round-trip to Python.
+the `MeshProgramDescriptor` plus semaphore-bank configuration. Its
+`dispatch(inputs)` method allocates ephemeral outputs and a fresh bank,
+patches the descriptor, dispatches, and applies result reordering—all in one
+C++ call with no per-semaphore Python round trips.
 Created once per `_CacheEntry` and shared across all containers with the
-same cache key:
+same cache key. An internal mutex serializes descriptor patching and submission
+when multiple host threads use that shared state concurrently:
 
 ```python
 entry.dispatch_state = FusionDispatchState(
     output_specs, shared_output_map, result_reorder,
     descriptor, address_slots, mesh_device,
+    semaphore_core_ranges, semaphore_initial_values,
 )
-outputs = entry.dispatch_state.dispatch(inputs)   # persistent hot path
+outputs = entry.dispatch_state.dispatch(inputs)
 ```
 
 On the C++ side, `FusionDispatchMeshProgramFactory` implements a two-phase
@@ -2906,13 +2935,14 @@ of activations are reallocated between calls (common for static weight
 tensors), the patching cost is proportional to the number of changed tensors,
 not the total slot count.
 
-The three slot types:
+The four slot types:
 
 | Slot type | Patched via |
 |-----------|-------------|
 | `PerCoreRuntimeArgSlot` | `GetRuntimeArgs(program, kernel_idx, core)[arg_idx] = addr` |
 | `CommonRuntimeArgSlot` | `GetCommonRuntimeArgs(program, kernel_idx)[arg_idx] = addr` |
 | `CBTensorSlot` | `UpdateDynamicCircularBufferAddress(program, cb_handle, buf)` |
+| `SemaphoreRTArgSlot` | Runtime arg is replaced from `bank.addresses[semaphore_index]` |
 
 
 ### Steady-State Pattern: run()
@@ -2923,8 +2953,8 @@ path depends on the container's lifetime and the build-cache state:
 
 | Path | When | Dispatch mechanism | Overhead |
 |------|------|--------------------|----------|
-| **Cold** | First call ever for this topology | Full codegen → `FusedOp.launch()` (4-arg) | ~seconds (codegen + JIT) |
-| **Warm** | `_BUILD_CACHE` hit, first call on this container | 3-arg `fusion_dispatch_op` with branch ops' output tensors | ~100s of µs |
+| **Cold** | First call ever for this topology | Full codegen → `FusedOp.launch()` with a fresh bank | ~seconds (codegen + JIT) |
+| **Warm** | `_BUILD_CACHE` hit, first call on this container | `FusionDispatchState.dispatch` | ~100s of µs |
 | **Persistent hot** | Call 2+ on the same container | `FusionDispatchState.dispatch` (C++, single call) | ~tens of µs |
 
 **Inline containers** (new each call) always take the warm path — `_cached_entry`
@@ -2933,16 +2963,17 @@ onward.  This is the natural pattern for inline `Sequential(…).run()` or
 `Parallel(…).run()`.
 
 **Persistent containers** (reused across calls) take the warm path on the
-first call, which creates the `FusionDispatchState` and sets `_cached_entry`
-alongside `_cached_entry_gen`.  All subsequent calls check
+first call and set `_cached_entry` alongside `_cached_entry_gen`. The
+`FusionDispatchState` was created eagerly with the shared cache entry. All
+subsequent calls check
 `_cached_entry_gen == _BUILD_CACHE_GEN` before using the cached entry —
 if `clear_build_cache()` was called in between, the generation mismatch
 forces a fall-through to the warm/cold path.  Otherwise, cache-key
 computation is bypassed entirely and dispatch goes through the C++ hot path.
 
-No `FusedOp` is retained on the container between calls.  Output tensors are
-ephemeral (allocated fresh each hot-path call from cached `TensorSpec`
-metadata) — zero L1 retention between forward passes.
+No `FusedOp` is retained on the container between calls. Output tensors and
+the semaphore bank are ephemeral—zero fusion-owned L1 retention between
+forward passes.
 
 See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
 at the top of this document for usage examples.
@@ -3053,7 +3084,10 @@ fall into category 3.  Python builtins and any type with a content-based
 | `models/experimental/ops/descriptors/fusion/codegen/args.py` | RT/CT/named arg merging + define handling + fp32 validation |
 | `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor`, `_DeferredOutput`, `@OpDescriptor.create` decorator, `update()`, `LazyOutputList` |
+| `ttnn/cpp/ttnn/operations/experimental/fusion/device/fusion_semaphore_bank.hpp` | Command-lifetime lockstep-sharded L1 bank for fusion barrier words |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py` | Device tests (require hardware) |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_fusion_cache.py` | Build cache, program key cache, LRU eviction, generation counter, update API, deferred descriptor, named kwargs tests |
-| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests (no hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests, including semaphore-bank coverage |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_global_cb.py` | GlobalCircularBuffer fusion tests (require hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py` | Fusion demo correctness tests |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/fused_demo.md` | Demo suite writeup with inline/persistent performance numbers |

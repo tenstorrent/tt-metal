@@ -44,9 +44,9 @@ visible). Pass ``launch(*ops)`` to refresh from a different op tuple instead.
 via :func:`_container_run`.  Persistent containers cache a ``_cached_entry``
 pointer to the shared ``_CacheEntry``; on call 2+ the C++
 ``FusionDispatchState`` allocates ephemeral outputs, patches, and dispatches
-in a single call — zero L1 pinning between forward passes.  Inline
-containers (new each call) always use the lightweight warm path (3-arg
-``fusion_dispatch_op``, reused output tensors).
+in a single call — zero L1 pinning between forward passes. Inline containers
+(new each call) use the same dispatch state after a build-cache lookup;
+persistent containers bypass that lookup after their first call.
 """
 
 import os
@@ -65,9 +65,10 @@ from models.experimental.ops.descriptors.op_descriptor import (
 )
 from models.experimental.ops.descriptors.fusion.common import (
     _SemaphoreSpec,
+    _allocate_fusion_semaphore_bank,
+    _cb_has_backing,
     _get_risc_type,
 )
-
 
 # =============================================================================
 # Production-readiness guard
@@ -115,20 +116,20 @@ class _CacheEntry:
     """Stored in ``_BUILD_CACHE``.  Fully initialized at construction, immutable thereafter.
 
     Contains everything needed to dispatch a fused program on cache hit
-    without re-running codegen/merge.  No tensor references or live L1
-    buffers are held — barrier semaphores are stored as allocation specs
-    (``sem_specs``) and re-allocated ephemerally at each dispatch.
+    without re-running codegen/merge. No tensor references or live L1 buffers
+    are held—logical barrier words are stored as ``sem_specs`` and packed into
+    one command-lifetime bank at each dispatch.
 
     The cached ``ProgramDescriptor`` may have stale buffer/semaphore
     addresses (CB buffer pointers and runtime arg values) after the
-    original tensors/semaphores are freed.  ``address_slots`` (opaque C++
+    original tensors/build-time bank are freed. ``address_slots`` (opaque C++
     ``AddressSlots``) records every descriptor position that references an
     IO tensor or semaphore address so the dispatch path can refresh them
     from live objects before dispatch.
     """
 
     cached_descriptor: Any  # ProgramDescriptor — dispatched via fusion_dispatch_op on hit
-    sem_specs: Tuple[_SemaphoreSpec, ...]  # Allocation blueprints for ephemeral barrier semaphores
+    sem_specs: Tuple[_SemaphoreSpec, ...]  # Logical barrier word metadata
     kernel_labels: tuple  # For _apply_kernel_dir file naming
     # (op_idx, tensor_idx) per merged output; None when the fused op has no outputs.
     output_sources: Optional[Tuple[Tuple[int, int], ...]]
@@ -251,8 +252,8 @@ def _compute_address_slots(desc, io_tensors, sem_addrs=()):
     ``discover_address_slots`` in the program factory.
 
     If ``sem_addrs`` is provided, runtime arg positions matching those
-    semaphore addresses are also recorded so they can be patched with
-    fresh addresses on each dispatch (ephemeral semaphores).
+    semaphore-bank word addresses are also recorded so they can be patched
+    with fresh addresses on each dispatch.
     """
     return ttnn._ttnn.operations.experimental.compute_address_slots(desc, io_tensors, list(sem_addrs))
 
@@ -276,9 +277,9 @@ def _cache_build_result(
     already set on *fused_op*.  Stored in the cache so ``fusion_dispatch_op``
     can refresh all stale addresses from live IO tensors before dispatch.
 
-    ``sem_specs`` stores allocation blueprints for barrier semaphores.
-    No live ``GlobalSemaphore`` objects are held in the cache — semaphores
-    are allocated ephemerally at each dispatch from these specs.
+    ``sem_specs`` stores the geometry and initial value of each logical
+    barrier word. No live L1 object is held in the cache — one bank is
+    allocated for the duration of each dispatch from these specs.
     """
     desc = fused_op.descriptor
     if desc.custom_program_hash is None:
@@ -330,6 +331,8 @@ def _cache_build_result(
             desc,
             address_slots,
             device,
+            [spec.core_ranges for spec in sem_specs],
+            [spec.initial_value for spec in sem_specs],
         )
 
     return _CacheEntry(
@@ -566,21 +569,6 @@ def _cleanup_persistent_ops(ops) -> None:
                 op.output_tensors = []
 
 
-def _allocate_ephemeral_semaphores(device, sem_specs):
-    """Allocate fresh barrier semaphores from specs, return (sem_refs, addresses).
-
-    The returned ``sem_refs`` list keeps the ``GlobalSemaphore`` objects alive
-    through the dispatch call.  After dispatch completes (command queue
-    ordering guarantees the program finishes before deallocation), the refs
-    go out of scope and L1 is freed.
-    """
-    if not sem_specs:
-        return [], []
-    sems = [ttnn.create_global_semaphore(device, spec.core_ranges, spec.initial_value) for spec in sem_specs]
-    addrs = [ttnn.get_global_semaphore_address(s) for s in sems]
-    return sems, addrs
-
-
 def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
 
@@ -612,8 +600,7 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         and getattr(container, "_cached_entry_gen", -1) == _BUILD_CACHE_GEN
     ):
         inputs = _gather_inputs(container._cached_ops)
-        _ephemeral_sems, sem_addrs = _allocate_ephemeral_semaphores(inputs[0].device(), entry.sem_specs)
-        outputs = entry.dispatch_state.dispatch(inputs, sem_addrs)
+        outputs = entry.dispatch_state.dispatch(inputs)
         _cleanup_persistent_ops(container._cached_ops)
         return _filter_results(outputs, container._default_results, results)
 
@@ -625,22 +612,28 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     if entry is not None:
         if entry.dispatch_state is not None:
             inputs = _gather_inputs(ops)
-            _ephemeral_sems, sem_addrs = _allocate_ephemeral_semaphores(inputs[0].device(), entry.sem_specs)
-            outputs = entry.dispatch_state.dispatch(inputs, sem_addrs)
+            outputs = entry.dispatch_state.dispatch(inputs)
             _cleanup_persistent_ops(ops)
             container._cached_entry = entry
             container._cached_entry_gen = _BUILD_CACHE_GEN
             return _filter_results(outputs, container._default_results, results)
 
         # Fallback warm path (no dispatch_state — e.g. no device at build
-        # time): 3-arg dispatch reusing output tensors from branch ops.
+        # time): reuse branch outputs and patch fresh bank addresses directly.
         inputs = _gather_inputs(ops)
         if entry.output_sources:
             outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
         else:
             outputs = list(ops[-1].output_tensors) if ops else []
         io_tensors = inputs + outputs
-        ttnn._ttnn.operations.experimental.fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
+        semaphore_bank = _allocate_fusion_semaphore_bank(inputs[0].device(), entry.sem_specs)
+        semaphore_addresses = [] if semaphore_bank is None else semaphore_bank.addresses
+        ttnn._ttnn.operations.experimental.fusion_dispatch_op(
+            io_tensors,
+            entry.cached_descriptor,
+            entry.address_slots,
+            semaphore_addresses,
+        )
     else:
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
@@ -672,10 +665,9 @@ class FusedOp:
     """Result of ``Sequential``/``Parallel``.``build()``.
 
     Holds a merged ``OpDescriptor`` (fused ``ProgramDescriptor`` + IO lists).
-    ``semaphores`` keeps build-time ``GlobalSemaphore`` refs alive for the
-    initial ``launch()``; ``sem_specs`` stores allocation blueprints so
-    subsequent launches can allocate fresh ephemeral semaphores (no persistent
-    L1 pinning).
+    ``sem_specs`` stores the metadata needed to allocate one command-lifetime
+    semaphore bank for each launch. No live L1 allocation is retained by the
+    ``FusedOp``.
 
     **Launch:** :meth:`launch` refreshes merged IO from the branch ops stored at
     ``build()`` time, then dispatches (in-place branch tensor updates are picked
@@ -687,7 +679,6 @@ class FusedOp:
 
     __slots__ = (
         "op",
-        "semaphores",
         "sem_specs",
         "kernel_labels",
         "_rebind_output_sources",
@@ -698,7 +689,6 @@ class FusedOp:
     def __init__(
         self,
         op: OpDescriptor,
-        semaphores: Tuple[Any, ...] = (),
         sem_specs: Tuple[_SemaphoreSpec, ...] = (),
         kernel_labels: Tuple[str, ...] = (),
         *,
@@ -707,7 +697,6 @@ class FusedOp:
         address_slots: Any = None,
     ):
         self.op = op
-        self.semaphores = semaphores
         self.sem_specs = sem_specs
         self.kernel_labels = kernel_labels
         # Empty tuple is not None but would skip outputs in refresh_merged_io (same bug as missing map).
@@ -741,7 +730,14 @@ class FusedOp:
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn._ttnn.operations.experimental.fusion_dispatch_op(io_tensors, self.descriptor, self._address_slots)
+        semaphore_bank = _allocate_fusion_semaphore_bank(io_tensors[0].device(), self.sem_specs)
+        semaphore_addresses = [] if semaphore_bank is None else semaphore_bank.addresses
+        ttnn._ttnn.operations.experimental.fusion_dispatch_op(
+            io_tensors,
+            self.descriptor,
+            self._address_slots,
+            semaphore_addresses,
+        )
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:
@@ -949,7 +945,6 @@ class Sequential:
             op=_coerce_mutable_io_opdescriptor(
                 OpDescriptor(r.descriptor, list(r.input_tensors), list(r.output_tensors))
             ),
-            semaphores=r.semaphores,
             sem_specs=r.sem_specs,
             kernel_labels=r.kernel_labels,
             rebind_output_sources=rebind_src,
@@ -989,10 +984,9 @@ class Sequential:
 
         2. **Warm path** (``_BUILD_CACHE`` hit, first call on this container
            instance): gathers inputs from branch descriptors and dispatches
-           via the 3-arg ``fusion_dispatch_op`` using the branch ops'
-           pre-existing output tensors.  Also creates the C++
-           ``FusionDispatchState`` for the hot path and sets
-           ``_cached_entry`` on the container.
+           via the cached ``FusionDispatchState``, which allocates output
+           tensors and a command-lifetime semaphore bank. Sets
+           ``_cached_entry`` on the container for subsequent hot-path calls.
 
         3. **Persistent hot path** (call 2+ on the same container): bypasses
            cache-key computation entirely.  ``_cached_entry.dispatch_state``
@@ -1123,7 +1117,6 @@ class Parallel:
             op=_coerce_mutable_io_opdescriptor(
                 OpDescriptor(r.descriptor, list(r.input_tensors), list(r.output_tensors))
             ),
-            semaphores=r.semaphores,
             sem_specs=r.sem_specs,
             kernel_labels=r.kernel_labels,
             rebind_output_sources=rebind_src,
@@ -1282,7 +1275,7 @@ def _build_item(item, device):
         cb_source_map = []
         global_cb_source_map = []
         for cb_idx, cb in enumerate(item.descriptor.cbs):
-            if cb.has_buffer():
+            if _cb_has_backing(cb):
                 cb_source_map.append((cb_idx, item, cb_idx))
             if cb.has_global_circular_buffer():
                 global_cb_source_map.append((cb_idx, item, cb_idx))

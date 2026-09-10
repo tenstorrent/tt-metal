@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-#include "buffer_test_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -20,7 +20,6 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 
 using namespace tt::test_utils;
-using namespace tt::test::buffer::detail;
 using namespace tt::tt_metal;
 
 namespace tt::test::buffer::detail {
@@ -29,8 +28,8 @@ bool SimpleDramLoopback(
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
     uint32_t dram_channel = mesh_device->allocator_impl()->get_dram_channel_from_bank_id(0);
-    writeDramBackdoor(mesh_device, dram_channel, local_address, inputs);
-    readDramBackdoor(mesh_device, dram_channel, local_address, outputs);
+    slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_channel, local_address, inputs);
+    slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_channel, local_address, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
         log_info(tt::LogTest, "Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
@@ -38,6 +37,8 @@ bool SimpleDramLoopback(
     return pass;
 }
 }  // namespace tt::test::buffer::detail
+
+using namespace tt::test::buffer::detail;
 
 namespace tt::tt_metal {
 

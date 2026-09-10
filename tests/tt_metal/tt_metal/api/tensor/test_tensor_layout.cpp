@@ -13,11 +13,11 @@
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 
 namespace tt::tt_metal {

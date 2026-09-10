@@ -17,6 +17,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     StableDiffusion3Pipeline,
     StableDiffusion3PipelineConfig,
 )
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -45,7 +46,8 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    ids=["line"],
     indirect=True,
 )
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])

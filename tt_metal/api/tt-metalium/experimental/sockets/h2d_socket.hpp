@@ -94,6 +94,34 @@ public:
         H2DMode h2d_mode);
 
     /**
+     * @brief Constructs an H2DSocket targeting an L2CPU receiver.
+     *
+     * Behaves as the standard constructor, with an L2CPU tile as the receiver.
+     * L2CPU LIM has no allocator in tt-metal, so the config buffer and data FIFO
+     * addresses are caller-supplied rather than allocated here.
+     *
+     * @param mesh_device The mesh device containing the receiver L2CPU.
+     * @param recv_l2cpu The receiving L2CPU tile. @c core_coord must be the TRANSLATED NOC
+     *                   coord of an L2CPU tile on the target device.
+     * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+     * @param config_buffer_address LIM address on the receiver L2CPU for the socket metadata.
+     *                              Must be PCIe-aligned and within the L2CPU's static TLB window.
+     * @param data_fifo_address LIM address for the data FIFO. In HOST_PUSH this is the ring
+     *                          itself and must be PCIe-aligned, disjoint from the config buffer,
+     *                          and fit with fifo_size inside the L2CPU's static TLB window. In
+     *                          DEVICE_PULL the ring lives in pinned host memory and this is the
+     *                          base the device computes ring offsets against.
+     * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
+     */
+    H2DSocket(
+        MeshDevice& mesh_device,
+        const MeshCoreCoord& recv_l2cpu,
+        uint32_t fifo_size,
+        uint32_t config_buffer_address,
+        uint32_t data_fifo_address,
+        H2DMode h2d_mode = H2DMode::HOST_PUSH);
+
+    /**
      * @brief Connects to an existing H2DSocket from another process.
      *
      * Waits for the flatbuffer descriptor exported by the owner, opens the named
@@ -242,6 +270,10 @@ private:
     void init_receiver_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
+    // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
+    // Connectors remain context-free and do not use this path.
+    void enable_mock_flow_control(const MeshDevice& mesh_device);
+
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
     void notify_receiver();
@@ -292,6 +324,10 @@ private:
     // Receiver core type, set at construction. The authoritative signal for
     // CoreType resolution and the DRAM-recv write path in init_receiver_tlb.
     RecvCoreType recv_core_type_ = RecvCoreType::Tensix;
+
+    // True when the receiver is an L2CPU tile. Selects the L2CPU code paths in
+    // init_receiver_tlb() / write_socket_metadata() and blocks descriptor export.
+    bool is_l2cpu_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -14,12 +14,23 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
-#include "sanitizer/api.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+namespace llk_unpack_a_detail
+{
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+constexpr std::uint32_t dest_reuse_dummy_unpack()
+{
+    static_assert(binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB);
+    constexpr std::uint32_t source = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? SrcA : SrcB;
+    return TT_OP_UNPACR_NOP(source, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+}
+
+} // namespace llk_unpack_a_detail
 
 /**
  * @brief Program the unpacker MOP for a single-operand (A) unpack.
@@ -107,9 +118,15 @@ inline void _llk_unpack_A_mop_config_(
     {
         if constexpr (acc_to_dest)
         {
+            // Use unpacker-bank readiness for the dummy SrcA publication so unpack can prepare
+            // the next bank while math consumes the current bank.
+            static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                                                                   ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
+                                                                   : unpack_srca_set_dvalid;
+
             constexpr std::uint32_t innerloop = 1;
             constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces, add support for dest to srcB
-            ckernel_template tmp(outerloop, innerloop, unpack_srca_set_dvalid, unpack_srca_set_dvalid);
+            ckernel_template tmp(outerloop, innerloop, unpack_srca_reuse, unpack_srca_reuse);
             tmp.set_start_op(unpack_srcb);
             tmp.set_end_op(srcb_set_z_2);
             tmp.program();
@@ -126,11 +143,16 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        constexpr std::uint32_t innerloop = 2;
-        constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces
+        const std::uint32_t outerloop = tensor_shape.num_faces_r_dim;
+        const std::uint32_t innerloop = tensor_shape.num_faces_c_dim;
         if constexpr (acc_to_dest)
         {
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_set_dvalid);
+            // Publish one dummy SrcA DVALID per tensor face, using unpacker-bank readiness so
+            // unpack can prepare the next bank while math consumes the current bank.
+            static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                                                                   ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
+                                                                   : unpack_srca_set_dvalid;
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_reuse);
             tmp.set_end_op(srcb_clear_z);
             tmp.program();
         }
@@ -185,11 +207,17 @@ inline void _llk_unpack_A_mop_config_(
         {
             if constexpr (acc_to_dest)
             {
+                // Use unpacker-bank readiness for destination-reuse dummy source publication so
+                // unpack can prepare the next bank while math consumes the current bank.
                 static constexpr std::uint32_t unpack_srca_reuse =
-                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? unpack_srca_set_dvalid : unpack_srca;
+                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                        ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
+                        : unpack_srca;
 
                 static constexpr std::uint32_t unpack_srcb_reuse =
-                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? unpack_srcb_set_dvalid : unpack_srcb;
+                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
+                        ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCB>()
+                        : unpack_srcb;
 
                 const std::uint32_t outerloop     = num_faces;
                 constexpr std::uint32_t innerloop = 1;
@@ -249,35 +277,6 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
-
-    if constexpr (BType == BroadcastType::NONE)
-    {
-        llk::san::unpack_operand_check(
-            llk::san::IGNORE,
-            unpack_src_format,
-            llk::san::IGNORE,
-            unpack_dst_format,
-            llk::san::IGNORE,
-            face_r_dim,
-            llk::san::IGNORE,
-            num_faces,
-            llk::san::IGNORE);
-    }
-    else
-    {
-        // If using broadcast UnpackA uses UNP_B... yeah i know...
-        llk::san::unpack_operand_check(
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            unpack_src_format,
-            llk::san::IGNORE,
-            unpack_dst_format,
-            llk::san::IGNORE,
-            face_r_dim,
-            llk::san::IGNORE,
-            num_faces);
-    }
-    llk::san::operation_init<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
@@ -356,35 +355,6 @@ template <
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-
-    if constexpr (BType == BroadcastType::NONE)
-    {
-        llk::san::unpack_operand_check(
-            llk::san::IGNORE,
-            unpack_src_format,
-            llk::san::IGNORE,
-            unpack_dst_format,
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            llk::san::IGNORE);
-    }
-    else
-    {
-        // If using broadcast UnpackA uses UNP_B... yeah i know...
-        llk::san::unpack_operand_check(
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            unpack_src_format,
-            llk::san::IGNORE,
-            unpack_dst_format,
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            llk::san::IGNORE,
-            llk::san::IGNORE);
-    }
-    llk::san::operation_check<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

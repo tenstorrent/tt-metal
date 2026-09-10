@@ -46,4 +46,30 @@ struct TensorBindingToken {
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 };
 
+// NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
+//
+// tensor::get_token_if_present<"name">() returns a pointer to the named TensorBindingToken when
+// the host bound that name, and a null NullTensorBindingToken pointer when it did not. That lets a
+// kernel written against an optional binding compile either way:
+//
+//   if (const auto* token = tensor::get_token_if_present<"maybe">()) {
+//       TensorAccessor accessor(*token);   // instantiated, but only reached when "maybe" is bound
+//       ...
+//   }
+//
+// Both branches are type-checked even though the guard is a compile-time constant, so the absent
+// case still has to name a constructible accessor. It cannot reuse TensorBindingToken with dummy
+// offsets: that constructor always reads a compile-time arg at CTA_OFFSET, which fails outright in
+// a kernel with no (or differently laid out) tensor CTAs. This distinct type selects overloads that
+// read nothing; see NullDSpec in tensor_accessor.h.
+//
+// NullTensorBindingToken is not meant to be constructed, only used as a type for the null pointer.
+struct NullTensorBindingToken {
+    NullTensorBindingToken() = delete;
+    NullTensorBindingToken(const NullTensorBindingToken&) = delete;
+    NullTensorBindingToken(NullTensorBindingToken&&) = delete;
+    NullTensorBindingToken& operator=(const NullTensorBindingToken&) = delete;
+    NullTensorBindingToken& operator=(NullTensorBindingToken&&) = delete;
+};
+
 }  // namespace tensor_accessor

@@ -39,6 +39,12 @@ from ...utils.test import mesh_device_config_to_string
         (1, 1, 2432, 14592),  # SD3.5 context
         (1, 1, 2432, 4864),  # SD3.5 final context
         (1, 4096, 2432, 64),  # SD3.5 proj_out
+        # Flux2 M=32 shapes — exercise the 1D matmul branch (M ≤ 64)
+        (1, 1, 256, 6144),  # timestep/guidance embed linear_1
+        (1, 1, 6144, 6144),  # timestep/guidance embed linear_2
+        (1, 1, 6144, 4608),  # double_stream_mod img / txt
+        (1, 1, 6144, 2304),  # single_stream_mod
+        (1, 1, 6144, 1536),  # spatial_time_embed_out
     ],
 )
 @pytest.mark.parametrize(

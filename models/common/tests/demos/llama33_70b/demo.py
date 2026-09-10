@@ -4,11 +4,13 @@
 """
 TTTv2 Llama-3.3-70B-Instruct demo — accuracy and performance measurement.
 
-Uses ``EagerLlama33_70BExecutor`` / ``TracedLlama33_70BExecutor`` directly (no vLLM adapter).
+Uses the model-owned ``Llama33_70BExecutor`` directly (no vLLM adapter).
 
-**Mesh note:** Llama-3.3-70B-Instruct has 64 attention heads and 8 KV heads; both divide
-T3K (8). The port raises on any other mesh. T3K is the only SKU PERF.md publishes per-user
-TTFT for, so it is the primary (and only) bringup SKU here.
+**Mesh note:** Llama-3.3-70B-Instruct supports Wormhole T3K (8 devices) and
+BlackHole P150x4 (4 devices on physical P150_X4 or P300_X2). P150x4 token accuracy is gated by the existing
+central ``p300x2``/``bh_quietbox_2`` floor. Performance cases without a
+workload-matched independent floor still run and report observational metrics;
+those measurements are not acceptance claims.
 
 **Workload:** performance tests prefill each prompt at its natural length (TTTv1
 ``preprocess_inputs_prefill`` semantics; these sample prompts are ~90-125 tokens -> 128
@@ -29,6 +31,11 @@ Usage::
     MESH_DEVICE=T3K HF_MODEL=meta-llama/Llama-3.3-70B-Instruct \\
       pytest models/common/tests/demos/llama33_70b/demo.py -k "batch-32" -v
 
+    # BlackHole central-target accuracy gate (physical P150_X4 or P300_X2; run serially)
+    MESH_DEVICE=P150x4 HF_MODEL=meta-llama/Llama-3.3-70B-Instruct \\
+      pytest models/common/tests/demos/llama33_70b/demo.py \\
+        -k "accuracy-token-accuracy-P150x4" -v
+
 LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
@@ -46,28 +53,33 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.models.executor import (
+from models.common.device_utils import get_device_name
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.models.llama33_70b.executor import Llama33_70BExecutor, Llama33_70BExecutorConfig
+from models.common.models.llama33_70b.hf_adaptor import encode_prompt, from_pretrained
+from models.common.models.llama33_70b.model import (
+    LLAMA33_70B_ACCURACY,
+    LLAMA33_70B_PERFORMANCE,
+    Llama33_70BTransformer1D,
+)
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import (
+    assert_no_special_tokens,
+    eval_decode_trace_mode,
     load_eval_repeat_prompts_batch32,
+    make_contiguous_page_table,
+    require_canonical_eval_modes_in_ci,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.models.llama33_70b.model import (
-    LLAMA33_70B_ACCURACY,
-    LLAMA33_70B_PERFORMANCE,
-    EagerLlama33_70BExecutor,
-    Llama33_70BTransformer1D,
-    TracedLlama33_70BExecutor,
-)
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_metric_tolerance, resolve_perf_targets
+from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf
 
 # =============================================================================
 # Expected metrics — perf gates set from same-box TTTv1-vs-TTTv2 measurement on this base
@@ -95,8 +107,8 @@ EXPECTED_METRICS = {
 
 # batch-1 throughput, sampling-mode- AND profile-aware. host = TTTv2-host; on_device_topk =
 # max(TTTv1, TTTv2-on-device). Populated from same-box measurement this session.
-# Cells not yet measured stay {} (the case still RUNS, printing tok_s_u, but is not gated) — never
-# a silent PERF.md value.
+# Cells not yet measured stay {}. T3K characterization remains unchanged; cases
+# without a complete floor run observationally and do not make acceptance claims.
 EXPECTED_METRICS_BATCH1: dict = {
     "host": {
         "performance": {"T3K": {"tok_s_u": 10.5, "ttft_ms": 195}},  # TTTv2-host 2026-07-24 (10.52)
@@ -130,8 +142,8 @@ EXPECTED_METRICS_BATCH32: dict = {
 # CI-faithful batch-32 targets (the ``batch-32-ci`` leg), measured at the batch-32-ci workload
 # (seq clamp below + 1024-token decode budget; TTTv1 ci-32 workload). Separate from the lighter
 # batch-32 leg: the longer decode budget grows the KV read window so steady-state per-token decode
-# is a bit slower. Cells not measured fall back to EXPECTED_METRICS_BATCH32 (stay gated, never
-# silently un-gated).
+# is a bit slower. Cells not measured fall back to EXPECTED_METRICS_BATCH32; if neither profile has
+# a complete floor, the case remains observational.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {"T3K": {"tok_s_u": 9.6, "ttft_ms": 90}},  # TTTv2-host 2026-07-24 (9.68)
@@ -156,6 +168,128 @@ _PERF_NUM_DECODE_TOKENS = int(os.environ.get("PERF_NUM_DECODE_TOKENS", "200"))
 
 PERF_TOLERANCE = 0.05
 
+# Profile-specific provenance for the TTTv1 ``performance-ci-eval-32`` parity
+# leg.  The central target resolver is intentionally profile-agnostic, so a
+# central value may only be consumed after this table records an independently
+# reviewed, workload-matched source for that exact optimization profile.  No
+# Llama-3.3-70B BlackHole eval floor has been approved yet.
+_EVAL32_TARGET_PROVENANCE: dict[str, dict[str, dict[str, int | str]]] = {}
+
+_EVAL32_FIXED_PROVENANCE = {
+    "batch_size": 32,
+    "decode_tokens": 200,
+    "repeat_batches": 3,
+    "sampling_mode": "on_device_topk",
+    "trace_mode": "decode_only",
+    "prefill_trace_mode": "eager",
+}
+
+
+def _resolve_eval32_perf_targets(hf_model: str, device_name: str, optimization_profile: str) -> dict | None:
+    provenance = _EVAL32_TARGET_PROVENANCE.get(optimization_profile, {}).get(device_name)
+    if provenance is None:
+        logger.warning(
+            f"No independently reviewed {optimization_profile} eval-32 perf floor for "
+            f"{hf_model} on {device_name}; running observationally without an acceptance claim."
+        )
+        return None
+    mismatches = {
+        key: (provenance.get(key), required)
+        for key, required in _EVAL32_FIXED_PROVENANCE.items()
+        if provenance.get(key) != required
+    }
+    source = provenance.get("source")
+    seq_len = provenance.get("seq_len")
+    if not isinstance(source, str) or not source.strip():
+        mismatches["source"] = (source, "non-empty independent evidence reference")
+    if not isinstance(seq_len, int) or isinstance(seq_len, bool) or seq_len <= 0:
+        mismatches["seq_len"] = (seq_len, "positive independently measured integer")
+    if mismatches:
+        raise ValueError(
+            f"Invalid {optimization_profile} eval-32 perf provenance for {hf_model} on {device_name}: {mismatches}"
+        )
+    seq_len = int(provenance["seq_len"])
+    expected = resolve_perf_targets(
+        hf_model,
+        device_name,
+        batch_size=32,
+        seq_len=seq_len,
+    )
+    if not expected:
+        logger.warning(
+            f"No centralized eval-32 perf target for {hf_model} on {device_name} "
+            f"(profile={optimization_profile}, batch_size=32, seq_len={seq_len}); "
+            "running observationally without an acceptance claim."
+        )
+        return None
+    required = ("decode_t/s/u", "prefill_time_to_first_token")
+    missing = [metric for metric in required if metric not in expected]
+    if missing:
+        logger.warning(
+            f"Incomplete centralized eval-32 perf target for {hf_model} on {device_name}: missing {missing}; "
+            "running observationally without an acceptance claim."
+        )
+        return None
+    return expected
+
+
+def _assert_eval32_perf_target(result, expected: dict, *, case_name: str) -> None:
+    decode_target = float(expected["decode_t/s/u"])
+    ttft_target = float(expected["prefill_time_to_first_token"])
+    decode_tolerance = resolve_metric_tolerance("decode_t/s/u", expected, PERF_TOLERANCE)
+    ttft_tolerance = resolve_metric_tolerance("prefill_time_to_first_token", expected, PERF_TOLERANCE)
+    failures = []
+    if result.tok_s_u < decode_target * (1 - decode_tolerance):
+        failures.append(f"tok/s/u {result.tok_s_u:.1f} < target {decode_target}")
+    if result.ttft_ms > ttft_target * (1 + ttft_tolerance):
+        failures.append(f"ttft_ms {result.ttft_ms:.1f} > target {ttft_target}")
+    assert not failures, f"{case_name}: " + "; ".join(failures)
+
+
+def _resolve_local_perf_target(expected: dict, *, case_name: str) -> dict:
+    """Use only complete local floors; otherwise preserve the run as observation."""
+
+    missing = [metric for metric in ("tok_s_u", "ttft_ms") if metric not in expected]
+    if missing:
+        logger.warning(
+            f"{case_name}: missing frozen perf target(s) {missing}; running observationally "
+            "without an acceptance claim."
+        )
+        return {}
+    return expected
+
+
+def _require_eval_perf_report_configuration(environ) -> None:
+    """Keep a named perf-report node on its target-matched canonical workload."""
+
+    require_canonical_eval_modes_in_ci(environ)
+    sampling_mode = environ.get("SAMPLING_MODE", "on_device_topk").lower()
+    if sampling_mode != "on_device_topk":
+        raise ValueError("eval-32-perf-report requires canonical SAMPLING_MODE=on_device_topk")
+    decode_tokens = int(environ.get("PERF_NUM_DECODE_TOKENS", "200"))
+    if decode_tokens != _EVAL32_FIXED_PROVENANCE["decode_tokens"]:
+        raise ValueError("eval-32-perf-report requires canonical PERF_NUM_DECODE_TOKENS=200")
+
+
+def _preflight_perf_target(
+    *,
+    test_config: str,
+    optimization_profile: str,
+    device_name: str,
+    hf_model: str,
+    expected: dict,
+) -> dict | None:
+    """Validate canonical modes and resolve either a complete floor or observation."""
+
+    case_name = f"{optimization_profile}/{test_config}"
+    if test_config == "eval-32-perf-report":
+        _require_eval_perf_report_configuration(os.environ)
+        return _resolve_eval32_perf_targets(hf_model, device_name, optimization_profile)
+    if test_config in {"batch-1", "batch-32", "batch-32-ci"}:
+        return _resolve_local_perf_target(expected, case_name=case_name)
+    return None
+
+
 # batch-32-ci per-SKU max_seq_len (TTTv1 ci-32 parity is seq2048). DRAM trap: raising max_seq_len
 # doubles the batch-32 KV cache, and 70B is the extreme case — BFP8 weights are ~9 GB/device on T3K,
 # leaving only ~3 GB for KV + activations. batch-32 already runs at seq1024 (see the test body);
@@ -175,6 +309,7 @@ def _sampling_bucket() -> str:
 
 _MESH_DEVICE_TO_SHAPE: dict[str, tuple[int, int]] = {
     "T3K": (1, 8),
+    "P150x4": (1, 4),
 }
 
 
@@ -182,26 +317,25 @@ def _ttnn_mesh_device_param_from_env() -> dict:
     env = os.environ.get("MESH_DEVICE", "").strip()
     if not env:
         pytest.skip(
-            "MESH_DEVICE must be set to T3K. See module docstring.",
+            "MESH_DEVICE must be set to T3K or P150x4. See module docstring.",
             allow_module_level=True,
         )
     shape = _MESH_DEVICE_TO_SHAPE.get(env)
     if shape is None:
         pytest.skip(
-            f"Unsupported MESH_DEVICE={env!r} for Llama-3.3-70B; only T3K is supported "
-            f"(64 attn heads / 8 KV heads ⇒ 8 devices).",
+            f"Unsupported MESH_DEVICE={env!r} for Llama-3.3-70B; use T3K or P150x4.",
             allow_module_level=True,
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        "trace_region_size": resolve_trace_region_size("llama3.3-70b", env),
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
-    # an explicit 1D fabric; the root conftest does not auto-enable it. FABRIC_1D on any >1-device
-    # mesh (70B is T3K-only, always 8 devices).
+    # an explicit fabric; the root conftest does not auto-enable it. The Llama33 model resolves T3K
+    # collectives to Ring topology, so the fabric config must match that topology.
     if shape != (1, 1):
-        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
     return param
 
 
@@ -220,25 +354,14 @@ def mesh_device(ttnn_mesh_device):
     return ttnn_mesh_device
 
 
-def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> None:
+def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice) -> None:
     n_dev = mesh_device.get_num_devices()
-    if n_dev <= 1:
-        return
-    cfg = AutoConfig.from_pretrained(hf_model_id)
-    n_h, n_kv = cfg.num_attention_heads, cfg.num_key_value_heads
-    if n_h % n_dev == 0 and n_kv % n_dev == 0:
+    if 64 % n_dev == 0 and 8 % n_dev == 0:
         return
     pytest.skip(
-        f"Incompatible mesh for {hf_model_id}: {n_dev} devices, "
-        f"num_attention_heads={n_h}, num_key_value_heads={n_kv}."
+        f"Incompatible mesh for Llama-3.3-70B-Instruct: {n_dev} devices, "
+        "num_attention_heads=64, num_key_value_heads=8."
     )
-
-
-def get_device_name(mesh_device: ttnn.MeshDevice) -> str:
-    n = mesh_device.get_num_devices()
-    if n == 8:
-        return "T3K"
-    return f"{n}dev"
 
 
 def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> Path:
@@ -307,7 +430,7 @@ def tokenize_prompts(
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     encoded: list[list[int]] = []
     for p in prompts:
-        ids = list(encode_prompt_hf(tokenizer, p))
+        ids = list(encode_prompt(tokenizer, p))
         if max_prefill_len is not None and len(ids) > max_prefill_len:
             ids = ids[-max_prefill_len:]
         encoded.append(ids)
@@ -379,32 +502,94 @@ def create_model(
     max_batch_size: int = 32,
     max_seq_len: int = 4096,
 ) -> Llama33_70BTransformer1D:
-    """Build ``Llama33_70BTransformer1D`` in executor (paged KV) mode.
-
-    Picks one of the two module-level precision recipes (``LLAMA33_70B_ACCURACY`` /
-    ``LLAMA33_70B_PERFORMANCE``) — both defined in ``llama33_70b/model.py`` and grounded
-    in TTTv1's ``DecodersPrecision`` for Llama-3.3-70B-Instruct.
-    """
+    """Build the provider-neutral graph through the Llama 3.3 HF adaptor."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-    _skip_unless_heads_divide_mesh(mesh_device, hf_model)
+    _skip_unless_heads_divide_mesh(mesh_device)
 
     precision = LLAMA33_70B_PERFORMANCE if optimizations == "performance" else LLAMA33_70B_ACCURACY
-
-    try:
-        model = Llama33_70BTransformer1D.from_pretrained(
-            mesh_device,
-            hf_model,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-            num_layers=None,
-            cache_dir=cache_dir,
-            precision=precision,
-            executor_mode=True,
-        )
-    except Exception as e:
-        pytest.skip(f"Could not build Llama-3.3-70B model (weights / memory / mesh): {e}")
-
+    llm = from_pretrained(
+        mesh_device,
+        hf_model=hf_model,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        n_layers=None,
+        cache_dir=cache_dir,
+        optimizations=precision,
+    )
+    model = llm.model
+    model.demo_tokenizer = llm.tokenizer
     return model
+
+
+def create_executor(
+    model: Llama33_70BTransformer1D,
+    *,
+    traced: bool,
+    device_sampling_enabled: bool,
+    trace_mode: str | None = None,
+) -> Llama33_70BExecutor:
+    block_size = 32
+    max_num_blocks = math.ceil(model.config.max_seq_len / block_size) * model.config.max_batch_size
+    attention_config = model.config.block_configs[0].attention_config
+    if trace_mode is None:
+        trace_mode = "all" if traced else "none"
+    return Llama33_70BExecutor(
+        model,
+        model.model_args,
+        Llama33_70BExecutorConfig(
+            trace=TraceConfig(mode=trace_mode),
+            warmup=WarmupConfig(),
+            paged_kv_cache=PagedKVCacheConfig(
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+                num_blocks=max_num_blocks,
+                dtype=attention_config.kv_cache_dtype,
+            ),
+            device_sampling_enabled=device_sampling_enabled,
+        ),
+    )
+
+
+def _warmup_demo_executor(
+    executor,
+    *,
+    kv_cache,
+    page_table,
+    prefill_compile_case=None,
+    prefill_sampling_params=None,
+    prefill_compile_execution=None,
+):
+    """Compile eager programs and representative requests before trace activation."""
+    config = executor.config
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(executor.model.config.max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if prefill_compile_case is not None:
+        tokens, prompt_lens = prefill_compile_case
+        executor.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=list(range(tokens.shape[0])),
+            sampling_params=prefill_sampling_params,
+            execution=(
+                prefill_compile_execution if prefill_compile_execution is not None else executor.eager_execution
+            ),
+        )
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
 # =============================================================================
@@ -416,12 +601,10 @@ def create_model(
 # garbage guard plus "runs to completion without hang/exception". This is a mesh / KV-cache /
 # page-table scaling smoke test, NOT an accuracy or perf gate.
 #
-# Hardware feasibility on Llama-3.3-70B (T3K-only): each DP group is ONE device
-# (``data_parallel == n_devices`` ⇒ a (1,1) submesh). A single Wormhole device cannot hold the
-# ~40 GB 70B checkpoint un-sharded, and ``from_pretrained`` raises for any non-8-device mesh
-# anyway — so DP-8 (the only factor giving 1-device groups on T3K) cleanly ``pytest.skip``s at
-# build time, and DP-2/4/16/32 skip earlier via ``_dp_or_skip`` (n // dp != 1). Every leg is
-# wired for TTTv1 parity and self-skips as a hardware-capability guard (never a masked failure).
+# Hardware feasibility on Llama-3.3-70B (T3K-only): one replica requires the full TP8 mesh,
+# so an eight-device host has capacity for DP1 only. Every retained DP factor is rejected by
+# ``_dp_or_skip`` before submesh creation or model construction. This also avoids the W0 DP-8
+# cleanup bug, where an intended build-time skip was masked by a failing parent-mesh quiesce.
 _DP_SIZE_TABLE: dict[int, dict] = {
     2: {"max_seq_len": 1024, "max_generated_tokens": 200, "stop_at_eos": True},
     4: {"max_seq_len": 4096, "max_generated_tokens": 2048, "stop_at_eos": False},
@@ -431,60 +614,19 @@ _DP_SIZE_TABLE: dict[int, dict] = {
 }
 
 
-def create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int) -> list:
-    """Partition the open parent mesh into ``data_parallel`` disjoint row-submeshes.
-
-    Mirrors TTTv1 ``generator.create_submeshes`` minus the Galaxy reshape branch. For the
-    single-user DP cases on our hardware ``n // data_parallel == 1``, so each submesh is a
-    ``(1,1)`` mesh. Fabric stays owned by the parent — do NOT set fabric per-submesh.
-    """
-    if data_parallel == 1:
-        return [mesh_device]
-    n = mesh_device.get_num_devices()
-    assert n % data_parallel == 0, f"{n} devices not divisible by data_parallel={data_parallel}"
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, n // data_parallel))
-
-
 def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
-    """Skip unless the mesh has exactly ``data_parallel`` single-device DP groups."""
-    n = mesh_device.get_num_devices()
-    if n % data_parallel != 0 or (n // data_parallel) != 1:
-        pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
+    """Preserve DP case IDs while rejecting every topology before model construction.
 
-
-def assert_no_special_tokens(
-    generated_token_ids, tokenizer, *, case_name: str = "", is_ci_env: bool | None = None
-) -> None:
-    """Guard: no special (garbage) tokens mid-stream. Warns always; hard-fails only under CI.
-
-    Mirrors TTTv1 ``simple_text_demo.py``'s special-token guard (warn always, ``assert`` only
-    when ``CI == "true"``). TTTv2's ``result.generated_token_ids[user]`` already starts at the
-    first generated token (prefill argmax), so unlike TTTv1 we do not slice off the prompt —
-    these are output-only. Each user's output is truncated at the first stop token (EoS / eot)
-    before scanning, then checked against any ``tokenizer.all_special_ids`` member.
+    Llama 3.3 70B requires TP8, so an eight-device T3K has capacity for exactly one
+    model replica. No collected DP factor can retain TP8 lanes.
     """
-    if is_ci_env is None:
-        is_ci_env = os.environ.get("CI") == "true"
-    special = set(tokenizer.all_special_ids)
-    stop = set()
-    if tokenizer.eos_token_id is not None:
-        stop.add(tokenizer.eos_token_id)
-    eot = tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    if isinstance(eot, int) and eot >= 0:
-        stop.add(eot)
-    offenders = 0
-    for out in generated_token_ids:
-        seq = list(out)
-        for i, t in enumerate(seq):
-            if t in stop:
-                seq = seq[:i]
-                break
-        if any(t in special for t in seq):
-            offenders += 1
-    if offenders:
-        logger.warning(f"[{case_name}] model produced special tokens ({offenders}/{len(generated_token_ids)} users)")
-        if is_ci_env:
-            assert False, f"model produced special tokens ({offenders} users)"
+    n = mesh_device.get_num_devices()
+    if n % data_parallel:
+        pytest.skip(f"DP-{data_parallel} cannot partition {n} devices into equal lanes")
+    pytest.skip(
+        f"DP-{data_parallel} on {n} devices creates TP{n // data_parallel} lanes; "
+        "Llama-3.3-70B requires one TP8 lane"
+    )
 
 
 def _run_dp_smoke(
@@ -496,105 +638,9 @@ def _run_dp_smoke(
     max_gen_tokens: int,
     stop_at_eos: bool,
 ) -> None:
-    """Single-user data-parallel scaling smoke across ``data_parallel`` submeshes.
-
-    Builds one model + one traced executor + one KV cache + one page table per submesh
-    (one user each), runs ``run_perf_benchmark`` per submesh sequentially, collects the
-    per-submesh output, and asserts no special tokens. Every executor and model is cleaned
-    up in ``finally`` even on mid-loop failure.
-    """
+    """Apply the capacity guard for the retained TTTv1-parity DP node IDs."""
+    del optimizations, cache_dir, max_seq_len, max_gen_tokens, stop_at_eos
     _dp_or_skip(mesh_device, data_parallel)
-
-    hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-    _skip_unless_heads_divide_mesh(mesh_device, hf_model)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-    precision = LLAMA33_70B_PERFORMANCE if optimizations == "performance" else LLAMA33_70B_ACCURACY
-
-    submeshes = create_dp_submeshes(mesh_device, data_parallel)
-
-    # One prompt per DP group (load_input_prompts pads/truncates to the requested count).
-    prompts = load_input_prompts(data_parallel)
-
-    sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
-    _on_device_params = {
-        "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
-        "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
-    }
-
-    models: list = []
-    executors: list = []
-    all_generated: list = []
-    try:
-        for i, sm in enumerate(submeshes):
-            try:
-                model = Llama33_70BTransformer1D.from_pretrained(
-                    sm,
-                    hf_model,
-                    max_batch_size=1,
-                    max_seq_len=max_seq_len,
-                    num_layers=None,
-                    cache_dir=cache_dir,
-                    precision=precision,
-                    executor_mode=True,
-                )
-            except Exception as e:
-                pytest.skip(f"Could not build Llama-3.3-70B model (weights / memory / mesh): {e}")
-            models.append((model, sm))
-
-            traced_executor = TracedLlama33_70BExecutor(model, sm)
-            executors.append(traced_executor)
-
-            ma = model.model_args
-            assert ma is not None
-
-            block_size = 32
-            n_dev_sm = sm.get_num_devices()
-            max_num_blocks_per_user = ma.max_seq_len // block_size
-            max_num_blocks = max_num_blocks_per_user * ma.max_batch_size  # max_batch_size == 1
-
-            kv_cache_shape = (max_num_blocks, ma.n_kv_heads // n_dev_sm, block_size, ma.head_dim)
-            kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-            page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(
-                ma.max_batch_size, max_num_blocks_per_user
-            )
-
-            input_tokens, prompt_lens = tokenize_prompts(prompts[i : i + 1], tokenizer)
-
-            sampling_params = (
-                _on_device_params[sampling_mode]
-                if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
-                else None
-            )
-            logger.info(
-                f"[ci-b1-DP-{data_parallel}] submesh {i} SAMPLING_MODE={sampling_mode} "
-                f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
-            )
-
-            result = run_perf_benchmark(
-                traced_executor,
-                tokens=input_tokens,
-                kv_cache=kv_cache,
-                page_table=page_table,
-                num_decode_tokens=max_gen_tokens,
-                max_batch_size=1,
-                prompt_lens=prompt_lens,
-                sampling_params=sampling_params,
-            )
-            all_generated.append(result.generated_token_ids[0])
-            log_generated_text(prompts[i : i + 1], result.generated_token_ids, tokenizer)
-
-        assert_no_special_tokens(all_generated, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
-    finally:
-        for ex in executors:
-            ex.cleanup()
-        for model, sm in models:
-            cleanup_model_case(model, sm)
-        # When data_parallel > 1 we carved child submeshes off the fixture-owned parent
-        # mesh. Those submeshes share the parent's command queue, so the parent cannot be
-        # closed (by the module-scoped ttnn_mesh_device fixture) while they remain in use.
-        # Drain the parent + submesh CQs and reset their in-use state before teardown.
-        if data_parallel > 1:
-            mesh_device.quiesce_devices()
 
 
 # =============================================================================
@@ -610,6 +656,7 @@ def _run_dp_smoke(
         pytest.param("batch-32", id="batch-32"),
         pytest.param("batch-32-ci", id="batch-32-ci"),
         pytest.param("eval-32", id="eval-32"),
+        pytest.param("eval-32-perf-report", id="eval-32-perf-report"),
         pytest.param("ci-b1-DP-2", id="ci-b1-DP-2"),
         pytest.param("ci-b1-DP-4", id="ci-b1-DP-4"),
         pytest.param("ci-b1-DP-8", id="ci-b1-DP-8"),
@@ -625,6 +672,7 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
     model = None
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
     cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
+    eval_expected = None
 
     try:
         # ci-b1-DP-*: single-user data-parallel smoke. Builds N models itself (one per submesh),
@@ -652,7 +700,7 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
         # × 1 KV head/dev × 128 head_dim × 32 batch at seq 4096 (≈2.7 GB/device) would overflow
         # alongside weights; 1024 (≈0.67 GB KV) still covers the natural-length prefill (~128 bucket)
         # + 200 decode workload.
-        if test_config in ("batch-32", "eval-32"):
+        if test_config in ("batch-32", "eval-32", "eval-32-perf-report"):
             max_bs, max_seq_len = 32, 1024
             expected = EXPECTED_METRICS_BATCH32.get(_sampling_bucket(), {}).get(optimizations, {}).get(device_name, {})
         elif test_config == "batch-32-ci":
@@ -673,14 +721,27 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
             )
         else:
             max_bs, max_seq_len = 1, 4096
+        perf_expected = expected
+        if test_config == "batch-1":
+            perf_expected = (
+                EXPECTED_METRICS_BATCH1.get(_sampling_bucket(), {}).get(optimizations, {}).get(device_name, {})
+            )
+        resolved_perf_expected = _preflight_perf_target(
+            test_config=test_config,
+            optimization_profile=optimizations,
+            device_name=device_name,
+            hf_model=hf_model,
+            expected=perf_expected,
+        )
+        if test_config in {"batch-1", "batch-32", "batch-32-ci"}:
+            perf_expected = resolved_perf_expected
+        else:
+            eval_expected = resolved_perf_expected
         model = create_model(mesh_device, optimizations, cache_dir, max_batch_size=max_bs, max_seq_len=max_seq_len)
 
         if test_config == "token-accuracy":
             _run_token_accuracy(model, mesh_device, expected)
         elif test_config == "batch-1":
-            perf_expected = (
-                EXPECTED_METRICS_BATCH1.get(_sampling_bucket(), {}).get(optimizations, {}).get(device_name, {})
-            )
             _run_perf_benchmark(model, mesh_device, perf_expected, batch_size=1, case_name=f"{optimizations}/batch-1")
         elif test_config == "batch-32":
             _run_perf_benchmark(model, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/batch-32")
@@ -693,9 +754,16 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
                 case_name=f"{optimizations}/batch-32-ci",
                 num_decode_tokens=1024,
             )
-        elif test_config == "eval-32":
+        elif test_config in ("eval-32", "eval-32-perf-report"):
             # 32-user cross-batch determinism (self-consistency under prompt rotation).
-            _run_eval_repeat_batch32(model, mesh_device)
+            perf_report = test_config == "eval-32-perf-report"
+            _run_eval_repeat_batch32(
+                model,
+                mesh_device,
+                expected=eval_expected,
+                case_name=f"{optimizations}/{test_config}",
+                perf_report=perf_report,
+            )
     finally:
         cleanup_model_case(model, mesh_device)
 
@@ -704,7 +772,7 @@ def _run_token_accuracy(model: Llama33_70BTransformer1D, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt``."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
     reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(hf_model)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    tokenizer = model.demo_tokenizer
 
     if reference_tokens.dim() > 1:
         reference_tokens = reference_tokens.squeeze()
@@ -725,44 +793,34 @@ def _run_token_accuracy(model: Llama33_70BTransformer1D, mesh_device, expected):
 
     prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
 
-    executor = EagerLlama33_70BExecutor(model, mesh_device)
-    ma = model.model_args
-    assert ma is not None
-
-    max_batch_size = ma.max_batch_size
-    prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
-    block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
-
-    target_top5 = select_teacher_forcing_top5_slice(
-        top5_tokens,
-        reference_tokens,
-        prompt_len,
-        metadata_aligned=has_prompt_len_metadata,
-    )
-    is_ci_env = os.environ.get("CI") == "true"
-    profiler = BenchmarkProfiler()
-    profiler.start("run")
-    # run_teacher_forcing times the prefill + per-step (teacher-forced) decode loop and, given the
-    # profiler, brackets the "inference_prefill" / "inference_decode" steps itself — so the returned
-    # result carries prefill/decode throughput alongside accuracy for CI benchmark-data emission.
-    result = run_teacher_forcing(
-        executor,
-        prompt_tokens=prompt_tokens,
-        reference_tokens=reference_tokens,
-        top5_tokens=target_top5,
-        kv_cache=kv_cache,
-        page_table=page_table,
-        max_batch_size=max_batch_size,
-        profiler=profiler,
-    )
-    profiler.end("run")
+    executor = create_executor(model, traced=False, device_sampling_enabled=False)
+    try:
+        max_batch_size = model.config.max_batch_size
+        prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
+        kv_cache = executor.allocate_kv_cache()
+        page_table = make_contiguous_page_table(max_batch_size, model.config.max_seq_len, 32)
+        target_top5 = select_teacher_forcing_top5_slice(
+            top5_tokens,
+            reference_tokens,
+            prompt_len,
+            metadata_aligned=has_prompt_len_metadata,
+        )
+        is_ci_env = os.environ.get("CI") == "true"
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
+        result = run_teacher_forcing(
+            executor,
+            prompt_tokens=prompt_tokens,
+            reference_tokens=reference_tokens,
+            top5_tokens=target_top5,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            max_batch_size=max_batch_size,
+            profiler=profiler,
+        )
+        profiler.end("run")
+    finally:
+        executor.cleanup()
 
     top1 = result.top1_accuracy() * 100
     top5 = result.top5_accuracy() * 100
@@ -796,7 +854,7 @@ def _run_token_accuracy(model: Llama33_70BTransformer1D, mesh_device, expected):
             ml_model_name=hf_model,
             ml_model_type="llm",
             device_name=get_device_name(mesh_device),
-            num_layers=ma.n_layers,
+            num_layers=model.config.n_layers,
             batch_size=1,
             input_sequence_length=prompt_len,
             output_sequence_length=num_target,
@@ -810,8 +868,11 @@ def _run_token_accuracy(model: Llama33_70BTransformer1D, mesh_device, expected):
     #       (no ratio tolerance — TTTv1 applies none to accuracy).
     # Measured accuracy is rounded up with math.ceil first, matching TTTv1
     # (simple_text_demo.py:1657-1658, ``math.ceil(acc[...] * 100)``).
-    use_centralized_targets = is_ci_env
+    # P150x4 is a qualification gate even outside CI. Its p300x2 alias already
+    # has an independently measured central accuracy target, so never downgrade
+    # this path to observational output or an empty local bucket.
     device_name = get_device_name(mesh_device)
+    use_centralized_targets = is_ci_env or device_name == "P150x4"
     if use_centralized_targets:
         central = resolve_accuracy_targets(hf_model, device_name, batch_size=1, seq_len=512)
         if not central or "top1" not in central or "top5" not in central:
@@ -840,7 +901,7 @@ def _run_perf_benchmark(
     max_prefill_len: int | None = None,
     num_decode_tokens: int | None = None,
 ):
-    """Timed prefill + decode (``TracedLlama33_70BExecutor``).
+    """Timed prefill + decode with the traced model-owned executor.
 
     Prefill uses each prompt's natural token length (TTTv1 ``preprocess_inputs_prefill``
     semantics — the executor buckets to ``get_padded_prefill_len``); decode runs for
@@ -852,14 +913,14 @@ def _run_perf_benchmark(
     decode position never overruns the page table (the ``batch-32-ci`` leg requests 1024).
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    tokenizer = model.demo_tokenizer
 
     # Batched-prefill A/B knob (parity caveat #12): set DISABLE_BATCHED_PREFILL=1 to force the
     # sequential per-user prefill loop (the pre-feature baseline) for before/after TTFT comparison.
     # Companion knob (PLAN_01): DISABLE_MINIMAL_MATMUL=1 forces QKV/W2 prefill back to ttnn.linear
     # (read at model build time, so it must be in the env before from_pretrained — it already is).
-    if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
-        model.model_args.disable_batched_prefill = True
+    # The shared prefill runtime reads DISABLE_BATCHED_PREFILL for each prepare call.
+    # Do not mutate model_args here: Llama33_70BRuntimeConfig is intentionally frozen.
 
     # On-device sampling toggle for SKU evidence-gathering:
     #   host            -> sampling_params=None (host-argmax, the default shipped path)
@@ -885,20 +946,29 @@ def _run_perf_benchmark(
     # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
     # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active). This is the
     # #49284 shared decode loop — the primary T3K decode-parity lever for this T3K-only 70B.
-    traced_executor = TracedLlama33_70BExecutor(model, mesh_device, ondevice_decode_loop=sampling_params is not None)
+    traced_executor = create_executor(
+        model,
+        traced=True,
+        device_sampling_enabled=sampling_params is not None,
+    )
     try:
-        ma = model.model_args
-        assert ma is not None
-
         block_size = 32
-        max_seq_len = ma.max_seq_len
-        max_batch_size = ma.max_batch_size
-        max_num_blocks_per_user = max_seq_len // block_size
-        max_num_blocks = max_num_blocks_per_user * max_batch_size
+        max_seq_len = model.config.max_seq_len
+        max_batch_size = model.config.max_batch_size
+        kv_cache = traced_executor.allocate_kv_cache()
+        page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
-        kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        prompts = load_input_prompts(batch_size)
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
+        prefill_sampling_params = None
+        _warmup_demo_executor(
+            traced_executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=(input_tokens, prompt_lens),
+            prefill_sampling_params=prefill_sampling_params,
+            prefill_compile_execution=traced_executor.traced_prefill_execution,
+        )
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep
         # a 16-token margin, so the high-water decode position stays inside max_seq_len.
@@ -910,11 +980,6 @@ def _run_perf_benchmark(
             f"[{case_name}] num_decode_tokens: requested={requested_decode}, "
             f"effective={effective_decode} (max_seq_len={max_seq_len})"
         )
-
-        prompts = load_input_prompts(batch_size)
-        # Natural-length tokenization (matches TTTv1): the executor buckets each user's real
-        # length to get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
-        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
 
         # BenchmarkProfiler brackets the timed prefill/decode regions inside run_perf_benchmark
         # (default-None ⇒ byte-inert for every other caller) so we can emit CI perf telemetry.
@@ -930,6 +995,8 @@ def _run_perf_benchmark(
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            prefill_sampling_params=prefill_sampling_params,
+            pipeline_readback=os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no"),
             profiler=profiler,
         )
         profiler.end("run")
@@ -963,7 +1030,7 @@ def _run_perf_benchmark(
                 ml_model_name=hf_model,
                 ml_model_type="llm",
                 device_name=get_device_name(mesh_device),
-                num_layers=ma.n_layers,
+                num_layers=model.config.n_layers,
                 batch_size=result.batch_size,
                 input_sequence_length=prefill_seq_len,
                 output_sequence_length=effective_decode,
@@ -993,43 +1060,66 @@ _EVAL_REPEAT_BATCHES = 3
 _EVAL_NUM_DECODE_TOKENS = _PERF_NUM_DECODE_TOKENS
 
 
-def _run_eval_repeat_batch32(model: Llama33_70BTransformer1D, mesh_device):
+def _run_eval_repeat_batch32(
+    model: Llama33_70BTransformer1D,
+    mesh_device,
+    *,
+    expected: dict | None = None,
+    case_name: str = "eval-32",
+    perf_report: bool = False,
+):
     """32-user cross-batch determinism (self-consistency under prompt rotation).
 
     Runs the batch-32 prefill+decode loop ``_EVAL_REPEAT_BATCHES`` times, rotating the
     prompt->slot assignment by one each repeat (fresh traced executor + KV cache per repeat),
     then asserts that undoing the rotation lines up per-user outputs. No external golden.
-    Honors the same ``SAMPLING_MODE`` knob as ``_run_perf_benchmark`` (default host argmax —
-    deterministic and mesh-agnostic, the recommended default for the determinism assert).
+    The determinism-only node defaults to host argmax and decode-only tracing. The
+    separately named perf-report node defaults to on-device top-k while retaining
+    decode-only tracing, the same prompts, rotation, decode budget, and three-repeat
+    consistency gate. Llama70 currently advertises only Q128 prefill traces while this
+    corpus also contains Q1024 prompts, so claiming strict full-prefill trace coverage
+    would be false. Any future floor must match this eager-prefill execution policy (or
+    a separately implemented and qualified mixed/full-trace policy). Only the first
+    repeat is timed for telemetry and target enforcement.
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-
-    ma = model.model_args
-    assert ma is not None
-
+    if perf_report:
+        _require_eval_perf_report_configuration(os.environ)
+        if not getattr(model, "supports_on_device_sampling", False):
+            raise ValueError(f"{case_name}: canonical on-device top-k sampling is unsupported")
+    require_canonical_eval_modes_in_ci(os.environ)
+    tokenizer = model.demo_tokenizer
     # Batched-prefill A/B knob (parity caveat #12): DISABLE_BATCHED_PREFILL=1 forces the pure
     # per-bucket sequential prefill (the Phase-1 path) so eval-32 can be validated both ON and OFF.
-    if os.environ.get("DISABLE_BATCHED_PREFILL"):
-        ma.disable_batched_prefill = True
+    # The shared prefill runtime reads DISABLE_BATCHED_PREFILL for each prepare call.
+    # Do not mutate model_args here: Llama33_70BRuntimeConfig is intentionally frozen.
 
     block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_batch_size = ma.max_batch_size
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    max_seq_len = model.config.max_seq_len
+    max_batch_size = model.config.max_batch_size
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the
     # rotated batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts
     # the 3rd repeat on hardware.
     def make_executor():
-        return TracedLlama33_70BExecutor(model, mesh_device)
+        return create_executor(
+            model,
+            traced=True,
+            device_sampling_enabled=sampling_params is not None,
+            trace_mode=eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced")),
+        )
 
     def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        kv_cache = executor.allocate_kv_cache()
+        _warmup_demo_executor(
+            executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=representative_prefill,
+            prefill_sampling_params=sampling_params,
+        )
+        return kv_cache
 
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()
@@ -1037,7 +1127,8 @@ def _run_eval_repeat_batch32(model: Llama33_70BTransformer1D, mesh_device):
     def tokenize_fn(ps):
         return tokenize_prompts(ps, tokenizer)
 
-    sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+    default_sampling_mode = "on_device_topk" if perf_report else "host"
+    sampling_mode = os.environ.get("SAMPLING_MODE", default_sampling_mode).lower()
     _on_device_params = {
         "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
         "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
@@ -1047,18 +1138,83 @@ def _run_eval_repeat_batch32(model: Llama33_70BTransformer1D, mesh_device):
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    # Prompt rotation preserves this heterogeneous signature multiset. Register it while
+    # prefill remains eager under decode-only tracing and before the program set closes.
+    representative_prefill = tokenize_fn(prompts)
     logger.info(f"[eval-32] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
-    run_eval_repeat_batch32(
-        make_executor=make_executor,
-        allocate_kv_cache=allocate_kv_cache,
-        page_table=page_table,
-        prompts=prompts,
-        tokenizer=tokenizer,
-        tokenize_fn=tokenize_fn,
-        num_decode_tokens=_EVAL_NUM_DECODE_TOKENS,
-        max_batch_size=max_batch_size,
-        sampling_params=sampling_params,
-        repeat_batches=_EVAL_REPEAT_BATCHES,
-        hf_model_id=hf_model,
+    profiler = BenchmarkProfiler() if perf_report else None
+    if profiler is not None:
+        profiler.start("run")
+    try:
+        first_result = run_eval_repeat_batch32(
+            make_executor=make_executor,
+            allocate_kv_cache=allocate_kv_cache,
+            page_table=page_table,
+            prompts=prompts,
+            tokenizer=tokenizer,
+            tokenize_fn=tokenize_fn,
+            num_decode_tokens=_EVAL_NUM_DECODE_TOKENS,
+            max_batch_size=max_batch_size,
+            sampling_params=sampling_params,
+            repeat_batches=(
+                _EVAL_REPEAT_BATCHES
+                if perf_report
+                else (1 if "EVAL_IDENTICAL_PROMPT_INDEX" in os.environ else _EVAL_REPEAT_BATCHES)
+            ),
+            hf_model_id=hf_model,
+            first_repeat_profiler=profiler,
+            page_table_mode=os.environ.get("EVAL_PAGE_TABLE_MODE", "slot-stable"),
+            identical_prompt_index=(
+                int(os.environ["EVAL_IDENTICAL_PROMPT_INDEX"]) if "EVAL_IDENTICAL_PROMPT_INDEX" in os.environ else None
+            ),
+            active_batch_size=(
+                int(os.environ["EVAL_ACTIVE_BATCH_SIZE"]) if "EVAL_ACTIVE_BATCH_SIZE" in os.environ else None
+            ),
+        )
+    finally:
+        if profiler is not None:
+            profiler.end("run")
+
+    if not perf_report:
+        return first_result
+
+    logger.info(
+        f"Performance [{case_name}, first of {_EVAL_REPEAT_BATCHES} repeats] — "
+        f"TTFT: {first_result.ttft_ms:.1f}ms, tok/s/u: {first_result.tok_s_u:.1f}, "
+        f"tok/s: {first_result.tok_s:.1f}"
     )
+    if os.environ.get("CI") == "true":
+        prefill_seq_len = int(representative_prefill[1].max())
+        measurements = {
+            "prefill_t/s": (
+                first_result.batch_size * prefill_seq_len / first_result.prefill_time_s
+                if first_result.prefill_time_s > 0
+                else 0.0
+            ),
+            "prefill_time_to_token": first_result.prefill_time_s / first_result.batch_size,
+            "decode_t/s": first_result.tok_s,
+            "decode_t/s/u": first_result.tok_s_u,
+        }
+        benchmark_data = create_benchmark_data(
+            profiler,
+            measurements,
+            {"inference_prefill": 0, "inference_decode": 1},
+            targets={},
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_perf",
+            ml_model_name=hf_model,
+            ml_model_type="llm",
+            device_name=get_device_name(mesh_device),
+            num_layers=model.config.n_layers,
+            batch_size=first_result.batch_size,
+            config_params={"optimization_profile": case_name.split("/", 1)[0]},
+            input_sequence_length=prefill_seq_len,
+            output_sequence_length=_EVAL_NUM_DECODE_TOKENS,
+        )
+
+    if expected is not None:
+        _assert_eval32_perf_target(first_result, expected, case_name=case_name)
+    return first_result

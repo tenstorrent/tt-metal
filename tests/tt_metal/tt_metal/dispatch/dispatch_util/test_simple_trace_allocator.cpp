@@ -197,35 +197,35 @@ protected:
 
 // --- intersects ---
 
-TEST_F(SimpleTraceAllocatorFixture, IntersectsNonOverlapping) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_IntersectsNonOverlapping) {
     EXPECT_FALSE(intersects(0, 10, 10, 10));
     EXPECT_FALSE(intersects(10, 10, 0, 10));
     EXPECT_FALSE(intersects(0, 5, 100, 5));
 }
 
-TEST_F(SimpleTraceAllocatorFixture, IntersectsOverlapping) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_IntersectsOverlapping) {
     EXPECT_TRUE(intersects(0, 10, 5, 10));
     EXPECT_TRUE(intersects(5, 10, 0, 10));
 }
 
-TEST_F(SimpleTraceAllocatorFixture, IntersectsContainment) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_IntersectsContainment) {
     EXPECT_TRUE(intersects(0, 100, 10, 5));
     EXPECT_TRUE(intersects(10, 5, 0, 100));
 }
 
-TEST_F(SimpleTraceAllocatorFixture, IntersectsSameRegion) { EXPECT_TRUE(intersects(5, 10, 5, 10)); }
+TEST_F(SimpleTraceAllocatorFixture, CPU_IntersectsSameRegion) { EXPECT_TRUE(intersects(5, 10, 5, 10)); }
 
 // --- merge_syncs ---
 
-TEST_F(SimpleTraceAllocatorFixture, MergeSyncsBothNullopt) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_MergeSyncsBothNullopt) {
     EXPECT_EQ(merge_syncs(std::nullopt, std::nullopt), std::nullopt);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, MergeSyncsFirstOnly) { EXPECT_EQ(merge_syncs(5, std::nullopt), 5); }
+TEST_F(SimpleTraceAllocatorFixture, CPU_MergeSyncsFirstOnly) { EXPECT_EQ(merge_syncs(5, std::nullopt), 5); }
 
-TEST_F(SimpleTraceAllocatorFixture, MergeSyncsSecondOnly) { EXPECT_EQ(merge_syncs(std::nullopt, 7), 7); }
+TEST_F(SimpleTraceAllocatorFixture, CPU_MergeSyncsSecondOnly) { EXPECT_EQ(merge_syncs(std::nullopt, 7), 7); }
 
-TEST_F(SimpleTraceAllocatorFixture, MergeSyncsBothPicksMax) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_MergeSyncsBothPicksMax) {
     EXPECT_EQ(merge_syncs(3, 9), 9);
     EXPECT_EQ(merge_syncs(9, 3), 9);
     EXPECT_EQ(merge_syncs(4, 4), 4);
@@ -233,7 +233,7 @@ TEST_F(SimpleTraceAllocatorFixture, MergeSyncsBothPicksMax) {
 
 // --- allocate_region ---
 
-TEST_F(SimpleTraceAllocatorFixture, ZeroSizeAllocation) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_ZeroSizeAllocation) {
     extra_data_.resize(1);
     auto alloc = make_allocator(1024);
     auto [sync, addr] = alloc.allocate_region(0, 0, ExtraData::kNonBinary, 100);
@@ -241,7 +241,7 @@ TEST_F(SimpleTraceAllocatorFixture, ZeroSizeAllocation) {
     EXPECT_EQ(addr, 0u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, BasicAllocationEmptyBuffer) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_BasicAllocationEmptyBuffer) {
     extra_data_.resize(1);
     auto alloc = make_allocator(1024);
     auto [sync, addr] = alloc.allocate_region(100, 0, ExtraData::kNonBinary, 100);
@@ -250,7 +250,7 @@ TEST_F(SimpleTraceAllocatorFixture, BasicAllocationEmptyBuffer) {
     EXPECT_EQ(*addr, 0u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, SequentialAllocationsNoOverlap) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_SequentialAllocationsNoOverlap) {
     extra_data_.resize(3);
     extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2;
     extra_data_[1].next_use_idx[ExtraData::kNonBinary] = 2;
@@ -266,14 +266,14 @@ TEST_F(SimpleTraceAllocatorFixture, SequentialAllocationsNoOverlap) {
     EXPECT_EQ(*addr1, 100u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, AllocationTooLargeForBuffer) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_AllocationTooLargeForBuffer) {
     extra_data_.resize(1);
     auto alloc = make_allocator(50);
     auto [sync, addr] = alloc.allocate_region(100, 0, ExtraData::kNonBinary, 100);
     EXPECT_FALSE(addr.has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, AllocationExactFit) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_AllocationExactFit) {
     extra_data_.resize(1);
     auto alloc = make_allocator(100);
     auto [sync, addr] = alloc.allocate_region(100, 0, ExtraData::kNonBinary, 100);
@@ -281,7 +281,7 @@ TEST_F(SimpleTraceAllocatorFixture, AllocationExactFit) {
     EXPECT_EQ(*addr, 0u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, TopDownScanIncludesPreviousOverlappingRegion) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_TopDownScanIncludesPreviousOverlappingRegion) {
     extra_data_.resize(2);
     auto alloc = make_allocator(300);
     add_memory_usage(alloc, 220, 0, ExtraData::kNonBinary, 40, 20);
@@ -294,7 +294,7 @@ TEST_F(SimpleTraceAllocatorFixture, TopDownScanIncludesPreviousOverlappingRegion
     EXPECT_FALSE(sync.has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, EvictionWhenBufferFull) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_EvictionWhenBufferFull) {
     // Buffer of size 100, allocate two 60-byte regions. The second must evict the first.
     extra_data_.resize(2);
     auto alloc = make_allocator(100);
@@ -312,7 +312,7 @@ TEST_F(SimpleTraceAllocatorFixture, EvictionWhenBufferFull) {
     EXPECT_EQ(*sync1, 0u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, CurrentNodeEvictionPenalty) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_CurrentNodeEvictionPenalty) {
     // Two regions. One has next_use == current trace_idx (penalized), the other has next_use far away.
     // Use wide spacing to isolate the penalty from stall-avoidance costs.
     constexpr uint32_t spacing = 100;
@@ -332,7 +332,7 @@ TEST_F(SimpleTraceAllocatorFixture, CurrentNodeEvictionPenalty) {
     EXPECT_EQ(*addr, 100u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, NowInUseSkipsPlacement) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_NowInUseSkipsPlacement) {
     // A region with the same trace_idx as the current allocation cannot be evicted.
     extra_data_.resize(2);
 
@@ -347,7 +347,7 @@ TEST_F(SimpleTraceAllocatorFixture, NowInUseSkipsPlacement) {
     EXPECT_FALSE(addr.has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, NowInUseWithRoomAfter) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_NowInUseWithRoomAfter) {
     extra_data_.resize(2);
 
     auto alloc = make_allocator(200);
@@ -360,7 +360,7 @@ TEST_F(SimpleTraceAllocatorFixture, NowInUseWithRoomAfter) {
     EXPECT_EQ(*addr, 60u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, EvictionReturnsSyncIdx) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_EvictionReturnsSyncIdx) {
     extra_data_.resize(3);
     auto alloc = make_allocator(100);
 
@@ -375,7 +375,7 @@ TEST_F(SimpleTraceAllocatorFixture, EvictionReturnsSyncIdx) {
     EXPECT_EQ(*sync, 1u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, ResetAllocatorClearsState) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_ResetAllocatorClearsState) {
     extra_data_.resize(2);
     auto alloc = make_allocator(100);
 
@@ -394,7 +394,7 @@ TEST_F(SimpleTraceAllocatorFixture, ResetAllocatorClearsState) {
     EXPECT_FALSE(sync.has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, AddAndGetRegion) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_AddAndGetRegion) {
     extra_data_.resize(1);
     auto alloc = make_allocator(100);
 
@@ -404,7 +404,7 @@ TEST_F(SimpleTraceAllocatorFixture, AddAndGetRegion) {
     EXPECT_FALSE(alloc.get_region(ExtraData::kNonBinary, 42).has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, UpdateRegionTraceIdx) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_UpdateRegionTraceIdx) {
     extra_data_.resize(3);
     extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2;
 
@@ -421,7 +421,7 @@ TEST_F(SimpleTraceAllocatorFixture, UpdateRegionTraceIdx) {
     EXPECT_EQ(*addr, 50u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, UpdateRegionTraceIdxNonexistent) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_UpdateRegionTraceIdxNonexistent) {
     extra_data_.resize(1);
     auto alloc = make_allocator(100);
 
@@ -429,7 +429,7 @@ TEST_F(SimpleTraceAllocatorFixture, UpdateRegionTraceIdxNonexistent) {
     alloc.update_region_trace_idx(999, 0);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, MultipleDataTypes) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_MultipleDataTypes) {
     // Two allocations with different data_types at the same trace_idx are independent.
     // The second allocation can't overlap the first (same trace_idx → now_in_use), so it goes after.
     extra_data_.resize(1);
@@ -444,7 +444,7 @@ TEST_F(SimpleTraceAllocatorFixture, MultipleDataTypes) {
     EXPECT_EQ(*a1, 100u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, OldRegionsWithNoFutureUseDeleted) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_OldRegionsWithNoFutureUseDeleted) {
     // Regions with no future uses that are old enough get cleaned up from the internal map.
     // Use a large gap to ensure we exceed max_stall_history_size regardless of its compile-time value.
     constexpr uint32_t gap = 100;
@@ -465,7 +465,7 @@ TEST_F(SimpleTraceAllocatorFixture, OldRegionsWithNoFutureUseDeleted) {
     EXPECT_FALSE(alloc.get_region(ExtraData::kNonBinary, 10).has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, BeladyEvictsLowestCostRegion) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_BeladyEvictsLowestCostRegion) {
     // Fill a buffer with three regions, then request one that requires evicting.
     // Use trace indices spaced far apart to avoid the stall-avoidance cost dominating.
     constexpr uint32_t spacing = 100;
@@ -494,7 +494,7 @@ TEST_F(SimpleTraceAllocatorFixture, BeladyEvictsLowestCostRegion) {
     EXPECT_EQ(*addr, 200u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, ProgramIdsMemoryMapCleanedOnEviction) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_ProgramIdsMemoryMapCleanedOnEviction) {
     extra_data_.resize(2);
     auto alloc = make_allocator(100);
 
@@ -509,7 +509,7 @@ TEST_F(SimpleTraceAllocatorFixture, ProgramIdsMemoryMapCleanedOnEviction) {
     EXPECT_FALSE(alloc.get_region(ExtraData::kNonBinary, 42).has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, ZeroCostEarlyExit) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_ZeroCostEarlyExit) {
     // When a placement has zero cost (no overlapping regions), the search stops immediately.
     extra_data_.resize(2);
     auto alloc = make_allocator(1000);
@@ -523,7 +523,7 @@ TEST_F(SimpleTraceAllocatorFixture, ZeroCostEarlyExit) {
     EXPECT_FALSE(sync.has_value());
 }
 
-TEST_F(SimpleTraceAllocatorFixture, StallAvoidanceIncreasesCost) {
+TEST_F(SimpleTraceAllocatorFixture, CPU_StallAvoidanceIncreasesCost) {
     // Evicting a region with a very recent trace_idx should have a much higher cost than evicting
     // one with an older trace_idx (beyond desired_write_ahead).
     // desired_write_ahead = min(launch_msg_buffer_num_entries, 7) = min(8, 7) = 7.

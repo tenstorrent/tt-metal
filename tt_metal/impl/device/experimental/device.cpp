@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/device/device_impl.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental::Device {
 
@@ -48,8 +49,28 @@ uint32_t get_worker_noc_hop_distance(
     const CoreCoord& logical_dst,
     NOC noc) {
     TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
-    const auto linear_index = mesh_coord.to_linear_index(mesh_device->shape());
-    return get_worker_noc_hop_distance(mesh_device->get_devices().at(linear_index), logical_src, logical_dst, noc);
+    // Resolve by coordinate rather than by linear index into get_devices(): that vector holds only
+    // the devices this rank drives, so on a submesh co-owned by several ranks a linear index over
+    // the full mesh shape walks off its end (coordinate (2, 1) of a 4x2 -> index 5 into 4 local
+    // devices).
+    IDevice* device = nullptr;
+    if (mesh_device->impl().is_local(mesh_coord)) {
+        device = mesh_device->impl().get_device(mesh_coord);
+    } else {
+        // The hop metric is a device-local physical property: logical->physical worker coordinates
+        // come from that chip's SoC descriptor, so this is a best-effort approximation, exact only
+        // when the mesh is homogeneously harvested. A co-owner composing a peer's coordinate -- to
+        // keep mesh-level allocation sequences symmetric -- has nothing else to measure on.
+        // Mirrors get_optimal_dram_bank_to_logical_worker_assignment(NOC, coord).
+        const auto local_devices = mesh_device->get_devices();
+        TT_FATAL(
+            !local_devices.empty(),
+            "get_worker_noc_hop_distance: MeshCoordinate {} maps to a remote device and this mesh has no local "
+            "devices to fall back to.",
+            mesh_coord);
+        device = local_devices.front();
+    }
+    return get_worker_noc_hop_distance(device, logical_src, logical_dst, noc);
 }
 
 }  // namespace tt::tt_metal::experimental::Device

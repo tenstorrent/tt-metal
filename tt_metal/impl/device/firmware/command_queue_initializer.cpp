@@ -11,7 +11,7 @@
 #include "impl/context/context_descriptor.hpp"
 #include "device/device_impl.hpp"
 
-#include <tt_metal_profiler.hpp>
+#include "profiler/tt_metal_profiler.hpp"
 
 namespace tt::tt_metal {
 

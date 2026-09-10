@@ -26,8 +26,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
-from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 
@@ -55,6 +55,8 @@ class TtMiniMaxMoE(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path=None,
         layer_idx: int = 0,
+        route_scale: float = 1.0,
+        reduce_scatter_fn=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -64,7 +66,9 @@ class TtMiniMaxMoE(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
 
-        # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1.
+        # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1. route_scale must
+        # match the model's routed_scaling_factor (2.0 for M3): the internal gate applies it to the
+        # returned top-k weights whenever it runs instead of a caller-supplied topk.
         gate_config = TtMoEGateConfig(
             dim=emb_dim,
             sp_dim=seq_len_per_chip,
@@ -72,7 +76,7 @@ class TtMiniMaxMoE(LightweightModule):
             n_activated_experts=num_experts_per_tok,
             n_expert_groups=1,
             n_limited_groups=1,
-            route_scale=1.0,
+            route_scale=route_scale,
         )
         gate_config.ccl_config["NUM_LINKS"] = num_links
 
@@ -112,6 +116,10 @@ class TtMiniMaxMoE(LightweightModule):
             topology=topology,
             subdevice_id=None,
         )
+        worst_case_tokens = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+        assert (
+            max_dispatch_buffer_token_size >= worst_case_tokens
+        ), f"init_zeros=False needs a drop-free dispatch buffer: {max_dispatch_buffer_token_size} < {worst_case_tokens}"
         self.combine_module = TtCombineModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -122,12 +130,17 @@ class TtMiniMaxMoE(LightweightModule):
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
-            # M3's real routing is heavily skewed -> many empty experts/unwritten combine slots. With
-            # init_zeros=False those slots keep STALE DRAM (a weight/old activation under the full-model
-            # footprint) which the weighted-sum reads as a ~1e38 garbage value -> residual overflow -> nan
-            # -> token-0. Zero-init the combine output so unwritten slots are 0. (DS default is True; the
-            # False override was unsafe for skewed routing.) See token-0 debug 2026-06-29.
-            init_zeros=True,
+            # No zero-init (~95 us per call). Invariant: every slot post_combine_reduce reads with a
+            # non-zero weight is written, because the dispatch buffer is drop-free (asserted above).
+            # Unwritten slots ARE still read: when none of a token's top-k experts is local to this
+            # dispatch group (about (1-1/ndg)^topk of tokens, ~1/3 on the 8x4 mesh, plus every padded
+            # row) the kernel's must_zero_init branch forces the last slot through with a writer-
+            # forced zero weight, so the result is stale_slot * 0. That is exact for finite stale
+            # data; for NaN/Inf it relies on the Blackhole FPU returning 0 for NaN*0 and Inf*0
+            # (measured on BH Galaxy, not an IEEE guarantee). deepseek_v3_d_p prefill runs the same
+            # path with init_zeros=False. Hard guarantee = kernel packs explicit zeros in the
+            # must_zero_init branch instead of reading the slot.
+            init_zeros=False,
         )
         global_expert_idx_tt = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(
@@ -158,20 +171,29 @@ class TtMiniMaxMoE(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.SwiGluOai,
         )
-        self.reduce_module = TtReduceModule(
+        # M3's own reduce module (tt/moe/tt_reduce.py), not DeepSeek's: same shared post_combine_reduce
+        # kernel, but the closing collective goes through the caller's reduce_scatter_fn — M3 passes
+        # MeshConfig.reduce_scatter (reduce_scatter_minimal_async + ping-pong/barrier semaphores) so the
+        # MoE's collective matches every other M3 collective instead of being the one plain prim call.
+        self.reduce_module = TtMiniMaxReduce(
             mesh_device=mesh_device,
             topk_dim=3,
             cluster_axis=1,
             num_links=num_links,
             topology=topology,
+            reduce_scatter_fn=reduce_scatter_fn,
         )
 
-    def forward(self, x, topk_indices=None, topk_weights=None):
+    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
         """Routed (expert-parallel) MoE output.
 
         x: (dispatch_group_size, seq_len_per_chip, emb_dim) — emb may be TP-sharded
            (then it's all-gathered to full) or already full (replicated, e.g. from the
            decoder layer) in which case the gather is skipped.
+        padding_config: the gate's per-device [num_real_tokens, pad_side] row for this chunk, or None
+           for a full chunk. Bounds dispatch's token loop, and MUST be the same tensor the gate used —
+           see tt/topk.py build_padding_config.
+
         topk_indices/topk_weights: optional external routing [tokens, topk] (from
            MiniMax's TopKRouter). When given, the internal DeepSeek gate is skipped —
            this is the production path (the layer feeds replicated full emb, which the
@@ -207,33 +229,35 @@ class TtMiniMaxMoE(LightweightModule):
         # Dispatch -> per-expert buffers (NO shared expert)
         with zone("dispatch"):
             dispatched_buffer, metadata = self.dispatch_module(
-                x, scores, indices, tt_expert_offsets, self.tt_expert_dispatch_table
+                x,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+                padding_config=padding_config,
             )
             ttnn.deallocate(x)
             scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
             indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
-            dispatched_buffer_tiled = ttnn.to_layout(
+        with zone("experts_mm"):
+            # Hand the ROW_MAJOR dispatch buffer straight to the composite, as DeepSeek does: it then
+            # tilizes only each expert's real token region in-kernel, instead of a standalone to_layout
+            # tilizing the whole (mostly empty) dispatch buffer. The input stays live for the duration
+            # of the call and the composite returns a fresh output, so free it after, not before.
+            expert_outputs = self.routed_expert(
                 ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
-                ttnn.TILE_LAYOUT,
-                dtype=self.routed_expert.activations_dtype,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
             )
             ttnn.deallocate(dispatched_buffer)
-
-        with zone("experts_mm"):
-            expert_outputs = self.routed_expert(
-                dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets
-            )
             expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
 
         with zone("combine"):
             combined_output = self.combine_module(
                 expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
             )
-        # Fused weighted-sum over topk, then a TP reduce-scatter. Two device ops with very different
-        # behaviour: PostCombineReduce is a steady ~0.15 ms, the ReduceScatter is a collective whose
-        # cost swings with cross-chip skew (0.15-3.3 ms observed). The zone report's op breakdown
-        # separates them — see tests/perf/README_profiling.md.
+        # Fused weighted-sum over topk, then the TP reduce-scatter (see tt_reduce.py).
         with zone("moe_reduce"):
             routed_output = self.reduce_module(
                 combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table

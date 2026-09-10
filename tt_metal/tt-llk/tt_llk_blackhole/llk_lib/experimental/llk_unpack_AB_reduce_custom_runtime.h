@@ -63,7 +63,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_
  * Use the standard _llk_unpack_AB_reduce_init_ for general-purpose reduction operations.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape& tensor_shape)
+inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
@@ -91,9 +91,12 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     // y_dim = number of faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile). Hardcoding 4 makes the
     // unpacker stride a full 32x32 tile between block tiles, over-reading the next tile (out-of-bounds
     // / wrong tile) for a genuine 16x32 operand.
-    if (tensor_shape.num_faces_r_dim == 1) {
+    if (tensor_shape.num_faces_r_dim == 1)
+    {
         TTI_SETDMAREG(0, 2 /* y_dim: 2 faces (16x32 tiny tile) */, 0, LO_16(p_gpr_unpack::TMP0));
-    } else {
+    }
+    else
+    {
         TTI_SETDMAREG(0, 4 /* y_dim: 4 faces (32x32 tile) */, 0, LO_16(p_gpr_unpack::TMP0));
     }
     TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));

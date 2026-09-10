@@ -149,7 +149,14 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
             MemoryRegion(current_address, noc_aligned_address_size_bytes_, config.num_channels);
         current_address = flow_control_regions_[type].get_end_address();
 
-        // Buffer index region: write pointer synchronization per channel
+        // Buffer index region: producer cursor handoff per channel. The producer reads and writes
+        // each entry as a whole SenderChannelProducerCursor, so the struct *is* the entry --
+        // require equality, not fit.
+        TT_FATAL(
+            sizeof(tt::tt_fabric::SenderChannelProducerCursor) == noc_aligned_address_size_bytes_,
+            "SenderChannelProducerCursor is {} B but the per-channel buffer index entry is {} B; they must match",
+            sizeof(tt::tt_fabric::SenderChannelProducerCursor),
+            noc_aligned_address_size_bytes_);
         buffer_index_regions_[type] =
             MemoryRegion(current_address, noc_aligned_address_size_bytes_, config.num_channels);
         current_address = buffer_index_regions_[type].get_end_address();

@@ -122,7 +122,7 @@ class Attention:
             kv_cache: Optional GptOssKVCache (packed K/V); may be None
             user_id: User/batch index; also the cache slot index (default: 0)
             batch_size: number of users packed on the sequence dim
-            cached_len: valid prefix already in the cache before this chunk (>0 -> cache-read path)
+            cached_len: valid prefix already in the cache before this chunk (all SP chunks use the cache-backed path)
             indexed_rope: use the on-device indexed RoPE (whole-cache block-cyclic SP cos/sin)
 
         Returns:

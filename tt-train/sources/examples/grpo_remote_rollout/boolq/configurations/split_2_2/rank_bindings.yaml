@@ -1,0 +1,20 @@
+# Maps MPI ranks (0 = TTML, 1 = TTT) to mgd.textproto mesh ids, pinning each to
+# two disjoint P150 cards via TT_VISIBLE_DEVICES.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# TT_VISIBLE_DEVICES indexes PCIe devices (0..3 here); each P150 card is one
+# PCIe device exposing one chip. Adjust to your machine.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3"
+
+mesh_graph_desc_path: "configurations/split_2_2/mgd.textproto"

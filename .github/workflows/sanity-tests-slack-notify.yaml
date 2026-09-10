@@ -1,0 +1,336 @@
+name: "Sanity tests - Slack break notification"
+
+on:
+  workflow_run:
+    workflows: ["Sanity tests"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Sanity tests run ID to process (for testing/re-sending)"
+        required: true
+        type: string
+      dry_run:
+        description: "Log the resolved Slack message instead of posting it"
+        required: false
+        type: boolean
+        default: true
+
+# Serializes processing of the SAME underlying run (e.g. a duplicate
+# workflow_run delivery GitHub occasionally sends, or a re-dispatch of the
+# same run) so the idempotency-marker check-and-claim below is race-free.
+# NOTE: this only serializes -- a queued duplicate still runs afterwards, it
+# does not by itself prevent a second Slack post. That guarantee comes from
+# the commit-status marker claimed in "Check and claim idempotency marker".
+concurrency:
+  group: sanity-tests-slack-notify-${{ github.event.workflow_run.id || github.event.inputs.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  # Needed for the idempotency marker: a commit status on the failing head_sha.
+  statuses: write
+
+jobs:
+  notify:
+    # ubuntu-latest, not ubuntu-slim: slim runners hard-cap execution at 15
+    # minutes, and the culprits step below may legitimately wait hours for the
+    # parent commit's retry cycle to settle.
+    runs-on: ubuntu-latest
+    # Must cover the culprits step's parent-settling wait budget (270 min,
+    # DEFAULT_MAX_WAIT_MS in .github/scripts/sanity-notify/culprits.js) plus
+    # the remaining steps, while staying under GitHub's 6h hosted-runner cap.
+    timeout-minutes: 300
+    #
+    # ============================ FINALITY GATE =============================
+    # _auto-retry-post-commit.yaml only re-runs a "Sanity tests" push run when
+    # ALL of: run_attempt < MAX_ATTEMPTS (3); it was originally push-triggered;
+    # AND conclusion == 'failure'. That third condition means cancelled /
+    # timed_out / startup_failure / etc. are NEVER retried, at ANY attempt
+    # number -- not just the last one. So "no further attempt is coming" (the
+    # exact moment we must notify) is:
+    #
+    #   is_final_red_state =
+    #     conclusion != 'success'
+    #     && (conclusion != 'failure' || run_attempt >= 3)
+    #
+    # A 'failure' only becomes final once the retry budget (3, MUST stay in
+    # sync with MAX_ATTEMPTS in _auto-retry-post-commit.yaml) is exhausted;
+    # every other non-success conclusion is final immediately, even at
+    # attempt 1. The previous gate (`conclusion == 'failure' && attempt >= 3`)
+    # silently never notified for any of those other terminal conclusions, at
+    # any attempt number.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion != 'success' && (github.event.workflow_run.conclusion != 'failure' || github.event.workflow_run.run_attempt >= 3)) }}
+    steps:
+      - name: Resolve run context
+        id: context
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          DISPATCH_RUN_ID: ${{ github.event.inputs.run_id }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            let run, dryRun;
+
+            if (context.eventName === 'workflow_dispatch') {
+              const runId = Number(process.env.DISPATCH_RUN_ID);
+              dryRun = process.env.DISPATCH_DRY_RUN !== 'false';
+              run = (await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId })).data;
+
+              // A manual replay/test must target a run the automated path would
+              // itself act on -- otherwise this would confidently post a Slack
+              // message built from an unrelated or successful run. Check the
+              // workflow file path, not `run.name`: sanity-tests.yaml sets a
+              // dynamic `run-name` (e.g. "Sanity tests (push) SKUs[WH,Sim]"), so
+              // an exact-name check would reject every real run, including the
+              // one this validates against. The conclusion check mirrors the
+              // is_final_red_state formula above (not just 'failure') so the
+              // newly-covered terminal conclusions can be replayed too.
+              const isFinalRedState = run.conclusion !== 'success' &&
+                (run.conclusion !== 'failure' || run.run_attempt >= 3);
+              const problems = [];
+              if (run.path !== '.github/workflows/sanity-tests.yaml') problems.push(`workflow is "${run.path}", not "sanity-tests.yaml"`);
+              if (run.event !== 'push') problems.push(`event is "${run.event}", not "push"`);
+              if (run.head_branch !== 'main') problems.push(`head_branch is "${run.head_branch}", not "main"`);
+              if (!isFinalRedState) problems.push(`conclusion "${run.conclusion}" at attempt ${run.run_attempt} is not a final red state (see workflow header)`);
+              if (problems.length > 0) {
+                core.setFailed(`run_id ${runId} is not a valid target to replay: ${problems.join('; ')}.`);
+                return;
+              }
+            } else {
+              run = context.payload.workflow_run;
+              dryRun = false;
+            }
+
+            core.info(`run=${run.id} sha=${run.head_sha} number=${run.run_number} dryRun=${dryRun}`);
+            core.setOutput('head_sha', run.head_sha);
+            core.setOutput('run_number', String(run.run_number));
+            core.setOutput('html_url', run.html_url);
+            core.setOutput('dry_run', String(dryRun));
+
+      - name: Check and claim idempotency marker
+        id: claim
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        with:
+          # ========================= IDEMPOTENCY MARKER =======================
+          # workflow_run deliveries can be duplicated, and a human can press
+          # "Re-run" in the UI after attempt 3, producing attempt 4/5/... which
+          # still satisfies the finality gate above. To guarantee at most one
+          # Slack post per broken head_sha, we keep a durable marker in GitHub
+          # itself (not Slack, not an external store): a commit status on the
+          # run's head_sha under a fixed, private context string.
+          #
+          # Claim-then-act: this runs BEFORE any expensive work (commit walk,
+          # PR resolution, mention lookup) so a serialized duplicate (queued
+          # behind the first by the concurrency group above) sees the claim and
+          # skips instead of redoing everything and re-posting.
+          #   - marker state 'success'          -> already notified; skip.
+          #   - absent, or 'pending' (a prior attempt claimed but never
+          #     finished, e.g. Slack was down) -> (re)claim with 'pending' and
+          #     proceed. Only a finalized 'success' permanently blocks a future
+          #     post, so a genuine posting failure stays retryable.
+          #
+          # workflow_dispatch (manual test/replay) never reads or writes this
+          # marker: it must always be replayable for testing, and must not be
+          # blocked by, or interfere with, the automated path's dedupe state.
+          #
+          # Accepted residual risk: a crash between "Slack accepted the post"
+          # and "marker finalized to success" (see the last step) could allow
+          # one duplicate post if a duplicate delivery also arrives in that
+          # window. That failure mode is one extra Slack message -- not worth
+          # a two-phase commit to close.
+          script: |
+            const MARKER_CONTEXT = 'sanity-tests-slack-notify';
+
+            if (context.eventName === 'workflow_dispatch') {
+              core.info('workflow_dispatch replay: idempotency marker intentionally not consulted.');
+              core.setOutput('already_notified', 'false');
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const headSha = process.env.HEAD_SHA;
+
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner, repo, ref: headSha, per_page: 100,
+            });
+            const marker = statuses.find(s => s.context === MARKER_CONTEXT);
+
+            if (marker && marker.state === 'success') {
+              core.info(`head_sha ${headSha} was already notified (marker set ${marker.updated_at}); skipping.`);
+              core.setOutput('already_notified', 'true');
+              return;
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: headSha,
+              state: 'pending',
+              context: MARKER_CONTEXT,
+              description: `Slack notification claimed by run ${context.runId}`,
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
+            core.setOutput('already_notified', 'false');
+
+      # Provides the decision module for the culprits step below and the
+      # composite action used after it.
+      - name: Checkout notify scripts and resolve-slack-mentions action
+        if: steps.claim.outputs.already_notified != 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          sparse-checkout: |
+            .github/scripts/sanity-notify
+            .github/actions/resolve-slack-mentions
+          sparse-checkout-cone-mode: true
+
+      - name: Find culprit PRs since last green run
+        id: culprits
+        if: steps.claim.outputs.already_notified != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          CURRENT_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        with:
+          # One-commit-back edge detection. The decision logic (parent
+          # resolution, per-run finality, settle-polling, culprit building)
+          # lives in .github/scripts/sanity-notify/culprits.js -- the single
+          # source of truth shared by this step, its unit tests
+          # (culprits.test.js, run with `node --test`), and the historical
+          # backtest (backtest.js). See the module for the invariants.
+          script: |
+            const { findBaseline, buildCulpritEntries } = require('./.github/scripts/sanity-notify/culprits.js');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentHeadSha = process.env.CURRENT_HEAD_SHA;
+
+            const result = await findBaseline({
+              github,
+              owner,
+              repo,
+              headSha: currentHeadSha,
+              log: core.info,
+              warn: core.warning,
+            });
+
+            if (result.decision !== 'notify') {
+              core.setOutput('should_notify', 'false');
+              return;
+            }
+
+            core.setOutput('should_notify', 'true');
+            core.setOutput('prev_run_url', result.baselineRun.html_url);
+            core.setOutput('prev_run_number', String(result.baselineRun.run_number));
+
+            const { entries, logins } = await buildCulpritEntries({
+              github,
+              owner,
+              repo,
+              baseSha: result.parentSha,
+              headSha: currentHeadSha,
+            });
+
+            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} for ${currentHeadSha} (parent baseline run #${result.baselineRun.run_number})`);
+            core.setOutput('entries', JSON.stringify(entries));
+            core.setOutput('logins_json', JSON.stringify(logins));
+
+      - name: Resolve Slack mentions for culprits
+        id: mentions
+        if: steps.culprits.outputs.should_notify == 'true'
+        uses: ./.github/actions/resolve-slack-mentions
+        with:
+          github-logins: ${{ steps.culprits.outputs.logins_json }}
+          slack-bot-token: ${{ secrets.CODEOWNERS_PING_BOT }}
+          github-token: ${{ github.token }}
+
+      - name: Compose and send Slack message
+        id: send
+        if: steps.culprits.outputs.should_notify == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+          SLACK_CHANNEL_ID: "C05GRJC4J4A" # #tt-metal-pipelines
+          DRY_RUN: ${{ steps.context.outputs.dry_run }}
+          ENTRIES_JSON: ${{ steps.culprits.outputs.entries }}
+          MENTIONS_JSON: ${{ steps.mentions.outputs.mentions-json }}
+          FAILING_RUN_URL: ${{ steps.context.outputs.html_url }}
+          PREV_RUN_URL: ${{ steps.culprits.outputs.prev_run_url }}
+        run: |
+          set -euo pipefail
+
+          LINES=$(echo "$ENTRIES_JSON" | jq -r --argjson mentions "$MENTIONS_JSON" '
+            .[] | (if .authorLogin != null then ($mentions[.authorLogin] // ("@" + .authorLogin)) else "(unknown author)" end) as $who
+            | "\($who) <\(.url)|\(if .type == "pr" then "#\(.number) - \(.title)" else .title end)> broke sanity."
+          ')
+
+          TEXT="${LINES}"$'\n'"Failing run on that commit: ${FAILING_RUN_URL}"$'\n'"Previous passing run: ${PREV_RUN_URL}"$'\n'"Please fix."
+
+          # Neutralize Slack broadcast mentions, out of caution -- text here is
+          # machine-built from PR titles/authors, not raw user content.
+          TEXT=$(echo "$TEXT" | sed 's/<!here>/\&lt;!here\&gt;/g; s/<!channel>/\&lt;!channel\&gt;/g; s/<!everyone>/\&lt;!everyone\&gt;/g')
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN -- would send to channel ${SLACK_CHANNEL_ID}:"
+            echo "---"
+            echo "$TEXT"
+            echo "---"
+            {
+              echo '### Dry-run Slack message (not sent)'
+              echo '```'
+              echo "$TEXT"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          SLACK_RESPONSE=$(jq -n --arg channel "$SLACK_CHANNEL_ID" --arg text "$TEXT" \
+            '{channel: $channel, text: $text, unfurl_links: true, unfurl_media: true}' |
+            curl -s --max-time 30 -X POST \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-type: application/json" \
+              -d @- \
+              "https://slack.com/api/chat.postMessage")
+
+          if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
+            echo "Slack notification sent successfully"
+          else
+            ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "unknown error"')
+            echo "::error::Failed to send Slack notification: $ERROR"
+            exit 1
+          fi
+
+      # Default step semantics: this only runs if every previous step
+      # succeeded -- in particular, only after "Compose and send Slack
+      # message" actually completed (a real post, or a dry-run summary). Real
+      # non-dry-run sends only reach here once Slack accepted the message.
+      # If that step failed (e.g. Slack API down), the marker stays 'pending'
+      # and the head_sha remains claimable by a later duplicate delivery or a
+      # manual replay. Never runs for workflow_dispatch, matching "claim" above.
+      - name: Finalize idempotency marker
+        if: github.event_name != 'workflow_dispatch' && steps.culprits.outputs.should_notify == 'true' && steps.context.outputs.dry_run != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: process.env.HEAD_SHA,
+              state: 'success',
+              context: 'sanity-tests-slack-notify',
+              description: `Slack notification posted by run ${context.runId}`,
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
+
+      - name: Skip notification
+        if: steps.claim.outputs.already_notified == 'true' || steps.culprits.outputs.should_notify != 'true'
+        run: |
+          if [ "${{ steps.claim.outputs.already_notified }}" = "true" ]; then
+            echo "This commit was already notified about (idempotency marker present) -- nothing to do."
+          else
+            echo "Not a fresh green->red transition (or no baseline run found) -- nothing to notify. See the 'Find culprit PRs' step log for why."
+          fi

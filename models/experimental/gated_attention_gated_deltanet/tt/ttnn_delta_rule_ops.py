@@ -421,9 +421,7 @@ def recurrent_gated_delta_rule_decode_ttnn(
     beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
     g_t = ttnn.reshape(g, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Compute decay
-    decay_t = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+    # Decay is exp(g); fused into the decay multiply below (no standalone ttnn.exp).
     # Ensure state is ready
     h = initial_state
     if h is None:
@@ -451,9 +449,11 @@ def recurrent_gated_delta_rule_decode_ttnn(
             pass
 
     # Decay before read; keep recurrence step L1-resident.
+    # decay = exp(g), fused as a pre-activation on the multiply's second operand — one fewer op
+    # than a standalone ttnn.exp + multiply.
     _L1 = ttnn.L1_MEMORY_CONFIG
-    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=_L1)
-    h = ttnn.multiply(h, decay_bhkv, memory_config=_L1)
+    g_bhkv = ttnn.reshape(g_t, [B, H, 1, 1], memory_config=_L1)
+    h = ttnn.multiply(h, g_bhkv, input_tensor_b_activations=[ttnn.UnaryOpType.EXP], memory_config=_L1)
 
     # v_read = k @ h (decayed state)
     v_read = ttnn.matmul(
@@ -464,8 +464,10 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Delta + state write (no re-decay).
     delta = ttnn.subtract(v_t, v_read, memory_config=_L1)
     k_t = ttnn.reshape(k_row, [B, H, K], memory_config=_L1)
+    # decay_t is unused downstream (apply_decay=False -> h already decayed above); pass g_bhkv to
+    # satisfy the signature without recomputing a decay tensor.
     h = fused_decay_and_write_ttnn(
-        h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=False
+        h=h, k_t=k_t, delta=delta, decay_t=g_bhkv, beta_t=beta_t, device=device, apply_decay=False
     )
 
     # o = q @ h
