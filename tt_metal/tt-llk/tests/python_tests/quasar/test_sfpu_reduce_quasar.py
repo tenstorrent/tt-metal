@@ -205,6 +205,57 @@ def get_reduce_atol(
     return max(0.05, atol)
 
 
+def _reduce_test_config_kwargs(
+    formats,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    tile_cnt,
+    src_A,
+    src_B,
+    dest_acc,
+    loop_factor=1,
+):
+    """Kernel configuration shared by the sweep and the Int32 range-end guard."""
+    return {
+        "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+            generate_input_dim(input_dimensions, input_dimensions),
+            IMPLIED_MATH_FORMAT(),
+            # SFPU-only op: operands reach Dest through unpack-to-dest, with no FPU
+            # datacopy staging them via SrcA.
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            DEST_SYNC(),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt),
+            NUM_FACES(4),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+            LOOP_FACTOR(loop_factor),
+        ],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+            # Int32 reaches Dest as two's-complement - what SFPIADD adds in and what
+            # SFPSWAP's compare orders.
+            twos_complement=formats.input_format == DataFormat.Int32,
+        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": True,
+        "disable_format_inference": True,
+        "compile_time_formats": True,
+    }
+
+
 @pytest.mark.quasar
 @parametrize(
     reduce_pool=REDUCE_POOLS,
@@ -309,49 +360,20 @@ def test_sfpu_reduce_quasar(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
-    test_config_kwargs = {
-        "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
-        "formats": formats,
-        "templates": [
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-            generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(),
-            # SFPU-only op: operands reach Dest through unpack-to-dest, with no FPU
-            # datacopy staging them via SrcA.
-            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
-            DEST_SYNC(),
-        ],
-        "runtimes": [
-            TILE_COUNT(tile_cnt),
-            NUM_FACES(4),
-            TEST_FACE_DIMS(),
-            DEST_INDEX(0),
-            LOOP_FACTOR(loop_factor),
-        ],
-        "variant_stimuli": StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-            num_faces=4,
-            # Int32 reaches Dest as two's-complement - what SFPIADD adds in and what
-            # SFPSWAP's compare orders.
-            twos_complement=formats.input_format == DataFormat.Int32,
-        ),
-        "dest_acc": dest_acc,
-        "unpack_to_dest": True,
-        "disable_format_inference": True,
-        "compile_time_formats": True,
-    }
-
     configuration = create_test_or_perf_config(
         is_perf=is_perf,
         run_types=run_types,
-        test_config_kwargs=test_config_kwargs,
+        test_config_kwargs=_reduce_test_config_kwargs(
+            formats,
+            mathop,
+            reduce_pool,
+            input_dimensions,
+            tile_cnt,
+            src_A,
+            src_B,
+            dest_acc,
+            loop_factor,
+        ),
     )
 
     if is_perf:
@@ -386,9 +408,8 @@ def test_sfpu_reduce_quasar(
 def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     """MAX/MIN-reduce one 32x32 Int32 tile with `injected_value` scattered through it.
 
-    Returns (golden_slice, device_slice). A near-copy of the sweep body rather than a shared
-    helper: that one is driven by parametrize axes and this one hardcodes the format, the pool and
-    a hand-built stimulus, so merging them would need a flag per difference.
+    Returns (golden_slice, device_slice). Shares the kernel configuration with the sweep; only the
+    stimulus is hand-built here.
     """
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     dest_acc = DestAccumulation.Yes  # Int32 is 32-bit, so it needs a 32-bit Dest
@@ -436,39 +457,16 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     configuration = create_test_or_perf_config(
         is_perf=False,
         run_types=(PerfRunType.L1_TO_L1,),
-        test_config_kwargs={
-            "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
-            "formats": formats,
-            "templates": [
-                MATH_OP(mathop=mathop, pool_type=reduce_pool),
-                generate_input_dim(input_dimensions, input_dimensions),
-                IMPLIED_MATH_FORMAT(),
-                UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
-                DEST_SYNC(),
-            ],
-            "runtimes": [
-                TILE_COUNT(tile_cnt),
-                NUM_FACES(4),
-                TEST_FACE_DIMS(),
-                DEST_INDEX(0),
-                LOOP_FACTOR(1),
-            ],
-            "variant_stimuli": StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=tile_cnt,
-                tile_count_B=tile_cnt,
-                tile_count_res=tile_cnt,
-                twos_complement=True,
-            ),
-            "dest_acc": dest_acc,
-            "unpack_to_dest": True,
-            "disable_format_inference": True,
-            "compile_time_formats": True,
-        },
+        test_config_kwargs=_reduce_test_config_kwargs(
+            formats,
+            mathop,
+            reduce_pool,
+            input_dimensions,
+            tile_cnt,
+            src_A,
+            src_B,
+            dest_acc,
+        ),
     )
     res_from_L1 = configuration.run().result
 

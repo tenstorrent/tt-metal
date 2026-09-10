@@ -57,6 +57,8 @@ namespace unit_tests::compute::sfpu_reduce {
 constexpr std::uint32_t kTileHeight = 32;
 constexpr std::uint32_t kTileWidth = 32;
 
+constexpr float kFloatStimulusBound = 4.0f;
+
 enum class ReduceAxis { Column, Row };
 enum class ReducePool { Sum, Avg, Max, Min };
 
@@ -69,6 +71,7 @@ struct SfpuReduceConfig {
     ReduceAxis axis = ReduceAxis::Column;
     ReducePool pool = ReducePool::Sum;
     tt::DataFormat format = tt::DataFormat::Float16_b;
+    bool wide_dest = false;
 };
 
 std::string pool_type_define(ReducePool pool) {
@@ -194,7 +197,7 @@ std::vector<double> generate_stimulus(
             v = static_cast<double>(dist(gen));
         }
     } else {
-        std::uniform_real_distribution<float> dist(-4.0f, 4.0f);
+        std::uniform_real_distribution<float> dist(-kFloatStimulusBound, kFloatStimulusBound);
         for (auto& v : values) {
             v = dist(gen);
         }
@@ -296,7 +299,7 @@ double reduce_atol(const SfpuReduceConfig& config, std::uint32_t cols) {
 
     const double eps = (config.format == tt::DataFormat::Float16_b) ? 0.0078125      // bf16: 2^-7
                                                                     : 1.1920929e-7;  // fp32: 2^-23
-    const double max_term = 4.0;                                                     // matches generate_stimulus
+    const double max_term = kFloatStimulusBound;
     const double num_terms = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
 
     double atol = 2.0 * max_term * eps * std::sqrt(num_terms);
@@ -404,7 +407,7 @@ void run_single_core_sfpu_reduce(
         // A 32-bit Dest makes the unpack mode a mandatory choice; see unpack_mode_for.
         .hw_config =
             experimental::ComputeGen2Config{
-                .enable_32_bit_dest = needs_fp32_dest_acc(config.format),
+                .enable_32_bit_dest = config.wide_dest || needs_fp32_dest_acc(config.format),
                 .unpack_modes = {{IN_DFB, unpack_mode_for(config.format)}}},
     };
 
@@ -477,13 +480,14 @@ void run_single_core_sfpu_reduce(
 
     log_info(
         tt::LogTest,
-        "sfpu_reduce {} {} ct_dim={} rt_dim={} blocks={} format={}",
+        "sfpu_reduce {} {} ct_dim={} rt_dim={} blocks={} format={} dest={}-bit",
         config.axis == ReduceAxis::Row ? "row" : "column",
         pool_name(config.pool),
         config.block_ct_dim,
         config.block_rt_dim,
         config.num_blocks,
-        format_define(config.format));
+        format_define(config.format),
+        (config.wide_dest || needs_fp32_dest_acc(config.format)) ? 32 : 16);
 
     ASSERT_EQ(golden.size(), device.size());
 
@@ -590,6 +594,34 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceInt32) {
                 .axis = ReduceAxis::Row,
                 .pool = pool,
                 .format = tt::DataFormat::Int32});
+    }
+}
+
+// A 16-bit format staged in a 32-bit Dest
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceWideDest) {
+    for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
+        run_single_core_sfpu_reduce(
+            this->devices_.at(0),
+            SfpuReduceConfig{
+                .block_ct_dim = 1,
+                .block_rt_dim = 1,
+                .num_blocks = 1,
+                .axis = ReduceAxis::Column,
+                .pool = pool,
+                .format = tt::DataFormat::Float16_b,
+                .wide_dest = true});
+    }
+    for (auto pool : {ReducePool::Sum, ReducePool::Max, ReducePool::Min}) {
+        run_single_core_sfpu_reduce(
+            this->devices_.at(0),
+            SfpuReduceConfig{
+                .block_ct_dim = 2,
+                .block_rt_dim = 1,
+                .num_blocks = 1,
+                .axis = ReduceAxis::Row,
+                .pool = pool,
+                .format = tt::DataFormat::Float16_b,
+                .wide_dest = true});
     }
 }
 }  // namespace tt::tt_metal
