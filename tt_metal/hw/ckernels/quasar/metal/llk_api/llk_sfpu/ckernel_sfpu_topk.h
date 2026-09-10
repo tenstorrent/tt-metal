@@ -97,7 +97,7 @@ inline void init_topk_addr_mod() {
  *
  * @note Run after the base SFPU init and before the topk execute stages.
  */
-template <bool APPROXIMATE, bool FUSED = false, bool RANK_STAMPED = false>
+template <bool APPROXIMATE, bool FUSED = false, bool RANK_STAMPED = false, std::uint32_t TAG_BITS = 16>
 inline void topk_init() {
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
@@ -118,12 +118,12 @@ inline void calculate_topk_defuse(std::uint32_t /*num_tiles*/) {
 }
 
 // Same motivation as Fused-key sweeps above
-template <bool APPROXIMATION_MODE, bool largest>
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
 inline void calculate_topk_stamp_local_positions() {
     static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
 }
 
-template <bool APPROXIMATION_MODE, bool largest>
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
 inline void calculate_topk_stamp_tile_rank_range(std::uint32_t /*dst_tile_index*/, std::uint32_t /*rank_base*/) {
     static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
 }
@@ -543,7 +543,8 @@ template <
     bool STABLE_SORT = false,
     bool FUSED = false,
     bool RANK_STAMPED = false,
-    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
 inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
@@ -770,6 +771,7 @@ inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t /*tile_index
 // Rank-stamped strip stub: the mode itself is static_asserted off on Quasar (see topk_init /
 // the network entries), so this is unreachable; it exists only so the arch-independent
 // compute API (topk_strip_rank_tags) compiles.
+template <std::uint32_t TAG_BITS = 16>
 inline void _topk_strip_rank_tags_(std::uint32_t /*dst_tile_index*/) {}
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t /*dst_tile_index*/) {}
 

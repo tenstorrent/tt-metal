@@ -39,10 +39,18 @@ template <
     bool STABLE_SORT = false,
     bool FUSED = false,
     bool RANK_STAMPED = false,
-    ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset>
+    ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
 inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) {
-    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(
-        m_iter, k);
+    _bitonic_topk_merge<
+        APPROXIMATION_MODE,
+        is_fp32_dest_acc_en,
+        idir,
+        STABLE_SORT,
+        FUSED,
+        RANK_STAMPED,
+        TIE_ORDER,
+        TAG_BITS>(m_iter, k);
 }
 
 template <
@@ -76,18 +84,18 @@ inline void calculate_topk_defuse(std::uint32_t num_tiles) {
 
 // Rank-stamped stable topk stamp sweep (see _topk_stamp_local_positions_ in the LLK header).
 // The stamp runs once per freshly transposed 2-tile slab, before every local-sort call.
-// largest is the op's GLOBAL sort order.
-template <bool APPROXIMATION_MODE, bool largest>
+// largest is the op's GLOBAL sort order; TAG_BITS the tag field width (16 for bf16 values).
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
 inline void calculate_topk_stamp_local_positions() {
-    _topk_stamp_local_positions_<largest>();
+    _topk_stamp_local_positions_<largest, TAG_BITS>();
 }
 
 // Single-tile stamp with a runtime rank base: the k>32 insertion cascade's chain-position stamp
 // (accumulator tile at level p gets [32p, 32p+32); the fresh chunk gets the top range once, at
 // level 0; loser-tile tags ride). See _topk_stamp_tile_rank_range_ in the LLK header.
-template <bool APPROXIMATION_MODE, bool largest>
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
 inline void calculate_topk_stamp_tile_rank_range(std::uint32_t dst_tile_index, std::uint32_t rank_base) {
-    _topk_stamp_tile_rank_range_<largest>(dst_tile_index, rank_base);
+    _topk_stamp_tile_rank_range_<largest, TAG_BITS>(dst_tile_index, rank_base);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -97,7 +105,7 @@ inline void calculate_topk_canonicalize_negzero() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FUSED = false, bool RANK_STAMPED = false>
+template <bool APPROXIMATION_MODE, bool FUSED = false, bool RANK_STAMPED = false, std::uint32_t TAG_BITS = 16>
 inline void topk_init() {
     static_assert(!(FUSED && RANK_STAMPED), "fused and rank-stamped modes are mutually exclusive");
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
@@ -105,7 +113,7 @@ inline void topk_init() {
     if constexpr (FUSED) {
         _init_topk_fused_();
     } else if constexpr (RANK_STAMPED) {
-        _init_topk_rank_stamped_();
+        _init_topk_rank_stamped_<TAG_BITS>();
     } else {
         _init_topk();
     }

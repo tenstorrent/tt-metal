@@ -127,6 +127,7 @@ ALWI void topk_local_sort(
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool         | true, false                                           | False    |
  * | rank_stamped    | Re-stamp both runs' rank tags and merge with the unstable network          | bool         | true, false                                           | False    |
  * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
+ * | tag_bits        | rank_stamped: width of the rank tag field in the value word's low bits     | uint32_t     | 6 to 16                                               | False    |
  */
 // clang-format on
 template <
@@ -135,7 +136,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
     bool rank_stamped = false,
-    TopkTieOrder tie_order = TopkTieOrder::Unset>
+    TopkTieOrder tie_order = TopkTieOrder::Unset,
+    std::uint32_t tag_bits = 16>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     static_assert(
         !stable_sort || tie_order != TopkTieOrder::Unset,
@@ -150,7 +152,8 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
          stable_sort,
          fused,
          rank_stamped,
-         static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
+         static_cast<ckernel::sfpu::TopkTieOrder>(tie_order),
+         tag_bits),
         idst,
         VectorMode::RC_custom,
         m_iter,
@@ -221,11 +224,14 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * Please refer to documentation for any_init. fused selects the fused-key init (index tracking
  * off; packed [bf16|u16] keys carry the index inside the sort word). rank_stamped selects the
  * rank-stamped init (index tracking ON — the true u32 indices ride the tracked swaps — plus the
- * rank-tag complement constant).
+ * rank-tag complement constant). tag_bits is the width of the rank tag field in the value word's
+ * low bits: 16 for bf16 values (the whole low half is free); fp32 values whose low mantissa bits
+ * are known to be zero can spare as few as 6, keeping the rest of the mantissa intact. Pass the
+ * same tag_bits to every stamp / merge / strip call of that sort.
  */
-template <bool fused = false, bool rank_stamped = false>
+template <bool fused = false, bool rank_stamped = false, std::uint32_t tag_bits = 16>
 ALWI void topk_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused, rank_stamped)));
+    MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused, rank_stamped, tag_bits)));
 }
 
 // clang-format off
@@ -288,30 +294,33 @@ ALWI void topk_defuse_tile(uint32_t idst, uint32_t num_tiles) {
 // clang-format off
 /**
  * Stamps one freshly transposed 2-tile TopK slab's value words with sign-conditioned LOCAL RANK
- * tags in their free low 16 bits, in place in DST: word = [bf16 value | rank XOR (0xFFFF iff
+ * tags in their free low tag_bits bits, in place in DST: word = [value | rank XOR (TAG_MASK iff
  * value_pos XNOR largest)], rank = the datum's 64-column sequence position. -0.0 is folded into
  * the +0.0 tie class on the way. The plain UNSTABLE network then sorts distinct keys whose
  * equal-value order is the torch-stable index order, while the true (u32) index tiles at DST
  * idst+2..idst+3 ride the index-tracking swaps untouched. Requires 32-bit DEST and the
- * rank-stamped init (topk_tile_init<false, true>). Run once per freshly loaded slab, before
- * every topk_local_sort call in rank-stamped mode; topk_merge re-stamps its runs internally.
- * DST must be in acquired state.
+ * rank-stamped init (topk_tile_init<false, true, tag_bits>). Run once per freshly loaded slab,
+ * before every topk_local_sort call in rank-stamped mode; topk_merge re-stamps its runs internally.
+ * The tag field must be free in the incoming words (bf16 values: the low 16 bits; fp32 values
+ * unpacked as TF32: the low 13 bits), otherwise the tag displaces value bits. DST must be in
+ * acquired state.
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | largest         | The requested global sort order (true = largest-first)                     | bool     | true, false                                           | True     |
+ * | tag_bits        | Rank tag field width in the value word's low bits; see topk_tile_init      | uint32_t | 6 to 16                                               | False    |
  * | idst            | The index of the first value tile of the slab in the DST register buffer   | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool largest>
+template <bool largest, std::uint32_t tag_bits = 16>
 ALWI void topk_stamp_local_positions(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_topk_stamp_local_positions,
-        (true /* APPROXIMATE */, largest),
+        (true /* APPROXIMATE */, largest, tag_bits),
         idst,
         VectorMode::RC_custom));
 }
@@ -325,25 +334,26 @@ ALWI void topk_stamp_local_positions(std::uint32_t idst) {
  * chain-position range (32 * level), the fresh incoming chunk is stamped once per round (level 0)
  * with the top range (32 * output_tiles), and the loser tile's tags ride the cascade untouched,
  * so every tag in the round stays globally consistent with the true (value, index) order.
- * rank_base must be a multiple of 32 with rank_base + 31 < 2^16. DST must be in acquired state.
+ * rank_base must be a multiple of 32 with rank_base + 31 < 2^tag_bits. DST must be in acquired state.
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | largest         | The requested global sort order (true = largest-first)                     | bool     | true, false                                           | True     |
+ * | tag_bits        | Rank tag field width in the value word's low bits; see topk_tile_init      | uint32_t | 6 to 16                                               | False    |
  * | idst            | The index of the first value tile of the slab in the DST register buffer   | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_index  | Which slab value tile to stamp (0 or 1)                                    | uint32_t | 0 to 1                                                | True     |
- * | rank_base       | First rank of this tile's range (multiple of 32)                           | uint32_t | 0 to 65504                                            | True     |
+ * | rank_base       | First rank of this tile's range (multiple of 32)                           | uint32_t | 0 to 2^tag_bits - 32                                  | True     |
  */
 // clang-format on
-template <bool largest>
+template <bool largest, std::uint32_t tag_bits = 16>
 ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uint32_t rank_base) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_topk_stamp_tile_rank_range,
-        (true /* APPROXIMATE */, largest),
+        (true /* APPROXIMATE */, largest, tag_bits),
         idst,
         VectorMode::RC_custom,
         dst_tile_index,
@@ -367,12 +377,15 @@ ALWI void topk_canonicalize_negzero_values(uint32_t idst) {
 }
 
 /**
- * Clears the low 16 bits (stale rank tags) of one rank-stamped value tile in DST, leaving exact
- * [bf16|0x0000] words so the following Float32->bf16 pack cannot RNE-round on tag bits. Must run
- * on MATH while DEST is still acquired, after the final transpose back to row layout (same
- * calling convention as topk_uint16_move_dest_tile_to_pack_half).
+ * Clears the low tag_bits bits (stale rank tags) of one rank-stamped value tile in DST, leaving
+ * exact value words (e.g. [bf16|0x0000] for tag_bits = 16) so the following pack cannot round on
+ * tag bits. Must run on MATH while DEST is still acquired, after the final transpose back to row
+ * layout (same calling convention as topk_uint16_move_dest_tile_to_pack_half).
  */
-ALWI void topk_strip_rank_tags(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_strip_rank_tags_(idst))); }
+template <std::uint32_t tag_bits = 16>
+ALWI void topk_strip_rank_tags(std::uint32_t idst) {
+    MATH((ckernel::sfpu::_topk_strip_rank_tags_<tag_bits>(idst)));
+}
 
 /**
  * Moves a uint16 index tile that lives in 32-bit DEST as a plain integer into the packer-visible
