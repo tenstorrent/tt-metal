@@ -4,12 +4,10 @@
 """Host-side guards for the sfpu_domains gates that decide what a sweep may inject.
 
 No kernel, no device: these are pure-Python assertions about metadata. They are here
-because specials_safe() is a *measured* matrix — 250 hardware variants reduced to a
-handful of rules (see the section comment in sfpu_domains) — and until now nothing
-executed it. Both production callers short-circuit on SPECIALS_READY_OPS, which is empty,
-so the rules and the enum-normalisation trap underneath them could be rewritten without a
-single test changing outcome. The measurement is expensive to redo and cheap to pin, so it
-is pinned here.
+because specials_safe() reduces a hardware-measured matrix to a handful of rules (see the
+section comment in sfpu_domains), and no host test would otherwise execute them: the rules
+and the enum-normalisation trap underneath them could be rewritten without a single test
+changing outcome.
 
 The second half guards probe *spacing*, which has the same shape of problem: a probe that
 is silently quantized back onto the boundary it was meant to straddle still reads as
@@ -41,7 +39,6 @@ from helpers.sfpu_domains import (
     probe_spacing_format,
     sfpu_unary_ops,
     specials_safe,
-    specials_safe_formats,
 )
 
 # The formats the measurement covered: the 5x5 matrix driven over the isinf / isposinf /
@@ -493,9 +490,6 @@ def test_every_float_binary_op_is_classified_for_cat_b():
         not stale
     ), f"these ops carry a cat-B verdict but no longer reach the binary driver: {stale}"
 
-    for op, reason in BINARY_SPECIALS_READY_OPS.items():
-        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
-
 
 def test_total_order_key_matches_the_isa_remap():
     """Both order keys must reproduce `SignMagIsSmaller()`'s remap, signed zeros included.
@@ -847,37 +841,6 @@ def test_dest_acc_rejects_non_flags(bad):
         TypeError
     ):
         specials_safe(DataFormat.Float32, DataFormat.Float32, bad)
-
-
-def test_specials_safe_formats_filters_to_the_accepted_rows():
-    formats = [
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float32),
-    ]
-
-    kept = specials_safe_formats(formats, DestAccumulation.No)
-    assert [(f.input_format, f.output_format) for f in kept] == [
-        (DataFormat.Float32, DataFormat.Float32),
-        (DataFormat.Float16_b, DataFormat.Float16_b),
-    ]
-
-    kept = specials_safe_formats(formats, DestAccumulation.Yes)
-    assert [(f.input_format, f.output_format) for f in kept] == [
-        (DataFormat.Float32, DataFormat.Float32),
-        (DataFormat.Float32, DataFormat.Float16),
-    ]
-
-
-def test_specials_safe_formats_validates_dest_acc_on_an_empty_list():
-    """Normalisation happens once up front, so a bad flag raises even with nothing to
-    filter — otherwise the error surfaces only for callers that happen to pass formats.
-    """
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        TypeError
-    ):
-        specials_safe_formats([], "Yes")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

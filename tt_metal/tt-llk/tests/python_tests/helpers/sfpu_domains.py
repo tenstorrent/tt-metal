@@ -6,8 +6,8 @@ SFPU / FPU operation domain registry and helpers.
 
 Maps every MathOperation to safe per-operand input domains (OperandSpecs).
 Provides for_op() to look up domains by op + format, and
-exclude_undefined()/exclude_intervals()/exclude_values() to subtract known-undefined
-regions from a user-supplied StimuliSpec.
+exclude_undefined()/exclude_intervals() to subtract known-undefined regions from a
+user-supplied StimuliSpec.
 """
 
 from __future__ import annotations
@@ -1043,35 +1043,13 @@ def _validate_distribution_override(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Undefined-region subtraction
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Which family each registered op belongs to
+# Which ops the unary sweep must not drive
 #
-# _OP_DOMAIN_REGISTRY mixes the unary SFPU ops with the binary ones, the FPU eltwise ops
-# and the reduce family, so a suite cannot tell from it alone whether its own op list is
-# complete. Each family below is named positively, one set per arity/engine, and the unary
-# family is whatever is left over -- so an op registered without being classified here
-# lands in sfpu_unary_ops() and trips the unary sweep's exhaustiveness assert.
-#
-# Flat sets rather than a field on OperandSpecs, because several entries are shared with the
-# perf sweeps and the accuracy harness, which do not want an arity opinion imposed on them.
+# _OP_DOMAIN_REGISTRY mixes the unary SFPU ops with everything else, so sfpu_unary_ops()
+# subtracts the ops that have no unary SFPU kernel and treats the remainder as unary. An op
+# registered without being listed here therefore lands in the unary sweep, which is the
+# safe direction: it trips that sweep's exhaustiveness assert rather than going untested.
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Eltwise binary run on the FPU rather than the SFPU (test_eltwise_binary.py).
-_FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
-    {
-        MathOperation.Elwadd,
-        MathOperation.Elwmul,
-        MathOperation.Elwsub,
-    }
-)
-
-# Applied by the packer (STACC_RELU), not the SFPU. Relu is the entry that looks like it
-# should be a unary SFPU op: it has a domain, but `relu` is not a member of SfpuType at
-# all, so driving it through the unary test fails to compile.
-_PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
 
 # Binary SFPU ops (test_eltwise_binary_sfpu.py). Registered ones only -- that suite also
 # drives int, comparison and bitwise ops that have no domain entry and so cannot be keys
@@ -1092,24 +1070,22 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
     }
 )
 
-# Ternary SFPU ops (test_sfpu_ternary.py). Empty because no ternary op has a domain entry
-# yet: OperandSpecs carries A and B only, so that suite builds its own per-operand specs
-# and reuses B for C. The set exists so the first registered ternary op lands here rather
-# than silently in sfpu_unary_ops().
-_SFPU_TERNARY_OPS: FrozenSet[MathOperation] = frozenset()
-
-# Reduce family (test_sfpu_reduce*.py).
-_REDUCE_OPS: FrozenSet[MathOperation] = frozenset(
+# No ternary op is registered yet, so there is nothing to subtract for that family: the
+# suite builds its own per-operand specs and reuses B for C.
+_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = _SFPU_BINARY_OPS | frozenset(
     {
+        # Eltwise binary on the FPU (test_eltwise_binary.py).
+        MathOperation.Elwadd,
+        MathOperation.Elwmul,
+        MathOperation.Elwsub,
+        # Reduce family (test_sfpu_reduce*.py).
         MathOperation.ReduceColumn,
         MathOperation.ReduceRow,
         MathOperation.ReduceScalar,
+        # Applied by the packer (STACC_RELU): Relu has a domain and looks unary, but is not
+        # a member of SfpuType, so driving it through the unary test fails to compile.
+        MathOperation.Relu,
     }
-)
-
-# Ops with no unary SFPU kernel, so they must not appear in the unary sweep.
-_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = (
-    _FPU_ELTWISE_OPS | _PACKER_OPS | _SFPU_BINARY_OPS | _SFPU_TERNARY_OPS | _REDUCE_OPS
 )
 
 # Unary SFPU ops that are registered but deliberately not in the correctness sweep.
@@ -1212,20 +1188,6 @@ def exclude_intervals(
 
     new_spec.intervals = defined
     return new_spec
-
-
-def exclude_values(
-    spec: StimuliSpec,
-    values: List[float],
-    epsilon: float = 1e-6,
-) -> StimuliSpec:
-    """Return a copy of *spec* with tiny intervals around each value excluded.
-
-    For each *v* in *values*, the interval [v - epsilon, v + epsilon] is
-    subtracted from the domain.
-    """
-    holes = [(v - epsilon, v + epsilon) for v in values]
-    return exclude_intervals(spec, holes)
 
 
 def exclude_undefined(
@@ -1623,7 +1585,6 @@ def boundary_probes(
 
 INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
-UINT32_MAX = 2**32 - 1
 
 
 # +0.0 and -0.0 are listed separately and both matter: signbit, sign, heaviside,
@@ -1902,176 +1863,106 @@ _SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
 
 
 # Ops whose golden defines a result for non-finite *inputs*, and may therefore have cat-B
-# specials injected. This is the golden-side gate; specials_safe() above is the
-# pipeline-side one, and both have to pass. Neither implies the other: a pipeline can
-# deliver NaN perfectly to a golden that has no answer for it.
-#
-# Per op rather than one global bool: injecting specials on every triple specials_safe()
-# allows fails for about half the op list, and those failures are goldens with no answer at a
-# special (inf where IEEE says nan, and so on) rather than a stimulus problem. An op joins
-# here once its golden defines a result at +inf, -inf, NaN, +0.0 and -0.0, carrying the
-# reason it is ready; the sweeps then inject specials for that op alone.
-#
-# What this does not claim: the *sign of a zero result* is a separate, arch-dependent
-# question -- SFPMAD flushes negative zero to positive on Wormhole and preserves it on
-# Blackhole.
-# Ops enrolled with no golden change: driven over the full specials set on every reachable
-# triple, with the golden and the kernel giving the same answer at every special the
-# pipeline delivers. That is what this suite can establish -- not that the golden
-# is independently correct, though the risk is small for goldens that route through torch or
-# are plain arithmetic.
-_SPECIALS_READY_UNCHANGED: Tuple[MathOperation, ...] = (
-    MathOperation.Acosh,
-    MathOperation.Add1,
-    MathOperation.Asinh,
-    MathOperation.Atan,
-    MathOperation.Atanh,
-    MathOperation.Cbrt,
-    MathOperation.Ceil,
-    MathOperation.Celu,
-    MathOperation.Cosh,
-    MathOperation.Elu,
-    MathOperation.EqualZero,
-    MathOperation.Exp2,
-    MathOperation.ExpWithBase,
-    MathOperation.Expm1,
-    MathOperation.Floor,
-    MathOperation.Fmod,
-    MathOperation.GeluAppx,
-    MathOperation.GeluTanh,
-    MathOperation.GreaterThanEqualZero,
-    MathOperation.GreaterThanZero,
-    MathOperation.Hardmish,
-    MathOperation.LessThanEqualZero,
-    MathOperation.LessThanZero,
-    MathOperation.Log1p,
-    MathOperation.Lrelu,
-    MathOperation.Mish,
-    MathOperation.NotEqualZero,
-    MathOperation.Prelu,
-    MathOperation.Remainder,
-    MathOperation.Round,
-    MathOperation.Selu,
-    MathOperation.Signbit,
-    MathOperation.Silu,
-    MathOperation.Sinh,
-    MathOperation.Softplus,
-    MathOperation.Softshrink,
-    MathOperation.Softsign,
-    MathOperation.Tanhshrink,
-    MathOperation.Threshold,
-    MathOperation.Trunc,
-    MathOperation.UnaryLe,
-    MathOperation.UnaryLt,
-    MathOperation.UnaryMax,
-    MathOperation.Xielu,
+# specials injected. The golden-side gate; specials_safe() above is the pipeline-side one and
+# both have to pass. Per op rather than one global bool, because about half the goldens still
+# have no answer at a special. Says nothing about the sign of a zero result, which is
+# arch-dependent -- SFPMAD flushes a negative zero on Wormhole and preserves it on Blackhole.
+SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        # Enrolled unchanged: golden and kernel agree at every special the pipeline delivers,
+        # which is all this suite establishes -- not that the golden is independently right.
+        MathOperation.Abs,  # |+/-inf| = +inf, |NaN| = NaN, |+/-0| = 0
+        MathOperation.Acosh,
+        MathOperation.Add1,
+        MathOperation.Asinh,
+        MathOperation.Atan,
+        MathOperation.Atanh,
+        MathOperation.Cbrt,
+        MathOperation.Ceil,
+        MathOperation.Celu,
+        MathOperation.Cosh,
+        MathOperation.Elu,
+        MathOperation.EqualZero,
+        MathOperation.Exp,  # exp(+inf) = +inf, exp(-inf) = 0, exp(+/-0) = 1
+        MathOperation.Exp2,
+        MathOperation.ExpWithBase,
+        MathOperation.Expm1,
+        MathOperation.Floor,
+        MathOperation.Fmod,
+        MathOperation.GeluAppx,
+        MathOperation.GeluTanh,
+        MathOperation.GreaterThanEqualZero,
+        MathOperation.GreaterThanZero,
+        MathOperation.Hardmish,
+        MathOperation.Identity,  # every special maps to itself
+        MathOperation.LessThanEqualZero,
+        MathOperation.LessThanZero,
+        MathOperation.Log1p,
+        MathOperation.Lrelu,
+        MathOperation.Mish,
+        MathOperation.Neg,  # -/+inf, -/+0; the only negative NaN here (cast_to_dest_dtype)
+        MathOperation.NotEqualZero,
+        MathOperation.Prelu,
+        MathOperation.Remainder,
+        MathOperation.Round,
+        MathOperation.Selu,
+        MathOperation.Signbit,
+        MathOperation.Silu,
+        MathOperation.Sinh,
+        MathOperation.Softplus,
+        MathOperation.Softshrink,
+        MathOperation.Softsign,
+        MathOperation.Tanhshrink,
+        MathOperation.Threshold,
+        MathOperation.Trunc,
+        MathOperation.UnaryLe,
+        MathOperation.UnaryLt,
+        MathOperation.UnaryMax,
+        MathOperation.Xielu,
+        # Divergences worth reading before trusting one of these: each is xfailed per combination
+        # in the sweep rather than smoothed over in the golden.
+        MathOperation.Reciprocal,  # 1/+/-0 = +/-inf, 1/+/-inf = +/-0; kernel gives +0 for NaN
+        MathOperation.Sqrt,  # sqrt(-inf) = NaN; kernel gives NaN for sqrt(-0), IEEE gives -0
+        MathOperation.Rsqrt,  # rsqrt(+/-0) = +/-inf; same -0 divergence as Sqrt
+        MathOperation.SqrtCustom,  # sqrt(-inf) gives -inf where IEEE gives NaN (issue #52930)
+        # Goldens that must route through torch: math.sin / cos / acos / asin / tan *raise* on a
+        # non-finite input instead of returning NaN. Any remaining `math.*` call is a latent repeat.
+        MathOperation.Sin,  # sin(+/-inf) = NaN, sin(+/-0) = +/-0
+        MathOperation.Cos,  # cos(+/-inf) = NaN, cos(+/-0) = 1
+        MathOperation.Acos,
+        MathOperation.Asin,
+        MathOperation.Tan,
+        # Goldens that needed a guard fixed: a finite-input test ("did this overflow?", "is this
+        # inside the shrink band?") answers false for NaN and routes it somewhere wrong.
+        MathOperation.Square,  # +/-inf -> +inf; golden's isfinite(x*x) test was false for NaN too
+        MathOperation.I0,  # +/-inf -> +inf (even, unbounded); torch.special.i0 gives NaN there
+        MathOperation.Hardshrink,  # NaN -> NaN; golden's |x| > lambda test is false for NaN
+        # The comparison family answers on the SFPU's total order, not IEEE's unordered compare:
+        # +NaN ranks above every finite value, so a clamp lands on its upper bound rather than
+        # propagating. sfpu_total_order_key models that. UnaryLt/Le/Max sit in the block above,
+        # since there the two orders agree at a +NaN.
+        MathOperation.UnaryGt,  # NaN > 0.5 is true under the total order, false under IEEE
+        MathOperation.UnaryGe,  # as UnaryGt
+        MathOperation.UnaryMin,  # min(x, 0.0): +NaN is the maximum, so the other operand wins
+        MathOperation.Clamp,  # calculate_clamp: max-then-min folds, so a +NaN lands on max
+        MathOperation.Hardtanh,  # sfpi::clamp, the same composition as Clamp, so one golden
+        MathOperation.ReluMax,  # _relu_max_body_ swaps a NaN for the threshold before the clamp
+        # ReluMin rests on the +NaN result alone: FLOAT_SPECIALS carries no -NaN, and one
+        # would fold to the threshold, -NaN ranking below -inf.
+        MathOperation.ReluMin,  # max(x, threshold) as one SFPSWAP fold, so a +NaN survives
+        MathOperation.Hardsigmoid,  # x*(1/6) + 0.5 through _relu_max_body_, so a NaN clamps to 1.0
+        # The scalar binops (ScalarBinopGolden). Each is `x (+|-|*|/) c` for a compile-time c, so
+        # cat B is their entire edge story -- edge_spec() returns None for them otherwise.
+        MathOperation.ScalarAdd,  # +/-inf and NaN pass through; +/-0 + c = c
+        MathOperation.ScalarSub,  # as ScalarAdd with the sign of c
+        MathOperation.ScalarMul,  # +/-inf * c keeps the sign; +/-0 * c keeps the zero's sign
+        MathOperation.ScalarDiv,  # host folds to x * (1/d), so divide-by-zero is unreachable
+        MathOperation.ScalarRsub,  # c - x: +inf and -inf swap, NaN propagates
+        # Read narrowly: fill writes a compile-time constant and its golden ignores the input, so
+        # the probe says only that a non-finite input does not corrupt the fill.
+        MathOperation.Fill,
+    }
 )
-
-# Ops whose golden has to route through torch rather than math.acos / math.asin / math.tan,
-# which *raise* ValueError("math domain error") on a non-finite input instead of returning NaN,
-# so a cat-B probe reaches them as a test error. Any remaining `math.*` call in a unary golden
-# is a latent repeat.
-_SPECIALS_READY_TORCH_ROUTED: Tuple[MathOperation, ...] = (
-    MathOperation.Acos,
-    MathOperation.Asin,
-    MathOperation.Tan,
-)
-
-SPECIALS_READY_OPS: Dict[MathOperation, str] = {
-    MathOperation.Identity: "Pass-through: every special maps to itself.",
-    MathOperation.Abs: "Magnitude: |+/-inf| = +inf, |NaN| = NaN, |+/-0| = 0.",
-    MathOperation.Exp: "IEEE: exp(+inf) = +inf, exp(-inf) = 0, exp(+/-0) = 1.",
-    MathOperation.Sin: "sin(+/-inf) = NaN, sin(NaN) = NaN, sin(+/-0) = +/-0. Golden routes "
-    "through torch rather than math.sin, which raises on a non-finite input.",
-    MathOperation.Cos: "cos(+/-inf) = NaN, cos(NaN) = NaN, cos(+/-0) = 1. Golden routes "
-    "through torch rather than math.cos, for the same reason as Sin.",
-    MathOperation.Neg: "neg(+/-inf) = -/+inf, neg(NaN) = NaN, neg(+/-0) = -/+0. Rests on "
-    "the golden not mangling a NaN's sign through a 16-bit Dest (see cast_to_dest_dtype): "
-    "Neg is the one op here that produces a *negative* NaN.",
-    MathOperation.Reciprocal: "IEEE: 1/+/-inf = +/-0, 1/+/-0 = +/-inf, 1/NaN = NaN. The "
-    "kernel does not propagate NaN (returns +0), which is a genuine kernel divergence and "
-    "is xfailed per combination rather than papered over in the golden.",
-    MathOperation.Sqrt: "IEEE: sqrt(+inf) = +inf, sqrt(-inf) = NaN, sqrt(NaN) = NaN, "
-    "sqrt(+/-0) = +/-0. The kernel returns NaN for sqrt(-0) where IEEE gives -0, but only "
-    "where a -0 is actually delivered (unpack-to-dest); xfailed there.",
-    MathOperation.Rsqrt: "IEEE: rsqrt(+inf) = +0, rsqrt(-inf) = NaN, rsqrt(NaN) = NaN, "
-    "rsqrt(+/-0) = +/-inf. Same -0 divergence as Sqrt and the same unpack-to-dest scoping.",
-    MathOperation.SqrtCustom: "IEEE: sqrt(+inf) = +inf, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0. "
-    "sqrt(-inf) returns -inf where IEEE gives NaN -- the guard passes a non-finite input "
-    "through rather than synthesising a NaN (tt-metal issue #52930) -- and is xfailed per "
-    "combination rather than hidden in the golden.",
-    **{
-        op: "Enrolled with no golden change: driven over the full specials set and agreed "
-        "with its golden at every one. See _SPECIALS_READY_UNCHANGED for the scope of "
-        "that claim."
-        for op in _SPECIALS_READY_UNCHANGED
-    },
-    **{
-        op: "Its golden routes through torch rather than math.acos / math.asin / math.tan, "
-        "which raise on a non-finite input instead of returning NaN."
-        for op in _SPECIALS_READY_TORCH_ROUTED
-    },
-    # Ops whose golden needed a fix of its own: a guard written for finite inputs ("did this
-    # overflow?", "is this inside the shrink band?") answers false for NaN and routes it somewhere
-    # wrong.
-    MathOperation.Square: "square(+/-inf) = +inf, square(NaN) = NaN. The golden tested "
-    "isfinite(x * x) to detect overflow, which is also false for NaN, so it reported inf "
-    "where the kernel correctly returns NaN.",
-    MathOperation.I0: "I0(+/-inf) = +inf (I0 is even and unbounded), I0(NaN) = NaN. "
-    "torch.special.i0 returns NaN at +/-inf, which is a torch limitation rather than the "
-    "mathematics -- the kernel was the correct party here and the golden was not.",
-    MathOperation.Hardshrink: "hardshrink(NaN) = NaN. The golden's |x| > lambda test is "
-    "false for NaN, which sent it to the shrink-to-zero branch; torch and the kernel both "
-    "propagate.",
-    # The comparison family, which answers on the SFPU's total order rather than IEEE's unordered
-    # compare: +NaN ranks above every finite value and -NaN below -inf. So each returns its own
-    # upper-bound dispatch constant where IEEE says NaN, and clamping a +NaN lands on that bound.
-    # sfpu_total_order_key models the order; it holds on both arches.
-    #
-    # UnaryLt, UnaryLe and UnaryMax are listed elsewhere: under the total order their answers
-    # coincide with IEEE's at a +NaN.
-    MathOperation.UnaryGt: "x > 0.5 under the SFPU's total order, in which +NaN is the "
-    "largest FP32 value, so NaN > 0.5 is true. Not IEEE, which makes it false.",
-    MathOperation.UnaryGe: "As UnaryGt.",
-    MathOperation.UnaryMin: "min(x, 0.0) under the total order. +NaN is the maximum, so "
-    "the minimum is the other operand -- which is why this diverged where UnaryMax did not.",
-    MathOperation.Clamp: "clamp(x, -1, 1) applied as metal `calculate_clamp` applies it: "
-    "max(x, min) then min(x, max), both SFPSWAP total-order folds, so a +NaN outranks "
-    "everything, survives the max, and lands on max via the min.",
-    MathOperation.Hardtanh: "clamp(x, -1, 1) via metal `calculate_hardtanh`, i.e. "
-    "`sfpi::clamp` -- the same SFPSWAP max-then-min composition as Clamp's kernel, so the "
-    "two share one golden by construction. The identity is pinned host-side.",
-    MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
-    "with the threshold, and the relu clamp then sees a finite value.",
-    MathOperation.ReluMin: "max(x, threshold) as a single SFPSWAP fold -- the same "
-    "total-order compare _relu_max_body_ opens with, minus the relu clamp after it. A "
-    "+NaN outranks the threshold and the fold keeps it, which is what IEEE propagation "
-    "gives too, so the golden agrees at every injected special. Read the scope narrowly: "
-    "FLOAT_SPECIALS carries only a positive NaN. A *negative* one folds to the threshold, "
-    "since -NaN ranks below -inf, where IEEE would propagate it -- so _relu_min's golden "
-    "models the total order rather than torch.max and is correct there too. That lane is "
-    "not swept, so enrolment rests on the +NaN result.",
-    MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "
-    "kernel shares with ReluMax, so a NaN clamps to 1.0.",
-    # The five scalar binops. They have their own suite and golden (ScalarBinopGolden), and cat B
-    # is their *entire* edge story: each is `x (+|-|*|/) c` for a compile-time c, smooth in x with
-    # no pole and no knee, so edge_spec() returns None unless specials are on. Their goldens are
-    # plain fp32 torch arithmetic.
-    MathOperation.ScalarAdd: "x + c: +/-inf and NaN pass through the add, +/-0 + c = c. "
-    "Golden is plain fp32 arithmetic.",
-    MathOperation.ScalarSub: "x - c: as ScalarAdd with the sign of c.",
-    MathOperation.ScalarMul: "x * c: +/-inf * c keeps the sign for a finite non-zero c, "
-    "NaN propagates, and +/-0 * c keeps the zero's sign.",
-    MathOperation.ScalarDiv: "x / d, which the host turns into x * (1/d) at compile time, "
-    "so it is ScalarMul at the kernel and d never reaches the device. A divide-by-zero is "
-    "therefore unreachable through this op.",
-    MathOperation.ScalarRsub: "c - x: +inf and -inf swap, NaN propagates, c - (+/-0) = c.",
-    # Read Fill's entry narrowly: the kernel writes a compile-time constant and its golden
-    # ignores the input, so the probe says nothing about NaN semantics.
-    MathOperation.Fill: "Input-independent: fill writes a constant, so every special maps to "
-    "that constant. The probe asserts the fill survives a non-finite input, not any NaN "
-    "semantics.",
-}
 
 # Three facts the entries above rest on:
 #
@@ -2300,66 +2191,55 @@ def specials_after_nan_sign_gate(
 # answer on the SFPU's total order rather than IEEE's unordered comparison, which
 # BinarySFPUGolden models -- otherwise they read as kernel divergences the ISA specifies as
 # correct.
-BINARY_SPECIALS_READY_OPS: Dict[MathOperation, str] = {
-    # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
-    MathOperation.SfpuElwadd: "IEEE: inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN. Plain SFPMAD, "
-    "which the ISA specifies as IEEE for a non-finite input.",
-    MathOperation.SfpuElwsub: "As SfpuElwadd; inf-inf = NaN is the case worth having.",
-    MathOperation.SfpuElwmul: "IEEE: inf*x = inf, inf*0 = NaN, +/-0 signs multiply.",
-    MathOperation.SfpuElwrsub: "As SfpuElwsub with the operands reversed.",
-    # Total order -- and the reason max/min enrol on a model the six comparisons could not: their
-    # kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard.
-    MathOperation.SfpuBinaryMax: "binary_max_min is a bare SFPSWAP(VEC_MIN_MAX) with no NaN "
-    "guard, so the documented total order reaches the result: +NaN is the maximum, -NaN the "
-    "minimum. Golden models sfpu_max, not torch.maximum -- those agree on +NaN by coincidence "
-    "and differ on -NaN.",
-    MathOperation.SfpuBinaryMin: "As SfpuBinaryMax, and the op that made the difference visible: "
-    "torch.minimum propagates a NaN where the total order returns the other operand.",
-    # IEEE unordered, because these kernels reject a NaN operand before comparing. The guard is
-    # quoted per sequence in BinarySFPUGolden, above _lt.
-    MathOperation.SfpuElwEq: "calculate_binary_comp_fp32_equal rejects a NaN operand, so its "
-    "pre-stored default stands and eq(NaN, x) = 0 -- IEEE's unordered answer, deliberately, "
-    "not the total order.",
-    MathOperation.SfpuElwNe: "As SfpuElwEq; its default result is 1, so ne(NaN, x) = 1.",
-    MathOperation.SfpuElwLt: "calculate_binary_comp_fp32_strict_ordered pre-stores 0 and guards "
-    "the store with the same rejects-NaN predicate, so lt(NaN, x) = 0.",
-    MathOperation.SfpuElwGt: "As SfpuElwLt, operands swapped.",
-    MathOperation.SfpuElwLe: "calculate_binary_comp_fp32_weak_ordered pre-stores 1, rejects if "
-    "false, then stores 0 where either operand is a NaN. So le(NaN, x) = 0.",
-    MathOperation.SfpuElwGe: "As SfpuElwLe, operands swapped.",
-}
+BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
+        MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
+        MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
+        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
+        # Total order, and the reason max/min enrol where the six comparisons could not: their
+        # kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is the maximum and
+        # -NaN the minimum. The golden models sfpu_max/min, not torch's, which propagate.
+        MathOperation.SfpuBinaryMax,
+        MathOperation.SfpuBinaryMin,  # torch.minimum propagates a NaN where the order returns b
+        # IEEE unordered, because these kernels reject a NaN operand before comparing, leaving
+        # their pre-stored default: eq/lt/gt/le/ge(NaN, x) = 0 and ne(NaN, x) = 1.
+        MathOperation.SfpuElwEq,  # eq(NaN, x) = 0: the kernel rejects a NaN before comparing
+        MathOperation.SfpuElwNe,  # its default result is 1, so ne(NaN, x) = 1
+        MathOperation.SfpuElwLt,  # strict_ordered pre-stores 0, so lt(NaN, x) = 0
+        MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
+        MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
+        MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
+    }
+)
 
-# The ops that diverge, and what each waits on -- a handful of causes rather than one
-# investigation each. None is enrolled on a guess: a reason string written to make a variant
-# green becomes a permanent, plausible-looking claim about the hardware.
-_BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
-    # (1) Composition through a reciprocal / log / exp. Each builds its result from a primitive
-    # the ISA specifies only inside a stated finite range, so what the composition does with a
-    # non-finite input is an LLK decision rather than an ISA one. One answer decides all six.
-    MathOperation.SfpuElwdiv: "composition: reciprocal + Newton-Raphson. Section 5.6 Q1.",
-    MathOperation.SfpuXlogy: "composition: x * log(y). Section 5.6 Q1.",
-    MathOperation.SfpuElwpow: "composition: exp(b * ln a). Section 5.6 Q1.",
-    MathOperation.SfpuBinaryFmod: "composition: quotient via reciprocal. Section 5.6 Q1.",
-    MathOperation.SfpuBinaryRemainder: "composition: as fmod. Section 5.6 Q1.",
-    MathOperation.SfpuAtan2: "composition: ratio plus a format-specific polynomial. Diverges on "
-    "2 cells rather than 4, so its non-finite handling is partial. Section 5.6 Q1.",
-    # (2) Compare-against-zero on an operand that may be a NaN. calculate_mask is
-    # `v_if(mask == 0)`, which lowers to SFPSETCC -- unspecified for a negative zero or a NaN.
-    # The same thing that holds Sign and Heaviside out of the unary cat B.
-    MathOperation.SfpuMask: "the mask operand reaches SFPSETCC, whose contract excludes a NaN "
-    "operand. Section 5.6 Q3, with Sign and Heaviside.",
-    # (3) Its own question, and a narrow one. Both the kernel and the golden claim torch.isclose
-    # semantics -- a NaN operand giving 0, with a separate path for the infinities -- and do not
-    # agree at a non-finite operand. Needs a per-cell read-back
-    # to say whether the golden or the kernel's inf path is wrong, before either is touched.
-    MathOperation.SfpuIsclose: "golden and kernel both claim torch.isclose semantics and "
-    "disagree at a non-finite operand; needs a per-cell read-back to say which is wrong.",
-    # (4) Not a binary op in the sense this probe assumes. The kernel reads in1 only on its x > 4
-    # branch and the golden ignores operand B outright, so logsigmoid is constant in y. A special
-    # injected into B is therefore not a stimulus for anything.
-    MathOperation.SfpuLogsigmoid: "effectively unary -- operand B is read only on the x > 4 "
-    "branch and the golden ignores it, so a cat-B probe in B asserts nothing.",
-}
+# The ops that diverge, grouped by what each waits on. None is enrolled on a guess: an
+# enrolment written to make a variant green becomes a permanent claim about the hardware.
+_BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
+    {
+        # Composition through a reciprocal / log / exp. Each builds its result from a primitive
+        # the ISA specifies only inside a stated finite range, so what the composition does with
+        # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
+        # all six.
+        MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
+        MathOperation.SfpuXlogy,  # x * log(y)
+        MathOperation.SfpuElwpow,  # exp(b * ln a)
+        MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
+        MathOperation.SfpuBinaryRemainder,  # as fmod
+        MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
+        # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
+        # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
+        # holds Sign and Heaviside out of the unary gate.
+        MathOperation.SfpuMask,
+        # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
+        # operand; needs a per-cell read-back to say which is wrong before either is touched.
+        MathOperation.SfpuIsclose,
+        # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
+        # ignores it, so a cat-B probe in B asserts nothing.
+        MathOperation.SfpuLogsigmoid,
+    }
+)
 
 assert not (
     set(BINARY_SPECIALS_READY_OPS) & set(_BINARY_SPECIALS_NOT_READY)
@@ -2389,21 +2269,6 @@ def generated_nan_sign_is_asserted(
     infinity of either sign", which is a change to the comparator rather than to this gate.
     """
     return on_wormhole and not nan_survives_to_l1(input_format, output_format, dest_acc)
-
-
-def specials_safe_formats(
-    formats: List["InputOutputFormat"],  # noqa: F821 - test-side type, duck-typed
-    dest_acc: Union[bool, Enum],
-) -> List["InputOutputFormat"]:  # noqa: F821
-    """Filter an input_output_formats() list down to the triples that carry specials.
-
-    Normalises *dest_acc* once here rather than leaving it to the per-format calls, so a
-    bad argument raises even when *formats* is empty.
-    """
-    dest_acc = _dest_acc_flag(dest_acc)
-    return [
-        f for f in formats if specials_safe(f.input_format, f.output_format, dest_acc)
-    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
