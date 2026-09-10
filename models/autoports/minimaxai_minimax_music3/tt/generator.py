@@ -178,6 +178,11 @@ class Music3Generator:
             load_vocoder=load_vocoder,
             log=log,
         )
+        self.vocoder_dtype = {"bf16": torch.bfloat16, "fp32": torch.float32}[
+            os.environ.get("MUSIC3_VOCODER_DTYPE", "bf16")
+        ]
+        if load_vocoder and self.vocoder_dtype != torch.float32:
+            self.ref.vocoder = self.ref.vocoder.to(self.vocoder_dtype)
         self.dit = None
         if load_dit and dit_device == "tt":
             from models.autoports.minimaxai_minimax_music3.tt.dit import TTDiT
@@ -202,7 +207,7 @@ class Music3Generator:
             if load_dit and dit_device == "tt"
             else ("torch-cpu" if load_dit else "-"),
             "cond_encoder": "torch-cpu",
-            "vocoder": "torch-cpu" if load_vocoder else "-",
+            "vocoder": f"torch-cpu ({os.environ.get('MUSIC3_VOCODER_DTYPE', 'bf16')})" if load_vocoder else "-",
         }
         log(f"Music3Generator ready in {time.time() - t0:.1f}s: {self.impl}")
 

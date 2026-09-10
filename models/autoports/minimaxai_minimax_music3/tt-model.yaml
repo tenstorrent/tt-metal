@@ -17,6 +17,8 @@ source:
   code:                        # allowlist — exactly what ships; verified by the stage-08 import-closure grep
     - models/common
     - models/tt_transformers/tt
+    - models/tt_dit/utils/matmul.py       # minimal_matmul blocking configs (DiT)
+    - models/tt_dit/utils/tensor.py       # fused-SwiGLU weight interleave (DiT)
     - models/autoports/minimaxai_minimax_music3/__init__.py
     - models/autoports/minimaxai_minimax_music3/config.py
     - models/autoports/minimaxai_minimax_music3/reference

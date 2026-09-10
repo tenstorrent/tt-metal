@@ -22,6 +22,8 @@ from models.autoports.minimaxai_minimax_music3.tt.weights import cache_root
 
 PAD_TO = 128
 MASK_VALUE = -1e9
+SDPA_MODE = os.environ.get("MUSIC3_DIT_SDPA", "window")  # window (cu_window_seqlens, mask built on device) | mask
+MATMUL_MODE = os.environ.get("MUSIC3_DIT_MATMUL", "minimal")  # minimal (tt_dit minimal_matmul, fused SwiGLU) | linear
 
 
 def padded_len(seq_len_with_temb: int) -> int:
@@ -124,6 +126,20 @@ class TTDiT:
             packer_l1_acc=False,
         )
         self.grid = mesh_device.compute_with_storage_grid_size()
+        self.matmul_mode = MATMUL_MODE
+        if self.matmul_mode == "minimal":
+            from models.tt_dit.utils.matmul import get_matmul_core_grid
+
+            self.mm_grid = get_matmul_core_grid(mesh_device)
+            # packed [a | g] ff_in weight re-interleaved for the fused SwiGLU epilogue: out = a * silu(g)
+            from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+            for i, blk in enumerate(self.blocks):
+                p = f"transformer_blocks.{i}."
+                wf = prepare_for_fused_swiglu(w[p + "ff_in.weight"].T.float(), ndev=1, gate_is_first=False)
+                bf = prepare_for_fused_swiglu(w[p + "ff_in.bias"].reshape(1, -1).float(), ndev=1, gate_is_first=False)
+                blk["w_ff_fused"] = dev(wf, f"b{i}_wff_fused")
+                blk["b_ff_fused"] = vec(bf, f"b{i}_bff_fused")
         self._shapes: Dict[int, dict] = {}  # per Lp: persistent inputs, rope tables, mask, sel, trace, outputs
         self.log(
             f"DiT weights on device in {time.time() - t0:.1f}s ({self.n_layers} layers, {_dtype_tag(weights_dtype)})"
@@ -171,6 +187,19 @@ class TTDiT:
             "sin_h": host(sin_full),
             "mask_h": host(mask),
             "sel_h": host(sel),
+            "cu": ttnn.from_torch(
+                torch.tensor([0, L + 1, Lp], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=rep,
+            ),
+            "cu_h": ttnn.from_torch(
+                torch.tensor([0, L + 1, Lp], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=rep,
+            ),
             "xin": mk(torch.zeros(2, 1, Lp, self.cfg.concat_channels)),
             "tf": mk(torch.zeros(2, 1, 32, self.cfg.fourier_embedding_dim)),
             "trace": None,
@@ -187,6 +216,24 @@ class TTDiT:
         return st
 
     # ------------------------------------------------------------------ graph
+    def _lin(self, x, w, b=None, act=None, swiglu=False):
+        if self.matmul_mode == "minimal":
+            from models.tt_dit.utils.matmul import get_matmul_config
+
+            M, K, N = x.padded_shape[-2], x.padded_shape[-1], w.padded_shape[-1]
+            return ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=w,
+                bias_tensor=b,
+                config=get_matmul_config(M, K, N, self.mm_grid),
+                fused_activation=act,
+                compute_kernel_config=self.ck_mm,
+                dtype=ttnn.bfloat16,
+                fuse_swiglu=swiglu,
+            )
+        assert not swiglu
+        return ttnn.linear(x, w, bias=b, activation=act, compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
+
     def _forward(self, st: dict):
         xin, tf = st["xin"], st["tf"]
         # timestep token: Fourier features -> linear_1 -> SiLU -> linear_2 -> placed at row 0 via a one-hot selector matmul
@@ -203,38 +250,42 @@ class TTDiT:
         x = ttnn.add(x, temb_rows)
         for B in self.blocks:
             h = ttnn.layer_norm(x, epsilon=1e-5, weight=B["n1_w"], bias=B["n1_b"])
-            qkv = ttnn.linear(h, B["wqkv"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
+            qkv = self._lin(h, B["wqkv"])
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qkv, num_heads=self.heads, num_kv_heads=self.heads, transpose_k_heads=False
             )
             q = ttnn.experimental.rotary_embedding_llama(q, st["cos"], st["sin"], self.trans_mat, is_decode_mode=False)
             k = ttnn.experimental.rotary_embedding_llama(k, st["cos"], st["sin"], self.trans_mat, is_decode_mode=False)
-            a = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=st["mask"],
-                is_causal=False,
-                program_config=st["sdpa_pc"],
-                compute_kernel_config=self.ck_sdpa,
-            )
+            if SDPA_MODE == "window":
+                # block-diagonal windows [0, L+1) (real rows) and [L+1, Lp) (padding): pad keys never reach real queries
+                a = ttnn.transformer.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    cu_window_seqlens=st["cu"],
+                    program_config=st["sdpa_pc"],
+                    compute_kernel_config=self.ck_sdpa,
+                )
+            else:
+                a = ttnn.transformer.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=st["mask"],
+                    is_causal=False,
+                    program_config=st["sdpa_pc"],
+                    compute_kernel_config=self.ck_sdpa,
+                )
             a = ttnn.experimental.nlp_concat_heads(a)
-            x = ttnn.add(x, ttnn.linear(a, B["wo"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16))
+            x = ttnn.add(x, self._lin(a, B["wo"]))
             h = ttnn.layer_norm(x, epsilon=1e-5, weight=B["n2_w"], bias=B["n2_b"])
-            a_ = ttnn.linear(h, B["w_a"], bias=B["b_a"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
-            g_ = ttnn.linear(
-                h, B["w_g"], bias=B["b_g"], activation="silu", compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16
-            )
-            x = ttnn.add(
-                x,
-                ttnn.linear(
-                    ttnn.multiply(a_, g_),
-                    B["w_o"],
-                    bias=B["b_o"],
-                    compute_kernel_config=self.ck_mm,
-                    dtype=ttnn.bfloat16,
-                ),
-            )
+            if self.matmul_mode == "minimal":
+                ff = self._lin(h, B["w_ff_fused"], B["b_ff_fused"], swiglu=True)  # a * silu(g) in one matmul
+            else:
+                a_ = self._lin(h, B["w_a"], B["b_a"])
+                g_ = self._lin(h, B["w_g"], B["b_g"], act="silu")
+                ff = ttnn.multiply(a_, g_)
+            x = ttnn.add(x, self._lin(ff, B["w_o"], B["b_o"]))
         y = ttnn.linear(x, self.w_out, compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)  # [2,1,Lp,128]
         y = ttnn.add(ttnn.linear(y, self.w_post, compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16), y)
         return y
@@ -273,7 +324,7 @@ class TTDiT:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(tf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), st["tf"]
         )
-        for k in ("cos", "sin", "mask", "sel"):
+        for k in ("cos", "sin", "mask", "sel", "cu"):
             ttnn.copy_host_to_device_tensor(st[k + "_h"], st[k])
         self._ensure_trace(st)
         if st["trace"] is not None:
