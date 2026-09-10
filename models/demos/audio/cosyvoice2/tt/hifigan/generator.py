@@ -81,6 +81,7 @@ from .conv import TtConv1d
 from .istft import TtIStft, periodic_hann
 from .resblock import TtResBlock, get_padding
 from .snake import TtSnake
+from .source import TtSourceModuleHnNSF
 from .stft import TtStft
 from .upsample import TtConvTranspose1d
 
@@ -498,3 +499,136 @@ class TtHiFTDecoder:
         out = ttnn.clamp(wav, -self.audio_limit, self.audio_limit)
         ttnn.deallocate(wav)
         return out
+
+
+# ---------------------------------------------------------------------------
+# HiFTGenerator.inference: mel (+ f0) -> waveform, composing the excitation
+# branch (SineGen2/SourceModuleHnNSF, Phase 3) with TtHiFTDecoder.decode (above).
+#
+# Confirmed against real upstream source directly (`cosyvoice.hifigan.generator.
+# HiFTGenerator.inference`):
+#
+#     f0 = self.f0_predictor(speech_feat)
+#     s = self.f0_upsamp(f0[:, None]).transpose(1, 2)       # nearest-upsample, mel-rate -> audio-rate
+#     s, _, _ = self.m_source(s)                            # SourceModuleHnNSF
+#     s = s.transpose(1, 2)
+#     generated_speech = self.decode(x=speech_feat, s=s)    # speech_feat unchanged, no other transform
+#
+# `self.f0_upsamp = torch.nn.Upsample(scale_factor=np.prod(upsample_rates) *
+# istft_params["hop_len"])` -- default mode "nearest", confirmed from real
+# source, not assumed -- exactly the `ttnn.repeat_interleave`/`torch
+# .repeat_interleave` idiom this package already uses for the SAME nearest-
+# upsample-by-integer-factor operation in `tt/flow/encoder.py`'s `TtUpsample1D`.
+# `self.m_source` is `SourceModuleHnNSF(sampling_rate=24000, upsample_scale=
+# prod(upsample_rates)*hop_len, sinegen_type='2', ...)` -- exactly
+# `TtSourceModuleHnNSF`/`TtSourceModuleHnNSF.torch_reference` (Phase 3), at the
+# SAME `upsample_scale` this module's own `shape_trace` already derives.
+#
+# **`f0_predictor` (`ConvRNNF0Predictor`, mel -> f0) is NOT built in this
+# environment** -- a separate small CNN+GRU network, out of scope for this
+# integration step (the same deliberate scope boundary this module's own
+# docstring already drew: "computing `s` ... is deferred to a follow-up").
+# `f0` is therefore an explicit external input here too, one level up: `inference`
+# takes a real, already-predicted-elsewhere `f0` (one value per MEL frame,
+# Hz, matching what `f0_predictor(speech_feat)` would return) rather than
+# predicting it from `mel` itself. Everything downstream of that -- the
+# nearest-upsample, the excitation synthesis, and the decode call -- is real,
+# validated code (Phase 2 + Phase 3), not a placeholder.
+#
+# **The mel interface contract itself, verified rather than assumed**: `speech_feat`
+# flows into both `f0_predictor` and `decode(x=speech_feat, ...)` with NO
+# transform in between anywhere in the real source -- no denormalisation, no
+# scaling, no clamping. So a flow-decoder mel output is fed to `decode` completely
+# unchanged. In THIS port, that connection needs no transpose either: the flow
+# decoder (`tt/flow/`) and this vocoder both use this package's channels-last
+# `[N, L, C]` convention, so `mel` and `s` (from `TtSourceModuleHnNSF`, itself
+# already channels-last) both go into `TtHiFTDecoder.decode` completely unchanged
+# -- a genuinely clean connection, confirmed by tracing shapes end to end, not by
+# assuming two channels-last modules must obviously compose.
+# ---------------------------------------------------------------------------
+
+
+class TorchHiFTGeneratorInferenceRef:
+    """`cosyvoice.hifigan.generator.HiFTGenerator.inference`, with `f0_predictor`
+    replaced by an explicit `f0` input -- see module docstring. Channel-first
+    throughout (`decode_ref`'s own convention, matching real upstream), so `mel`/
+    `s` are transposed from this package's channels-last convention at the
+    boundary -- the same bridging `tt/flow/decoder.py`'s torch reference already
+    does internally.
+    """
+
+    def __init__(
+        self,
+        decode_ref: TorchHiFTDecodeRef,
+        source_linear_weight: torch.Tensor,
+        source_linear_bias: torch.Tensor,
+        sampling_rate: int = 24000,
+        harmonic_num: int = 8,
+        sine_amp: float = 0.1,
+        noise_std: float = 0.003,
+        voiced_threshold: float = 10.0,
+    ):
+        self.decode_ref = decode_ref
+        self.upsample_scale = int(np.prod(decode_ref.upsample_rates) * decode_ref.hop_len)
+        self.source_linear_weight = source_linear_weight
+        self.source_linear_bias = source_linear_bias
+        self.sampling_rate = sampling_rate
+        self.harmonic_num = harmonic_num
+        self.sine_amp = sine_amp
+        self.noise_std = noise_std
+        self.voiced_threshold = voiced_threshold
+
+    def inference(self, mel: torch.Tensor, f0_mel_rate: torch.Tensor) -> torch.Tensor:
+        """mel: [1, T_mel, 80] channels-last. f0_mel_rate: [1, T_mel] Hz, one
+        value per mel frame (stand-in for `f0_predictor(mel)` -- see module
+        docstring). Returns waveform [1, L]."""
+        f0_audio = f0_mel_rate.repeat_interleave(self.upsample_scale, dim=1).unsqueeze(-1)  # [1, T_audio, 1]
+        sine_merge, _, _ = TtSourceModuleHnNSF.torch_reference(
+            f0_audio,
+            self.source_linear_weight,
+            self.source_linear_bias,
+            sampling_rate=self.sampling_rate,
+            upsample_scale=self.upsample_scale,
+            harmonic_num=self.harmonic_num,
+            sine_amp=self.sine_amp,
+            noise_std=self.noise_std,
+            voiced_threshold=self.voiced_threshold,
+        )
+        mel_cf = mel.transpose(1, 2)  # -> [1, 80, T_mel], TorchHiFTDecodeRef's own convention
+        s_cf = sine_merge.transpose(1, 2)  # -> [1, 1, T_audio]
+        return self.decode_ref.decode(mel_cf, s_cf)
+
+
+class TtHiFTGenerator:
+    """`TorchHiFTGeneratorInferenceRef` on device -- see module docstring. No
+    transpose anywhere: `mel` (from `tt/flow/`) and `s` (from
+    `TtSourceModuleHnNSF`) are both already this package's channels-last
+    convention.
+    """
+
+    def __init__(self, device, ref: TorchHiFTGeneratorInferenceRef, decoder: TtHiFTDecoder, dtype=ttnn.bfloat16):
+        self.device = device
+        self.decoder = decoder
+        self.upsample_scale = ref.upsample_scale
+        self.source = TtSourceModuleHnNSF(
+            device,
+            ref.source_linear_weight,
+            ref.source_linear_bias,
+            sampling_rate=ref.sampling_rate,
+            upsample_scale=ref.upsample_scale,
+            harmonic_num=ref.harmonic_num,
+            sine_amp=ref.sine_amp,
+            add_noise_std=ref.noise_std,
+            voiced_threshold=ref.voiced_threshold,
+            dtype=dtype,
+        )
+        self.dtype = dtype
+
+    def inference(self, mel, f0_mel_rate: torch.Tensor, mel_frames: int, batch_size: int = 1):
+        """mel: ttnn [B, T_mel, 80] (straight from `TtCausalMaskedDiffWithXvec`,
+        unchanged). f0_mel_rate: torch [1, T_mel] Hz. Returns ttnn [B, L, 1]
+        waveform."""
+        f0_audio = f0_mel_rate.repeat_interleave(self.upsample_scale, dim=1).unsqueeze(-1)  # [1, T_audio, 1]
+        f0_dev = ttnn.from_torch(f0_audio, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        sine_merge, _, _ = self.source(f0_dev)
+        return self.decoder.decode(mel, sine_merge, mel_frames, batch_size)
