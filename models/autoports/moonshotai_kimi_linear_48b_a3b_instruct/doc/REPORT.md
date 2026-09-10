@@ -31,7 +31,7 @@ generated 2026-09-10T23:53:51Z
 ## Advisory findings and known limitations
 
 - host vLLM readiness runner (sampling/qualitative/benchmark) exit 1
-- KDA prefill: tokens before the exact fp32 tail run through the chunked bf16-gate kernel; the carried state of slow heads is ~0.993 PCC at 128 tokens (outputs > 0.998). Documented deviation; full-model accuracy is the acceptance criterion.
+- KDA prefill runs the chunked fp32 WY recurrence (tt/kda/chunked_prefill.py, gate clamp -2.5); kernel-vs-exact PCC on real activations at 1024 tokens: outputs 0.9997-0.9999, carried state 0.99993-0.99999 (layers 0/2/8/17/25). The reused ttnn.experimental.kda kernel is kept selectable but drifts (bf16 gate chain) and overflows on layer 25.
 - Decode is eager in the bare-metal generator paths unless traced (vLLM traces decode); on-device sampling not enabled (host sampling).
 
 ## User-facing latency (host vLLM, p300x2)
@@ -85,3 +85,8 @@ generated 2026-09-10T23:53:51Z
  }
 ]
 ```
+
+## Published
+
+- repo: https://huggingface.co/jashansinghTT/kimi-linear-48b-a3b-instruct-blackhole (public: yes; catalog tag: yes)
+- clean-pull proof on p300x2: PASSED (`tt-model serve --profile p300x2 jashansinghTT/kimi-linear-48b-a3b-instruct-blackhole`; prove exit 1)
