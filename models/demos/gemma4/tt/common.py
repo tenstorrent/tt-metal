@@ -111,7 +111,11 @@ def create_tt_model(
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
-    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    # NOTE: use the SERVED max_seq_len argument, not model_args.max_seq_len --
+    # model_args still carries its construction default here (the served value is
+    # applied further below), so reading it silently skipped the bfp8 context
+    # ceiling at long context.
+    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh, max_seq_len=max_seq_len)
     # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
     # only their dtype: a warm marker seeded before a filename change certifies a build whose files
     # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
@@ -186,6 +190,8 @@ def create_assistant_model(
     assistant_path=None,
     state_dict=None,
     max_local_batch_size=1,
+    bounded_sliding_kv_cache=None,
+    max_seq_len=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -212,17 +218,50 @@ def create_assistant_model(
             f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) != target hidden_size "
             f"({target_model.hidden_size}). The assistant must match its target model."
         )
+    # Bounded target KV is supported now: the drafter's attention configs take
+    # the same cache_position_modulo as the target's sliding layers (see the
+    # bounded_sliding_kv_cache plumbing below and assistant/model.py), so its
+    # cross-attention wraps absolute positions into the same ring. This is what
+    # makes >=128k spec decode reachable on 31B, where unbounded KV does not fit.
+    # It requires the ring sizes to agree; the assistant's own sliding_window
+    # matches its target's (1024 on both 12B and 31B), so verify that here
+    # rather than assuming it.
+    # GATE LIFTED. The clobbering described here was real -- verify writes all K+1
+    # candidates up front, and in a ring of EXACTLY the window, slot (p+j)%W still
+    # holds live position p+j-W. It is fixed by ring HEADROOM (the spec path runs
+    # ring = 2*window, so speculative slots fall outside the window; see
+    # attention.bounded_ring_modulo), plus the last-chunk expansion threshold fix
+    # in Gemma4Generator._expand_bounded_last_chunk.
+    # Measured 31B @ 32k, greedy/traced: bounded 2.40/5 @ 42.26 tok/s/u vs
+    # unbounded 2.40/5 @ 42.42 -- parity, matching text. 128k 2.78/5 @ 36.08
+    # (baseline 24.44); 256k 1.70/5 @ 16.35 (baseline 16.97 -- coherent but spec
+    # is NOT a win at 256k: verify cost scales with context, acceptance falls).
     if getattr(target_model, "bounded_sliding_kv_cache", False):
-        raise NotImplementedError(
-            "Speculative decoding requires the target to use unbounded sliding KV caches "
-            "(bounded_sliding_kv_cache=False); the drafter cross-attention reads absolute cache positions."
+        _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
+            getattr(target_model, "hf_config", None), "sliding_window", None
         )
+        _asst_win = getattr(assistant_args.text_args, "sliding_window", None)
+        if _tgt_win is not None and _asst_win is not None and int(_tgt_win) != int(_asst_win):
+            raise NotImplementedError(
+                f"Bounded spec decode needs matching sliding windows: target {_tgt_win} vs "
+                f"assistant {_asst_win}. The drafter cross-attends the target's bounded ring, "
+                "so a different window would wrap positions to the wrong slots."
+            )
 
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     assistant_args.cluster_shape = mesh_shape
+    # Serve length: Gemma4AssistantArgs.max_seq_len DEFAULTS to 131072, and the
+    # drafter's layers are built from it (assistant/model.py max_seq_len=...). Left
+    # unset, a 256k run builds the drafter for HALF the context while positions run
+    # to 262143 -- the drafter then produces noise and acceptance collapses to
+    # ~0.00/5 (measured), while <=128k looked fine because the default covered it.
+    if max_seq_len is not None:
+        assistant_args.max_seq_len = int(max_seq_len)
+        if hasattr(assistant_args, "text_args"):
+            assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
@@ -235,5 +274,25 @@ def create_assistant_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_local_batch_size=max_local_batch_size,
+        # Match the TARGET's KV mode: with bounded sliding caches the drafter's
+        # cross-attention must wrap positions into the same ring. Inferred from
+        # the target when not stated explicitly.
+        # Whether the DRAFTER wraps positions must match the caches it actually
+        # reads, not the target's global mode. The drafter cross-attends only the
+        # LAST layer of each type; full-attention layers are always unbounded, and
+        # the last sliding layer is EXEMPTED from bounding for exactly this reason
+        # (Gemma4Model._spec_unbounded_layer). So when that exemption is active,
+        # both caches the drafter touches hold absolute positions and it must NOT
+        # apply the ring modulo -- otherwise it looks up p % window in a
+        # full-length cache and drafts noise (measured: acceptance 0.12/5 at 128k
+        # bounded vs 2.78/5 unbounded, 0.00/5 at 256k).
+        bounded_sliding_kv_cache=(
+            bounded_sliding_kv_cache
+            if bounded_sliding_kv_cache is not None
+            else (
+                bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+                and getattr(target_model, "_spec_unbounded_layer", None) is None
+            )
+        ),
     )
     return assistant_args, model

@@ -455,6 +455,40 @@ class Gemma4Model:
 
         # Decoder layers (each creates its own KV cache if requested)
         self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
+        # Speculative decoding exemption: the it-assistant drafter is KV-SHARED --
+        # it computes only Q and cross-attends into the TARGET's caches, taking the
+        # LAST layer of each type (see get_shared_kv_caches / last_kv_layer_by_type).
+        # A bounded sliding layer is a 1024-slot ring, and a drafter reading it gets
+        # the wrong slots: measured acceptance 0.02/5 at 256k (with coherent bf16
+        # output, so this is not the precision bug). Full-attention layers are
+        # already unbounded, so exactly ONE layer -- the last sliding one -- has to
+        # stay unbounded for the drafter to work at long context.
+        #
+        # Cost measured on 31B/tp=8 at 256k: 0.54 GB/device for that layer vs 2.1 MB
+        # bounded, i.e. ~1.7% of a 32 GB chip, while the other sliding layers keep
+        # their bounded footprint. This is what qwen3.6's MTP head gets for free by
+        # owning its own KV cache (models/demos/blackhole/qwen36/tt/mtp.py); gemma4's
+        # drafter checkpoint has no k/v projections at all, so it cannot.
+        #
+        # OPT-IN ONLY (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER=1); the spec-decode
+        # demo path sets it. It defaulted ON, which corrupted PLAIN bounded
+        # decode: the exempt layer gets a FULL-length cache with
+        # cache_position_modulo=None, but the plain demo's build_hybrid_page_tables
+        # still marks it sliding and hands it a 16-block table with a zero-padded
+        # tail -- so every position >= sliding_window indexed past the valid
+        # prefix and clobbered block 0 (the hazard kv_cache_hybrid.py documents).
+        # Measured: plain greedy bounded diverged from unbounded at 4k/32k.
+        # Without a drafter the exemption also buys nothing and costs 0.54
+        # GB/device at 256k, so plain bounded decode must not pay for it.
+        self._spec_unbounded_layer = None
+        if bounded_sliding_kv_cache and os.environ.get("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "0") == "1":
+            _sliding = [i for i in range(n_layers) if hf_config.layer_types[i] == "sliding_attention"]
+            if _sliding:
+                self._spec_unbounded_layer = max(_sliding)
+                logger.info(
+                    f"Bounded sliding KV: exempting layer {self._spec_unbounded_layer} (last sliding) "
+                    "so the KV-shared spec-decode drafter reads unbounded positions"
+                )
         self.layers = []
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
@@ -472,7 +506,7 @@ class Gemma4Model:
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
-                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                bounded_sliding_kv_cache=(bounded_sliding_kv_cache and i != self._spec_unbounded_layer),
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -487,11 +521,20 @@ class Gemma4Model:
                 max_num_blocks_override = None
                 if (
                     bounded_sliding_kv_cache
+                    # the drafter-visible layer keeps a FULL-length cache (see
+                    # _spec_unbounded_layer above); sizing it as a ring here would
+                    # undo the exemption and hand the drafter wrapped positions.
+                    and i != self._spec_unbounded_layer
                     and attn_cfg.is_sliding
                     and attn_cfg.sliding_window is not None
                     and paged_attention_config is not None
                 ):
-                    sliding_blocks_per_seq = attn_cfg.sliding_window // paged_attention_config.block_size
+                    # Size to the RING (window + spec headroom), not the window:
+                    # the ring is what positions wrap into. See bounded_ring_modulo.
+                    from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+                    _ring = bounded_ring_modulo(attn_cfg.sliding_window)
+                    sliding_blocks_per_seq = _ring // paged_attention_config.block_size
                     max_num_blocks_override = sliding_blocks_per_seq * max_local_batch_size
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,
@@ -545,6 +588,12 @@ class Gemma4Model:
         #
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
         self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
+
+        # dFlash residual-tap capture (armed by dflash_capture_taps; consumed by
+        # the dFlash drafter — see tt/dflash_drafter.py).
+        self._dflash_tap_layers = None
+        self._dflash_taps = []
+        self._dflash_tap_buffers = None
 
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
@@ -920,6 +969,8 @@ class Gemma4Model:
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
+        # copy-mode dFlash taps index buffers per forward
+        self._dflash_tap_idx = 0
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             rope_presliced = False
@@ -994,6 +1045,11 @@ class Gemma4Model:
                 lt = self.hf_config.layer_types[i]
                 sliding = lt == "sliding_attention"
                 rope_packed = packed.get("rope_packed") or {}
+                # Per-type hot pages (ring vs full pool under bounded sliding);
+                # explicit None checks -- never truthiness on a ttnn.Tensor.
+                _hot = packed.get("hot_pt_sliding") if sliding else packed.get("hot_pt_full")
+                if _hot is None:
+                    _hot = packed.get("hot_pt")
                 layer_packed = {
                     "packed_p": packed["packed_p"],
                     "position_idx": packed["position_idx"],
@@ -1001,7 +1057,7 @@ class Gemma4Model:
                     "attn_mask": packed["attn_mask_sliding"] if sliding else packed["attn_mask_full"],
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
-                    "hot_pt": packed.get("hot_pt"),
+                    "hot_pt": _hot,
                 }
 
             hidden_states = layer(
@@ -1031,6 +1087,30 @@ class Gemma4Model:
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
             if keep_kv and layer.self_attn._last_kv is not None:
                 shared_kv_store[i] = layer.self_attn._last_kv
+
+            # dFlash tap capture: stash the post-layer residual at the drafter's
+            # tap layers (dflash_capture_taps(...) arms it; pop_dflash_taps()
+            # drains). Two modes:
+            #  - clone-append (untraced paths only: clone allocates);
+            #  - copy-into-persistent-buffers (trace-safe: allocation-free, the
+            #    buffers are boot-owned — used inside the fused dFlash trace).
+            if self._dflash_tap_layers is not None and i in self._dflash_tap_layers:
+                if self._dflash_tap_buffers is not None:
+                    j = self._dflash_tap_idx
+                    if self._dflash_tap_buffers[j] is None:
+                        # lazy first-use allocation (compile pass, pre-capture):
+                        # guarantees the buffer matches the real tap shape. The
+                        # copy runs too so its program is compiled BEFORE the
+                        # trace capture replays this hook via the copy path
+                        # ("cannot load new binaries during trace capture").
+                        self._dflash_tap_buffers[j] = ttnn.clone(hidden_states)
+                    ttnn.copy(hidden_states, self._dflash_tap_buffers[j])
+                    self._dflash_tap_idx += 1
+                else:
+                    self._dflash_taps.append(ttnn.clone(hidden_states))
+                    keep = getattr(self, "_dflash_tap_keep", None)
+                    if keep and len(self._dflash_taps) > keep:
+                        self._dflash_taps.pop(0).deallocate(True)
 
         # Free the per-layer-type decode RoPE tensors shared across the loop.
         for cos_pos, sin_pos in decode_rope_presliced.values():
@@ -1094,7 +1174,13 @@ class Gemma4Model:
         # lm_head deallocates its input.
         if is_decode and return_hidden:
             # Spec-decode reads full-vocab logits on host — never keep sharded.
-            logits = self._apply_lm_head(hidden_states, is_decode=True, keep_sharded_for_sampling=False)
+            # dFlash verify can consume SHARDED logits (the on-device sampling
+            # module handles the gather + force-argmax itself).
+            logits = self._apply_lm_head(
+                hidden_states,
+                is_decode=True,
+                keep_sharded_for_sampling=getattr(self, "_dflash_sharded_logits", False),
+            )
             return logits, post_norm_hidden
 
         # Slice to the last token tile before lm_head when caller only wants
@@ -1240,6 +1326,24 @@ class Gemma4Model:
         """
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
 
+    def dflash_capture_taps(self, layer_ids, buffers=None, keep_last=None):
+        """Arm (list of layer indices) or disarm (None) dFlash tap capture.
+
+        ``buffers``: optional list of persistent device tensors (one per tap
+        layer, shape == the forward's hidden). When given, taps are ttnn.copy'd
+        into them (allocation-free — safe inside a metal trace); otherwise taps
+        are cloned (untraced paths only).
+        """
+        self._dflash_tap_layers = set(layer_ids) if layer_ids is not None else None
+        self._dflash_taps = []
+        self._dflash_tap_idx = 0
+        self._dflash_tap_buffers = buffers
+
+    def pop_dflash_taps(self):
+        """Drain captured taps: list of [1,1,rows,H] device tensors, tap order."""
+        taps, self._dflash_taps = self._dflash_taps, []
+        return taps
+
     def ttnn_verify_forward(
         self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
     ):
@@ -1308,6 +1412,9 @@ class Gemma4Model:
         embed_idx_full=None,
         embed_idx_sliding=None,
         hot_pt=None,
+        hot_pt_full=None,
+        hot_pt_sliding=None,
+        page_tables_per_layer=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1359,7 +1466,18 @@ class Gemma4Model:
             "embed_idx_full": embed_idx_full,
             "embed_idx_sliding": embed_idx_sliding,
             "hot_pt": hot_pt,
+            # Bounded sliding: ring pools wrap the hot block, so the physical
+            # fill pages differ per layer TYPE (ring vs full pool). Falls back
+            # to the shared ``hot_pt`` when unset (unbounded callers).
+            "hot_pt_full": hot_pt_full,
+            "hot_pt_sliding": hot_pt_sliding,
         }
+
+        # Same per-layer page-table contract as ttnn_verify_forward: bounded
+        # sliding runs hybrid tables where each layer addresses its own pool.
+        if page_tables_per_layer is None:
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
 
         out = self(
             hidden_states=input_embeds,
@@ -1370,6 +1488,7 @@ class Gemma4Model:
             token_index=None if self.rope_caches_2d else 0,
             return_hidden=True,
             packed=packed,
+            page_tables_per_layer=page_tables_per_layer,
         )
         for cos_bp, sin_bp in rope_packed.values():
             cos_bp.deallocate(True)
@@ -1466,6 +1585,11 @@ class Gemma4Model:
         """
         if page_tables_per_layer is None:
             return None
+        # Already-device lists (e.g. the packed verify's width-matched tables)
+        # pass straight through -- there is nothing to allocate or track, and
+        # _host_page_tables_batch would return None for them.
+        if all(pt is None or isinstance(pt, ttnn.Tensor) for pt in page_tables_per_layer):
+            return page_tables_per_layer
         by_batch = getattr(self, "_persistent_pt_by_batch", None)
         if by_batch is None:
             by_batch = {}
