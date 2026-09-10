@@ -1985,7 +1985,11 @@
   cmd: |
     set -e
     uv pip install -r models/experimental/xtts/requirements.txt
-    pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900
+    # test_empty_generation runs in the e2e job instead: it needs a full traced pipeline, which
+    # costs 294 s of cold-cache compile here but 118 s there (the e2e perf test has already
+    # compiled it). Keeping it here overran this job's 25 min. Every other pcc test stays.
+    pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900 \
+      --ignore=models/experimental/xtts/tests/pcc/test_empty_generation.py
   model: xtts-v2
   model_family: XTTS
   skus:

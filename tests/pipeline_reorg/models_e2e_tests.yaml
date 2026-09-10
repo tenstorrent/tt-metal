@@ -1181,6 +1181,10 @@
     set -e
     uv pip install -r models/experimental/xtts/requirements.txt
     pytest models/experimental/xtts/tests/perf/test_e2e_perf.py --timeout=900
+    # Empty-generation regressions live here, after the perf test has compiled the pipeline they
+    # share: 118 s here against 294 s in the unit job. Measured cold total for this job is
+    # 10m40s of its 25 min, so this needs no budget change.
+    pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
     python models/experimental/xtts/demo/xtts_demo.py
   model: xtts-v2
   model_family: XTTS
