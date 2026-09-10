@@ -85,7 +85,7 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         if constexpr (stable_sort) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
-        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, tie_order>(
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, /*fused=*/false, /*rank_stamped=*/false, tie_order>(
             0, (int)ascending_local, end_phase);
 
         // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).

@@ -36,6 +36,12 @@ namespace blocks {
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
 constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
 
+// Every TopK primitive of the gate runs in one fixed mode: the plain network (no fused or rank-stamped
+// keys), with a descending tie order whenever the stable comparator is selected.
+constexpr bool GATE_TOPK_FUSED = false;
+constexpr bool GATE_TOPK_RANK_STAMPED = false;
+constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER = ckernel::TopkTieOrder::Descending;
+
 // Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
 // The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
 // every operand in a single format, so the bf16 gate logits/bias are upcast here (lossless) instead
@@ -174,8 +180,9 @@ void process_and_sort_tiles(
         if constexpr (stable_sort) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
-        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
-            0, (int)ascending, end_phase);
+        ckernel::
+            topk_local_sort<stable_sort, DST_ACCUM_MODE, GATE_TOPK_FUSED, GATE_TOPK_RANK_STAMPED, GATE_TOPK_TIE_ORDER>(
+                0, (int)ascending, end_phase);
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores_id);
@@ -264,7 +271,7 @@ void topk_group_scores(
     if constexpr (stable_sort) {
         ckernel::topk_canonicalize_negzero_values(0);
     }
-    ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+    ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, GATE_TOPK_FUSED, GATE_TOPK_RANK_STAMPED, GATE_TOPK_TIE_ORDER>(
         0, (int)ascending, log_topk_groups);
     ckernel::topk_finalize_uint16_indices(2);
 
@@ -345,11 +352,15 @@ void topk(
     if constexpr (stable_sort) {
         ckernel::topk_canonicalize_negzero_values(0);
     }
-    ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+    ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, GATE_TOPK_FUSED, GATE_TOPK_RANK_STAMPED, GATE_TOPK_TIE_ORDER>(
         0, (int)ascending, 4);
-    ckernel::
-        topk_merge<false, stable_sort, DST_ACCUM_MODE, false, false, false, ckernel::TopkTieOrder::Descending>(
-            0, 0, 32);
+    ckernel::topk_merge<
+        /*idir=*/false,
+        stable_sort,
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        GATE_TOPK_RANK_STAMPED,
+        GATE_TOPK_TIE_ORDER>(0, 0, 32);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -370,18 +381,18 @@ void topk(
         if constexpr (stable_sort) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
-        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
-            0, (int)ascending, 4);
+        ckernel::
+            topk_local_sort<stable_sort, DST_ACCUM_MODE, GATE_TOPK_FUSED, GATE_TOPK_RANK_STAMPED, GATE_TOPK_TIE_ORDER>(
+                0, (int)ascending, 4);
         ckernel::topk_merge<
-            false,
+            /*idir=*/false,
             stable_sort,
             DST_ACCUM_MODE,
-            false,
-            false,
-            false,
-            ckernel::TopkTieOrder::Descending>(0, 0, 32);
+            GATE_TOPK_FUSED,
+            GATE_TOPK_RANK_STAMPED,
+            GATE_TOPK_TIE_ORDER>(0, 0, 32);
     }
-    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, GATE_TOPK_FUSED, GATE_TOPK_RANK_STAMPED, GATE_TOPK_TIE_ORDER>(
         0, (int)ascending, 0, 32, 5, true);
     ckernel::topk_finalize_uint16_indices(2);
     tile_regs_commit();

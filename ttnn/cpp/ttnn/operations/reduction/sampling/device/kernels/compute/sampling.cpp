@@ -264,9 +264,12 @@ void top_k() {
             if constexpr (stable_sort) {
                 ckernel::topk_canonicalize_negzero_values(0);
             }
-            ckernel::
-                topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
-                    0, (int)ascending, logk - 1);
+            ckernel::topk_local_sort<
+                stable_sort,
+                DST_ACCUM_MODE,
+                /*fused=*/false,
+                /*rank_stamped=*/false,
+                ckernel::TopkTieOrder::Descending>(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
 
@@ -315,17 +318,19 @@ void top_k() {
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
                 ckernel::topk_merge<
-                    false,
+                    /*idir=*/false,
                     stable_sort,
                     DST_ACCUM_MODE,
-                    false,
-                    false,
-                    false,
+                    /*fused=*/false,
+                    /*rank_stamped=*/false,
                     ckernel::TopkTieOrder::Descending>(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::
-                    topk_rebuild<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
-                        0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::topk_rebuild<
+                    stable_sort,
+                    DST_ACCUM_MODE,
+                    /*fused=*/false,
+                    /*rank_stamped=*/false,
+                    ckernel::TopkTieOrder::Descending>(0, (uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();

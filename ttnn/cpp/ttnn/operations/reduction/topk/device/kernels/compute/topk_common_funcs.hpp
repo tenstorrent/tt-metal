@@ -78,7 +78,8 @@ void process_and_sort_tiles(
         if constexpr (stable_sort) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
-        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, fused, false, tie_order>(0, (int)ascending, end_phase);
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+            0, (int)ascending, end_phase);
         tile_regs_commit();
 
         input_dfb.pop_front(tiles_to_wait);
@@ -157,7 +158,7 @@ void process_tile_pair(
     // (stable) tie-break polarity is set once per kernel from the global `largest`; `ascending`
     // here may be flipped per core (direction_init) to alternate output direction for the final
     // cross-core bitonic merge, and the tie polarity must not flip with it.
-    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, fused, false, tie_order>(
+    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
         0, (std::uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
     tile_regs_commit();
@@ -235,9 +236,13 @@ void process_tiles(
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
-                ckernel::topk_merge<false, stable_sort, DST_ACCUM_MODE, fused, false, false, tie_order>(0, m_iter, K);
+                ckernel::
+                    topk_merge</*idir=*/false, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+                        0, m_iter, K);
             } else {
-                ckernel::topk_merge<true, stable_sort, DST_ACCUM_MODE, fused, false, false, tie_order>(0, m_iter, K);
+                ckernel::
+                    topk_merge</*idir=*/true, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+                        0, m_iter, K);
             }
 
             tile_regs_commit();

@@ -56,17 +56,18 @@ constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | int32    | 0 to 1                                                | True     |
- * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32    | 1 to 5                                                | True     |
- * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
- * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
- * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
- * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
- * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
- * | rank_stamped    | Sort [bf16 value | rank tag] keys with the unstable network (u32 indices)  | bool     | true, false                                           | False    |
+ * | Argument        | Description                                                                | Type         | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|--------------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t     | Must be less than the size of the DST register buffer | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | int32        | 0 to 1                                                | True     |
+ * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32        | 1 to 5                                                | True     |
+ * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32        | 0 to 5                                                | False    |
+ * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32        | 4 to 6                                                | False    |
+ * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32        | 4 to 6                                                | False    |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool         | true, false                                           | False    |
+ * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool         | true, false                                           | False    |
+ * | rank_stamped    | Sort [bf16 value | rank tag] keys with the unstable network (u32 indices)  | bool         | true, false                                           | False    |
+ * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
  */
 // clang-format on
 template <
@@ -117,16 +118,15 @@ ALWI void topk_local_sort(
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
- * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
- * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
- * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
- * | rank_stamped    | Re-stamp both runs' rank tags and merge with the unstable network          | bool     | true, false                                           | False    |
- * | pre_tagged      | With rank_stamped: tags already ride in the keys (ttnn.sort's per-call     | bool     | true, false                                           | False    |
- * |                 | true-index fuse) — run the rank-stamped transport without re-stamping      |          |                                                       |          |
+ * | Argument        | Description                                                                | Type         | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|--------------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t     | Must be less than the size of the DST register buffer | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32        | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32        | {4, 8, 16, 32, 64}                                    | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool         | true, false                                           | False    |
+ * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool         | true, false                                           | False    |
+ * | rank_stamped    | Re-stamp both runs' rank tags and merge with the unstable network          | bool         | true, false                                           | False    |
+ * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
  */
 // clang-format on
 template <
@@ -135,7 +135,6 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
     bool rank_stamped = false,
-    bool pre_tagged = false,
     TopkTieOrder tie_order = TopkTieOrder::Unset>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     static_assert(
@@ -145,7 +144,13 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, idir, stable_sort, fused, rank_stamped, pre_tagged, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
+        (true /* APPROXIMATE */,
+         is_fp32_dest_acc_en,
+         idir,
+         stable_sort,
+         fused,
+         rank_stamped,
+         static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
         idst,
         VectorMode::RC_custom,
         m_iter,
@@ -174,17 +179,18 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool     | 0 to 1                                                | True     |
- * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
- * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
- * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
- * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
- * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
- * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
- * | rank_stamped    | Rebuild [bf16 value | rank tag] keys with the unstable network             | bool     | true, false                                           | False    |
+ * | Argument        | Description                                                                | Type         | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|--------------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t     | Must be less than the size of the DST register buffer | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool         | 0 to 1                                                | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32        | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32        | {4, 8, 16, 32, 64}                                    | True     |
+ * | logk            | The log of K                                                               | int32        | 2 to 6                                                | True     |
+ * | skip_second     | Whether or not to skip second tile                                         | int32        | 0 to 1                                                | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool         | true, false                                           | False    |
+ * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool         | true, false                                           | False    |
+ * | rank_stamped    | Rebuild [bf16 value | rank tag] keys with the unstable network             | bool         | true, false                                           | False    |
+ * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
  */
 // clang-format on
 template <
