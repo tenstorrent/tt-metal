@@ -10,6 +10,27 @@
 #include <umd/device/types/arch.hpp>
 
 namespace {
+// SYS-4948: first CMFW bundle whose DRAM telemetry lives on the relocated endpoints. Metal's noc0
+// assignment has to match wherever CMFW polls, so this threshold decides which endpoint pair the
+// descriptor loads.
+//
+// This is the bundle from tt-system-firmware PR #1452, which self-reports as 19.13.2.0. It is not
+// public: a board only reports it after being deliberately flashed with that bundle. The public
+// release line is far below it (latest tag v19.6.0), so any board that has not been flashed stays on
+// the pre-relocation endpoints, which is the safe direction -- it only costs bandwidth, whereas
+// selecting relocated endpoints on a CMFW that has not moved puts a noc on an endpoint CMFW polls
+// (the SYS-1419 hang).
+//
+// Revisit only if the relocation ends up shipping publicly under a different version than 19.13.2.
+constexpr tt::umd::FirmwareBundleVersion kBlackholeRelocatedDramEndpointFirmware(19, 13, 2);
+
+// FirmwareBundleVersion::compare_firmware_bundle normalizes major >= 80 to 0 as a legacy marker, so
+// such a threshold would compare below every real version and enable the relocation everywhere --
+// the opposite of raising the bar. Reject that outright rather than shipping it silently.
+static_assert(
+    kBlackholeRelocatedDramEndpointFirmware.major < 80,
+    "Threshold major >= 80 is treated as a legacy version and would match every firmware.");
+
 // True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
 // bit-masking convention used across the DRAM-view helpers below.
 bool is_dram_channel_harvested(uint32_t dram_harvesting_mask, size_t channel) {
@@ -253,8 +274,25 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const 
     return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
 }
 
-void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
+bool metal_SocDescriptor::uses_relocated_dram_endpoints(
+    const std::optional<tt::umd::FirmwareBundleVersion>& firmware_version) const {
+    // Only Blackhole reserves a CMFW-owned noc0 DRAM endpoint, so no other arch has a second
+    // assignment to choose between.
+    if (this->arch != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    // An unreadable version means we cannot prove CMFW has moved. Staying on the pre-relocation
+    // endpoints only costs bandwidth, whereas guessing wrong collides a noc with CMFW (SYS-1419).
+    if (!firmware_version.has_value()) {
+        return false;
+    }
+    return firmware_version.value() >= kBlackholeRelocatedDramEndpointFirmware;
+}
+
+void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(bool use_relocated_dram_endpoints) {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
+    const char* eth_endpoint_key = use_relocated_dram_endpoints ? "relocated_eth_endpoint" : "eth_endpoint";
+    const char* worker_endpoint_key = use_relocated_dram_endpoints ? "relocated_worker_endpoint" : "worker_endpoint";
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
     const size_t num_dram_views_in_descriptor = device_descriptor_yaml["dram_views"].size();
     this->dram_core_size = num_dram_views_in_descriptor * this->dram_view_size;
@@ -282,7 +320,15 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
-        const auto eth_endpoint_ids = dram_view["eth_endpoint"].as<std::vector<int>>();
+        TT_FATAL(
+            dram_view[eth_endpoint_key] && dram_view[worker_endpoint_key],
+            "DRAM view for channel {} is missing '{}'/'{}' in {}",
+            channel,
+            eth_endpoint_key,
+            worker_endpoint_key,
+            this->device_descriptor_file_path);
+
+        const auto eth_endpoint_ids = dram_view[eth_endpoint_key].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
         std::vector<size_t> eth_endpoints;
         eth_dram_cores.reserve(eth_endpoint_ids.size());
@@ -300,7 +346,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             eth_endpoints.push_back(eth_endpoint);
         }
 
-        const auto worker_endpoint_ids = dram_view["worker_endpoint"].as<std::vector<int>>();
+        const auto worker_endpoint_ids = dram_view[worker_endpoint_key].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> worker_dram_cores;
         std::vector<size_t> worker_endpoints;
         worker_dram_cores.reserve(worker_endpoint_ids.size());
@@ -399,9 +445,12 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // removing the harvested physical coordinates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& /*board_type*/) :
+metal_SocDescriptor::metal_SocDescriptor(
+    const SocDescriptor& other,
+    const tt::BoardType& /*board_type*/,
+    std::optional<tt::umd::FirmwareBundleVersion> firmware_version) :
     SocDescriptor(other) {
-    this->load_dram_metadata_from_device_descriptor();
+    this->load_dram_metadata_from_device_descriptor(this->uses_relocated_dram_endpoints(firmware_version));
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();
 }
