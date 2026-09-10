@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <algorithm>
+#include <array>
 #include <bit>
 
 namespace ttnn::prim {
@@ -306,53 +307,66 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
     const uint32_t idx_addr = t.indices.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
 
+    // Kernel argument grids are invariant across the cores in this dispatch.
+    auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx);
+
+    // Only the work range varies by core; refresh every address and scalar each dispatch.
+    std::array<uint32_t, kReaderArgCount> reader_values{};
+    reader_values[kReaderQAddr] = q_addr;
+    reader_values[kReaderKAddr] = k_addr;
+    reader_values[kReaderVAddr] = v_addr;
+    reader_values[kReaderIdxAddr] = idx_addr;
+    reader_values[kReaderKBatchOffset] = dyn.k_batch_tile_offset;
+    reader_values[kReaderVBatchOffset] = dyn.v_batch_tile_offset;
+    reader_values[kReaderKGroupStride] = dyn.k_group_tile_stride;
+    reader_values[kReaderVGroupStride] = dyn.v_group_tile_stride;
+    reader_values[kReaderChunkStart] = dyn.chunk_start_local;
+    std::array<uint32_t, kWriterArgCount> writer_values{};
+    writer_values[kWriterOutAddr] = out_addr;
+    writer_values[kWriterKAddr] = k_addr;
+    writer_values[kWriterVAddr] = v_addr;
+    writer_values[kWriterKBatchOffset] = dyn.k_batch_tile_offset;
+    writer_values[kWriterVBatchOffset] = dyn.v_batch_tile_offset;
+    writer_values[kWriterKGroupStride] = dyn.k_group_tile_stride;
+    writer_values[kWriterVGroupStride] = dyn.v_group_tile_stride;
+    std::array<uint32_t, kComputeArgCount> compute_values{};
+
     for (uint32_t i = 0; i < dyn.num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % dyn.grid.x, i / dyn.grid.x};
         const uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
         const uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
 
-        auto& reader = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        auto& reader = reader_args[core.x][core.y];
         TT_FATAL(
             reader.size() == kReaderArgCount,
             "sparse_sdpa_msa reader expected {} runtime args, cached program has {}",
             static_cast<uint32_t>(kReaderArgCount),
             reader.size());
-        reader[kReaderQAddr] = q_addr;
-        reader[kReaderKAddr] = k_addr;
-        reader[kReaderVAddr] = v_addr;
-        reader[kReaderIdxAddr] = idx_addr;
-        reader[kReaderWorkStart] = work_start;
-        reader[kReaderWorkCount] = work_count;
-        reader[kReaderKBatchOffset] = dyn.k_batch_tile_offset;
-        reader[kReaderVBatchOffset] = dyn.v_batch_tile_offset;
-        reader[kReaderKGroupStride] = dyn.k_group_tile_stride;
-        reader[kReaderVGroupStride] = dyn.v_group_tile_stride;
-        reader[kReaderChunkStart] = dyn.chunk_start_local;
+        reader_values[kReaderWorkStart] = work_start;
+        reader_values[kReaderWorkCount] = work_count;
+        std::copy(reader_values.begin(), reader_values.end(), reader.data());
 
-        auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        auto& writer = writer_args[core.x][core.y];
         TT_FATAL(
             writer.size() == kWriterArgCount,
             "sparse_sdpa_msa writer expected {} runtime args, cached program has {}",
             static_cast<uint32_t>(kWriterArgCount),
             writer.size());
-        writer[kWriterOutAddr] = out_addr;
-        writer[kWriterWorkStart] = work_start;
-        writer[kWriterWorkCount] = work_count;
-        writer[kWriterKAddr] = k_addr;
-        writer[kWriterVAddr] = v_addr;
-        writer[kWriterKBatchOffset] = dyn.k_batch_tile_offset;
-        writer[kWriterVBatchOffset] = dyn.v_batch_tile_offset;
-        writer[kWriterKGroupStride] = dyn.k_group_tile_stride;
-        writer[kWriterVGroupStride] = dyn.v_group_tile_stride;
+        writer_values[kWriterWorkStart] = work_start;
+        writer_values[kWriterWorkCount] = work_count;
+        std::copy(writer_values.begin(), writer_values.end(), writer.data());
 
-        auto& compute = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx, core);
+        auto& compute = compute_args[core.x][core.y];
         TT_FATAL(
             compute.size() == kComputeArgCount,
             "sparse_sdpa_msa compute expected {} runtime args, cached program has {}",
             static_cast<uint32_t>(kComputeArgCount),
             compute.size());
-        compute[kComputeWorkStart] = work_start;
-        compute[kComputeWorkCount] = work_count;
+        compute_values[kComputeWorkStart] = work_start;
+        compute_values[kComputeWorkCount] = work_count;
+        std::copy(compute_values.begin(), compute_values.end(), compute.data());
     }
 }
 
