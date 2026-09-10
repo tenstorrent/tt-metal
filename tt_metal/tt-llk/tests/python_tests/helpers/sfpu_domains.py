@@ -306,10 +306,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Asinh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # atanh: domain |x| < 1. The log1p reformulation is stable across the whole
-    # interior including the small-x region (catastrophic cancellation in the old
-    # form) and close to ±1, so sweep nearer the boundary; stay just inside ±1 to
-    # avoid the exact ±inf endpoints (covered separately by special-case tests).
+    # atanh: domain |x| < 1. The log1p form is stable across the whole interior, small x
+    # included, and close to ±1, so the sweep can run near the boundary; stay just inside
+    # ±1 to avoid the exact ±inf endpoints (covered separately by special-case tests).
     MathOperation.Atanh: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999
@@ -1663,7 +1662,7 @@ def format_specials(fmt: DataFormat) -> Tuple[float, ...]:
 #
 # Every dispatch constant this table probes at is imported from sfpu_dispatch_constants,
 # which UnarySFPUGolden reads too — so there is one number, not a copy per consumer, and a
-# threshold cannot move on the golden side while the probe stays where it was. Values
+# threshold cannot move on the golden side without the probe moving with it. Values
 # written literally below (hardsigmoid's [-3, 3], the rounding ties, the integer knees) are
 # properties of the mathematics rather than of a kernel's dispatch, so there is nothing on
 # the golden side for them to drift from.
@@ -1869,8 +1868,8 @@ _SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
 # arch-dependent -- SFPMAD flushes a negative zero on Wormhole and preserves it on Blackhole.
 SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
     {
-        # Enrolled unchanged: golden and kernel agree at every special the pipeline delivers,
-        # which is all this suite establishes -- not that the golden is independently right.
+        # Golden and kernel agree at every special the pipeline delivers, which is all this
+        # suite establishes -- not that the golden is independently right.
         MathOperation.Abs,  # |+/-inf| = +inf, |NaN| = NaN, |+/-0| = 0
         MathOperation.Acosh,
         MathOperation.Add1,
@@ -1925,18 +1924,20 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.Sqrt,  # sqrt(-inf) = NaN; kernel gives NaN for sqrt(-0), IEEE gives -0
         MathOperation.Rsqrt,  # rsqrt(+/-0) = +/-inf; same -0 divergence as Sqrt
         MathOperation.SqrtCustom,  # sqrt(-inf) gives -inf where IEEE gives NaN (issue #52930)
-        # Goldens that must route through torch: math.sin / cos / acos / asin / tan *raise* on a
-        # non-finite input instead of returning NaN. Any remaining `math.*` call is a latent repeat.
+        # These goldens have to route through torch: math.sin / cos / acos / asin / tan *raise*
+        # on a non-finite input instead of returning NaN, so a `math.*` call in a unary golden
+        # is the same trap.
         MathOperation.Sin,  # sin(+/-inf) = NaN, sin(+/-0) = +/-0
         MathOperation.Cos,  # cos(+/-inf) = NaN, cos(+/-0) = 1
         MathOperation.Acos,
         MathOperation.Asin,
         MathOperation.Tan,
-        # Goldens that needed a guard fixed: a finite-input test ("did this overflow?", "is this
-        # inside the shrink band?") answers false for NaN and routes it somewhere wrong.
-        MathOperation.Square,  # +/-inf -> +inf; golden's isfinite(x*x) test was false for NaN too
+        # Goldens whose guard has to test for a NaN before anything else: a finite-input
+        # question ("did this overflow?", "is this inside the shrink band?") answers false for
+        # a NaN too, which would route it down the wrong branch.
+        MathOperation.Square,  # +/-inf -> +inf, NaN -> NaN
         MathOperation.I0,  # +/-inf -> +inf (even, unbounded); torch.special.i0 gives NaN there
-        MathOperation.Hardshrink,  # NaN -> NaN; golden's |x| > lambda test is false for NaN
+        MathOperation.Hardshrink,  # NaN -> NaN, not shrunk to zero
         # The comparison family answers on the SFPU's total order, not IEEE's unordered compare:
         # +NaN ranks above every finite value, so a clamp lands on its upper bound rather than
         # propagating. sfpu_total_order_key models that. UnaryLt/Le/Max sit in the block above,
@@ -2185,12 +2186,11 @@ def specials_after_nan_sign_gate(
 # Both gates still have to pass -- this one says the *golden* defines an answer for a non-finite
 # operand, specials_safe() says the *pipeline* delivers one intact.
 #
-# Every candidate is driven over the (special, special) pairs on every specials-safe cell
-# before it is enrolled. The ops that agree with their golden everywhere are enrolled here;
-# those that diverge stay out, in _BINARY_SPECIALS_NOT_READY. The comparisons and min/max
-# answer on the SFPU's total order rather than IEEE's unordered comparison, which
-# BinarySFPUGolden models -- otherwise they read as kernel divergences the ISA specifies as
-# correct.
+# An op belongs here once it agrees with its golden at every (special, special) pair on every
+# specials-safe cell; the ones that diverge are in _BINARY_SPECIALS_NOT_READY. Note that the
+# comparisons and min/max answer on the SFPU's total order rather than IEEE's unordered
+# comparison, which BinarySFPUGolden models -- read as IEEE they look like kernel divergences
+# the ISA specifies as correct.
 BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
     {
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
@@ -2198,9 +2198,9 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
         MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
-        # Total order, and the reason max/min enrol where the six comparisons could not: their
-        # kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is the maximum and
-        # -NaN the minimum. The golden models sfpu_max/min, not torch's, which propagate.
+        # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
+        # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
+        # first. The golden models sfpu_max/min, not torch's, which propagate.
         MathOperation.SfpuBinaryMax,
         MathOperation.SfpuBinaryMin,  # torch.minimum propagates a NaN where the order returns b
         # IEEE unordered, because these kernels reject a NaN operand before comparing, leaving
