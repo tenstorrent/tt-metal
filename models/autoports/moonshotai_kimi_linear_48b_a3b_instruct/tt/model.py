@@ -55,12 +55,15 @@ class KimiLinearModel:
         self.layer_indices = list(range(cfg.num_hidden_layers)) if layers is None else list(layers)
         ck = checkpoint
         t0 = time.time()
+        # Embedding table sharded along HIDDEN across the mesh (189 MB/chip row-major): a 755 MB replicated row-major write
+        # hangs the dispatch cores on this QB2 (observed 2026-09-10, same class as the earlier 800 MB embedding hang). The
+        # lookup output [1,1,S,H/tp] is all-gathered to the replicated residual.
         self.embd_weight = as_device_tensor(
             mesh_device,
             None if ck is None else ck.embedding(),
-            name="embed_tokens",
+            name="embed_tokens_hs",
             dtype=ttnn.bfloat16,
-            shard_dim=None,
+            shard_dim=-1,
             cache_path=cache_path,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -125,7 +128,8 @@ class KimiLinearModel:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(x, (1, 1, x.shape[-2], x.shape[-1]))
+        x = ttnn.reshape(x, (1, 1, x.shape[-2], x.shape[-1]))  # [1,1,S,H/tp]
+        return self.ccl.all_gather(x, dim=3)
 
     def lm_head_logits(self, x: ttnn.Tensor, gather: bool = True) -> ttnn.Tensor:
         """x [1,1,S,hidden] -> logits [1,1,S,vocab] (gathered) or the vocab shard [1,1,S,vocab/tp]."""
