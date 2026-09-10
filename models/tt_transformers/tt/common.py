@@ -952,6 +952,13 @@ def create_tt_model(
     # (The warm-cache placeholder mapping is deliberately falsy, so test for None, not truthiness.)
     if state_dict is not None and not getattr(tt_model_args, "is_mixture_of_experts", False):
         tt_model_args.is_mixture_of_experts = any(".experts." in k for k in state_dict.keys())
+    if getattr(tt_model_args, "is_mixture_of_experts", False):
+        # Reused weights must initialize the same MoE configuration as load_state_dict.
+        tt_model_args.moe = True
+        expert_indices = [
+            int(k.split(".experts.")[1].split(".")[0]) + 1 for k in state_dict if "block_sparse_moe.experts." in k
+        ]
+        tt_model_args.num_experts = max(expert_indices) if expert_indices else tt_model_args.num_local_experts
 
     model = Transformer(
         args=tt_model_args,

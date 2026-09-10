@@ -28,6 +28,45 @@ from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc, is_blackhole
 
 
+@pytest.mark.parametrize("all_configs", [False, True])
+def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all_configs):
+    """Compiling an in-place penalty path must not penalize the next real replay."""
+    logits = torch.tensor([1.0, 2.0, 3.0])
+    original = logits.clone()
+    monkeypatch.setattr(ttnn, "clone", torch.clone)
+    log_probs = SimpleNamespace(logprobs_enabled=[False], num_logprobs=[0], enable_log_probs=False)
+
+    def set_log_probs_mode(enabled, num_logprobs):
+        log_probs.logprobs_enabled = enabled if isinstance(enabled, list) else [enabled]
+        log_probs.num_logprobs = num_logprobs if isinstance(num_logprobs, list) else [num_logprobs]
+        log_probs.enable_log_probs = any(log_probs.logprobs_enabled)
+
+    log_probs.set_log_probs_mode = set_log_probs_mode
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._penalties_active = True
+    sampling._trace_states = {}
+    sampling.tt_sampling = SimpleNamespace(
+        log_probs_calculator=log_probs, _force_argmax_sampling=True, _allow_force_argmax_sampling=True
+    )
+    compiled = []
+
+    def run_sampling(scratch, *, penalties_on, tt_out_tok, count_tokens):
+        assert not count_tokens, "Warmup must not add dummy samples to request history"
+        if penalties_on:
+            scratch.sub_(2.0)
+        compiled.append(penalties_on)
+
+    sampling._run_sampling = run_sampling
+    sampling.precompile(logits, all_configs=all_configs)
+
+    assert compiled
+    torch.testing.assert_close(logits, original, rtol=0, atol=0)
+    assert sampling._penalties_active is True
+    assert sampling.tt_sampling._force_argmax_sampling is True
+    assert log_probs.logprobs_enabled == [False]
+    assert log_probs.num_logprobs == [0]
+
+
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
     monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)

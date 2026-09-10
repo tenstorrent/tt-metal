@@ -350,6 +350,13 @@ class SamplingGenerator:
         if self._penalties_active:
             self.tt_penalties.reset_output_tokens()
 
+    def _copy_warmup_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        # clone chooses its own core grid, which can cross the prefetcher/worker
+        # sub-device boundary on Galaxy.
+        if self.sub_core_grids is not None:
+            return ttnn.identity(logits, sub_core_grids=self.sub_core_grids)
+        return ttnn.clone(logits)
+
     def precompile(
         self,
         logits: ttnn.Tensor,
@@ -372,6 +379,11 @@ class SamplingGenerator:
         callers pass ``skip_precompile=True``, executes its program for the first time inside a live
         trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
         """
+        # Capture's penalty precompile uses a copy because penalties rewrite
+        # logits in place. Warm that copy program before any trace is live too.
+        if all_configs or self._penalties_active:
+            logits = self._copy_warmup_logits(logits)
+
         if not all_configs:
             self._run_sampling(
                 logits,
@@ -432,7 +444,7 @@ class SamplingGenerator:
             )
             # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
             # leave the capture buffer already penalized and make the first replay penalize it twice.
-            scratch = ttnn.clone(logits) if penalties_on else logits
+            scratch = self._copy_warmup_logits(logits) if penalties_on else logits
             self._run_sampling(
                 scratch,
                 penalties_on=penalties_on,

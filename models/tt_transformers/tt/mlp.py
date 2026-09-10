@@ -341,19 +341,33 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if seq_len > 128 and mode != Mode.DECODE:
+        w2_output_dtype = activation_dtype
+        if w2_output_dtype is None:
+            w2_output_dtype = ttnn.bfloat16
+
+        if mode != Mode.DECODE and self.args.use_minimal_prefill_matmul(seq_len):
+            is_qwen3_32b_t3k = self.args.base_model_name == "Qwen3-32B" and self.args.device_name == "T3K"
+            if not is_qwen3_32b_t3k:
+                # None makes minimal_matmul inherit w2_in.dtype. Only the
+                # validated Qwen3-32B/T3K path overrides that default.
+                w2_output_dtype = None
+
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,
+                dtype=w2_output_dtype,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
             )
         else:
+            if TG:
+                w2_output_dtype = self.args.ccl_dtype
+
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
-                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+                dtype=w2_output_dtype,
                 program_config=None if use_tg_decode_no_prefetch else pc_2,
                 memory_config=(
                     ttnn.DRAM_MEMORY_CONFIG

@@ -237,6 +237,8 @@ class Generator(WarmupForwardMixin):
         # no output-processing allocation happens while a trace is live. See prefill_warmup.
         self._defer_trace_recording = False
         self._pending_prefill_traces: dict = {}
+        # None means programs are warm, but L1 inputs must be recreated after prefill.
+        self._prepared_decode_traces: dict = {}
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -457,6 +459,12 @@ class Generator(WarmupForwardMixin):
             enable_trace = False
 
         if not self.already_warmed_up_prefill:
+            if (
+                enable_trace
+                and not self._disable_decode_tracing
+                and getattr(self.model_args, "prepare_decode_before_prefill", False)
+            ):
+                self._prepare_decode_before_prefill(page_table, kv_cache, sampling_params is not None)
             self.prefill_warmup(
                 tokens,
                 page_table,
@@ -774,6 +782,9 @@ class Generator(WarmupForwardMixin):
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+                # Copies above have consumed these temporary logits. Do not keep
+                # the previous user's output alive across the next prefill replay.
+                del tt_logits_list
         if do_device_sampling and not use_batched_prefill and empty_slots:
             active_prefill_slots = {int(slot) for slot in empty_slots}
             fill_slot = int(empty_slots[0])
@@ -1654,7 +1665,54 @@ class Generator(WarmupForwardMixin):
             return tt_tok[0], None
         return tt_tok
 
-    def _capture_trace_text(
+    @staticmethod
+    def _decode_preparation_key(page_table, on_device_logits, is_cur_pos_sharded, is_page_table_sharded):
+        return (
+            on_device_logits,
+            is_cur_pos_sharded,
+            is_page_table_sharded,
+            None if page_table is None else tuple(page_table.shape),
+        )
+
+    def _prepare_decode_before_prefill(self, page_table, kv_cache, on_device_logits):
+        """Stage the initial decode programs and inputs before prefill traces exist."""
+        if any(self.trace_id_prefill.values()) or any(self.trace_ids_decode.values()):
+            return
+        batch = self.model_args.max_batch_size
+        if page_table is not None and page_table.shape[0] < batch:
+            page_table = torch.nn.functional.pad(page_table, (0, 0, 0, batch - page_table.shape[0]))
+        input_layouts = [(False, False)]
+        if (
+            page_table is not None
+            and self.model.paged_attention_config is not None
+            and page_table.shape[1] == self.model.paged_attention_config.max_num_blocks // batch
+        ):
+            # Galaxy's throughput demo shards both inputs; the serving warmup
+            # uses the default interleaved inputs with the same page-table shape.
+            input_layouts.append((True, True))
+        self.model.switch_mode("decode")
+        logger.info("Preparing decode before prefill trace capture")
+        for is_cur_pos_sharded, is_page_table_sharded in input_layouts:
+            key = self._decode_preparation_key(page_table, on_device_logits, is_cur_pos_sharded, is_page_table_sharded)
+            if key not in self._prepared_decode_traces:
+                self._prepared_decode_traces[key] = self._prepare_trace_decode(
+                    tokens=torch.zeros(batch, 1, dtype=torch.int32),
+                    # Inactive positions compile the same programs without modifying KV
+                    # entries that may already contain a cached prefix.
+                    current_pos=torch.full((batch,), -1, dtype=torch.int32),
+                    page_table=page_table,
+                    kv_cache=kv_cache[0],
+                    is_cur_pos_sharded=is_cur_pos_sharded,
+                    is_page_table_sharded=is_page_table_sharded,
+                    on_device_logits=on_device_logits,
+                )
+                if is_cur_pos_sharded or is_page_table_sharded:
+                    # These L1 buffers collide with prefill's static circular
+                    # buffers. Keep the compiled programs, not the warmup inputs.
+                    self._prepared_decode_traces[key] = None
+        self.model.switch_mode("prefill")
+
+    def _prepare_trace_decode(
         self,
         tokens,
         current_pos,
@@ -1664,9 +1722,7 @@ class Generator(WarmupForwardMixin):
         is_page_table_sharded=False,
         on_device_logits=False,
     ):
-        """
-        Captures a trace for the decode_forward method.
-        """
+        """Compile decode and sampling, and stage the persistent trace inputs."""
 
         # Compile run
         compile_out = self._decode_forward_no_trace_text(
@@ -1705,6 +1761,40 @@ class Generator(WarmupForwardMixin):
             if compile_logits is not None:
                 logger.info("Pre-compiling sampling path before decode trace capture")
                 sampling_module.precompile(logits=compile_logits, tt_out_tok=tokens_tt, all_configs=True)
+
+        return tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
+
+    def _capture_trace_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
+        on_device_logits=False,
+    ):
+        key = self._decode_preparation_key(page_table, on_device_logits, is_cur_pos_sharded, is_page_table_sharded)
+        if key in self._prepared_decode_traces:
+            prepared = self._prepared_decode_traces.pop(key)
+            if prepared is None:
+                # Prefill and decode intentionally reuse this L1 space. These
+                # are trace inputs, not program-cache allocations.
+                with ttnn.corruptible_allocation_scope(self.mesh_device):
+                    prepared = self.model.prepare_inputs_decode(
+                        tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+                    )
+        else:
+            prepared = self._prepare_trace_decode(
+                tokens,
+                current_pos,
+                page_table,
+                kv_cache,
+                is_cur_pos_sharded,
+                is_page_table_sharded,
+                on_device_logits,
+            )
+        tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = prepared
 
         # Save the buffer addresses for preallocated tensors.
         # Same reasoning as the prefill capture: everything allocated inside the capture window

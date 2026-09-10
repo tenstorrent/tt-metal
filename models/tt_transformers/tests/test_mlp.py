@@ -34,7 +34,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (64 * 1024, 32 * 1024, 512, 32),
+    (64 * 1024, 32 * 1024, 512, 128, 32),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -112,6 +112,15 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     )
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
+
+    # Qwen3-32B/T3K keeps BF16 across the linear/minimal prefill boundary.
+    # Other models preserve the original minimal-matmul BF8 output default.
+    if not model_args.is_galaxy:
+        qwen_t3k = model_args.base_model_name == "Qwen3-32B" and model_args.device_name == "T3K"
+        expected_dtype = ttnn.bfloat16
+        if seq_len > 128 and not qwen_t3k:
+            expected_dtype = ttnn.bfloat8_b
+        assert tt_output.dtype == expected_dtype
 
     tt_output_torch = ttnn.to_torch(
         tt_output,

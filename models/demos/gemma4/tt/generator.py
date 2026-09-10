@@ -1604,7 +1604,17 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         enable_trace,
         can_sample_on_device,
         greedy_only: bool = False,
+        decode_page_table=None,
     ):
+        # The prefill sweep uses narrower tables, which are unsuitable
+        # for Gemma's batch-keyed decode traces and hybrid per-layer tables.
+        prepared_decode = None
+        if enable_trace and not self.already_warmed_up_prefill and decode_page_table is not None:
+            prepared_decode = self._prepare_decode_trace_for_warmup(
+                kv_cache=kv_cache,
+                page_table=decode_page_table,
+                on_device_sampling=can_sample_on_device,
+            )
         warmup_gemma4_model_prefill(
             self,
             kv_cache,
@@ -1612,6 +1622,21 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             can_sample_on_device=can_sample_on_device,
             greedy_only=greedy_only,
         )
+        if prepared_decode is not None:
+            # Complete trace setup before serving real requests. The eager
+            # preparation above wrote dummy K/V; capture only records commands.
+            previous_mode = self.mode
+            self.mode = Mode.DECODE
+            for model in self.model:
+                model.switch_mode(Mode.DECODE)
+            try:
+                trace_ids, outputs, *inputs = self._record_decode_trace_text(prepared_decode)
+            finally:
+                self.mode = previous_mode
+            key = (can_sample_on_device, int(decode_page_table.shape[0]) // self.data_parallel)
+            self.trace_ids_decode[key] = trace_ids
+            self.trace_inputs_decode[key] = inputs
+            self.trace_output_decode[key] = outputs
 
     def prefill_forward_text(
         self,
