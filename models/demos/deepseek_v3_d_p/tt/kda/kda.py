@@ -126,7 +126,7 @@ class ttKDA:
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
         self.recurrent_state_memory_config = kda_nd_dram_memory_config(
-            mesh_device,
+            self.weights.input_projection,
             (1, 1, self.config.head_k_dim, ttnn.TILE_SIZE),
         )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(

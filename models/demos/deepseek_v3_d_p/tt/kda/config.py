@@ -26,13 +26,13 @@ KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
 def kda_nd_dram_memory_config(
-    device: ttnn.Device | ttnn.MeshDevice,
+    anchor: ttnn.Tensor,
     shard_shape: Sequence[int],
 ) -> ttnn.MemoryConfig:
     """Create the canonical bank-round-robin DRAM layout for a KDA carry."""
-    dram_grid = device.dram_grid_size()
+    num_dram_banks = min(tensor.device().dram_grid_size().x for tensor in ttnn.get_device_tensors(anchor))
     bank_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(dram_grid.x)]
+        [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(num_dram_banks)]
     )
     return ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
