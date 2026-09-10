@@ -85,7 +85,7 @@ def _assert_close(name, got, ref, dtype):
     )
 
 
-# Covers the asymptotic |x| > 10 branch and the ±88.5 input clamp.
+# Covers the asymptotic |x| > 10 branch.
 # Range [-50, 50] keeps reference values within FP32 (i1(50) ≈ 2.93e20).
 @pytest.mark.parametrize(
     "shapes",
@@ -120,22 +120,10 @@ def test_i1_ood(device, shapes, dtype):
     _assert_close("test_i1_ood", output_tensor, torch_output_tensor, dtype)
 
 
-# Boundary inputs straddling the |x| > 10 branch and the ±88.5 clamp.
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
-def test_i1_clamp_boundary(device, dtype):
-    boundaries = torch.tensor(
-        [-100.0, -88.5, -88.0, -10.5, -10.0, -9.5, 9.5, 10.0, 10.5, 88.0, 88.5, 100.0],
-        dtype=torch.float32,
-    )
-    # i1 is unbounded; out-of-clamp inputs (|x| > 88.5) return i1(±88.5).
-    expected_input = torch.clamp(boundaries, min=-88.5, max=88.5)
-    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    expected_input = expected_input.to(torch_dtype).to(torch.float32)
-    torch_output_tensor = torch.special.i1(expected_input)
-
-    # Pad to a tile-aligned shape so we can run on device.
+def _run_on_device(values, device, dtype):
+    """Push a 1-D list of float32 values through ttnn.i1, padded to one tile."""
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
-    padded[0, 0, 0, : boundaries.numel()] = boundaries
+    padded[0, 0, 0, : values.numel()] = values
 
     input_tensor_a = ttnn.from_torch(
         padded,
@@ -145,6 +133,73 @@ def test_i1_clamp_boundary(device, dtype):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output_tensor = ttnn.to_torch(output_tensor)[0, 0, 0, : boundaries.numel()]
+    return ttnn.to_torch(output_tensor)[0, 0, 0, : values.numel()]
 
-    _assert_close("test_i1_clamp_boundary", output_tensor, torch_output_tensor, dtype)
+
+# Boundary inputs straddling the |x| > 10 branch, the point where exp() alone
+# would overflow FP32 (88.72284), and the point where i1 itself does (91.90626).
+#
+# The golden is computed from the *unclamped* input on purpose. An earlier
+# version of this test clamped its own reference to ±88.5 to match the kernel,
+# which made it assert that the device reproduces a clamp rather than that it
+# computes i1, and left the whole region above the clamp untested.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_i1_large_magnitude(device, dtype):
+    boundaries = torch.tensor(
+        [
+            -91.5,
+            -90.0,
+            -89.0,
+            -88.72284,
+            -88.5,
+            -88.0,
+            -50.0,
+            -10.5,
+            -10.0,
+            -9.5,
+            9.5,
+            10.0,
+            10.5,
+            50.0,
+            88.0,
+            88.5,
+            88.72284,
+            89.0,
+            90.0,
+            91.5,
+        ],
+        dtype=torch.float32,
+    )
+    # Quantise the reference input to the device dtype so we measure kernel
+    # error, not input-quantisation noise. No clamp: i1 is finite and
+    # representable at every point here, in both dtypes.
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    ref_input = boundaries.to(torch_dtype).to(torch.float32)
+    torch_output_tensor = torch.special.i1(ref_input.double()).float()
+    assert torch.isfinite(torch_output_tensor).all()
+
+    output_tensor = _run_on_device(boundaries, device, dtype)
+
+    _assert_close("test_i1_large_magnitude", output_tensor, torch_output_tensor, dtype)
+
+
+# i1 grows without bound, so past its own overflow point the only correct answer
+# is ±Inf. Returning a finite value there turns an out-of-range input into a
+# plausible in-range answer that nothing downstream can detect, so this is
+# asserted explicitly rather than left to a tolerance.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_i1_overflow_saturates_to_inf(device, dtype):
+    values = torch.tensor(
+        [92.0, 100.0, 1000.0, 3.0e38, float("inf"), -92.0, -100.0, -1000.0, -3.0e38, float("-inf")],
+        dtype=torch.float32,
+    )
+    output_tensor = _run_on_device(values, device, dtype)
+
+    expected_sign = torch.sign(values)
+    assert torch.isinf(output_tensor).all(), (
+        f"i1 must saturate to ±Inf once it overflows {dtype}; got {output_tensor.float().tolist()} "
+        f"for {values.tolist()}"
+    )
+    assert torch.equal(torch.sign(output_tensor.float()), expected_sign), (
+        f"i1 is odd, so the saturated value must keep the input's sign; " f"got {output_tensor.float().tolist()}"
+    )

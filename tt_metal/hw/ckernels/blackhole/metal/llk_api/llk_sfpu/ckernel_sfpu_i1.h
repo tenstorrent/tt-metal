@@ -6,8 +6,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_bessel_common.h"
 #include "ckernel_sfpu_recip.h"
-#include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
@@ -22,7 +22,7 @@ namespace ckernel::sfpu {
 //              FP32: 7 numer + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
 //   |x| > 10:  asymptotic expansion
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
-//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
+//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 92].
 //
 // Code shape (chosen to relieve SFPI LRA budget):
 //   1. Compute polynomial result unconditionally and store to DST.
@@ -32,7 +32,16 @@ namespace ckernel::sfpu {
 // register allocator schedule the two paths sequentially rather than
 // keeping the polynomial alive across the asymptotic block.
 //
-// Inputs are clamped to [-88.5, 88.5] to avoid exp() overflow.
+// Inputs are clamped to [-92, 92], which is i1's own FP32 overflow point
+// (91.90626) rounded up, not exp's (88.72284). The two differ because the
+// asymptotic value carries a 1/sqrt(2·pi·|x|) ≈ 1/23.6 divisor, so i1 stays
+// representable for ln(sqrt(2·pi·88.5)) = 3.16 more of domain than the bare
+// exp(|x|) intermediate does. The intermediate is kept in range by evaluating
+// exp(|x|)/2^32 and rescaling at the end (see calculate_i1_asymptotic_), so the
+// only operation that can overflow is that final rescale — and overflowing
+// there is the correct answer, because that is where i1 itself leaves FP32.
+// Every |x| > 92, including +/-Inf, therefore lands on +/-Inf rather than on
+// the finite value of i1 at the clamp point.
 // In-domain accuracy is unchanged from the polynomial-only baseline.
 // OOD accuracy: ~10⁶ FP32 ULP (clamping) → <60 FP32 ULP (asymptotic with
 // accurate FP32 exp).
@@ -40,58 +49,46 @@ namespace ckernel::sfpu {
 // APPROXIMATION_MODE: only affects the reciprocal NR iteration count.
 // ======================================================================
 
-// Asymptotic path is outlined to keep register pressure within SFPI's
-// LRA budget. Returns sign(x_signed) · exp(|x|) · 1/sqrt(|x|) · P(1/|x|).
-// Note: this function must stay minimalist — SFPU LRA is limited.
-// Every operation here competes with the main loop.
+// Asymptotic path: shared machinery lives in ckernel_sfpu_bessel_common.h; this
+// wrapper carries P's coefficients (fit on y ∈ [1/92, 0.1], max rel err 1.052e-9
+// in float64), the 2^32 rescale folded into each coefficient (exact power of two,
+// so the emitted constants change but no mantissa does), and the final sign
+// fix-up — i1 is odd, i0 is not.
+//
+// exp_abs · rsqrt_y peaks at 2.2e29 for |x|=92, so the rescaled polynomial
+// multiply is the only operation here that can overflow — which is correct,
+// because that is where i1 itself leaves FP32.
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
-    // exp(|x|) — unsafe variants in both paths: |x|∈[10,88.5] precludes
-    // overflow/underflow, so the safe wrappers' clamping/guards are dead
-    // and skipped.
 #ifdef INP_FLOAT32
-    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
+    const sfpi::vFloat mag = _bessel_asymptotic_<true>(
 #else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
+    const sfpi::vFloat mag = _bessel_asymptotic_<false>(
 #endif
-
-    // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
-    // Computed first so that 1/|x| can be derived as rsqrt_y² without a
-    // separate sfpu_reciprocal call.
-    const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
-    sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
-    sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
-    c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
-
-    // 1/|x| = (1/√|x|)² — reuses the refined rsqrt instead of a fresh reciprocal.
-    const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
-
-    // P(y), degree-5 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-9.
-    // This outlined function does not stress the main loop's LRA, so full precision is safe.
-    const sfpi::vFloat correction = PolynomialEvaluator::eval(
-        inv_abs_x,
+        abs_x,
         3.9894228967e-01f,
         -1.4960495444e-01f,
         -4.6652925320e-02f,
         -4.3674591560e-02f,
         -1.9748322314e-02f,
         -3.3467922914e-01f);
-
-    // i1 is odd: copy sign of original x onto positive magnitude.
-    return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
+    return sfpi::copysgn(mag, x_signed);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
-    constexpr float I1_MAX_INPUT = 88.5f;
+    // i1, not exp: i1(x) leaves FP32 at |x| = 91.90626, exp(x) at 88.72284.
+    // Clamping at the larger bound keeps the 3.16 of domain in between, on which
+    // i1 is finite and representable, and sends everything above it to +/-Inf,
+    // which is the correct saturation for a function that has left the format.
+    constexpr float I1_MAX_INPUT = 92.0f;
     constexpr float I1_THRESHOLD = 10.0f;
 
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
+        // Clamp to [-92, 92] — past that i1 has overflowed FP32, so the clamped
+        // input reaches the asymptotic path and overflows to ±Inf on its own.
         x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
 
         const sfpi::vFloat abs_x = sfpi::abs(x);
