@@ -28,8 +28,8 @@ from models.experimental.xtts.config import (
     SESSION_TRACE_REGION,
     STOP_AUDIO_TOKEN,
     STOP_TEXT_TOKEN,
-    TILE,
 )
+from models.experimental.xtts.tests.pcc.test_tt_trace import TRACE_MAX_SEQ
 from models.experimental.xtts.reference.xtts_conditioning import load_coqui_test_audio
 from models.experimental.xtts.reference.xtts_gpt_generate import wrap_text_ids
 from models.experimental.xtts.reference.xtts_inference import XttsReference
@@ -39,6 +39,7 @@ from models.experimental.xtts.tt.xtts_inference import TtXtts
 from models.experimental.xtts.tt.xtts_sampler import TtSampler
 
 REF_SECONDS = 6
+PAD_TO = 96  # matches the traced suite so prefill kernels are shared
 SAMPLING = dict(
     temperature=GENERATION.temperature,
     top_k=GENERATION.top_k,
@@ -68,7 +69,10 @@ def _inputs(device, xtts_state_dict):
     )
     ids = wrap_text_ids(preprocess_text("Hello world", lang="en"))
     real_len = ids.shape[1]
-    pad_to = -(-real_len // TILE) * TILE
+    # Pad to the width the rest of the traced tests use rather than this text's own tile
+    # multiple: a unique pad_to/max_seq mints a whole 30-layer kernel set that no other test
+    # reuses, and on CI's cold cache that compile dominated the suite's runtime.
+    pad_to = PAD_TO
     padded = torch.nn.functional.pad(ids, (0, pad_to - real_len), value=STOP_TEXT_TOKEN)
     tt = TtXtts(device, xtts_state_dict, reference.decoder_full)
     return tt, wav, spk_tt, padded, real_len, pad_to
@@ -89,8 +93,14 @@ def _assert_empty_audio(wav_dev, where):
 
 
 def _max_seq(pad_to, budget):
-    """KV geometry for a prompt of pad_to text tokens and a budget-code decode."""
-    return -(-(NUM_LATENTS + pad_to + budget + 2) // TILE) * TILE
+    """The shared KV geometry, asserted big enough for this prompt and budget.
+
+    Decode is bit-identical across cache depths (test_gpt_decode_max_seq_sweep covers
+    160/384/608/992), so an oversized cache costs nothing but shares kernels with every other
+    traced test.
+    """
+    assert NUM_LATENTS + pad_to + budget + 2 <= TRACE_MAX_SEQ, "budget does not fit the shared max_seq"
+    return TRACE_MAX_SEQ
 
 
 @pytest.mark.parametrize(
