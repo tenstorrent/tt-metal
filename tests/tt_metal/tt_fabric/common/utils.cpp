@@ -1030,8 +1030,20 @@ void expect_galaxy_rank_group_4x1_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                     << " 4x1 rank group fabric nodes must be on the same host";
 
+    // A 4x1 RING is a 4-cycle, and so is a 2x2 halftray, so the placement may seat a 4x1 rank group on one
+    // tray's halftray ({1,2,5,6} or {3,4,7,8}) instead of a tray pair's shared column. Both are accepted:
+    // the halftray layout when the group sits on one tray, the column layout when it spans two.
+    static const std::set<std::set<uint32_t>> valid_halftray_asic_location_groups = {{1, 2, 5, 6}, {3, 4, 7, 8}};
+    if (trays.size() == 1) {
+        EXPECT_TRUE(valid_halftray_asic_location_groups.contains(all_asic_locations))
+            << "mesh " << *mesh_id << " host_rank " << *host_rank
+            << " 4x1 rank group on a single tray must use a halftray asic location group {1,2,5,6} or {3,4,7,8}, "
+               "got a different set";
+        return;
+    }
+
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
-                                << " 4x1 rank group must sit on exactly two trays";
+                                << " 4x1 rank group must sit on exactly two trays (or one halftray)";
 
     // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping ({1,2}/{3,4}); only Blackhole rev-A/B uses
     // {1,3}/{2,4}.
