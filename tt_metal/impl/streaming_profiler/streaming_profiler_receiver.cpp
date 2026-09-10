@@ -109,6 +109,9 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
             receiver->ingest_threads_.emplace_back(&Receiver::ingest_thread, receiver.get(), std::move(owned));
         }
     }
+    // The ingest threads are draining the sockets now, so the idle pushers will not block; launch the boot-time
+    // eth link syncs (their armed producers need that live drain). Skipped when nothing was planned.
+    receiver->relays_->run_link_sync();
     return receiver;
 }
 

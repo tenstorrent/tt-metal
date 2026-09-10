@@ -14,6 +14,14 @@
 // against its wall clock, exactly the local tracker's record with the link kind. The host pairs the two ends of
 // a round by index and fits refclk against refclk, so DVFS on either chip's wall clock cannot enter the link
 // solve. Streaming backend only: the DRAM profiler's build of this kernel is untouched.
+// Room for n words in this core's SPSC ring, non-blocking. The burst runs during bring-up before the host
+// receiver drains, so the pusher cannot free the ring mid-burst and a blocking reserve would deadlock the
+// pair; room only shrinks, so each side keeps a contiguous prefix of rounds that the host pairs by index.
+FORCE_INLINE bool link_clock_room(uint32_t n) {
+    invalidate_l1_cache();
+    return (kernel_profiler::wIndex - kernel_profiler::profiler_control_buffer[kernel_profiler::HEAD_INDEX]) <=
+           (kernel_profiler::RING_USABLE - n);
+}
 FORCE_INLINE void link_clock_stamp() {
     const uint32_t wlo = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);  // reading L latches H: L first
     const uint32_t whi = *reinterpret_cast<volatile uint32_t*>(0xFFB121F8);
@@ -24,15 +32,13 @@ FORCE_INLINE void link_clock_stamp() {
     if (*rhip != h1) {  // no latch on the refclk pair: guard a 2^32 splice
         rlo = *rlop;
     }
-    // Reserve first: ring_write_word stores without checking room, so every caller must. Blocking is right
-    // here -- a one-shot boot kernel waits for the idle-eth pusher to drain, as the zone macros do.
-    kernel_profiler::ring_ensure_room(3);
     kernel_profiler::ring_write_sticky_timer(whi);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w0(kernel_profiler::ppfmt::CLOCK_LINK_REFCLK, rlo));
     kernel_profiler::ring_write_word(wlo);
     kernel_profiler::publish_tail();
 }
 #else
+FORCE_INLINE bool link_clock_room(uint32_t) { return false; }
 FORCE_INLINE void link_clock_stamp() {}
 #endif
 
@@ -65,8 +71,12 @@ FORCE_INLINE void run_loop_iteration(
             while (channel_sync_addrs[i]->bytes_sent == 0) {
                 invalidate_l1_cache();
             }
+#if !defined(PROFILE_STREAMING)
             DeviceZoneScopedN("SYNC-ZONE-RECEIVER");
-            link_clock_stamp();  // arrival
+#endif
+            if (link_clock_room(3)) {
+                link_clock_stamp();  // arrival (t1)
+            }
 
             channel_sync_addrs[i]->bytes_sent = 0;
             channel_sync_addrs[i]->receiver_ack = 0;

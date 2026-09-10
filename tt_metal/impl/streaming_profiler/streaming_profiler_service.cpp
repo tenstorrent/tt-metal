@@ -190,6 +190,7 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
                 "d2d-sync",
                 [](const api::Batch<api::RecordType::All>&, uint64_t) {},
                 ConsumerHooks{
+                    .on_attach = [c](const CaptureContext& ctx) { c->on_attach(ctx); },
                     .clock_sink = [c](const ClockSample& cs) { c->on_clock(cs); },
                     .on_capture_end = [c](const CaptureContext& ctx) { c->on_capture_end(ctx); }});
         }

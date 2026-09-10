@@ -337,7 +337,7 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
         devices_.push_back(std::move(ctx));
     }
     if (!devices_.empty()) {
-        launch_link_sync(mesh_device);
+        plan_link_sync();
     }
     if (!devices_.empty()) {
         log_info(
@@ -875,21 +875,19 @@ void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
     }
     for (const EthPusher& e : ctx.eth) {
         write_eth_ctrl_word(ctx, e.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
-        for (const EthPusher::Linked& ln : e.linked) {
-            const uint32_t v = armed ? 1u : 0u;
-            MetalContext::instance(context_id_)
-                .get_cluster()
-                .write_core(
-                    &v,
-                    sizeof(v),
-                    tt_cxy_pair(ctx.chip_id, ln.virt),
-                    ln.prof_l1 + kernel_profiler::PROFILER_ARMED * sizeof(uint32_t));
-        }
     }
+    // The linked ACTIVE eth cores are deliberately left UNARMED. Their sync-kernel link stamps are non-blocking, and
+    // unarmed the FW-level blocking zone writes overwrite rather than wait, so an active core can never wedge on a
+    // full ring while the idle pusher is briefly behind. The pusher drains them all the same: publish_tail advances
+    // the tail regardless of the arm flag, and the pusher reads to that tail.
 }
 
-void Devices::launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    (void)mesh_device;
+// Plan the boot-time eth link syncs (metadata only): every connected active-eth pair of local devices, when fabric
+// is DISABLED. After fabric init those cores hold live routers; a launch onto one would write a launch message into
+// a router, so under fabric the link half must come from the router's own hook instead. run_link_sync() launches
+// the kernels later, once the host receiver is draining -- the sync kernels are armed profiler producers whose rings
+// the idle pusher can only drain to a FIFO the receiver is emptying.
+void Devices::plan_link_sync() {
     auto& mc = MetalContext::instance(context_id_);
     if (mc.get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         log_info(
@@ -899,7 +897,6 @@ void Devices::launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& m
         return;
     }
     auto& cluster = mc.get_cluster();
-    uint32_t pairs = 0;
     for (size_t a = 0; a < devices_.size(); a++) {
         const uint32_t chip_a = devices_[a].chip_id;
         const auto connected = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_a);
@@ -912,39 +909,6 @@ void Devices::launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& m
             const CoreCoord eth_sender = it->second[0];
             const CoreCoord eth_receiver =
                 std::get<1>(cluster.get_connected_ethernet_core(std::make_tuple(chip_a, eth_sender)));
-            const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
-            Program ps = CreateProgram();
-            Program pr = CreateProgram();
-            CreateKernel(
-                ps,
-                "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
-                eth_sender,
-                EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
-            CreateKernel(
-                pr,
-                "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
-                eth_receiver,
-                EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
-            // Never launch a binary that failed to compile (an eth core with no valid binary wedges).
-            try {
-                detail::CompileProgram(devices_[a].device, ps, /*force_slow_dispatch=*/true);
-                detail::CompileProgram(devices_[b].device, pr, /*force_slow_dispatch=*/true);
-            } catch (const std::exception& ex) {
-                log_warning(
-                    tt::LogMetal,
-                    "[streaming profiler] link sync {}<->{}: sync kernels failed to compile ({}); pair skipped",
-                    chip_a,
-                    chip_b,
-                    ex.what());
-                continue;
-            }
-            detail::LaunchProgram(
-                devices_[a].device, ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-            detail::LaunchProgram(
-                devices_[b].device, pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-            detail::WaitProgramDone(devices_[a].device, ps, /*read_device_profiler_results=*/false);
-            detail::WaitProgramDone(devices_[b].device, pr, /*read_device_profiler_results=*/false);
-            pairs++;
             links_.push_back(CaptureContext::Link{
                 .dev_a = static_cast<uint32_t>(a),
                 .dev_b = static_cast<uint32_t>(b),
@@ -952,20 +916,61 @@ void Devices::launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& m
                 .chip_b = chip_b,
                 .eth_a = eth_sender,
                 .eth_b = eth_receiver});
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] link sync {} eth({},{}) <-> {} eth({},{}): {} rounds",
-                chip_a,
-                eth_sender.x,
-                eth_sender.y,
-                chip_b,
-                eth_receiver.x,
-                eth_receiver.y,
-                kLinkSyncSamples);
         }
     }
-    if (pairs == 0 && devices_.size() > 1) {
+    if (links_.empty() && devices_.size() > 1) {
         log_warning(tt::LogMetal, "[streaming profiler] link sync: no eth connection between the local devices");
+    }
+}
+
+// Launch each planned link sync. Called AFTER the receiver's ingest threads are up: the sync kernels emit their
+// PP_CLOCK(LINK) stamps into the active cores' rings, the idle pushers drain those rings over their sockets, and the
+// receiver empties the FIFOs -- so the pushers never block and the burst completes. Running this during boot()
+// deadlocked instead: the FIFO filled with no reader, the pusher parked in socket_reserve_pages, and the armed sync
+// kernels wedged an eth core (a board reset). A binary that failed to compile is never launched.
+void Devices::run_link_sync() {
+    for (const CaptureContext::Link& L : links_) {
+        IDevice* dev_a = devices_[L.dev_a].device;
+        IDevice* dev_b = devices_[L.dev_b].device;
+        const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
+        Program ps = CreateProgram();
+        Program pr = CreateProgram();
+        CreateKernel(
+            ps,
+            "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
+            L.eth_a,
+            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+        CreateKernel(
+            pr,
+            "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
+            L.eth_b,
+            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+        try {
+            detail::CompileProgram(dev_a, ps, /*force_slow_dispatch=*/true);
+            detail::CompileProgram(dev_b, pr, /*force_slow_dispatch=*/true);
+        } catch (const std::exception& ex) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] link sync {}<->{}: sync kernels failed to compile ({}); pair skipped",
+                L.chip_a,
+                L.chip_b,
+                ex.what());
+            continue;
+        }
+        detail::LaunchProgram(dev_a, ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        detail::LaunchProgram(dev_b, pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        detail::WaitProgramDone(dev_a, ps, /*read_device_profiler_results=*/false);
+        detail::WaitProgramDone(dev_b, pr, /*read_device_profiler_results=*/false);
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] link sync {} eth({},{}) <-> {} eth({},{}): {} rounds",
+            L.chip_a,
+            L.eth_a.x,
+            L.eth_a.y,
+            L.chip_b,
+            L.eth_b.x,
+            L.eth_b.y,
+            kLinkSyncSamples);
     }
 }
 

@@ -65,6 +65,9 @@ public:
     // After the relays swept to empty and the capture detached: the producer-owned stall counters, and every
     // worker lane's own tail against the consumed-words mirror `heads` (empty when nothing decoded the device).
     void verify_completeness(uint32_t device_index);
+    // Launch the planned boot-time eth link syncs. MUST be called after the host receiver's ingest threads
+    // are draining the sockets, or the armed sync kernels wedge on a FIFO no reader empties.
+    void run_link_sync();
     // The eth link syncs launch_link_sync() ran at boot, for the consumers' CaptureContext.
     const std::vector<CaptureContext::Link>& links() const { return links_; }
 
@@ -144,7 +147,7 @@ private:
     // One-shot device<->device link sync at boot: the eth sync kernels on every connected active-eth pair of local
     // devices, whose SYNC-ZONE zones the idle pushers then drain. Only when fabric is DISABLED: after fabric init
     // those cores hold live routers, and a launch onto one would write a launch message into a router.
-    void launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    void plan_link_sync();
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
     // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
     void set_producers_armed(const DeviceCtx& ctx, bool armed);
