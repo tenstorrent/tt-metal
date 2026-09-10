@@ -1257,6 +1257,16 @@ class MiniMaxH3Pipeline:
                 if self.audio_t_factor > 1
                 else None
             )
+            # T is a line: the DiT's Ring manager would wrap the last (pad) shard onto t=0.
+            audio_ccl = (
+                CCLManager(
+                    mesh_device=self.mesh_device,
+                    num_links=self.ccl_manager.num_links,
+                    topology=ttnn.Topology.Linear,
+                )
+                if audio_parallel_config is not None
+                else None
+            )
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1266,7 +1276,7 @@ class MiniMaxH3Pipeline:
                 resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
-                ccl_manager=self.ccl_manager,
+                ccl_manager=audio_ccl,
                 parallel_config=audio_parallel_config,
                 split_mode=self.audio_split_mode,
             )
