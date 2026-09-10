@@ -172,14 +172,15 @@ class KimiExperts:
         """
         T = x.shape[2]
         E, I, H = self.E, self.I_loc, self.H
-        chunk = chunk or min(self.prefill_dense_chunk, T)
-        while T % chunk:
-            chunk //= 2
+        step = (
+            chunk or self.prefill_dense_chunk
+        )  # sub-chunks of up to ``step`` rows; any tile multiple works for a dense matmul
         down_flat = ttnn.reshape(self.down, (1, 1, E * I, H))  # view; E,I contiguous in [1,E,I,H]
         outs = []
-        for s in range(0, T, chunk):
-            xs = x if T == chunk else ttnn.slice(x, (0, 0, s, 0), (1, 1, s + chunk, H))
-            rs = routing if T == chunk else ttnn.slice(routing, (0, 0, s, 0), (1, 1, s + chunk, E))
+        for s in range(0, T, step):
+            n = min(step, T - s)
+            xs = x if n == T else ttnn.slice(x, (0, 0, s, 0), (1, 1, s + n, H))
+            rs = routing if n == T else ttnn.slice(routing, (0, 0, s, 0), (1, 1, s + n, E))
             g = ttnn.matmul(
                 xs,
                 self.gate,
@@ -202,7 +203,7 @@ class KimiExperts:
             )  # [1,E,S,1] per-row expert weights (0 for non-selected)
             hp = ttnn.permute(h, (0, 2, 1, 3))  # [1,S,E,I]
             ttnn.deallocate(h)
-            hp = ttnn.reshape(hp, (1, 1, chunk, E * I))
+            hp = ttnn.reshape(hp, (1, 1, n, E * I))
             o = ttnn.matmul(
                 hp,
                 down_flat,
