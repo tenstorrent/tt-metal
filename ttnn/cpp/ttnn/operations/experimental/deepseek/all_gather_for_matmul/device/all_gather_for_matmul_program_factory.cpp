@@ -49,6 +49,7 @@ ProgramDescriptor create_gather_descriptor(
     const uint32_t untilized_shard_bytes = shard_height * shard_width_bytes;
     const uint32_t full_tensor_bytes = output_shard.shape[0] * full_width_bytes;
     const uint32_t bbox_num_cores = output_bbox.grid_size().x * output_bbox.grid_size().y;
+    const bool skip_untilize = input.layout() == Layout::ROW_MAJOR;
 
     ProgramDescriptor desc;
 
@@ -57,27 +58,39 @@ ProgramDescriptor create_gather_descriptor(
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t gather_semaphore_id = 0;
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = tiles_per_core * input_tile_size,
-        .core_ranges = input_shard.grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_in),
-            .data_format = input_format,
-            .page_size = input_tile_size,
-            .tile = input.tensor_spec().tile(),
-        }}},
-        .buffer = input.buffer(),
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = untilized_shard_bytes,
-        .core_ranges = input_shard.grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_untilized),
-            .data_format = output_format,
-            .page_size = output_tile_size,
-        }}},
-    });
+    if (skip_untilize) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = untilized_shard_bytes,
+            .core_ranges = input_shard.grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_in),
+                .data_format = output_format,
+                .page_size = shard_width_bytes,
+            }}},
+            .buffer = input.buffer(),
+        });
+    } else {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles_per_core * input_tile_size,
+            .core_ranges = input_shard.grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_in),
+                .data_format = input_format,
+                .page_size = input_tile_size,
+                .tile = input.tensor_spec().tile(),
+            }}},
+            .buffer = input.buffer(),
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = untilized_shard_bytes,
+            .core_ranges = input_shard.grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_untilized),
+                .data_format = output_format,
+                .page_size = output_tile_size,
+            }}},
+        });
+    }
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = full_tensor_bytes,
@@ -106,26 +119,13 @@ ProgramDescriptor create_gather_descriptor(
         cb_in,
         cb_untilized,
         tiles_per_core,
+        static_cast<uint32_t>(skip_untilize),
         output_shard.shape[0],
         shard_width_bytes,
         full_width_bytes,
         gather_semaphore_id,
     };
     writer_desc.config = WriterConfigDescriptor{};
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = input_shard.grid;
-    compute_desc.compile_time_args = {blocks_per_core, tiles_per_block, cb_in, cb_untilized};
-    if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32) {
-        compute_desc.defines = {{"DST_ACCUM_MODE", "1"}};
-    }
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en =
-            input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32,
-    };
 
     KernelDescriptor receiver_desc;
     receiver_desc.kernel_source =
@@ -157,7 +157,24 @@ ProgramDescriptor create_gather_descriptor(
     }
 
     desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    if (!skip_untilize) {
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = input_shard.grid;
+        compute_desc.compile_time_args = {blocks_per_core, tiles_per_block, cb_in, cb_untilized};
+        if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 ||
+            input.dtype() == DataType::FLOAT32) {
+            compute_desc.defines = {{"DST_ACCUM_MODE", "1"}};
+        }
+        compute_desc.config = ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 ||
+                                input.dtype() == DataType::FLOAT32,
+        };
+        desc.kernels.push_back(std::move(compute_desc));
+    }
     desc.kernels.push_back(std::move(receiver_desc));
     return desc;
 }
