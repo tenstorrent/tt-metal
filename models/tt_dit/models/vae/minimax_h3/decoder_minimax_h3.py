@@ -46,6 +46,7 @@ from ....layers.normalization import LayerNorm, RMSNorm
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.tensor import bf16_tensor
+from .blockings_minimax_h3_vae import register_h3_vae_decoder_blockings
 from .rope_minimax_h3 import head_lane_permutation, rope_tables
 
 TILE = 32
@@ -356,6 +357,7 @@ class MiniMaxH3ViTDecoder3d(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
+        register_h3_vae_decoder_blockings()
         dim = num_heads * head_dim
         self.dim = dim
         self.latent_shape = (num_frames, height, width)
