@@ -79,8 +79,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     into a ttnn trace: a host scalar is patched per dispatch, and a replay never re-runs
                     that patch, so every replay would re-read the slot live at capture time. Mutually
                     exclusive with ``input_batch_index``.
-                batch_slot_num_layers: Layers per user in the input cache's batch dim. Compile-time
-                    (hashed) and only read on the ``input_batch_index_tensor`` path.
+                batch_slot_num_layers: Layers per user in the input cache's batch dim. Runtime (NOT
+                    hashed, so one program serves caches of any depth) and only read on the
+                    ``input_batch_index_tensor`` path.
                 batch_slot_layer_idx: This call's layer index within a user's slots. Runtime (not
                     hashed, so all layers share one program) and only read on the
                     ``input_batch_index_tensor`` path.

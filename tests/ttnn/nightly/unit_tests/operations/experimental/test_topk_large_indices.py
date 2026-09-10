@@ -671,6 +671,39 @@ def test_topk_large_indices_metadata_matches_scalar(device, k, n, valid_length, 
     _assert_indices(metadata, expected, [num_rows, k])
 
 
+def test_topk_large_indices_metadata_zero_length_does_not_hang(device):
+    """A metadata tensor holding 0 with the default offset=0 must not hang the device.
+
+    search_len = valid_length + offset is zero only when both are, and calculate_topk_bounds(0, K) yields
+    num_chunks = 0 with a wrapped tail_elements ((0 - 1) * K underflows). The reader would then push zero
+    chunks while the Classic / FusedEndToEnd compute bodies unconditionally cb_wait_front on the first one.
+    Nothing on the host rejects it: the scalar path has TT_FATAL(valid_length > 0), the tensor path cannot
+    see the value, and the reader's structural check is a watcher-gated ASSERT that compiles out.
+
+    The reader therefore clamps search_len to input_width when the metadata is malformed, so this degrades
+    to a full-row search instead of hanging. Asserting completion is the point -- a regression here shows up
+    as a timeout, not a wrong answer, which is why no existing case covers it (they all use
+    valid_length - offset >= 385).
+    """
+    k, n, num_rows = 256, 2048, 2
+    torch_input = _make_bf16_exact_input(num_rows, n)
+
+    out = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+    )
+    ttnn.synchronize_device(device)
+
+    # Clamped to the full row, so the result must match a scalar full-width search rather than be garbage.
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=n)
+    ttnn.synchronize_device(device)
+    assert_equal(
+        ttnn.to_torch(out, dtype=torch.uint32).to(torch.int64),
+        ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64),
+    )
+
+
 def test_topk_large_indices_metadata_rejects_scalar_alongside_tensor(device, expect_error):
     torch_input = _make_bf16_exact_input(2, 2048)
     with expect_error(RuntimeError, "mutually exclusive"):

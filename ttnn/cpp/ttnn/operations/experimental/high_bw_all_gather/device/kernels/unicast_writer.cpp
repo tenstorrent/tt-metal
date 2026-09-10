@@ -139,7 +139,14 @@ void kernel_main() {
     if constexpr (extent_from_metadata) {
         CircularBuffer cb_writer_meta(cb_meta_writer_id);
         cb_writer_meta.wait_front(1);
-        CoreLocalMem<HighBwAllGatherMetadataSchedule> mailbox(cb_writer_meta.get_read_ptr());
+        // cb_wait_front only spins on a stream register; it does not fence L1. The mailbox sits at a FIXED
+        // CB address whose contents change per chunk on the traced path, so with the Blackhole L1 data
+        // cache enabled (TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS incl. BR) this could read the previous
+        // chunk's slice_count/final_count while the reader had already published the new schedule --
+        // a semaphore mismatch or hang, not a wrong number. Same wait_front + invalidate + volatile
+        // sequence this PR's writer_indexer_score.cpp uses on its mailbox; the two must not disagree.
+        invalidate_l1_cache();
+        CoreLocalMem<volatile HighBwAllGatherMetadataSchedule> mailbox(cb_writer_meta.get_read_ptr());
         eff_slice_start = mailbox->slice_start;
         eff_slice_count = mailbox->slice_count;
         eff_final_start = mailbox->final_start;

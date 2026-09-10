@@ -188,6 +188,18 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
         "high_bw_all_gather gathered_prefix_tensor must be in DRAM");
 }
 
+void validate_slot_extent_control_mix(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    if (!tensor_args.has_gathered_prefix_metadata()) {
+        return;
+    }
+    TT_FATAL(
+        args.input_batch_index.value_or(0) == 0,
+        "high_bw_all_gather: a non-zero scalar input_batch_index ({}) cannot be combined with "
+        "gathered_prefix_tensor -- the reader derives its page range from the extent metadata and ignores the "
+        "scalar slot, so this would silently gather slot 0. Pass input_batch_index_tensor instead.",
+        args.input_batch_index.value_or(0));
+}
+
 }  // namespace
 
 void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
@@ -195,6 +207,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
     validate_batch_index_metadata(args, tensor_args);
     validate_gathered_prefix_metadata(args, tensor_args);
+    validate_slot_extent_control_mix(args, tensor_args);
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
@@ -367,12 +380,26 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+    validate_slot_extent_control_mix(args, tensor_args);
     if (args.input_batch_index.has_value()) {
         TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
         TT_FATAL(
             *args.input_batch_index < input_shape[0],
             "high_bw_all_gather input_batch_index {} must be < input batch {}",
             *args.input_batch_index,
+            input_shape[0]);
+    }
+    if (tensor_args.has_batch_index_metadata()) {
+        TT_FATAL(
+            args.batch_slot_layer_idx < args.batch_slot_num_layers,
+            "high_bw_all_gather batch_slot_layer_idx {} must be < batch_slot_num_layers {}",
+            args.batch_slot_layer_idx,
+            args.batch_slot_num_layers);
+        TT_FATAL(
+            args.batch_slot_num_layers <= input_shape[0] && input_shape[0] % args.batch_slot_num_layers == 0,
+            "high_bw_all_gather batch_slot_num_layers {} must divide the input batch {} (the cache batch dim is "
+            "user-major: num_users * num_layers)",
+            args.batch_slot_num_layers,
             input_shape[0]);
     }
     if (args.gathered_dim_size.has_value()) {

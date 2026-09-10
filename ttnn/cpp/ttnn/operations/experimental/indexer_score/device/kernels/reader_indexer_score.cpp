@@ -113,7 +113,10 @@ constexpr bool cache_slot_from_metadata = get_compile_time_arg_val(slot_ct_base)
 constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 1);      // RT slot of this block
 constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 2);  // pages per cache slot
 constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 3);      // NoC landing slot
-constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 4>();
+// Slot count of the local cache (k_local batch dim), so the on-device recomposition can be bounded the
+// same way the AG reader bounds the identical word. Shape-derived, hence already hashed.
+constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 4);
+constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 5>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -731,12 +734,17 @@ void kernel_main() {
         // one CB serves as both the NoC landing slot and the reader->compute mailbox.
         const uint32_t chunk_start_idx = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
-        // Preserve the scalar API's alignment and capacity contract before any causal-geometry arithmetic.
-        // Express the capacity check as subtraction to avoid overflowing chunk_start_idx + chunk_global.
+        // Match the SCALAR host contract, which validate_chunk_start states explicitly: the chunk must
+        // START inside the cache, but its causal window MAY end past the valid prefix and past T -- a
+        // chunked prefill runs a fixed chunk size, so a final chunk pads its query window beyond what the
+        // cache holds. Requiring start + sp*chunk_local <= T here was stricter than both that contract and
+        // the AG reader's bounded_kv_actual_isl (start < T, then clamp), so a legitimate padded window
+        // tripped this ASSERT under the watcher while the scalar path accepted it -- and it made the
+        // kv_len_tiles clamp below dead code. Both readers of this word now fall back identically.
         constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
         ASSERT(
-            chunk_start_idx % iscore::kCausalTileWidth == 0 && chunk_global_tiles <= k_len_tiles &&
-            chunk_start_idx / iscore::kCausalTileWidth <= k_len_tiles - chunk_global_tiles);
+            chunk_start_idx % iscore::kCausalTileWidth == 0 &&
+            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
         // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
         // Identity when key_stripe_split == 1, which is every non-dedup path.
         // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
@@ -802,7 +810,9 @@ void kernel_main() {
                 noc, slot_meta_args, get_arg_val<uint32_t>(slot_rt_base + 0), cb_slot.get_write_ptr());
             const uint32_t num_layers = get_arg_val<uint32_t>(slot_rt_base + 1);
             const uint32_t layer_idx = get_arg_val<uint32_t>(slot_rt_base + 2);
-            local_slot_offset = (user_id * num_layers + layer_idx) * slot_local_pages;
+            local_slot_offset =
+                trace_metadata::bounded_cache_batch_idx(user_id, num_layers, layer_idx, slot_cache_extent) *
+                slot_local_pages;
         }
         const FusedRingGate gate(fused_recv, fused_argidx, local_slot_offset);
         run(&gate);

@@ -315,7 +315,7 @@ def test_indexer_score_ring4_fused_indexed_cache():
     _run_fused_multiuser(16, num_users=2, cache_batch_idx=1)
 
 
-def test_indexer_score_ring4_fused_indexed_cache_slot_metadata():
+def test_indexer_score_ring4_fused_indexed_cache_slot_metadata(expect_error):
     """Trace-safe slot select: cache_batch_idx_tensor + index_cache_num_layers/_layer_idx.
 
     The cache is user-major, so the op recomposes the slot ON-DEVICE as user * num_layers + layer_idx.
@@ -443,6 +443,30 @@ def test_indexer_score_ring4_fused_indexed_cache_slot_metadata():
         )
         assert submesh.num_program_cache_entries() == entries_after_first, "rewriting the slot tensor recompiled"
         logger.info(f"ring4 slot metadata: in-place user rewrite {user} -> {other_user} tracked by the reader")
+
+        # The slot tensor needs the extent tensor: the factory forwards the slot to the all-gather but
+        # withholds kv_actual_isl without it, and the helper then fails at PROGRAM BUILD with a message
+        # naming neither this op nor the missing kwarg. Pin that it is rejected up front instead.
+        with expect_error(RuntimeError, "cache_batch_idx_tensor requires chunk_start_idx_tensor"):
+            ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                cache_batch_idx_tensor=slot_tensor,
+                index_cache_num_layers=num_layers,
+                index_cache_layer_idx=0,
+                chunk_start_idx=chunk_start,
+                kv_len=kv_len,
+                block_cyclic_sp_axis=SP_AXIS,
+                block_cyclic_chunk_local=QB_SQ,
+                program_config=glx_config(heads),
+            )
     finally:
         _close_ring4_ccl(parent, submesh, stall_group)
 

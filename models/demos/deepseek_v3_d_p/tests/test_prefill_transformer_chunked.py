@@ -22,6 +22,7 @@ Requires an 8x4 Blackhole mesh and (env from the task):
 Override the trace dir with PREFILL_TRACE_DIR.
 """
 
+import copy
 import gc
 import json
 import os
@@ -825,12 +826,24 @@ def run_chunked_transformer(
         total_len <= SEQ_CACHE
     ), f"preload_isl {preload_isl} + {n_chunks} chunks ({measured_len}) = {total_len} exceed cache {SEQ_CACHE}"
 
+    # conftest's _resolve_config_only is lru_cache'd, so this object is shared process-wide: mutating
+    # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
+    # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
+    config = copy.deepcopy(config)
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = SEQ_CACHE
 
-    if isinstance(getattr(config, "rope_scaling", None), dict):
-        config.rope_scaling["original_max_position_embeddings"] = SEQ_CACHE
+    # YaRN-DISABLED variants only. GLM sets factor=1.0, where "disables YaRN" is not a full short-circuit:
+    # the two configs still produce cos/sin tables differing by up to 3.8e-6, which is why this test and the
+    # runner reported slightly different KV PCC (0.861237 vs 0.860911) on identical tokens and goldens.
+    # For a real YaRN config the rewrite is NOT harmless -- it moves yarn_find_correction_range and rescales
+    # most rope frequencies, while the goldens come from the untouched AutoConfig. DeepSeek (factor 40),
+    # Kimi (64) and Mistral (128) all reach these drivers, so gate on the factor rather than on the presence
+    # of a config_builder (Mistral has one and still runs real YaRN).
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if isinstance(rope_scaling, dict) and rope_scaling.get("factor", 1.0) == 1.0:
+        rope_scaling["original_max_position_embeddings"] = SEQ_CACHE
 
     logger.info(
         f"chunked transformer: num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
@@ -1599,16 +1612,25 @@ def run_chunked_transformer_updated(
         f"but preload_isl {preload_isl} + {n_chunks} chunks = {total_len}"
     )
 
+    # conftest's _resolve_config_only is lru_cache'd, so this object is shared process-wide: mutating
+    # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
+    # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
+    config = copy.deepcopy(config)
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_cache
     # Keep rope_scaling CONSISTENT with the length we actually run. config_builder() is called with no
-    # args, so original_max_position_embeddings stays at its 8192 default while max_seq_len is mutated
-    # here -- and the runner, which passes PREFILL_MAX_SEQ_LEN, gets the run length for both. factor=1.0
-    # is documented as "disables YaRN", but the implementation does not fully short-circuit: the two
-    # configs produce cos/sin tables differing by up to 3.8e-6, which is exactly why this test and the
+    # args, so original_max_position_embeddings stays at its 8192 default while max_seq_len is mutated here
+    # -- and the runner, which passes PREFILL_MAX_SEQ_LEN, gets the run length for both.
+    # YaRN-DISABLED variants only. GLM sets factor=1.0, where "disables YaRN" is not a full short-circuit:
+    # the two configs still produce cos/sin tables differing by up to 3.8e-6, which is why this test and the
     # runner reported slightly different KV PCC (0.861237 vs 0.860911) on identical tokens and goldens.
-    if isinstance(getattr(config, "rope_scaling", None), dict):
-        config.rope_scaling["original_max_position_embeddings"] = seq_cache
+    # For a real YaRN config the rewrite is NOT harmless -- it moves yarn_find_correction_range and rescales
+    # most rope frequencies, while the goldens come from the untouched AutoConfig. DeepSeek (factor 40),
+    # Kimi (64) and Mistral (128) all reach these drivers, so gate on the factor rather than on the presence
+    # of a config_builder (Mistral has one and still runs real YaRN).
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if isinstance(rope_scaling, dict) and rope_scaling.get("factor", 1.0) == 1.0:
+        rope_scaling["original_max_position_embeddings"] = seq_cache
 
     logger.info(
         f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
@@ -1735,7 +1757,10 @@ def run_chunked_transformer_updated(
 
     # preload_isl > 0: seed the prior [0, preload_isl) KVPE + indexer-K from the golden trace so the measured
     # chunk attends to real KV (representative MoE routing) and the indexer scores a real prefix.
-    if preload_isl > 0:
+    # A closure because the traced arm re-seeds it after clearing the caches (see the capture block).
+    def _seed_preload():
+        if preload_isl <= 0:
+            return
         _preload_kvpe_prefix_from_trace(
             tt_kvpe_cache,
             trace_dir,
@@ -1769,6 +1794,8 @@ def run_chunked_transformer_updated(
                 sp_axis,
                 tp_shard_kv=tp_shard_kv,
             )
+
+    _seed_preload()
 
     # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
     # make the block-cyclic rotation degenerate to a plain per-chip reshape.
@@ -1881,6 +1908,7 @@ def run_chunked_transformer_updated(
         transformer.set_trace_controller(trace_controller)
         _fwd_meta()  # warm/compile the metadata-variant programs before recording
         ttnn.synchronize_device(mesh_device)
+
         trace_controller.begin_capture()
         _fwd_meta()
         trace_controller.end_capture()
@@ -2130,7 +2158,13 @@ def run_chunked_transformer_updated(
             # Calibrated floors are model-specific: Kimi's 0.96 sits ABOVE GLM-5.2's documented KVPE
             # minimum (~0.86 @ L75), so applying it to GLM fails a perfectly good run.
             assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
-            assert_layer_depth=GATED_LAYER_DEPTH,
+            # FULL DEPTH for the accuracy driver. Gating at GATED_LAYER_DEPTH left the LAST layer with no
+            # asserted check at all on GLM-5.2 L78: its decoder-output snapshot does not exist
+            # (kv_only_last_layer strips it), the traced arm runs check_layer_pcc=False, layer 77 is a
+            # `shared` indexer layer so the indexer-K PCC does not cover it either, and 77 > 10 made the
+            # KVPE assertion recording-only. A regression confined to layers > 10 that left indexer-K
+            # intact passed unconditionally. The depth gate belongs to the perf sweeps, not here.
+            assert_layer_depth=None,
             # Without this the readback un-rotates over sp stripes while a TP-deduped cache holds
             # sp*tp, and the gather comes back 1/tp as tall: "value tensor of shape [14080, 576]
             # cannot be broadcast to indexing result of shape [56320, 576]".

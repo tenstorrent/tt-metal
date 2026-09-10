@@ -466,6 +466,7 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(rt_arg::reader_slot_base);
     reader_ct.push_back(has_slot_meta ? local_slot_pages_ct : 0u);
     reader_ct.push_back(has_slot_meta ? cb_meta_slot : 0u);
+    reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k_local.logical_shape()[0]) : 0u);
     tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
 

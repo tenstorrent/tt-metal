@@ -2045,15 +2045,30 @@ class ttMLA:
         )
 
     def _can_full_mesh_gather_kvpe(self, cache_storage) -> bool:
-        """Whether one snake ring can replace the two-stage sp*tp KV-prefix gather.
+        """Whether one snake ring can replace the two-stage sp*tp KV-prefix gather. Memoized.
 
-        Every condition here mirrors a hard TT_FATAL in high_bw_all_gather, so the guard degrades to the
+        The sole caller is _gather_kvpe_prefix, reached from _sparse_chunked_attn for every
+        full-attention layer of every chunk -- 78 x 11 = 858 times on a GLM-5.2 prefill. The answer is a
+        property of the mesh, the axis roles and the cache layout, none of which change between chunks, so
+        evaluate it once per distinct cache shape: without this the whole predicate (tensor_topology()
+        included) re-ran per chunk, and on any mesh that fails a condition it also logged 858 identical
+        lines."""
+        memo = getattr(self, "_full_mesh_gather_memo", None)
+        if memo is None:
+            memo = self._full_mesh_gather_memo = {}
+        key = (tuple(cache_storage.padded_shape), self._sparse_kv_gather_buffer is not None)
+        if key not in memo:
+            memo[key] = self._can_full_mesh_gather_kvpe_uncached(cache_storage)
+        return memo[key]
+
+    def _can_full_mesh_gather_kvpe_uncached(self, cache_storage) -> bool:
+        """Every condition here mirrors a hard TT_FATAL in high_bw_all_gather, so the guard degrades to the
         two-stage route instead of crashing. The op does not fail softly on any of them."""
 
         def _no(reason):
-            # Which condition rejected the snake decides whether traced TP is possible at all on this
-            # mesh (the two-stage fallback has no metadata path), so name it rather than silently
-            # degrading. INFO: this fires once per MLA layer construction, not per chunk.
+            # Name which condition rejected the snake rather than degrading silently: it decides whether
+            # this mesh takes the snake or the two-stage fallback, and the two differ in gather volume.
+            # Logged once per distinct cache shape thanks to the memo on the wrapper above.
             logger.info(f"[kvpe gather] full-mesh snake unavailable, using two-stage TP gather: {reason}")
             return False
 

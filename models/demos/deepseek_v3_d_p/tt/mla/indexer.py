@@ -740,13 +740,12 @@ class TtIndexer:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
             # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
             #
-            # No valid_global here: the metadata form has no on-device clamp yet, so this path writes the
-            # whole padded window and scores it (see the kv_len note in forward()). Consistent within
-            # itself; it just does not yet share the scalar path's real-token clamp.
-            assert actual_end is None, (
-                "indexer write_k: the metadata path has no valid_global clamp, so a host actual_end would "
-                "be silently ignored -- pass the real end through metadata[2] once the clamp lands on-device"
-            )
+            # valid_global clamps the write to the real token end, exactly as the dense KVPE write does
+            # (mla.py's update_padded_kv_cache call). Without it a partial final chunk filled
+            # [ceil32(actual_end), end_pos) with PAD keys, where eager leaves those rows untouched -- so the
+            # traced index-K cache diverged from the untraced one on the only chunk shape that can differ.
+            # A full chunk has actual_end == end_pos, making the clamp a no-op, which is why this went
+            # unnoticed: the traced tests only ever drive full chunks.
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 index_kbuf,
                 k,
@@ -755,6 +754,7 @@ class TtIndexer:
                 layer_idx=cache_layer_idx,
                 num_layers=self._index_cache_layers,
                 cluster_axis=self.sp_axis,
+                valid_global=metadata[2],  # actual_end tensor: real-token clamp, same as the dense path
                 tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
             )
         else:
@@ -894,17 +894,12 @@ class TtIndexer:
         # key cache ONCE — but that needs L1 headroom, so k_chunk is bounded by resident head count
         # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=320).
         k_chunk = get_indexer_key_chunk(a.index_n_heads)
-        # k_chunk_size feeds the HASHED program config, so a per-chunk value would compile a new program per
-        # chunk and defeat trace reuse entirely. Keyed on neither valid_pos nor end_pos for that reason: the
-        # assert below makes min(k_chunk, end_pos) identically k_chunk at every deployed config
-        # (end_pos >= chunk_global = seq_len*sp >> k_chunk), so the constant is used directly and a future
-        # short-chunk config fails loudly instead of silently recapturing. The valid extent travels in the
-        # hash-excluded kv_len.
-        assert k_chunk <= glob, (
-            f"indexer k_chunk {k_chunk} exceeds the global chunk {glob}: k_chunk_size would vary per chunk and "
-            "enter the program hash, so one captured trace could not serve every chunk"
-        )
-        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=k_chunk, head_group_size=0)
+        # k_chunk_size feeds the HASHED program config, so it must not vary per chunk (a per-chunk value
+        # would compile a new program per chunk and defeat trace reuse). min(k_chunk, glob) is chunk-invariant
+        # for a fixed config -- glob = seq_len*sp is the same on every chunk -- and keeps short-chunk configs
+        # (e.g. 256-token GLM unit tests, where the op rejects k_chunk_size > T) working. The valid extent
+        # travels in the hash-excluded kv_len.
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=min(k_chunk, glob), head_group_size=0)
         # SP-sharded queries (rotation-safe): each chip scores its S/sp rows while the fused ring indexer
         # gathers remote block-cyclic K slabs into a shared persistent full-T buffer. The reader consumes
         # each band as soon as its source slab arrives and dual-sources the local slab directly, overlapping
@@ -976,11 +971,15 @@ class TtIndexer:
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
             block_cyclic_cache_tp_sharded=kv_deduped,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
-            # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local, i.e. end_pos.
-            # That equals valid_pos whenever the chunk is full, which is the only shape the traced path
-            # currently produces (the runtime asserts actual_end is None above). A partial final chunk
-            # would need the reader to derive min(end_pos, ceil32(metadata[2])) on-device; until then the
-            # assert in write_k keeps the two from silently diverging.
+            # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local, i.e. end_pos --
+            # NOT valid_pos. The two coincide on a full chunk; on a partial final chunk the scored window
+            # runs past the real tokens. The WRITE is clamped to actual_end (valid_global in write_k), so
+            # those trailing rows hold whatever the cache held before rather than this chunk's pad keys,
+            # and only PAD QUERY rows can rank them -- real rows are causally shielded, since every key
+            # past actual_end sits at s > t. Their outputs are discarded downstream.
+            # Bounding the score itself needs metadata[2] on-device in this op and in topk_large_indices
+            # (both currently derive from metadata[1] + glob); until then this is the documented gap, not
+            # an assumed invariant.
             kv_len=None if metadata is not None else valid_pos,
         )
         if host_start is not None:

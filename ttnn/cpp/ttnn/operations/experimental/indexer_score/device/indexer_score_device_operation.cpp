@@ -311,6 +311,17 @@ void validate_cache_slot_metadata(const operation_attributes_t& attrs, const ten
         "indexer_score: cache_batch_idx and cache_batch_idx_tensor are mutually exclusive -- pass the scalar "
         "OR the 1-element user-id tensor (the tensor is the trace-safe form)");
     TT_FATAL(
+        t.has_chunk_start_metadata(),
+        "indexer_score: cache_batch_idx_tensor requires chunk_start_idx_tensor -- the fused all-gather "
+        "derives the slot and the valid extent from the same metadata, and a slot with a host-scalar extent "
+        "would be frozen at capture time anyway");
+    TT_FATAL(
+        attrs.key_stripe_split == 1,
+        "indexer_score: cache_batch_idx_tensor cannot be combined with a TP-split key cache "
+        "(key_stripe_split {} > 1, from block_cyclic_cache_tp_sharded): the deduped path hands the op a "
+        "rebuilt BATCH-1 slab, so there is no slot to select -- drop cache_batch_idx_tensor",
+        attrs.key_stripe_split);
+    TT_FATAL(
         attrs.index_cache_layer_idx < attrs.index_cache_num_layers,
         "indexer_score: index_cache_layer_idx {} must be < index_cache_num_layers {}",
         attrs.index_cache_layer_idx,
