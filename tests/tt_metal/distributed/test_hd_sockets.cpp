@@ -376,22 +376,11 @@ void test_hd_socket_multithreaded_loopback(
     write_thread.join();
     read_thread.join();
 
-    auto report_thread_error = [](const char* thread_name, const std::exception_ptr& error) {
-        if (!error) {
-            return;
-        }
-        try {
-            std::rethrow_exception(error);
-        } catch (const std::exception& e) {
-            ADD_FAILURE() << thread_name << " failed: " << e.what();
-        } catch (...) {
-            ADD_FAILURE() << thread_name << " failed with an unknown exception";
-        }
-    };
-    report_thread_error("H2D writer thread", write_error);
-    report_thread_error("D2H reader thread", read_error);
-    if (write_error || read_error) {
-        return;
+    if (write_error) {
+        std::rethrow_exception(write_error);
+    }
+    if (read_error) {
+        std::rethrow_exception(read_error);
     }
 
     input_socket.barrier(10000);
