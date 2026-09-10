@@ -244,6 +244,69 @@ work from anything done so far. Second, at batch 1 the step is 48.56 ms against
 the requirements' own 13.2 ms roofline, so there is 3.7x of headroom there in
 principle.
 
+## 4b. First measurement of a required point, and what it says
+
+ISL 4096, OSL 252, **batch 16** — a Rev 0.11 row, measured on this branch with a
+local server at `max_num_seqs=16` and `QWEN36_PREFILL_PER_REQUEST=1`:
+
+| metric | required | measured | gap |
+| --- | ---: | ---: | ---: |
+| TTFT cold, median | 500 ms | **863,982 ms** | **1728x over** |
+| decode t/s/u | 32 | **0.60** | **53x short** |
+| aggregate t/s | 512 | **3.15** | **162x short** |
+| completed / failed | — | 16 / 0 | — |
+
+It runs cleanly — 16 of 16, no failures — and it takes 1279 s against 1305 s
+predicted by the cost model below, a 2% error. The numbers are simply nowhere
+near target.
+
+**And decode is not why.** The decode-only step at batch 16 is 61.92 ms, i.e.
+16.15 t/s/u. Under this load the client observes a TPOT of 1655 ms, i.e.
+0.60 t/s/u — a **27x inflation**. With chunked prefill disabled, every request's
+inter-token gap contains a full 4096-token prefill of some other request. So at
+the operating point the requirements actually name, per-token latency is set by
+prefill serialization, not by the decode step.
+
+That is the conclusion that matters for prioritisation, and it supersedes the
+framing `doc/decode_perf` carries. The 2.68x decode win there is real and
+measured, and so is the further 1.43x available from right-sizing the server
+(below) — but **neither can move this row**, because the term they improve is 4%
+of the observed per-token time. Chunked prefill and APC, both marked REQUIRED and
+both currently disabled, are the whole of it.
+
+### Two supporting models, both validated against measurements
+
+**Decode step versus batch**, measured at batch 1/8/16/32 on this branch:
+
+| batch | ms/step | t/s/u | agg t/s | vs Rev 0.11 |
+| ---: | ---: | ---: | ---: | --- |
+| 1 | 48.56 | 20.59 | 20.6 | 41% of the 50 target |
+| 8 | 50.82 | 19.68 | 157.4 | 58% of 34 — and *below* the 20 t/s usability floor |
+| 16 | 61.92 | 16.15 | 258.4 | 50% of 32 |
+| 32 | 88.74 | 11.27 | 360.6 | not a required batch |
+
+`step ≈ 47.3 + 1.296 x batch ms` — a fixed weight read plus ~1.3 ms per slot of
+recurrent-state traffic. Since no requirement asks for batch 32, **serving at 16
+instead is 1.43x better per-user decode for free**. Note also that running
+concurrency 16 against a batch-32 server is *not* a valid substitute for the
+batch-16 row: the step stays 88.74 ms regardless of how many slots are active,
+so it would report 11.27 t/s/u instead of 16.15 and understate the requirement.
+
+**Benchmark point cost**: `total ≈ n x single-request prefill`, because prefill
+is fully serialized. Checked against the three conc-32 points that completed in
+CI:
+
+| point | predicted | measured | error |
+| --- | ---: | ---: | ---: |
+| isl 128, n=256 | 847 s | 913 s | −7% |
+| isl 1024, n=128 | 2691 s | 2698 s | −0.3% |
+| isl 2048, n=128 | 5244 s | 5375 s | −2% |
+
+**Concurrency does not reduce prefill cost at all — only `n` does.** Applied to
+the required points, 11 of 13 fit the 7200 s per-point cap; batch 8 at 131072
+(22,066 s) and batch 16 at 32768 (11,043 s) do not, and cannot until prefill
+stops being serialized.
+
 ## 5. What to change in the benchmark configuration
 
 In rough order of value per hour of runner time:

@@ -8,6 +8,21 @@ Everything below is measured on this host: 4x Blackhole p300c, `MeshShape(1,4)`,
 `FABRIC_1D_RING`, real Qwen3.8-27B weights, all 64 layers, batch 32 — the shape
 the server runs (`readiness_vllm/server.log` line 18: `max_num_seqs: 32`).
 
+## Read this first
+
+This document optimizes the **decode step**, and the numbers in it are sound. But
+it is not the bottleneck of the product requirement. Measured at the operating
+point Rev 0.11 of the QB2 requirements actually names — ISL 4096, OSL 252,
+batch 16 — the client observes a TPOT of 1655 ms against a decode-only step of
+61.92 ms: a **27x inflation from prefill serialization**, because chunked prefill
+is disabled. The 2.68x below improves a term worth ~4% of the observed per-token
+time at that point.
+
+So treat this as what it is: the decode step is now understood and 2.68x faster,
+which matters for a decode-bound workload. For the agentic-coding requirements,
+`doc/benchmark_requirements_gap` is the document that says what to fix, and the
+answer there is chunked prefill and automatic prefix caching, not decode.
+
 ## Summary
 
 | | ms/step | t/s/u | total t/s |
