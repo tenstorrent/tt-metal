@@ -62,7 +62,7 @@ inline void find_argmax_for_core(
                 s_src,
                 src_dfb,
                 src_read_size,
-                {.page_id = outer_idx * inner_dim_units + j, .offset_bytes = src_offset},
+                {.page_id = (outer_idx * inner_dim_units) + j, .offset_bytes = src_offset},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
         }
@@ -89,7 +89,7 @@ inline void find_argmax_for_core(
                     });
 
             } else if constexpr (data_format == DataFormat::Float32) {
-                uint32_t val = in_vals[i - red_dim_offset];
+                const uint32_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint32_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint32_t a, uint32_t b) {
                         return float32_greater(a, b);
@@ -163,11 +163,11 @@ inline uint32_t find_argmax_from_intermediate_outputs(
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         volatile tt_l1_ptr auto i_red_idxs =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_idx_dfb_local_base_addr + i * red_idx_size_per_core);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_idx_dfb_local_base_addr + (i * red_idx_size_per_core));
 
         if constexpr (data_format == DataFormat::Float16_b) {
-            volatile tt_l1_ptr auto i_red_vals =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_val_dfb_local_base_addr + i * red_val_size_per_core);
+            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint16_t a, uint16_t b) {
@@ -175,15 +175,15 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 });
 
         } else if constexpr (data_format == DataFormat::UInt16) {
-            volatile tt_l1_ptr auto i_red_vals =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_val_dfb_local_base_addr + i * red_val_size_per_core);
+            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint16_t a, uint16_t b) { return a > b; });
 
         } else if constexpr (data_format == DataFormat::Float32) {
-            volatile tt_l1_ptr auto i_red_vals =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_val_dfb_local_base_addr + i * red_val_size_per_core);
+            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) {
@@ -191,8 +191,8 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 });
 
         } else if constexpr (data_format == DataFormat::Int32) {
-            volatile tt_l1_ptr auto i_red_vals =
-                reinterpret_cast<volatile tt_l1_ptr int32_t*>(red_val_dfb_local_base_addr + i * red_val_size_per_core);
+            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr int32_t*>(
+                red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](int32_t a, int32_t b) {
@@ -200,8 +200,8 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 });
 
         } else if constexpr (data_format == DataFormat::UInt32) {
-            volatile tt_l1_ptr auto i_red_vals =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_val_dfb_local_base_addr + i * red_val_size_per_core);
+            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) { return a > b; });
@@ -254,13 +254,13 @@ void kernel_main() {
     constexpr auto red_dim_units = get_arg(args::red_dim_units);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_arg(args::reduce_all);
+    constexpr bool reduce_all = get_arg(args::reduce_all) == 1;
 
     // Total number of cores participating in this op
     constexpr auto num_cores = get_arg(args::num_cores);
 
     // Pick the core that will collate the intermediate outputs
-    constexpr uint32_t reduce_core_id = (bool)get_arg(args::reduce_core_id);
+    constexpr uint32_t reduce_core_id = get_arg(args::reduce_core_id);
 
     constexpr auto reduce_core_x = get_arg(args::reduce_core_x);
     constexpr auto reduce_core_y = get_arg(args::reduce_core_y);
@@ -294,16 +294,16 @@ void kernel_main() {
     const auto s_src = TensorAccessor(tensor::src);
     const auto s_dst = TensorAccessor(tensor::dst);
 
-    Noc noc;
-    UnicastEndpoint remote;
-    DataflowBuffer src_dfb(dfb::src);
+    const Noc noc;
+    const UnicastEndpoint remote;
+    const DataflowBuffer src_dfb(dfb::src);
     // This DFB is only used in the reduction core. It is used to store
     // final outputs (indices) after reduction of intermediate outputs.
-    DataflowBuffer dst_dfb(dfb::dst);
+    const DataflowBuffer dst_dfb(dfb::dst);
     // This DFB holds intermediate outputs (indices) in each core
-    DataflowBuffer red_idx_dfb(dfb::red_idxs);
+    const DataflowBuffer red_idx_dfb(dfb::red_idxs);
     // This DFB holds intermediate outputs (values) in each core
-    DataflowBuffer red_val_dfb(dfb::red_vals);
+    const DataflowBuffer red_val_dfb(dfb::red_vals);
 
     // DFB in L1 memory for storing input
     constexpr DataFormat src_dfb_addr_data_format = get_dataformat(dfb::src);
