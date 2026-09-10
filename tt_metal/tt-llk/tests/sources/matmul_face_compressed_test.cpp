@@ -84,12 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    {
-        // Dest init also issues SETADCXY/SETADCZW. Serialize them with the
-        // unpacker's borrowed ADC writes, just like pack init and each pack below.
-        T6MutexLockGuard<true> guard(mutex::THREAD2_ADC);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    }
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
