@@ -18,6 +18,9 @@
 
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 
+#include <string>
+#include <unordered_set>
+
 namespace tt::tt_metal::streaming_profiler {
 
 class Service;
@@ -80,6 +83,21 @@ private:
         int64_t timestamp_ns,
         uint32_t runtime_id,
         std::span<const uint64_t> values);
+    // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the 1 ms LINK
+    // stamps): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that scales its
+    // wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
+    // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
+    // through SyncPlots.
+    struct FreqPoint {
+        int64_t host_ns;
+        double ghz;
+    };
+    std::vector<FreqPoint> compute_frequency(size_t begin, size_t end) const;
+    const char* intern_name(const std::string& name);
+    // Plots are emitted at capture end, not during decode: at decode time the correction is not yet solved
+    // (lookup returns 0) and the timeline map has no segments (points land at raw, hours-off timestamps).
+    void emit_plots();
+    int64_t plot_stamp(int64_t host_ns) const;  // the PlotDataAt stamp for a point at this host time
 
     Service& service_;
     ConsumerHandle handle_ = 0;
@@ -96,6 +114,17 @@ private:
     std::vector<SrclocEntry> srcloc_table_;  // open addressing, power-of-two size, at most half full
     [[maybe_unused]] size_t srcloc_count_ = 0;  // ditto: only the Tracy-enabled srcloc path touches it
     std::unordered_map<std::string, const void*> srclocs_;
+    std::vector<DeviceClock> clocks_;  // per device index, for mapping a clock sample's device time to the timeline
+    std::vector<DeviceClock> eth_clocks_;  // per device index, the idle-eth wall anchor for PP_CLOCK samples
+    struct PlotSample {
+        uint32_t dev;
+        uint32_t kind;
+        uint32_t core;  // eth core index on the device: one refclk counter per stream
+        uint64_t ts;
+        uint32_t value24;  // the 24-bit refclk reading
+    };
+    std::vector<PlotSample> plot_samples_;  // accumulated during the capture, drained in emit_plots()
+    std::unordered_set<std::string> plot_names_;  // interned: PlotDataAt keys a plot by its name pointer
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

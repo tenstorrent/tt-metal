@@ -4,19 +4,26 @@
 
 #include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
 
+#include <algorithm>
+#include <map>
 #include <cstring>
 #include <limits>
 
 #include <umd/device/driver_atomics.hpp>
 
 #include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
 #include <tracy/Tracy.hpp>
 #include <client/TracyProfiler.hpp>
 #endif
 
+#include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -73,7 +80,25 @@ int64_t tracy_anchor_now() {
 TracySink::TracySink(Service& service) :
     service_(service), anchor_tracy_(tracy_anchor_now()), srcloc_table_(kSrclocTableInitial) {
     base_ = probe();
-    handle_ = service_.add_consumer("tracy", [this](const Batch& b, uint64_t capture) { on_batch(b, capture); });
+    handle_ = service_.add_consumer(
+        "tracy",
+        [this](const Batch& b, uint64_t capture) { on_batch(b, capture); },
+        ConsumerHooks{
+            .on_attach =
+                [this](const CaptureContext& ctx) {
+                    clocks_.clear();
+                    eth_clocks_.clear();
+                    for (const auto& d : ctx.devices) {
+                        clocks_.push_back(d.clock);
+                        eth_clocks_.push_back(d.eth_clock);
+                    }
+                },
+            .clock_sink =
+                [this](const ClockSample& cs) {
+                    plot_samples_.push_back(
+                        PlotSample{cs.dev, cs.kind, cs.lane / profiler::kSpscNRiscDecode, cs.ts, cs.value24});
+                },
+            .on_capture_end = [this](const CaptureContext&) { emit_plots(); }});
 }
 
 TracySink::~TracySink() {
@@ -332,6 +357,183 @@ void TracySink::push_marker(
 #endif
     TracyTTPushMarkerLockfree(ctx, marker);
 #endif
+}
+
+// The stamp PlotDataAt needs for a point at host time host_ns. The server displays (tsc - baseTime) * m_timerMul --
+// an absolute timer-tick stamp like GetTime() -- while to_timeline() yields ns since anchor_tracy_; so
+// anchor_tracy_ + ns / mul, which is exactly where the device zones land through their GPU context.
+int64_t TracySink::plot_stamp(int64_t host_ns) const {
+#if defined(TRACY_ENABLE)
+    const double timer_mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
+    return anchor_tracy_ + static_cast<int64_t>(static_cast<double>(to_timeline(host_ns)) / timer_mul);
+#else
+    return to_timeline(host_ns);
+#endif
+}
+
+void TracySink::emit_plots() {
+    // Samples arrive in decode order; group them into streams (device, kind, eth core) in time order. Each stream is
+    // one refclk counter, unwrapped and differenced on its own.
+    std::sort(plot_samples_.begin(), plot_samples_.end(), [](const PlotSample& a, const PlotSample& b) {
+        if (a.dev != b.dev) {
+            return a.dev < b.dev;
+        }
+        if (a.kind != b.kind) {
+            return a.kind < b.kind;
+        }
+        if (a.core != b.core) {
+            return a.core < b.core;
+        }
+        return a.ts < b.ts;
+    });
+    // Every stream's frequency series first: (host ns, applied AICLK GHz) at each sample.
+    struct Series {
+        uint32_t dev, kind;
+        std::vector<FreqPoint> pts;
+    };
+    std::vector<Series> series;
+    for (size_t i = 0; i < plot_samples_.size();) {
+        size_t j = i + 1;
+        while (j < plot_samples_.size() && plot_samples_[j].dev == plot_samples_[i].dev &&
+               plot_samples_[j].kind == plot_samples_[i].kind && plot_samples_[j].core == plot_samples_[i].core) {
+            j++;
+        }
+        series.push_back(Series{plot_samples_[i].dev, plot_samples_[i].kind, compute_frequency(i, j)});
+        i = j;
+    }
+    // The ROOT is the lowest device index with samples -- the d2d consumer's rule; its correction is the identity,
+    // so its scale is exactly 1. Every other chip is plotted as its AICLK over the root's at the same host instant,
+    // per sync kind: the k_B/k_A of wall_B = (k_B*s/k_A)*wall_A, the factor that scales that chip's wall-clock rate
+    // onto the root's. (The refclk ratio s, ~ppm, is the separate scale-convergence plot from the d2d consumer.)
+    uint32_t root_dev = std::numeric_limits<uint32_t>::max();
+    for (const Series& s : series) {
+        root_dev = std::min(root_dev, s.dev);
+    }
+    std::map<uint32_t, std::vector<FreqPoint>> root_ref;  // kind -> the root's series, sorted by host ns
+    for (const Series& s : series) {
+        if (s.dev == root_dev) {
+            auto& r = root_ref[s.kind];
+            r.insert(r.end(), s.pts.begin(), s.pts.end());
+        }
+    }
+    for (auto& [kind, r] : root_ref) {
+        std::sort(r.begin(), r.end(), [](const FreqPoint& a, const FreqPoint& b) { return a.host_ns < b.host_ns; });
+    }
+#if defined(TRACY_ENABLE)
+    const auto chip_of = [this](uint32_t dev) {
+        return (dev < eth_clocks_.size() && eth_clocks_[dev].frequency_ghz > 0.0) ? eth_clocks_[dev].chip_id
+                                                                                  : clocks_[dev].chip_id;
+    };
+    for (const Series& s : series) {
+        if (s.pts.empty() || s.dev >= clocks_.size() || root_dev >= clocks_.size()) {
+            continue;
+        }
+        const bool link = s.kind == PP_CLOCK_LINK_REFCLK;
+        const char* name = intern_name(fmt::format(
+            "d2d freq scale chip{}/chip{} {}", chip_of(s.dev), chip_of(root_dev), link ? "link 1ms" : "local 3us"));
+        if (s.dev == root_dev) {
+            for (const FreqPoint& p : s.pts) {
+                tracy::Profiler::PlotDataAt(name, 1.0, plot_stamp(p.host_ns));
+            }
+            continue;
+        }
+        const auto rit = root_ref.find(s.kind);
+        if (rit == root_ref.end() || rit->second.empty()) {
+            continue;
+        }
+        const std::vector<FreqPoint>& ref = rit->second;
+        for (const FreqPoint& p : s.pts) {
+            // The root's estimate at or just before this instant (<= one sample stale: 3 us local, 1 ms link).
+            auto it = std::upper_bound(
+                ref.begin(), ref.end(), p.host_ns, [](int64_t h, const FreqPoint& q) { return h < q.host_ns; });
+            if (it == ref.begin()) {
+                continue;
+            }
+            --it;
+            if (it->ghz <= 0.0) {
+                continue;
+            }
+            tracy::Profiler::PlotDataAt(name, p.ghz / it->ghz, plot_stamp(p.host_ns));
+        }
+    }
+    // Series the d2d consumer computed at capture end (the cross-chip refclk scale regression), placed the same way.
+    for (auto& [name, pts] : SyncPlots::drain()) {
+        const char* nm = intern_name(name);
+        for (const SyncPlotPoint& p : pts) {
+            tracy::Profiler::PlotDataAt(nm, p.value, plot_stamp(p.host_ns));
+        }
+    }
+#else
+    SyncPlots::drain();
+#endif
+    plot_samples_.clear();
+    plot_samples_.shrink_to_fit();
+}
+
+// PlotDataAt keys a plot by its name POINTER, so every name lives for the sink's lifetime.
+const char* TracySink::intern_name(const std::string& name) { return plot_names_.insert(name).first->c_str(); }
+
+// One stream of PP_CLOCK samples [begin, end) -> that chip's applied AICLK in GHz at every sample: the sliding
+// dwall/drefclk over the trailing window (the refclk is a fixed 50 MHz, so wall ticks per refclk tick x 50 MHz is
+// the AICLK), at the sample's host time via the eth clock. The window is set in REFCLK ticks so a dropped sample
+// only widens it: ~100 us for the 3 us local tracker (0.02 % quantisation), >= 1 ms for the 1 ms link stamps
+// (2e-5). The link sender emits two stamps per round a few us apart, which the >= 1 ms window steps over.
+std::vector<TracySink::FreqPoint> TracySink::compute_frequency(size_t begin, size_t end) const {
+    std::vector<FreqPoint> out;
+    if (end <= begin) {
+        return out;
+    }
+    const PlotSample& s0 = plot_samples_[begin];
+    if (s0.dev >= clocks_.size()) {
+        return out;
+    }
+    const DeviceClock& eclk = (s0.dev < eth_clocks_.size() && eth_clocks_[s0.dev].frequency_ghz > 0.0)
+                                  ? eth_clocks_[s0.dev]
+                                  : clocks_[s0.dev];
+    if (eclk.frequency_ghz <= 0.0) {
+        return out;
+    }
+    const bool link = s0.kind == PP_CLOCK_LINK_REFCLK;
+    if (!link && s0.kind != PP_CLOCK_LOCAL_REFCLK) {
+        return out;
+    }
+    constexpr double kRefclkHz = 50.0e6;
+    const uint64_t window = link ? 50'000 : 5'000;  // refclk ticks: 1 ms / 100 us
+    std::vector<uint64_t> refclk(end - begin);
+    {
+        bool seeded = false;
+        uint32_t last = 0;
+        uint64_t wraps = 0;
+        for (size_t i = begin; i < end; i++) {
+            const uint32_t v = plot_samples_[i].value24;
+            if (seeded && v < last && (last - v) > (1u << 23)) {
+                wraps++;
+            }
+            seeded = true;
+            last = v;
+            refclk[i - begin] = (wraps << 24) | v;
+        }
+    }
+    out.reserve(end - begin);
+    size_t j = 0;  // trailing edge: the LATEST sample still >= window behind, for the tightest window over target
+    for (size_t i = 0; i < end - begin; i++) {
+        while (j + 1 < i && refclk[i] - refclk[j + 1] >= window) {
+            j++;
+        }
+        if (i == j || refclk[i] - refclk[j] < window) {
+            continue;
+        }
+        const double dr = static_cast<double>(refclk[i] - refclk[j]);
+        const double dw =
+            static_cast<double>(plot_samples_[begin + i].ts) - static_cast<double>(plot_samples_[begin + j].ts);
+        const int64_t host_ns =
+            eclk.anchor_host_ns +
+            static_cast<int64_t>(
+                (static_cast<double>(plot_samples_[begin + i].ts) - static_cast<double>(eclk.anchor_ticks)) /
+                eclk.frequency_ghz);
+        out.push_back(FreqPoint{host_ns, (dw / dr) * kRefclkHz * 1e-9});
+    }
+    return out;
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
