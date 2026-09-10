@@ -35,6 +35,7 @@ case "${MODEL}" in
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     MAX_SEQ_LEN=256000
     GOLDEN_LEN=56320
+    PCC_WINDOW_TOKENS=${CHUNK_SIZE}
     # Users are bounded by per-bank KV capacity, and that bound has to be bisected, not computed --
     # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
     # just above this and wanders between ranks, so re-bisect before raising it.
