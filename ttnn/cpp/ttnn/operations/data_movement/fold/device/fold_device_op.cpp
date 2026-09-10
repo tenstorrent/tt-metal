@@ -18,15 +18,22 @@ bool is_fast_path_input(const Tensor& t) {
            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR;
 }
 
-bool is_tile_native_fold_supported(const Tensor& input_tensor) {
-    if (input_tensor.layout() != Layout::TILE) {
+bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w) {
+    if (input_tensor.layout() != tt::tt_metal::Layout::TILE) {
         return false;
     }
-    const bool is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const uint32_t noc_align =
-        is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t c_bytes = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    return c_bytes % noc_align == 0;
+    // Output dtype mirrors compute_output_specs: BFLOAT8_B/BFLOAT16 collapse to BFLOAT16 on RM output.
+    const auto in_dt = input_tensor.dtype();
+    const auto out_dt = (in_dt == tt::tt_metal::DataType::FLOAT32 || in_dt == tt::tt_metal::DataType::UINT16)
+                            ? in_dt
+                            : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t out_elem = tt::datum_size(datatype_to_dataformat_converter(out_dt));
+    const uint32_t input_width = input_tensor.logical_shape()[2];
+    const uint32_t C = input_tensor.logical_shape()[-1];
+    const uint64_t scratch_bytes = static_cast<uint64_t>(input_width / stride_w) * stride_h * stride_w * C * out_elem;
+    // ~200 KB reserve for the src0/src1 tile CBs and kernel code/stack (pattern from conv3d factory).
+    constexpr uint64_t kOverhead = 200 * 1024;
+    return scratch_bytes + kOverhead < tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
 }
 
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(

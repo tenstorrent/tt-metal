@@ -539,9 +539,10 @@ Tensor fold(
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
-        // TILE-native factory handles aligned (C * elem_size); fall back to untilize→RM only when it can't.
+        // Tile-native factory holds one full output row in L1 scratch; if it wouldn't fit, fall back
+        // to untilize→RM so prim::fold takes the RM path (1-stick scratch).
         if (processed_tensor.layout() == Layout::TILE &&
-            !operations::data_movement::is_tile_native_fold_supported(processed_tensor)) {
+            !operations::data_movement::tile_native_fold_scratch_fits_l1(processed_tensor, stride_h, stride_w)) {
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 
