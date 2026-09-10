@@ -802,13 +802,9 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     add_compute_intermediate(DFB_SUM_2, "sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    // Tile-counter budget: prev_sum_2 and exp_max_diff_2 are not allocated — the compute kernel reuses
-    // out_im/qk_im (dead after the flash loop). out_accumulate_im_2 stays dedicated: it can't share a DFB
-    // with the other two (ring-wrap corruption, seen on WH) => 9 intra-Tensix DFBs on this checkpoint.
-    // Reaching Quasar's cap of 8 needs it off the tile-counter budget (fused accumulate / scratchpad) —
-    // follow-up.
-    const DFBSpecName DFB_OUT_ACC_IM_2{"out_accumulate_im_2"};
-    add_compute_intermediate(DFB_OUT_ACC_IM_2, "out_accumulate_im_2", im_tile_size, out_tiles, im_df, &im_tile);
+    // Tile-counter budget (Quasar cap 8): the 3 tree-reduction temps are NOT allocated — the compute
+    // kernel reuses qk_im / out_im (dead after the flash loop) and out_m (compute-produced, idle until
+    // send-to-parent) for prev_sum_2 / out_accumulate_im_2 / exp_max_diff_2. 11 -> 8. See the kernel.
 
     // ---- Tensor parameters + bindings ----
     Group<TensorParameter> tensor_params;

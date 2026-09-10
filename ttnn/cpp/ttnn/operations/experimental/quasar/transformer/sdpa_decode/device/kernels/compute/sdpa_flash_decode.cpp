@@ -118,23 +118,23 @@ void kernel_main() {
     constexpr auto dfb_sum_1 = dfb::sum_1;
     constexpr auto dfb_sum_2 = dfb::sum_2;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
-    // Tile-counter budget (Quasar caps intra-Tensix DFBs at 8; flash-decode declared 11). Two of the
-    // three tree-reduction temps reuse compute-private buffers that are drained after the flash loop:
-    //   - prev_sum_2   -> out_im  (move_block(l_in -> out_im); correction consumes it)
-    //   - exp_max_diff_2 -> qk_im (correction produces it; the child-O mul consumes it)
-    // im_df == stats_df == Float16_b with identical tile geometry, so the IM buffers hold the STATS-format
-    // temps byte-for-byte (out_tiles/qk_tiles >= statistics_tiles). Temps MUST be compute-private: the
-    // mul/add in-place helpers reserve_back+push_back their operand (they RE-PRODUCE it), which only the
-    // buffer's producer may do, so the borrowed cross-core buffers (l_in/out_o) may only be *consumed*
-    // via move_block (that consume preserves their cross-core handshake). The 3rd temp
-    // (out_accumulate_im_2) cannot share a DFB with the other two — proven on WH: reusing one DFB for two
-    // different-sized temps within a round corrupts numerics via ring wrap — so it stays a dedicated DFB
-    // here => 9 intra-Tensix DFBs. Reaching 8 for Quasar needs out_accumulate_im_2 moved off the
-    // tile-counter budget (fused scaled-accumulate that never materializes it, or a synced scratchpad):
-    // follow-up.
-    constexpr auto dfb_prev_sum_2 = dfb::out_im;
-    constexpr auto dfb_exp_max_diff_2 = dfb::qk_im;
-    constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
+    // Tile-counter budget (Quasar caps intra-Tensix DFBs at 8; flash-decode declared 11). The 3
+    // tree-reduction temps reuse buffers that are idle during the tree phase, so none is allocated (11->8):
+    //   - prev_sum_2         -> qk_im  (compute-private, drained after the flash loop; move_block(l_in
+    //                                   -> qk_im) consumes the borrowed l_in, correction consumes qk_im)
+    //   - out_accumulate_im_2 -> out_im (compute-private, drained after the flash loop; move_block(out_o
+    //                                   -> out_im) consumes the borrowed out_o; scaled + accumulated below)
+    //   - exp_max_diff_2      -> out_m  (compute-PRODUCED buffer: the writer only *consumes* out_m at
+    //                                   send-to-parent, so compute may reserve_back/push_back it; out_m is
+    //                                   unwritten until send-to-parent, after every exp_max_diff_2 use)
+    // The three land on DISTINCT buffers (no DFB is reused for two different-sized temps in one round --
+    // that ring-wraps and corrupts, seen on WH), and no in-place op ever runs on a borrowed (writer-
+    // produced) buffer -- l_in/out_o are only *consumed* via move_block. im_df == stats_df == Float16_b
+    // with identical tile geometry, so IM buffers hold the STATS-format temps byte-for-byte; sizes fit
+    // (out_m/qk_tiles/out_tiles >= statistics_tiles; out_accumulate_im_2 needs out_tiles so it takes out_im).
+    constexpr auto dfb_prev_sum_2 = dfb::qk_im;
+    constexpr auto dfb_exp_max_diff_2 = dfb::out_m;
+    constexpr auto dfb_out_accumulate_im_2 = dfb::out_im;
 
     constexpr auto dfb_out_o = dfb::out_o;
     constexpr auto dfb_out_worker = dfb::out_worker;
