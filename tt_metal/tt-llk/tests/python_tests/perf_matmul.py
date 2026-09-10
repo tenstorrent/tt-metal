@@ -137,6 +137,21 @@ def test_perf_matmul(
 
     formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
 
+    # BFP pack from 16-bit dest still holds dest on THCON after PACK looks idle.
+    # Dest Half + LOOP_FACTOR(64) ping-pongs: ZEROACC CLR_HALF then races math
+    # writing the other half. Dest Full serializes math off dest during the
+    # clear; dest_acc=Yes uses a different packer dest-read path. Functional
+    # test_matmul uses these same combos at LOOP_FACTOR(1), so math never starts
+    # the second half and the stall does not deadlock. Unskip after #56073.
+    if (
+        dest_sync == DestSync.Half
+        and dest_acc == DestAccumulation.No
+        and formats.output_format.is_block_float()
+    ):
+        pytest.skip(
+            "Dest Half + dest_acc=No + BFP pack hangs in _llk_pack_dest_section_done_ (#56073)"
+        )
+
     run_types = [
         PerfRunType.L1_TO_L1,
         PerfRunType.UNPACK_ISOLATE,
@@ -167,7 +182,7 @@ def test_perf_matmul(
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),
             LOOP_FACTOR(64),
-            TILE_COUNT(dims.rt_dim * dims.ct_dim),
+            TILE_COUNT(variant_tile_count),
             CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
         ],
         variant_stimuli=StimuliConfig(
