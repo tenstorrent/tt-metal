@@ -49,3 +49,49 @@ python_env/bin/python3 -m pytest models/demos/gemma4_d_p/tests/unit -k 'not devi
 ```
 
 These checks cover packed-cache algebra, projection/RoPE permutations, migration addresses, supported mesh/chunk geometry, and independence from the original Gemma4 package. Device correctness and performance require a Galaxy run; host checks do not establish numerical trace-replay equivalence.
+
+## Prefill service
+
+The common runner supports one CP8/TP4 Galaxy, multiple resident user slots,
+chunk-aligned requests, and traced or eager execution. It loads input/decoder
+weights only; the LM head and final norm are omitted. The manifest reserves
+32 MiB per device for traces and enables device-side layer acknowledgements.
+
+Use a populated **gemma4_d_p** weight cache (see the cache population script),
+not the original `gemma4` cache:
+
+```bash
+HF_HOME=/localdev/svuckovic/huggingface \
+HF_MODEL=google/gemma-4-31B-it \
+TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it \
+PREFILL_MANIFEST=models/demos/gemma4_d_p/tt/runners/manifests/gemma4_31b.json \
+  python -m models.demos.common.prefill.runners.prefill_runner
+```
+
+After `setup complete, entering request loop`, run the producer in another shell:
+
+```bash
+PREFILL_MODEL=gemma4_31b PREFILL_SP=8 PREFILL_TP=4 \
+PREFILL_CHUNK_SIZE=8192 PREFILL_MAX_SEQ_LEN=262144 \
+PREFILL_NUM_LAYERS=60 PREFILL_NUM_USERS=2 \
+PREFILL_H2D_SERVICE_ID=gemma4_prefill \
+PREFILL_PRODUCER_SYNTHETIC_TOKENS=1 PREFILL_PRODUCER_WAIT_FOR_ACK=1 \
+PREFILL_PRODUCER_CHUNKS=7 PREFILL_PRODUCER_MAX_REQUESTS=2 \
+PREFILL_PRODUCER_INTERLEAVE=round_robin PREFILL_SEND_SHUTDOWN=1 \
+  python -m models.demos.common.prefill.runners.prefill_producer
+```
+
+For a single-user run, set producer `PREFILL_NUM_USERS=1`,
+`PREFILL_PRODUCER_MAX_REQUESTS=1`, and `PREFILL_PRODUCER_CHUNKS=2`.
+Set `PREFILL_SEND_SHUTDOWN=0` to keep the server available after a run.
+Match context and chunk configuration between processes; server environment
+variables override manifest defaults. `REQUESTS_COMPLETE` confirms all layer
+acknowledgements arrived; synthetic tokens do not establish numerical accuracy.
+With the same model/cache environment, run the device regression with:
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_common_prefill_runtime.py -sv
+```
+
+It exercises slot changes, eager/traced KV equivalence, migration-table export,
+and D2H acknowledgement metadata. It is not a comparison against an HF model.

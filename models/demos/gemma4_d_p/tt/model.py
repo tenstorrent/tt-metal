@@ -185,6 +185,7 @@ class Gemma4Model:
         # ring KV cache slabs. None means single-chunk prefill.
         prefill_chunk_size=None,
         ring_kv_caches=None,
+        prefill_weights_only=False,
     ):
         from models.demos.gemma4_d_p.config import validate_galaxy_mesh
 
@@ -199,6 +200,8 @@ class Gemma4Model:
             raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
         if prefill_chunk_size < 1024 * mesh_config.prefill.sp:
             raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+        self.prefill_weights_only = prefill_weights_only
+        self.lm_head_weight = None
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.prefill_chunk_size = prefill_chunk_size
@@ -295,26 +298,29 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # LM head (tied with embeddings): column-parallel (shard vocab dim)
-            # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
-            # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
-            # argmax, but the override is exposed for systems that genuinely
-            # need the DRAM relief and can tolerate the precision loss.
-            lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
-            if tp > 1:
-                lm_mapper = mesh_config.column_parallel(mesh_device)
-            else:
-                lm_mapper = replicate
-            lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
-            self.lm_head_weight = ttnn.as_tensor(
-                lm_head_weight,
-                device=mesh_device,
-                dtype=lm_head_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=lm_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if not prefill_weights_only:
+                # LM head (tied with embeddings): column-parallel (shard vocab dim)
+                # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
+                # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
+                # argmax, but the override is exposed for systems that genuinely
+                # need the DRAM relief and can tolerate the precision loss.
+                lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
+                if tp > 1:
+                    lm_mapper = mesh_config.column_parallel(mesh_device)
+                else:
+                    lm_mapper = replicate
+                lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
+                self.lm_head_weight = ttnn.as_tensor(
+                    lm_head_weight,
+                    device=mesh_device,
+                    dtype=lm_head_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=lm_mapper,
+                    cache_file_name=get_cache_file_name(
+                        tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"
+                    ),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         else:
             self.embedding_weight = None
             self.lm_head_weight = None
@@ -343,21 +349,23 @@ class Gemma4Model:
 
         self.tt_kv_cache = [layer.self_attn.ring_kv_cache for layer in self.layers]
 
-        # Final norm
-        if state_dict and "model.language_model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.language_model.norm")
-        elif state_dict and "model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.norm")
-        else:
-            norm_state = {}
+        self.norm = None
+        if not prefill_weights_only:
+            # Final norm
+            if state_dict and "model.language_model.norm.weight" in state_dict:
+                norm_state = substate(state_dict, "model.language_model.norm")
+            elif state_dict and "model.norm.weight" in state_dict:
+                norm_state = substate(state_dict, "model.norm")
+            else:
+                norm_state = {}
 
-        self.norm = RMSNorm(
-            mesh_device=mesh_device,
-            hf_config=hf_config,
-            state_dict=norm_state,
-            tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
-            mesh_config=mesh_config,
-        )
+            self.norm = RMSNorm(
+                mesh_device=mesh_device,
+                hf_config=hf_config,
+                state_dict=norm_state,
+                tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
+                mesh_config=mesh_config,
+            )
 
     def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
         """Slice chunk-major RoPE caches using a CP-local row offset."""
@@ -385,10 +393,11 @@ class Gemma4Model:
         d2h_service=None,
         metadata_msg=None,
     ):
-        """Prefill one user's chunk and return its post-norm hidden states.
+        """Prefill one user's chunk and return hidden states.
 
-        The caller owns trace staging and runs the LM head on the final token
-        after the last chunk. Migration acknowledgements follow each layer's KV writes.
+        With prefill_weights_only, omit the output norm and LM-head weights.
+        Otherwise the caller runs the LM head on the final token after the last
+        chunk. Migration acknowledgements follow each layer's KV writes.
         """
         seq_len = hidden_states.shape[2]
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
@@ -438,7 +447,7 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
-        return self.norm.forward(hidden_states)
+        return hidden_states if self.prefill_weights_only else self.norm.forward(hidden_states)
 
     def _cp_gather_prefill_sequence(self, hidden_states):
         """Gather a chunk across CP ranks without freeing the caller-owned hidden states."""

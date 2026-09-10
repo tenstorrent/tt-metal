@@ -12,11 +12,13 @@ import ttnn
 from models.demos.gemma4_d_p.tt.model import Gemma4Model
 
 
+@pytest.mark.parametrize("prefill_weights_only", [False, True])
 @pytest.mark.parametrize("ack_mode", ["callback", "segmented_trace", "socket"])
-def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
+def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, prefill_weights_only):
     events = []
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
     model = object.__new__(Gemma4Model)
+    model.prefill_weights_only = prefill_weights_only
     model.mesh_device = object()
     model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
     model.tt_kv_cache = [None, None]
@@ -65,7 +67,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
         if ack_mode == "callback":
             expected.append(("sync", None))
         expected.append(("ack", idx))
-    assert events == expected + [("norm", None)]
+    assert events == expected + ([] if prefill_weights_only else [("norm", None)])
 
 
 @pytest.mark.parametrize("is_global", [False, True])
