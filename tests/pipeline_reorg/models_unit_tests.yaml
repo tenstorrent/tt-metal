@@ -1520,7 +1520,7 @@
   model_family: BEVFormer
   skus:
     bh_p150b_civ2:
-      timeout: 18
+      timeout: 15
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
