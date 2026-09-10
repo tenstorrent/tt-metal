@@ -1,0 +1,2 @@
+{"hf_advertised_context": 1048576, "supported_context": {"p300x2": null, "p300": null}, "largest_tested_prefill": null, "largest_tested_decode": null,
+ "limiting_reason": "not yet measured (stage 06/07 context ladder)", "notes": "KDA layers carry constant-size state; only the 7 MLA layers use the paged latent KV cache (8 KB/token bf16 per chip, replicated)."}

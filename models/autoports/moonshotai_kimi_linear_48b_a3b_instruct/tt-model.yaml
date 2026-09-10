@@ -1,0 +1,99 @@
+# moonshotai/Kimi-Linear-48B-A3B-Instruct on Tenstorrent Blackhole — CONTAINER (v5.1) package, kind vllm-plugin.
+# Authored from the bring-up on a QB2 (2x p300c = 4 chips), tt-metal worktree branch jashan/kimi-linear-48b (base 8e18a76).
+#   uv run tt-model package --container models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/tt-model.yaml --out ~/tt-model-builds
+# Values marked VALIDATED are written by ~/kimi-linear-bringup (scripts/py/finalize_manifest.py, stage 11).
+schema: '5.1'
+repo: jashansinghTT/kimi-linear-48b-a3b-instruct-blackhole
+name: kimi-linear-48b-a3b-instruct
+weights:
+  repo: moonshotai/Kimi-Linear-48B-A3B-Instruct
+  revision: e1df551a447157d4658b573f9a695d57658590e9
+  ignore_patterns: ["figures/*"]
+kind: vllm-plugin
+arch: blackhole
+source:
+  tt_metal: /home/jashan/tt-metal-kimi
+  code:
+  - models/common
+  - models/tt_transformers/tt
+  - models/demos/deepseek_v3_d_p/reference/kda
+  - models/demos/deepseek_v3_d_p/tt/kda
+  - models/demos/deepseek_v3_d_p/utils/fast_cache_checker.py
+  - models/demos/deepseek_v3_d_p/__init__.py
+  - models/demos/deepseek_v3_d_p/tt/__init__.py
+  - models/demos/deepseek_v3_d_p/reference/__init__.py
+  - models/demos/deepseek_v3_d_p/utils/__init__.py
+  - models/experimental/gated_attention_gated_deltanet/tt/ttnn_delta_rule_ops.py
+  - models/experimental/gated_attention_gated_deltanet/__init__.py
+  - models/experimental/gated_attention_gated_deltanet/tt/__init__.py
+  - models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/__init__.py
+  - models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/reference
+  - models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/tt
+  - models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/config
+  - models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/vllm_bundle
+  ubuntu: '22.04'
+  python: '3.12'
+runtime:
+  vllm:
+    version: 0.26.0
+  plugin:
+    path: /home/jashan/kimi-linear-bringup/third_party/vllm-tt-plugin
+  extra_models_dir: models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/vllm_bundle
+  overrides:
+  - numpy>=1.24.4,<2
+  - opencv-python-headless==4.11.0.86
+  - transformers==5.14.1
+  - tiktoken>=0.6.0
+  - blobfile>=3
+  - safetensors>=0.4
+serve:
+  port: 8000
+  block_size: 64
+  capabilities:
+    tool_parser: kimi_k2
+  additional_config:
+    tt:
+      trace_region_size: 268435456
+      fabric_config: FABRIC_1D_RING
+  env:
+    TT_METAL_OPERATION_TIMEOUT_SECONDS: '120.0'
+    TT_CACHE_PATH: /cache/kimi_weights
+  args:
+  - --trust-remote-code
+serve_profiles:
+- name: p300x2
+  description: Two p300 boards / QuietBox 2, 4 chips (TP4 over KDA/MLA heads and expert intermediates); 32 users. [NOT validated yet]
+  hardware: p300x2
+  mesh_device: P300x2
+  max_num_seqs: 32
+  max_model_len: 131072
+- name: p300
+  description: One p300 board (2 chips, TP2). Declared for physical P300 hosts; NOT bootable on a QuietBox 2 (a bare 1x2 mesh cannot initialise fabric there); accuracy validated as a 1x2 submesh only. [NOT validated yet]
+  hardware: p300
+  mesh_device: P300
+  max_num_seqs: 16
+  max_model_len: 65536
+  additional_config:
+    tt:
+      fabric_config: FABRIC_1D
+default_profile: p300x2
+verify:
+- import vllm; from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.generator_vllm import KimiLinearForCausalLM as M; assert M.model_capabilities['supports_prefix_caching'] is False
+- import json; m = json.load(open('/opt/tt-metal/models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/vllm_bundle/kimi_linear/vllm_metadata.json')); assert m['arch'] == 'KimiLinearForCausalLM'
+- from vllm.tool_parsers import ToolParserManager; ToolParserManager.get_tool_parser('kimi_k2')
+- from vllm.transformers_utils.configs.kimi_linear import KimiLinearConfig; import tiktoken, blobfile
+- import transformers; assert transformers.__version__ == '5.14.1', transformers.__version__
+- from pathlib import Path; d = Path('/opt/tt-metal/models/autoports/moonshotai_kimi_linear_48b_a3b_instruct/config'); assert (d / 'selected_precision_config.json').is_file() and (d / 'context_contract.json').is_file()
+- import ttnn; from ttnn.experimental import kda; assert hasattr(ttnn.transformer, 'paged_flash_multi_latent_attention_decode')
+card:
+  description: >
+    Moonshot AI's Kimi Linear 48B-A3B Instruct (MIT): a hybrid Kimi Delta Attention / MLA mixture-of-experts decoder
+    (48B total, 3B active, 256 experts, 1M-token architecture) served on Tenstorrent Blackhole via vLLM with an
+    OpenAI-compatible API and native Kimi-K2-format tool calling. Primary profile p300x2 (QuietBox 2 / two P300 boards).
+  quickstart: |
+    ### Use with your client
+    ```bash
+    curl -s localhost:20000/v1/chat/completions -H 'Content-Type: application/json' \
+      -d '{"model":"moonshotai/Kimi-Linear-48B-A3B-Instruct","messages":[{"role":"user","content":"Hello!"}],"max_tokens":64}'
+    ```
+    Tool calling: pass `tools` (and `tool_choice: auto`); responses return `finish_reason: tool_calls`. Streaming is supported.

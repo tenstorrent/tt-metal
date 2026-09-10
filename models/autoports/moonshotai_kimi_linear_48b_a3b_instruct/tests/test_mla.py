@@ -87,7 +87,7 @@ def test_mla_decode_batch(mesh_device, ccl, hf_config, mla_sd, cache_path):
         L = 8 + 4 * u
         x = (torch.randn(1, L + 1, hf_config.hidden_size) * 0.5).bfloat16()
         ref, _ = mla_forward_reference(x, mla_sd, hf_config)
-        xp = torch.zeros(1, 1, 32, hf_config.hidden_size, dtype=torch.bfloat16)
+        xp = torch.zeros(1, 1, 64, hf_config.hidden_size, dtype=torch.bfloat16)  # prompts up to 36 tokens
         xp[0, 0, :L] = x[0, :L]
         mla.forward_prefill(replicated(mesh_device, xp), cache, pt, user_id=u, valid_len=L)
         xs.append(x[0, L])

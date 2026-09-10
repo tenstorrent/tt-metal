@@ -222,7 +222,12 @@ class KimiGenerator(_ContractGenerator):
 def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> KimiGenerator:
     snapshot = resolve_snapshot(model_dir)
     max_seq_len = int(kwargs.get("max_seq_len") or os.environ.get("KIMI_MAX_SEQ_LEN", 8192))
-    gen = KimiGenerator(mesh_device, snapshot=snapshot, max_seq_len=max_seq_len)
+    precision = PrecisionPolicy()
+    if os.environ.get("KIMI_PRECISION", "").lower() in ("bfp4", "bfp4_experts"):
+        precision.experts = ttnn.bfloat4_b
+    if os.environ.get("KIMI_KV_BFP8") == "1":
+        precision.kv_cache = ttnn.bfloat8_b
+    gen = KimiGenerator(mesh_device, snapshot=snapshot, max_seq_len=max_seq_len, precision=precision)
     if os.environ.get("KIMI_SKIP_TRACE_WARMUP") != "1":
         gen.warmup_decode_trace()
     return gen

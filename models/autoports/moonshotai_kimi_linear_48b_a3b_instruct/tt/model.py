@@ -240,6 +240,26 @@ class KimiLinearModel:
                     ttnn.experimental.slice_write(zero, h, [0, slot, 0], [1, slot + 1, h.shape[-1]], [1, 1, 1])
                     ttnn.deallocate(zero)
 
+    def remap_slots(self, remap) -> None:
+        """slot i takes the KDA state previously at slot remap[i] (vLLM batch condense); identity is a no-op."""
+        idx = [int(remap[i]) for i in range(self.max_batch_size)]
+        if all(i == j for i, j in enumerate(idx)):
+            return
+        for ds in self.kda_decode_states:
+            rows = [ttnn.slice(ds.recurrent, (i, 0, 0, 0), (i + 1,) + tuple(ds.recurrent.shape)[1:]) for i in idx]
+            new = ttnn.concat(rows, dim=0)
+            ttnn.copy(new, ds.recurrent)
+            ttnn.deallocate(new)
+            for r in rows:
+                ttnn.deallocate(r)
+            for h in ds.conv_history:
+                rows = [ttnn.slice(h, (0, i, 0), (1, i + 1, h.shape[-1])) for i in idx]
+                new = ttnn.concat(rows, dim=1)
+                ttnn.copy(new, h)
+                ttnn.deallocate(new)
+                for r in rows:
+                    ttnn.deallocate(r)
+
     # ---- host-side decode inputs (for traced decode: created on host, copied into persistent device tensors) ---------
     def _host_decode_inputs(self, tokens: torch.Tensor, cur_pos: torch.Tensor, page_table: torch.Tensor):
         B = self.max_batch_size

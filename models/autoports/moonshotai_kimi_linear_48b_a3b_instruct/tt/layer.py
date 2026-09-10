@@ -23,7 +23,7 @@ class PrecisionPolicy:
     shared: object = ttnn.bfloat8_b
     dense_mlp: object = ttnn.bfloat8_b
     mla_proj: object = ttnn.bfloat8_b
-    kv_cache: object = ttnn.bfloat16
+    kv_cache: object = ttnn.bfloat8_b  # the flash-MLA decode kernel is exercised upstream with a bfp8 latent cache
 
 
 class KimiDecoderLayer:

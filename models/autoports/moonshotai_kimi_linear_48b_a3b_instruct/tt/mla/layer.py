@@ -106,7 +106,7 @@ class KimiMLA:
         )
 
     # ---- cache -------------------------------------------------------------------------------
-    def allocate_cache(self, num_blocks: int, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    def allocate_cache(self, num_blocks: int, dtype=ttnn.bfloat8_b) -> ttnn.Tensor:
         return ttnn.zeros(
             (num_blocks, 1, self.block_size, self.L),
             dtype=dtype,
@@ -114,6 +114,35 @@ class KimiMLA:
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def _decode_program_config(self, B: int):
+        """The auto config puts every Blackhole core (110) on the single latent KV head at small batch and trips the
+        kernel's tree-reduction limit (max 64 cores per head); cap cores per (head, batch) at 64."""
+        cfg = getattr(self, "_dec_cfg", {}).get(B)
+        if cfg is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=0,
+                k_chunk_size=128,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=16,
+            )
+            self._dec_cfg = {**getattr(self, "_dec_cfg", {}), B: cfg}
+        return cfg
+
+    def _update_shard_config(self, B: int):
+        cfg = getattr(self, "_upd_cfg", {}).get(B)
+        if cfg is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            cores = ttnn.num_cores_to_corerangeset(B, grid, row_wise=True)
+            cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(cores, (32, self.L), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._upd_cfg = {**getattr(self, "_upd_cfg", {}), B: cfg}
+        return cfg
 
     # ---- shared pieces -----------------------------------------------------------------------
     def _latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -235,8 +264,10 @@ class KimiMLA:
         B = x.shape[2]
         kvpe = self._latent(x)  # [1,1,B,576]
         upd = ttnn.reshape(kvpe, (1, B, 1, self.L))  # [1, B, n_kv_heads=1, D]
-        upd_c = upd if upd.dtype == cache.dtype else ttnn.typecast(upd, cache.dtype)
-        ttnn.experimental.paged_update_cache(cache, upd_c, update_idxs_tensor=cur_pos, page_table=page_table)
+        # paged_update_cache wants a bf16/fp32 input HEIGHT-sharded in L1 (one core per batch row); it repacks into the cache dtype
+        upd_s = ttnn.interleaved_to_sharded(upd, self._update_shard_config(B))
+        ttnn.experimental.paged_update_cache(cache, upd_s, update_idxs_tensor=cur_pos, page_table=page_table)
+        ttnn.deallocate(upd_s)
         ttnn.deallocate(kvpe)
         q = self._q_latent(x)  # [1, H_loc, B, 576]
         q = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, H_loc, 576]
@@ -247,6 +278,7 @@ class KimiMLA:
             page_table_tensor=page_table,
             cur_pos_tensor=cur_pos,
             scale=self.scale,
+            program_config=self._decode_program_config(B),
             compute_kernel_config=self.sdpa_compute,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, B, H_loc, 512]

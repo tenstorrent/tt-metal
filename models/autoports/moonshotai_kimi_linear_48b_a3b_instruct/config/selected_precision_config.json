@@ -1,0 +1,1 @@
+{"experts": "bfp8", "shared": "bfp8", "dense_mlp": "bfp8", "mla_proj": "bfp8", "kv_cache": "bf16", "note": "default before the datatype sweep (stage 08)"}
