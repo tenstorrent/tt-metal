@@ -14,6 +14,7 @@
 #include <cmath>
 #include <map>
 #include <string>
+#include <cstdint>
 
 using namespace tt::tt_metal;
 
@@ -36,16 +37,17 @@ namespace ttnn::prim {
  * @param index_tile_size Memory size of index tiles
  * @return Tuple of (num_cores, split_size, remainder, final_input_size, selected_x, selected_y)
  */
-static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
-    uint32_t width,
-    uint32_t min_dim,
-    uint32_t max_dim,
-    uint32_t k,
+static inline std::tuple<std::uint16_t, std::uint16_t, std::uint16_t, std::uint16_t, std::uint16_t, std::uint16_t>
+cores_utilized(
+    std::uint32_t width,
+    std::uint32_t min_dim,
+    std::uint32_t max_dim,
+    std::uint32_t k,
     const CoreRange core_range,
-    const uint32_t l1_size,
-    const uint32_t value_tile_size,
-    const uint32_t index_tile_size,
-    uint32_t tile_width = 32) {
+    const std::uint32_t l1_size,
+    const std::uint32_t value_tile_size,
+    const std::uint32_t index_tile_size,
+    std::uint32_t tile_width = 32) {
     const auto config_opt = find_topk_core_config(
         width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
     // select_program_factory only picks the multi-core factory after verify_multi_core_cost
@@ -107,21 +109,44 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             ? tt::DataFormat::Float16_b
             : input_cb_data_format;
 
+    // Fused-key stable mode: pack each datum into one 32-bit [bf16 value | u16 index] sort key at
+    // local-sort entry and run the plain UNSTABLE network on the packed words end-to-end (through
+    // the intermediate CBs and the NoC gather), splitting values/indices back apart only on the
+    // final core. This makes stable=true CHEAPER than the comparator-stable network (the tie-break
+    // rides inside the key, index tiles stop travelling, and the LLK regains full replay
+    // compression). Eligibility is keyed on the INDEX dtype, not on "multicore", so it fails safe
+    // if the width gate ever changes: bf16-family values (16-bit key half) and u16 indices only;
+    // fp32 inputs / 32-bit indices keep the comparator-stable network.
+    const bool fused_stable_keys = args.stable && !has_fp32_values && index_cb_data_format == tt::DataFormat::UInt16;
+    // Packed keys move as raw 32-bit words. Float32 is the proven raw transport here: the packer's
+    // fp32->fp32 path is a documented identity (no rounding, denormals and NaN patterns preserved —
+    // Round_10b_mant stays 0) and it is exactly the configuration the fp32-input topk already ships
+    // through these same kernels, including the out-of-order pack_tile<true> the merge loops use.
+    // UInt32-format CBs corrupt the high halves under pack_tile<true> on this path (silicon-observed;
+    // the same mechanism corrupts the fp32 path's UInt32 index tiles — see issue #53466).
+    const tt::DataFormat packed_cb_data_format = tt::DataFormat::Float32;
+    const std::uint32_t packed_tile_size = tile_size(packed_cb_data_format);
+    // Intermediate/transport formats: packed keys when fused, the split value/index pair otherwise.
+    const tt::DataFormat interm_value_cb_data_format =
+        fused_stable_keys ? packed_cb_data_format : compute_cb_data_format;
+    const std::uint32_t interm_value_tile_size =
+        fused_stable_keys ? packed_tile_size : tile_size(compute_cb_data_format);
+
     // Core grid and tile size calculations
     const auto first_core_range = args.sub_core_grids.ranges().at(0);
     const auto first_core_range_set = CoreRangeSet(first_core_range);
 
-    const uint32_t input_tile_size = tile_size(input_cb_data_format);
-    const uint32_t value_tile_size = tile_size(value_cb_data_format);
-    const uint32_t index_tile_size = tile_size(index_cb_data_format);
-    const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
+    const std::uint32_t input_tile_size = tile_size(input_cb_data_format);
+    const std::uint32_t value_tile_size = tile_size(value_cb_data_format);
+    const std::uint32_t index_tile_size = tile_size(index_cb_data_format);
+    const std::uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     const auto* device = &input_tensor.mutable_device();
 
     const auto input_shape = input_tensor.padded_shape();
-    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
-    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const std::uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
 
     // Determine optimal core configuration based on input dimensions, K value, and memory constraints
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
@@ -164,12 +189,13 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         {});
 
     // Calculate processing dimensions in tile units
-    const uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
-    const uint32_t Wt_final = final_topk_input_size / tile_width;  // Total width tiles for final core
-    const uint32_t Kt = args.k % tile_width == 0 ? args.k / tile_width : (args.k / tile_width) + 1;  // TopK in tiles
+    const std::uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
+    const std::uint32_t Wt_final = final_topk_input_size / tile_width;  // Total width tiles for final core
+    const std::uint32_t Kt =
+        args.k % tile_width == 0 ? args.k / tile_width : (args.k / tile_width) + 1;  // TopK in tiles
 
-    const uint32_t num_cb_unit = 2;                // Base buffering unit
-    const uint32_t cb_in_units = 2 * num_cb_unit;  // 4 units total for double-buffered input
+    const std::uint32_t num_cb_unit = 2;                // Base buffering unit
+    const std::uint32_t cb_in_units = 2 * num_cb_unit;  // 4 units total for double-buffered input
 
     // ==================================================================================
     // CIRCULAR BUFFER ALLOCATION
@@ -183,24 +209,24 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     //   Final core:   CB0 → CB1 → CB4 → CB5 → CB8 → CB9 → CB6 → CB7
     // ==================================================================================
     // Input values (double-buffered for continuous DRAM streaming)
-    constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
+    constexpr std::uint32_t input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_in_units * value_tile_size,
         .core_ranges = all_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_cb_index),
+            .buffer_index = static_cast<std::uint8_t>(input_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_tile_size,
         }}},
     });
 
     // Input indices (double-buffered, generated on-demand or read from DRAM)
-    constexpr uint32_t index_cb_index = tt::CBIndex::c_1;
+    constexpr std::uint32_t index_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_in_units * index_tile_size,
         .core_ranges = all_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_cb_index),
+            .buffer_index = static_cast<std::uint8_t>(index_cb_index),
             .data_format = index_cb_data_format,
             .page_size = index_tile_size,
         }}},
@@ -212,36 +238,53 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // (e.g. [normal_H0, INF_H1, ..., INF_H31]). If stored as bfp8 the shared-exponent
     // block is dominated by INF, zeroing out H=0's value. Keeping bf16 here and in
     // values_cb_index (local) avoids that precision loss for the inter-core transfer.
-    constexpr uint32_t gathered_values_cb_index = tt::CBIndex::c_4;
+    constexpr std::uint32_t gathered_values_cb_index = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = Wt_final * compute_tile_size,
+        .total_size = Wt_final * interm_value_tile_size,
         .core_ranges = all_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(gathered_values_cb_index),
-            .data_format = compute_cb_data_format,
-            .page_size = compute_tile_size,
+            .buffer_index = static_cast<std::uint8_t>(gathered_values_cb_index),
+            .data_format = interm_value_cb_data_format,
+            .page_size = interm_value_tile_size,
         }}},
     });
 
-    // Gathered indices (aggregation buffer for final core)
-    constexpr uint32_t gathered_indices_cb_index = tt::CBIndex::c_5;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = Wt_final * index_tile_size,
-        .core_ranges = all_cores_range_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(gathered_indices_cb_index),
-            .data_format = index_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
+    // Gathered indices (aggregation buffer for final core).
+    // Fused-key mode: indices ride inside the packed value tiles — no index gather is needed, and
+    // this CB slot becomes a small final-core staging buffer for the defused (column-layout) bf16
+    // value tiles between the defuse split and the 16-bit transpose back to row layout.
+    constexpr std::uint32_t gathered_indices_cb_index = tt::CBIndex::c_5;
+    if (!fused_stable_keys) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = Wt_final * index_tile_size,
+            .core_ranges = all_cores_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(gathered_indices_cb_index),
+                .data_format = index_cb_data_format,
+                .page_size = index_tile_size,
+            }}},
+        });
+    } else {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = Kt * compute_tile_size,
+            .core_ranges = final_cores_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(gathered_indices_cb_index),
+                .data_format = compute_cb_data_format,
+                .page_size = compute_tile_size,
+            }}},
+        });
+    }
 
-    // Local TopK indices output (local cores → writer → final core)
-    constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_9;
+    // Local TopK indices output (local cores → writer → final core).
+    // Fused-key mode: local cores emit packed keys only, so this CB exists only on the final core
+    // (where the defuse produces the u16 index output for the final writer).
+    constexpr std::uint32_t output_ind_cb_index = tt::CBIndex::c_9;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cb_unit * index_tile_size,
-        .core_ranges = all_cores_range_set,
+        .core_ranges = fused_stable_keys ? final_cores_range_set : all_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_ind_cb_index),
+            .buffer_index = static_cast<std::uint8_t>(output_ind_cb_index),
             .data_format = index_cb_data_format,
             .page_size = index_tile_size,
         }}},
@@ -251,28 +294,31 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Holds all Wt_local tiles for complete width chunk processing.
     // Uses bf16 when input is bfp8/bfp4 to avoid precision loss from shared-exponent
     // grouping during the sort (inf in one slot zeroes out its block-mates).
-    constexpr uint32_t input_transposed_cb_index = tt::CBIndex::c_2;
+    constexpr std::uint32_t input_transposed_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = Wt_local * compute_tile_size,
+        .total_size = Wt_local * interm_value_tile_size,
         .core_ranges = local_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_transposed_cb_index),
-            .data_format = compute_cb_data_format,
-            .page_size = compute_tile_size,
+            .buffer_index = static_cast<std::uint8_t>(input_transposed_cb_index),
+            .data_format = interm_value_cb_data_format,
+            .page_size = interm_value_tile_size,
         }}},
     });
 
-    // Transposed indices (single-buffered for in-place bitonic operations)
-    constexpr uint32_t index_transposed_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = Wt_local * index_tile_size,
-        .core_ranges = local_cores_range_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_transposed_cb_index),
-            .data_format = index_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
+    // Transposed indices (single-buffered for in-place bitonic operations).
+    // Fused-key mode: indices never travel after the fuse — no workspace CB.
+    constexpr std::uint32_t index_transposed_cb_index = tt::CBIndex::c_3;
+    if (!fused_stable_keys) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = Wt_local * index_tile_size,
+            .core_ranges = local_cores_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(index_transposed_cb_index),
+                .data_format = index_cb_data_format,
+                .page_size = index_tile_size,
+            }}},
+        });
+    }
 
     // Local TopK values output — split format between local and final cores.
     //
@@ -285,14 +331,14 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Final core (bfp8): after the final merge and transpose-back, the tile rows are
     // per-H-row (H=0 row has only normal values, no INF mixing), so bfp8 quantisation
     // is safe. bfp8 also matches the output tensor dtype for the DRAM write.
-    constexpr uint32_t values_cb_index = tt::CBIndex::c_8;
+    constexpr std::uint32_t values_cb_index = tt::CBIndex::c_8;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cb_unit * compute_tile_size,
+        .total_size = num_cb_unit * interm_value_tile_size,
         .core_ranges = local_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(values_cb_index),
-            .data_format = compute_cb_data_format,
-            .page_size = compute_tile_size,
+            .buffer_index = static_cast<std::uint8_t>(values_cb_index),
+            .data_format = interm_value_cb_data_format,
+            .page_size = interm_value_tile_size,
         }}},
     });
 
@@ -300,7 +346,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         .total_size = num_cb_unit * value_tile_size,
         .core_ranges = final_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(values_cb_index),
+            .buffer_index = static_cast<std::uint8_t>(values_cb_index),
             .data_format = value_cb_data_format,
             .page_size = value_tile_size,
         }}},
@@ -309,32 +355,34 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Final values (staging buffer for final compute output).
     // Uses bf16 when input is bfp8/bfp4 so that the final bitonic merge operates at
     // higher precision (same rationale as input_transposed_cb_index above).
-    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
+    constexpr std::uint32_t final_values_cb_index = tt::CBIndex::c_6;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = Wt_final * compute_tile_size,
+        .total_size = Wt_final * interm_value_tile_size,
         .core_ranges = final_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(final_values_cb_index),
-            .data_format = compute_cb_data_format,
-            .page_size = compute_tile_size,
+            .buffer_index = static_cast<std::uint8_t>(final_values_cb_index),
+            .data_format = interm_value_cb_data_format,
+            .page_size = interm_value_tile_size,
         }}},
     });
 
-    // Final indices (staging buffer for final compute output)
-    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_7;
+    // Final indices (staging buffer for final compute output).
+    // Fused-key mode: the merge tree operates on packed keys — the Wt-sized index workspace
+    // shrinks to a Kt-sized staging buffer for the defused (column-layout) u16 index tiles.
+    constexpr std::uint32_t final_indices_cb_index = tt::CBIndex::c_7;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = Wt_final * index_tile_size,
+        .total_size = (fused_stable_keys ? Kt : Wt_final) * index_tile_size,
         .core_ranges = final_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(final_indices_cb_index),
+            .buffer_index = static_cast<std::uint8_t>(final_indices_cb_index),
             .data_format = index_cb_data_format,
             .page_size = index_tile_size,
         }}},
     });
 
     // Semaphore-based flow control for coordinating data transfer between local and final cores
-    const uint32_t sender_semaphore_id = 0;    // Tracks data transmission completion
-    const uint32_t receiver_semaphore_id = 1;  // Signals readiness to receive data
+    const std::uint32_t sender_semaphore_id = 0;    // Tracks data transmission completion
+    const std::uint32_t receiver_semaphore_id = 1;  // Signals readiness to receive data
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = sender_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -351,7 +399,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Local reader - Data Input and Index Generation/Reading
     // Responsibility: Stream input tensor data from DRAM to local cores
     // Two variants: generate indices on-demand or read pre-existing index tensor
-    std::vector<uint32_t> reader_local_compile_time_args = {
+    std::vector<std::uint32_t> reader_local_compile_time_args = {
         input_cb_index,                // CB0: Input values destination
         index_cb_index,                // CB1: Input indices destination
         Ht,                            // Height tiles in tensor
@@ -380,7 +428,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Uses semaphore protocol to synchronize with multiple sender cores
     CoreCoord local_cores_physical_start = device->worker_core_from_logical_core(local_cores.at(0));
     CoreCoord local_cores_physical_end = device->worker_core_from_logical_core(local_cores.at(num_cores - 2u));
-    const std::vector<uint32_t> reader_final_compile_time_args = {
+    const std::vector<std::uint32_t> reader_final_compile_time_args = {
         static_cast<std::uint32_t>(receiver_semaphore_id),         // Semaphore for coordinating data reception
         static_cast<std::uint32_t>(sender_semaphore_id),           // Semaphore for tracking transmission completion
         static_cast<std::uint32_t>(local_cores_physical_start.x),  // NoC coordinates of local core range
@@ -394,19 +442,25 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         gathered_indices_cb_index                   // Final TopK indices destination
     };
 
+    KernelDescriptor::Defines fused_defines;
+    if (fused_stable_keys) {
+        fused_defines.emplace_back("TOPK_FUSED_STABLE_KEYS", "1");
+    }
+
     KernelDescriptor reader_final_desc;
     reader_final_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp";
     reader_final_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     reader_final_desc.compile_time_args = reader_final_compile_time_args;
+    reader_final_desc.defines = fused_defines;
     reader_final_desc.config = ReaderConfigDescriptor{};
 
     // Local writer - Local TopK Results Transmission
     // Responsibility: Send local TopK results from each core to final aggregation core
     // Implements sender side of semaphore-based synchronization protocol
     const CoreCoord final_cores_physical = device->worker_core_from_logical_core(final_core);
-    const std::vector<uint32_t> writer_local_compile_time_args = {
+    const std::vector<std::uint32_t> writer_local_compile_time_args = {
         static_cast<std::uint32_t>(receiver_semaphore_id),   // Semaphore to check final core readiness
         static_cast<std::uint32_t>(sender_semaphore_id),     // Semaphore to signal transmission completion
         static_cast<std::uint32_t>(final_cores_physical.x),  // Target final core NoC coordinates
@@ -425,12 +479,13 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     writer_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     writer_local_desc.compile_time_args = writer_local_compile_time_args;
+    writer_local_desc.defines = fused_defines;
     writer_local_desc.config = WriterConfigDescriptor{};
 
     // Final writer - Global TopK Results Output to DRAM
     // Responsibility: Write final globally optimal TopK results to output tensors
     // Handles proper interleaved tensor formatting for host consumption
-    std::vector<uint32_t> writer_final_compile_time_args = {
+    std::vector<std::uint32_t> writer_final_compile_time_args = {
         values_cb_index,      // Final TopK values source
         output_ind_cb_index,  // Final TopK indices source
         Ht,                   // Height tiles to write
@@ -450,7 +505,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Local compute - Local Width Chunk Bitonic Sorting
     // Responsibility: Perform bitonic sort on assigned width chunk to extract local TopK
     // Uses iterative divide-and-conquer with log(Wt_local) merge phases
-    const std::vector<uint32_t> compute_args = {
+    const std::vector<std::uint32_t> compute_args = {
         input_cb_index,                                   // CB0: Input values stream
         index_cb_index,                                   // CB1: Input indices stream
         input_transposed_cb_index,                        // CB24: Transposed values workspace
@@ -476,16 +531,23 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         unpack_local[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_local[input_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (fused_stable_keys) {
+        // Packed 32-bit keys must unpack straight to DEST: the default path goes through the
+        // 16-bit source registers and truncates 32-bit datums.
+        unpack_local[input_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor compute_local_desc;
     compute_local_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
+    compute_local_desc.defines = fused_defines;
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
-    // survive the transpose/sort datapath without truncation.
+    // survive the transpose/sort datapath without truncation. Fused keys are 32-bit words and need
+    // 32-bit DEST for the same reason (and for the exact bf16->fp32 value widening the fuse relies on).
     compute_local_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = has_fp32_values || has_32bit_index,
+        .fp32_dest_acc_en = has_fp32_values || has_32bit_index || fused_stable_keys,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_local,
     };
@@ -493,7 +555,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Final compute - Global TopK Bitonic Merge
     // Responsibility: Perform final bitonic merge of all local TopK results
     // Produces globally optimal TopK from aggregated local results
-    const std::vector<uint32_t> compute_args_final = {
+    const std::vector<std::uint32_t> compute_args_final = {
         gathered_values_cb_index,                         // CB26: Aggregated local TopK values
         gathered_indices_cb_index,                        // CB27: Aggregated local TopK indices
         final_values_cb_index,                            // CB28: Final processing workspace values
@@ -518,21 +580,27 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         unpack_final[gathered_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_final[final_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (fused_stable_keys) {
+        // Packed 32-bit keys must unpack straight to DEST (see the local-core note above).
+        unpack_final[gathered_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_final[final_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor compute_final_desc;
     compute_final_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp";
     compute_final_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     compute_final_desc.compile_time_args = compute_args_final;
+    compute_final_desc.defines = fused_defines;
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
-    // survive the merge datapath without truncation.
+    // survive the merge datapath without truncation. Fused keys are 32-bit words and need 32-bit DEST.
     compute_final_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = has_fp32_values || has_32bit_index,
+        .fp32_dest_acc_en = has_fp32_values || has_32bit_index || fused_stable_keys,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_final,
     };
 
-    uint32_t core_id = 0;            // Width offset counter for core assignment
+    std::uint32_t core_id = 0;       // Width offset counter for core assignment
     bool ascending = !args.largest;  // Initial sort direction for bitonic properties
 
     // Configure runtime arguments for each local processing core
@@ -546,10 +614,12 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
                 core_id * Wt_local,                      // Width offset for this core's chunk
                 static_cast<uint32_t>(has_32bit_index),  // Flag indicating if data is 32-bit
                 input_indices_tensor.has_value()
-                    ? std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(*input_indices_tensor)}
-                    : std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // DRAM address of input
-                                                                                             // indices tensor (if
-                                                                                             // provided)
+                    ? std::variant<std::uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(
+                          *input_indices_tensor)}
+                    : std::variant<std::uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // DRAM address of
+                                                                                                  // input indices
+                                                                                                  // tensor (if
+                                                                                                  // provided)
             });
 
         // Local writer
@@ -563,7 +633,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         compute_local_desc.runtime_args.emplace_back(
             core,
             KernelDescriptor::CoreRuntimeArgs{
-                static_cast<uint32_t>(ascending),  // Sort direction for bitonic properties
+                static_cast<std::uint32_t>(ascending),  // Sort direction for bitonic properties
             });
 
         core_id++;               // Advance to next width chunk
