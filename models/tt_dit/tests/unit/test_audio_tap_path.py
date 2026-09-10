@@ -28,19 +28,26 @@ from ...utils.tap_filter_configs import (
     tap_device_key,
 )
 
-# (C, K, stride, T_pad): the depthwise resample filters MiniMax-H3's BigVGAN runs at a 5 s clip (K=12
-# anti-alias taps at stride 1 up / stride 2 down per band, K=7 in the LTX vocoder), from the latent rate
-# (T_pad ~ 40-200, where full C cannot fit and C is chunked) to the audio rate.
+# (C, K, stride, T_pad): every depthwise resample filter the MiniMax-H3 audio decoder runs for a 5 s clip on one
+# device (recorded 2026-09-09 with tools/sweep_tap_filter_configs.py --record --frames 207): the K=7 stride-1
+# up-sampler and the K=12 stride-2 anti-alias filter of each of the seven bands, C halving from 512 to 8 as T grows.
+# Batch 2 (stereo). At C=512 the full-channel conv never fits L1 (C*K activation block) and C is chunked.
+BATCH = 2
 SHAPES = [
-    (512, 12, 1, 166),
-    (512, 12, 2, 416),
-    (512, 7, 1, 40),
-    (256, 12, 1, 832),
-    (256, 7, 1, 80),
-    (128, 12, 2, 1664),
-    (64, 12, 1, 3328),
-    (64, 7, 1, 166),
-    (32, 12, 2, 3328),
+    (512, 7, 1, 1041),
+    (512, 12, 2, 2081),
+    (256, 7, 1, 5181),
+    (256, 12, 2, 10361),
+    (128, 7, 1, 10356),
+    (128, 12, 2, 20711),
+    (64, 7, 1, 20706),
+    (64, 12, 2, 41411),
+    (32, 7, 1, 41406),
+    (32, 12, 2, 82811),
+    (16, 7, 1, 82806),
+    (16, 12, 2, 165611),
+    (8, 7, 1, 165606),
+    (8, 12, 2, 331211),
 ]
 SINGLE_DEVICE_PARAMS = [{"l1_small_size": 65536}]
 
@@ -68,8 +75,10 @@ def test_derive_num_slices_rejects_empty_output(expect_error):
         derive_num_slices(0, 160, 4)
 
 
-def test_slice_config_for_one_slice_is_l1_full():
-    assert slice_signature(slice_config_for(1)) == slice_signature(ttnn.Conv2dL1FullSliceConfig)
+def test_slice_config_for_one_slice_is_a_single_width_slice():
+    # Not L1_FULL: an explicit L1_FULL takes conv2d's separate L1 path, measured 2x slower than one DRAM slice.
+    assert slice_signature(slice_config_for(1)) == ("DRAM_WIDTH", 1)
+    assert slice_signature(slice_config_for(0)) == ("DRAM_WIDTH", 1)
     cfg = slice_config_for(3)
     assert cfg.num_slices == 3
     assert slice_signature(cfg) == ("DRAM_WIDTH", 3)
@@ -248,7 +257,7 @@ def test_prepared_weight_is_keyed_on_geometry_and_slicing(chain, monkeypatch):
 
 def _inputs(C, K, T_pad, mesh_device):
     torch.manual_seed(0)
-    x = torch.randn(1, T_pad, C, dtype=torch.float32)
+    x = torch.randn(BATCH, T_pad, C, dtype=torch.float32)
     x_dev = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
     taps = [float(t) for t in torch.randn(K)]
     return x, x_dev, taps
@@ -267,7 +276,7 @@ def _run_and_check(mesh_device, C, K, stride, T_pad, cache):
     expected = _reference(x, taps, stride)
     assert actual.shape == expected.shape
     assert torch.allclose(actual, expected, atol=1e-4, rtol=1e-4), "numerically wrong"
-    return cache[("tap_path", 1, T_pad, C, K, stride)]
+    return cache[("tap_path", BATCH, T_pad, C, K, stride)]
 
 
 @pytest.fixture

@@ -114,11 +114,13 @@ def derive_num_slices(T_out: int, T_out_ref: int, num_slices_ref: int) -> int:
 
 
 def slice_config_for(num_slices: int):
-    """The explicit conv slice config for a count: one slice means the whole op fits L1, which is what the
-    auto-slicer itself converts a single slice to."""
-    if num_slices <= 1:
-        return ttnn.Conv2dL1FullSliceConfig
-    return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=int(num_slices))
+    """The explicit conv slice config for a count, along the sequence (conv1d's only sliceable dimension).
+
+    One slice is passed as ``num_slices=1``, not as ``L1_FULL``: inside the slicer a provided count of 1 takes the
+    same single-L1-op route the auto path converts a one-slice answer to, whereas an explicit ``L1_FULL`` selects
+    conv2d's separate L1 execution path (measured 2x slower for the 512-channel, 128-chunk filter, 2026-09-09).
+    """
+    return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=max(1, int(num_slices)))
 
 
 def tap_slice_config(device_key: DeviceKey, channels: int, K: int, stride: int, T_out: int):

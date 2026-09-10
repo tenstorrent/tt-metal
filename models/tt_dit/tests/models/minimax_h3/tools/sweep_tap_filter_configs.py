@@ -175,9 +175,8 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
     expected = _reference(x, taps, stride)
     cache: dict = {}
 
-    def attempt(formulation, slice_config):
-        """(fits, seconds, max_abs_err) for one configuration; a RuntimeError is 'does not fit'."""
-        run = lambda: _run_formulation(  # noqa: E731
+    def runner(formulation, slice_config):
+        return lambda: _run_formulation(
             x_dev,
             taps,
             stride,
@@ -190,21 +189,33 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
             C=C,
             K=K,
         )
+
+    def probe(formulation, slice_config):
+        """(fits, max_abs_err) for one configuration -- one run; a RuntimeError is 'does not fit'."""
         try:
-            out = run()
+            out = runner(formulation, slice_config)()
         except RuntimeError as exc:
             return dict(fits=False, error=str(exc).splitlines()[0][:200])
         actual = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
-        err = float((actual - expected).abs().max())
-        seconds = _timed(run, mesh_device, repeat)
-        return dict(fits=True, seconds=seconds, max_abs_err=err)
+        return dict(fits=True, max_abs_err=float((actual - expected).abs().max()))
+
+    def time_all(configs: dict) -> dict:
+        """Best-of-``repeat`` seconds per config, measured in two interleaved rounds (forward, then reversed) so
+        a drift or an order effect cannot favour whichever config happened to run last."""
+        best = {name: float("inf") for name in configs}
+        order = list(configs)
+        for round_order in (order, order[::-1]):
+            for name in round_order:
+                formulation, slice_config = configs[name]
+                best[name] = min(best[name], _timed(runner(formulation, slice_config), mesh_device, repeat))
+        return best
 
     result = dict(shape=dict(B=B, T_pad=T_pad, C=C, K=K, stride=stride, T_out=T_out), formulations={})
     for formulation in applicable_formulations(C):
         rows = {}
         n_min = None
         for n in range(1, max_slices + 1):
-            r = attempt(formulation, slice_config_for(n))
+            r = probe(formulation, slice_config_for(n))
             rows[n] = r
             if r["fits"]:
                 n_min = n
@@ -212,8 +223,17 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
         if n_min is not None:
             for n in sorted({n_min + 1, n_min + 2, 2 * n_min}):
                 if n <= max_slices and n <= T_out:
-                    rows[n] = attempt(formulation, slice_config_for(n))
-        auto = attempt(formulation, None)
+                    rows[n] = probe(formulation, slice_config_for(n))
+        auto = probe(formulation, None)
+        configs = {str(n): (formulation, slice_config_for(n)) for n, r in rows.items() if r["fits"]}
+        if auto["fits"]:
+            configs["auto"] = (formulation, None)
+        seconds = time_all(configs) if configs else {}
+        for n, r in rows.items():
+            if r["fits"]:
+                r["seconds"] = seconds[str(n)]
+        if auto["fits"]:
+            auto["seconds"] = seconds["auto"]
         fitting = {n: r for n, r in rows.items() if r["fits"]}
         best_n = min(fitting, key=lambda n: fitting[n]["seconds"]) if fitting else None
         result["formulations"][str(formulation)] = dict(
@@ -229,9 +249,17 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
             f"auto={'%.2f ms' % (auto['seconds'] * 1e3) if auto['fits'] else 'no fit'}"
         )
     if time_mac:
-        result["formulations"]["mac"] = attempt("mac", None)
+        mac = probe("mac", None)
+        if mac["fits"]:
+            mac["seconds"] = _timed(runner("mac", None), mesh_device, repeat)
+        result["formulations"]["mac"] = mac
     ttnn.deallocate(x_dev)
     return result
+
+
+# A slice row is worth recording only when the explicit count beats conv1d's own auto-slicing by this margin at the
+# reference length; otherwise the table leaves slicing to the op (the formulation row alone removes the failed probes).
+EXPLICIT_WIN_RATIO = 0.9
 
 
 # ------------------------------------------------------------------------------------------- tables
@@ -242,29 +270,44 @@ def build_tables(results: list[dict]) -> tuple[dict, dict, list[str]]:
     (channels, K, stride), at the largest T_out swept), plus derivation checks for the other lengths."""
     formulations: dict[tuple, object] = {}
     fastest: dict[tuple, float] = {}
-    slice_candidates: dict[tuple, list[tuple[int, int, float]]] = {}
+    # (channels, K, stride) -> [(T_out, best explicit n, smallest fitting n, explicit seconds, auto seconds or None)]
+    slice_candidates: dict[tuple, list[tuple[int, int, int, float, float | None]]] = {}
     for res in results:
         s = res["shape"]
         C, K, stride, T_out = s["C"], s["K"], s["stride"], s["T_out"]
         for name, meas in res["formulations"].items():
-            if name == "mac" or meas.get("best_n") is None:
+            if name == "mac" or (meas.get("best_n") is None and not meas.get("auto", {}).get("fits")):
                 continue
             formulation = "direct" if name == "direct" else int(name)
+            auto_s = meas["auto"]["seconds"] if meas.get("auto", {}).get("fits") else None
+            explicit_s = meas.get("best_seconds")
+            best_s = min(v for v in (explicit_s, auto_s) if v is not None)
             key = (C, K, stride)
-            if meas["best_seconds"] < fastest.get(key, float("inf")):
-                fastest[key] = meas["best_seconds"]
+            if best_s < fastest.get(key, float("inf")):
+                fastest[key] = best_s
                 formulations[key] = formulation
-            channels = C if formulation == "direct" else formulation
-            slice_candidates.setdefault((channels, K, stride), []).append((T_out, meas["best_n"], meas["best_seconds"]))
+            if meas.get("best_n") is not None:
+                channels = C if formulation == "direct" else formulation
+                slice_candidates.setdefault((channels, K, stride), []).append(
+                    (T_out, meas["best_n"], meas["n_min"], explicit_s, auto_s)
+                )
     slices: dict[tuple, tuple[int, int]] = {}
     checks: list[str] = []
     for key, cands in slice_candidates.items():
-        T_ref, n_ref, _ = max(cands, key=lambda c: c[0])
+        T_ref, n_ref, _, explicit_s, auto_s = max(cands, key=lambda c: c[0])
+        if auto_s is not None and explicit_s > EXPLICIT_WIN_RATIO * auto_s:
+            checks.append(
+                f"{key}: no slice row -- explicit {explicit_s * 1e3:.2f} ms vs auto {auto_s * 1e3:.2f} ms at "
+                f"T_out={T_ref}; conv1d's auto-slicing is kept"
+            )
+            continue
         slices[key] = (T_ref, n_ref)
-        for T_out, n_best, _ in cands:
+        gain = f"{(1 - explicit_s / auto_s) * 100:.0f} % faster than auto" if auto_s else "auto does not fit"
+        checks.append(f"{key}: slice row ({T_ref}, {n_ref}), {gain}")
+        for T_out, n_best, n_min, _, _ in cands:
             derived = derive_num_slices(T_out, T_ref, n_ref)
-            note = "ok" if derived >= n_best else "UNDER -- derived count smaller than the measured minimum"
-            checks.append(f"{key} T_out={T_out}: measured best {n_best}, derived {derived}: {note}")
+            note = "fits" if derived >= n_min else "UNDER -- derived count smaller than the smallest count that fits"
+            checks.append(f"    T_out={T_out}: smallest fitting {n_min}, fastest {n_best}, derived {derived}: {note}")
     return formulations, slices, checks
 
 
@@ -279,7 +322,8 @@ def print_tables(device_key, formulations, slices, checks, provenance: str) -> N
     for (channels, K, stride), (T_ref, n_ref) in sorted(slices.items(), reverse=True):
         print(f"    {format_slice_row(channels, K, stride, T_ref, n_ref)}")
     print("}")
-    print("\n# derivation checks (the derived count must be >= the measured minimum at every swept length):")
+    print("\n# slice rows: kept only where the explicit count beats auto-slicing; derived counts must be >= the")
+    print("# measured minimum at every swept length:")
     for line in checks:
         print(f"#   {line}")
 
