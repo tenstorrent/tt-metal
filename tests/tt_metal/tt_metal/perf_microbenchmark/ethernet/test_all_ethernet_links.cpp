@@ -9,6 +9,7 @@
 #include <set>
 #include <vector>
 #include <queue>
+#include <numeric>
 #include <optional>
 #include <fstream>
 
