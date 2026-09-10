@@ -11,7 +11,7 @@ import os
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
     apply_allreduce,
@@ -434,6 +434,7 @@ def decode_forward(
         k_chunk_size=64,
         exp_approx_mode=False,
     )
+    sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
 
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -447,6 +448,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -466,6 +468,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 
@@ -584,9 +587,9 @@ def _packed_verify_sdpa(
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2, scope="decode"),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
-            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True, scope="decode"),
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         if _num_dev == 1

@@ -144,6 +144,12 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
     return context_text
 
 
+# Tokens detokenized for the per-step progress line. The line keeps at most 97
+# characters, and a token averages ~4, so this tail always covers it while making
+# the decode-loop detokenize O(1) per step instead of O(tokens generated).
+_LOG_TAIL_TOKENS = 48
+
+
 def load_inputs(user_input, batch, instruct):
     """Load prompts from a json file (optionally fetching a gutenberg context), repeated to `batch`."""
     if isinstance(user_input, str):
@@ -255,9 +261,15 @@ def _device_params():
     default_trace_region = 256_000_000 if is_blackhole() else 192_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
-    router = fabric_router_config_from_env()
-    if router is not None:
-        params["fabric_router_config"] = router
+    # Wormhole keeps Fabric's default packet payload. ``default_ccl_packet_bytes``
+    # returns 6144 for WH 31B for CCL page packing and the test fabric harness
+    # takes it, but the demo does not: a non-default payload is a Fabric-wide
+    # setting and the ETH-heartbeat wedges on this box sit in the fabric.
+    # ``GEMMA4_CCL_PACKET_BYTES`` still pins a value explicitly on either arch.
+    if is_blackhole() or os.environ.get("GEMMA4_CCL_PACKET_BYTES") is not None:
+        router = fabric_router_config_from_env()
+        if router is not None:
+            params["fabric_router_config"] = router
     return params
 
 
@@ -712,6 +724,7 @@ def test_demo_text(
     pending_reads = []
 
     def _fold_tokens(tokens):
+        """Fold one step's sampled tokens into the output; True to keep going."""
         tokens = tokens.long().view(batch_size, -1)
         keep_decoding = True
         for user in range(batch_size):
@@ -722,12 +735,25 @@ def test_demo_text(
                 user_done[user] = True
                 if all(user_done):
                     keep_decoding = False
-        if not is_ci_env:
-            for user in range(batch_size):
-                generated = tokenizer.decode(all_outputs[user][prefill_lens[user] :])
-                generated = ("..." + generated[-97:]) if len(generated) > 100 else generated
-                logger.info(f"[User {user}] {generated.replace(chr(10), ' ')}")
         return keep_decoding
+
+    def _log_decode_progress():
+        """Per-step progress line, deliberately OUTSIDE the timed decode window.
+
+        This used to run inside it, and detokenize the whole generated slice --
+        O(generated) host work per step per user, quadratic over a run, scaling
+        with batch -- to print a line that keeps 97 characters. Now only the
+        tail that survives the clamp is decoded, and the host time is not
+        charged to the decode timer.
+        """
+        if is_ci_env:
+            return
+        for user in range(batch_size):
+            generated = all_outputs[user][prefill_lens[user] :]
+            text = tokenizer.decode(generated[-_LOG_TAIL_TOKENS:])
+            if len(generated) > _LOG_TAIL_TOKENS or len(text) > 100:
+                text = "..." + text[-97:]
+            logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
 
     def _consume_tokens(host_output, read_events):
         for event in read_events:
@@ -761,12 +787,17 @@ def test_demo_text(
 
         current_pos += 1
         iteration += 1
+        consumed = False
         if pipeline_reads:
             if len(pending_reads) > 1:
                 users_decoding = _consume_tokens(*pending_reads.pop(0))
+                consumed = True
         else:
             users_decoding = _fold_tokens(out_tok)
+            consumed = True
         profiler.end(f"inference_decode_time_{step}")
+        if consumed:
+            _log_decode_progress()
         if iteration >= max_generated_tokens:
             users_decoding = False
     for pending_read in pending_reads:
