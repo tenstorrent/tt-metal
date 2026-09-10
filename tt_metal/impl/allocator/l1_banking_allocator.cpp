@@ -220,11 +220,17 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+    // The streaming profiler's relay spool sits at the HAL's DRAM unreserved base. It is carved out here rather
+    // than allocated as a buffer because every submesh builds its own allocator over the same banks.
+    const auto& rtoptions = env.get_rtoptions();
+    const uint32_t streaming_profiler_spool_bytes =
+        rtoptions.get_streaming_profiler_enabled() ? rtoptions.get_streaming_profiler_spool_mb() << 20 : 0u;
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
+         .dram_unreserved_base =
+             static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)) + streaming_profiler_spool_bytes,
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base =
              static_cast<uint32_t>(align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM))),

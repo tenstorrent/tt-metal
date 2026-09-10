@@ -24,7 +24,6 @@
 #include <tt-metalium/kernel_types.hpp>
 
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
@@ -34,6 +33,7 @@
 
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "llrt/tt_cluster.hpp"
 #include "hostdev/streaming_profiler_common.h"
@@ -313,7 +313,7 @@ bool Devices::boot_device(
     if (!choose_relay_cores(mesh_device, ctx)) {
         return false;
     }
-    reserve_spool(mesh_device, ctx.device);
+    reserve_spool(ctx.device);
     for (uint32_t d = 0; d < ctx.n_relays; d++) {
         if (!launch_relay(mesh_device, ctx, coord, d)) {
             return false;
@@ -474,31 +474,22 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
     return true;
 }
 
-// One replicated mesh buffer with one interleaved page per bank reserves the same window in every bank of
-// every device. Mesh-level because the lock-step allocator never sees a device-local Buffer::create and
-// would hand the region out again.
-void Devices::reserve_spool(const std::shared_ptr<distributed::MeshDevice>& mesh_device, IDevice* device) {
-    const uint32_t spool_mb = MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_spool_mb();
-    if (spool_mb == 0 || spool_buffer_ != nullptr) {
+void Devices::reserve_spool(IDevice* device) {
+    const auto& ctx = MetalContext::instance(context_id_);
+    const uint32_t bytes = ctx.rtoptions().get_streaming_profiler_spool_mb() << 20;
+    if (bytes == 0 || spool_bytes_ != 0) {
         return;
     }
-    const uint32_t bytes = spool_mb * (1u << 20);
-    const uint32_t nbanks_dram = device->allocator()->get_num_banks(BufferType::DRAM);
-    try {
-        spool_buffer_ = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{static_cast<DeviceAddr>(nbanks_dram) * bytes},
-            distributed::DeviceLocalBufferConfig{.page_size = bytes, .buffer_type = BufferType::DRAM},
-            mesh_device.get());
-        spool_addr_ = static_cast<uint32_t>(spool_buffer_->address());
-        spool_bytes_ = bytes;
-    } catch (const std::exception& e) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] could not reserve {} MiB/bank of DRAM for the GDDR spool ({}); falling "
-            "back to direct push",
-            spool_mb,
-            e.what());
-    }
+    const uint32_t base = static_cast<uint32_t>(ctx.hal().get_dev_addr(HalDramMemAddrType::UNRESERVED));
+    const uint32_t allocator_base = device->allocator_impl()->get_config().dram_unreserved_base;
+    TT_FATAL(
+        allocator_base >= base + bytes,
+        "streaming profiler: allocator DRAM base {:#x} overlaps the {} B GDDR spool at {:#x}",
+        allocator_base,
+        bytes,
+        base);
+    spool_addr_ = base;
+    spool_bytes_ = bytes;
 }
 
 namespace {
