@@ -19,14 +19,16 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
-# Perf mode (B4). Default off, so every existing caller keeps today's PCC-gated behaviour.
-# SKIP_PCC=1 stops the producer reading KV back, so the run is not PCC-comparable -- that is the
-# point: the same workload timed without the readback, the way MiniMax splits its two legs.
-SKIP_PCC="${PREFILL_SKIP_PCC:-0}"
+# Throughput gate (B4). Default off, so every existing caller keeps today's PCC-only behaviour.
+# Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's own log line:
+# that one times the push schedule, which returns long before the model is done (run 34491555152
+# reported 139,694 tok/s off wall=0.4s). The probes are device-side and cross-rank, and are taken
+# during the measured request, so PCC readback is outside them -- one leg gates both.
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
 PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
-CHECK_PCC=1
-[ "${SKIP_PCC}" = 1 ] && CHECK_PCC=0
+# Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
+# on nothing.
+REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
 RUNNER_ENV=""
 PRODUCER_ENV=""
 TP_SHARD_KV_DEFAULT=0
@@ -125,6 +127,18 @@ RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
+SUMMARY_DONE=0
+emit_summary() {
+  [ "${SUMMARY_DONE}" = 1 ] && return 0
+  SUMMARY_DONE=1
+  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+    --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+    --chunk-size "${CHUNK_SIZE}" \
+    --probe-chunks "${PROBE_CHUNKS}" \
+    --summary-name "${MODEL}_${CONFIG}" \
+    || echo "summary generation failed (non-fatal)"
+}
+
 cleanup() {
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     kill -- "-${RUNNER_PID}" 2>/dev/null || true
@@ -149,12 +163,7 @@ cleanup() {
       echo "---- ${f#"${RANKLOGS}"/} ----"
       tail -n 40 "$f" 2>/dev/null || true
     done
-    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
-      --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      --chunk-size "${CHUNK_SIZE}" \
-      --probe-chunks "${PROBE_CHUNKS}" \
-      --summary-name "${MODEL}_${CONFIG}" \
-      || echo "summary generation failed (non-fatal)"
+    emit_summary
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
@@ -260,7 +269,7 @@ set +e
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC="${CHECK_PCC}"; \
+    export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
@@ -282,35 +291,45 @@ if [ "${PROD_RC}" -eq 0 ]; then
 fi
 
 TPS_GATE_RC=0
-if [ "${SKIP_PCC}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
-  # Whole-sequence figure from the producer's own summary line (total tokens / wall seconds).
-  # `|| true`: under set -e a grep that matches nothing would abort the script here, losing the
-  # "measured nothing" diagnostic below -- which is the case this gate exists to report.
-  TPS=$(grep -rhoE 'throughput=[0-9]+ tok/s' "${RANKLOGS}" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)
-  if [ -z "${TPS}" ]; then
-    echo "TPS GATE FAIL: no 'throughput=<n> tok/s' line under ${RANKLOGS}; the run measured nothing" >&2
-    TPS_GATE_RC=1
-  elif [ -z "${EXPECTED_TPS}" ]; then
-    echo "TPS: ${TPS} tok/s (no PREFILL_EXPECTED_TPS set -- reporting, not gating; cut the baseline from this)"
-  else
-    python3 - "${TPS}" "${EXPECTED_TPS}" "${PERF_MARGIN}" <<'TPSPY' || TPS_GATE_RC=$?
-import sys
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+  # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
+  # a file to read. The trap's own call is a no-op once this one has run.
+  emit_summary
+  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
+    <<'TPSPY' || TPS_GATE_RC=$?
+import json, sys
 
-tps, expected, margin = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
+path, expected, margin = sys.argv[1], sys.argv[2], float(sys.argv[3])
+try:
+    rec = json.load(open(path))
+except Exception as e:
+    print(f"TPS GATE FAIL: no perf metrics at {path}: {type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+
+probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
+# Gate the deepest probe: throughput falls as the KV cache grows, so it is the worst case and the
+# one a full-context user sees.
+label = max(probes, key=lambda k: index.get(k, -1), default=None)
+if label is None:
+    print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
+    sys.exit(1)
+
+tps = probes[label]
+if not expected:
+    print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
+    sys.exit(0)
+
+expected = float(expected)
 lo, hi = expected * (1 - margin), expected * (1 + margin)
-print(f"TPS GATE: {tps:.0f} tok/s vs {expected:.0f} +/- {margin * 100:.0f}% [{lo:.0f}, {hi:.0f}]")
+print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
 if not lo <= tps <= hi:
-    print(f"TPS GATE FAIL: {tps:.0f} outside [{lo:.0f}, {hi:.0f}]", file=sys.stderr)
+    print(f"TPS GATE FAIL: {tps:,.0f} outside [{lo:,.0f}, {hi:,.0f}]", file=sys.stderr)
     sys.exit(1)
 print("TPS GATE PASS")
 TPSPY
-  fi
 fi
 
 PCC_GATE_RC=0
-if [ "${SKIP_PCC}" = 1 ]; then
-  echo "PCC GATE SKIPPED (PREFILL_SKIP_PCC=1): perf leg; its sibling gates correctness"
-else
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
@@ -341,7 +360,6 @@ if bad:
     sys.exit(1)
 print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
 PY
-fi
 
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"

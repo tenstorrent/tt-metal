@@ -98,7 +98,16 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
         filename_rank = 4 if rank == 3 and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
     (root / "producer_done").touch()
-elif args and (args[0].endswith("summarize_ci_run.py") or args[0].endswith("plot_pipeline_trace.py")):
+elif args and args[0].endswith("summarize_ci_run.py"):
+    if os.environ.get("TEST_TPS"):
+        name = args[args.index("--summary-name") + 1]
+        out = Path(os.environ["PREFILL_SUMMARIES"]) / "perf_json"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / ("%s.json" % name)).write_text(json.dumps({
+            "chunk_index": {"@5k": 0, "@55k": 10},
+            "throughput_tok_s": {"@5k": 37234.8, "@55k": float(os.environ["TEST_TPS"])},
+        }))
+elif args and args[0].endswith("plot_pipeline_trace.py"):
     pass
 elif args == ["-c", "import matplotlib"]:
     pass
@@ -237,16 +246,48 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 )
 
     def test_perf_gate_fails_when_no_throughput_was_measured(self):
-        result, _ = self.run_harness("mistral4", extra_env={"PREFILL_SKIP_PCC": "1", "PREFILL_EXPECTED_TPS": "17000"})
+        result, _ = self.run_harness("mistral4", extra_env={"PREFILL_EXPECTED_TPS": "17000"})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
-        self.assertIn("PCC GATE SKIPPED", result.stdout + result.stderr)
+
+    def test_perf_gate_requires_a_measurement_before_a_baseline_exists(self):
+        result, _ = self.run_harness("mistral4", extra_env={"PREFILL_REQUIRE_TPS": "1"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+
+    def test_perf_gate_reads_the_deepest_probe(self):
+        # Shallow probes run faster; gating the wrong one would hide a full-context regression.
+        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "23689", "PREFILL_EXPECTED_TPS": "23689"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE @55k", result.stdout)
+
+    def test_perf_gate_still_verifies_pcc(self):
+        # Multi-rank producers refuse PREFILL_PRODUCER_CHECK_PCC=0: ranks 1..N are validators.
+        _, records = self.run_harness("mistral4", extra_env={"PREFILL_REQUIRE_TPS": "1"})
+        self.assertEqual(self.one_record(records, "producer")["env"]["PREFILL_PRODUCER_CHECK_PCC"], "1")
+
+    def test_perf_gate_passes_within_margin(self):
+        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "17000", "PREFILL_EXPECTED_TPS": "17500"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE PASS", result.stdout)
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_perf_gate_fails_outside_margin(self):
+        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+
+    def test_perf_gate_reports_when_no_baseline_is_set(self):
+        # The state the CI leg ships in: measure and print, do not compare.
+        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "17000", "PREFILL_REQUIRE_TPS": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS: 17,000 tok/s @55k", result.stdout)
+        self.assertIn("reporting, not gating", result.stdout)
 
     def test_perf_knobs_absent_leaves_pcc_gating_untouched(self):
         result, _ = self.run_harness("mistral4")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("TPS GATE", result.stdout + result.stderr)
-        self.assertNotIn("PCC GATE SKIPPED", result.stdout + result.stderr)
 
     def test_mistral_rejects_sc4(self):
         result, records = self.run_harness("mistral4", config="sc4")

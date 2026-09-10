@@ -1031,8 +1031,9 @@
 
 # Four pipeline ranks share one galaxy (SP=8, TP=1 per rank). Probe its physical columns before
 # launching: the TT_VISIBLE_DEVICES mapping differs between galaxies. This checks the entire
-# 56,320-token golden KV window over 36 layers with traced execution; it is a correctness gate.
-- name: "Mistral-Small-4-119B PP4 prefill KV accuracy 55k@5k, SC1"
+# 56,320-token golden KV window over 36 layers with traced execution, and gates the whole-sequence
+# throughput the same run measures.
+- name: "Mistral-Small-4-119B PP4 prefill KV accuracy + throughput 55k@5k, SC1"
   fabric_profile: torus_xy
   cmd: |
     set -euo pipefail
@@ -1041,6 +1042,11 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # Throughput too: one run gates both. The gate reads the deepest probe in the runner-side perf
+    # JSON (@55k), which is device-side and taken during the measured request, so the KV readback
+    # sits outside it. Cut from run 34491555152; single sample, so MiniMax's +/-15% to start.
+    export PREFILL_EXPECTED_TPS=23689
+    export PREFILL_PERF_MARGIN=0.15
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
   test_type: mistral4_pp4_kv_pcc
   test_tags: [mistral4, runner, kv_cache]
@@ -1050,36 +1056,6 @@
       # Initial correctness budget includes per-galaxy probing, weight loading and compilation.
       # Revisit after the first completed hardware CI run.
       timeout: 60
-  owner_id: U08GEEEEC75 # ssalice
-  team: models
-  sp_config: sc1
-
-
-# The throughput sibling of the KV-accuracy leg above: same script, same workload, PCC readback
-# skipped so the timing is not distorted by it. Gates whole-sequence tok/s, which is what a user
-# feels; the op-level rows gate the pieces.
-- name: "Mistral-Small-4-119B PP4 prefill throughput 55k@5k, SC1"
-  fabric_profile: torus_xy
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    export PREFILL_SKIP_PCC=1
-    # PREFILL_EXPECTED_TPS is deliberately unset: the leg reports its number and does not gate on
-    # it yet. It still fails if the run measured nothing. Set it from the first green run here and
-    # record the run number, then this becomes a real gate. Start at MiniMax's +/-15%.
-    export PREFILL_PERF_MARGIN=0.15
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
-  test_type: mistral4_pp4_perf
-  test_tags: [mistral4, runner, transformer]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      # Same work as the accuracy leg minus the KV readback, so under its 60. Re-cut from a real run.
-      timeout: 45
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
