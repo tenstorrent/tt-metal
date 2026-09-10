@@ -22,7 +22,7 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_tile = 1;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer user_ids_dfb(dfb::user_ids);
     DataflowBuffer seeds_dfb(dfb::seeds);
     DataflowBuffer kernel_communication_dfb(dfb::kernel_communication);
@@ -50,8 +50,8 @@ void kernel_main() {
     // Process user_ids
     uint32_t seed = 0;
     bool is_user_id = false;
-    CoreLocalMem<volatile uint32_t> user_id(l1_write_addr_index);
-    CoreLocalMem<volatile uint32_t> seeds(seeds_l1_write_addr_index);
+    const CoreLocalMem<volatile uint32_t> user_id(l1_write_addr_index);
+    const CoreLocalMem<volatile uint32_t> seeds(seeds_l1_write_addr_index);
     for (uint32_t id = 0; id < number_of_ids; ++id) {
         if (core_id == user_id[id]) {
             is_user_id = true;  // Indicate match
@@ -62,7 +62,7 @@ void kernel_main() {
 
     // Prepare message for compute kernel
     kernel_communication_dfb.reserve_back(one_tile);
-    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_dfb.get_write_ptr());
+    const CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_dfb.get_write_ptr());
     communication_ptr[0] = is_user_id ? 1 : 0;
     communication_ptr[1] = is_user_id ? seed : 0;
 

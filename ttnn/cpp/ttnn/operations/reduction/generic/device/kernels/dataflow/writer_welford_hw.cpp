@@ -51,10 +51,13 @@ constexpr std::uint32_t tree_levels_for(std::uint32_t num_blocks) {
 template <std::uint32_t COUNT>
 inline WelfordBlockStats finalize_block(
     float base_mean, float mean_delta_sum, float mean_delta_sq_sum, float partial_var_sum) {
-    static_assert(COUNT > 0);
-    constexpr float inv_count = 1.0f / static_cast<float>(COUNT);
+    // COUNT == 0 never runs: the tail call is guarded by `if constexpr (tail_size > 0)`. That guard
+    // cannot stop the *instantiation*, though -- kernel_main is not a template, so a discarded
+    // `if constexpr` substatement still instantiates what it names. Keep this instantiable at
+    // COUNT == 0 rather than static_asserting, or every no-tail config fails to compile.
+    constexpr float inv_count = COUNT > 0 ? 1.0f / static_cast<float>(COUNT) : 0.0f;
     const float mean_delta = mean_delta_sum * inv_count;
-    const float raw_means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+    const float raw_means_m2 = mean_delta_sq_sum - (mean_delta_sum * mean_delta);
     const float means_m2 = raw_means_m2 < 0.0f ? 0.0f : raw_means_m2;
     return {.mean = base_mean + mean_delta, .variance_sum = partial_var_sum + means_m2};
 }
@@ -63,8 +66,8 @@ inline WelfordBlockStats combine_known_counts(
     const WelfordBlockStats& a, const WelfordBlockStats& b, float b_fraction, float cross_weight) {
     const float delta = b.mean - a.mean;
     return {
-        .mean = a.mean + delta * b_fraction,
-        .variance_sum = a.variance_sum + b.variance_sum + delta * delta * cross_weight};
+        .mean = a.mean + (delta * b_fraction),
+        .variance_sum = a.variance_sum + b.variance_sum + (delta * delta * cross_weight)};
 }
 
 inline void push_full_block(WelfordBlockStats* tree, WelfordBlockStats block, std::uint32_t completed_blocks) {
@@ -133,7 +136,7 @@ void kernel_main() {
     constexpr std::uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr std::uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    Noc noc;
+    const Noc noc;
     // dfb::partial holds the per-column (mean, var) tile pairs produced by the compute kernel.
     DataflowBuffer dfb_partial(dfb::partial);
     // dfb::combined: combined scalar tile written by this kernel, read back by compute for repacking
@@ -151,7 +154,7 @@ void kernel_main() {
     // NC_per_core is the total number of NC slices assigned to this core.
     // Each output element is produced by combining reduce_batch_size
     // consecutive NC slices (each contributing Wt partial tile pairs).
-    std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
+    const std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: W-combine all per-column partials into one scalar ---
@@ -178,11 +181,11 @@ void kernel_main() {
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
-                std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
+                const std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
                 for (std::uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
                     // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
-                    std::uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
+                    const std::uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
                     const float partial_mean = means_ptr[idx];
                     const float partial_var = vars_ptr[idx];
 
@@ -278,7 +281,7 @@ void kernel_main() {
 
         // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---
         dfb_out.wait_front(1);
-        std::uint32_t out_tile_id = output_tile_start_id + out;
+        const std::uint32_t out_tile_id = output_tile_start_id + out;
         noc.async_write(dfb_out, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
         dfb_out.pop_front(1);
