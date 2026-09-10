@@ -14,7 +14,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_mod
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
+# pytest models/demos/mixtral8x7b/tests/test_mixtral_model_prefill.py
 
 
 @torch.no_grad()

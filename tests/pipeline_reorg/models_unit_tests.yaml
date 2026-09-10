@@ -590,15 +590,16 @@
 
 - name: Mixtral-8x7B unit tests
   cmd: |
+    # Unit uses base Mixtral-8x7B-v0.1; e2e uses Instruct. Leave that split.
     export TT_METAL_WATCHER=15
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
-    pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy and quick"
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py -k "paged_attention"
+    pytest --timeout 300 models/demos/mixtral8x7b/tests/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
+    pytest --timeout 120 models/demos/mixtral8x7b/tests/test_mixtral_mlp.py
+    pytest --timeout 120 models/demos/mixtral8x7b/tests/test_mixtral_moe.py
+    pytest --timeout 120 models/demos/mixtral8x7b/tests/test_mixtral_decoder.py
+    pytest --timeout 120 models/demos/mixtral8x7b/tests/test_mixtral_decoder_prefill.py
+    pytest --timeout 120 models/demos/mixtral8x7b/tests/test_mixtral_model.py -k "performance and not accuracy and quick"
+    pytest --timeout 120 models/demos/mixtral8x7b/tests/test_mixtral_model_prefill.py -k "paged_attention"
   model: mixtral-8x7b
   model_family: Mistral
   skus:

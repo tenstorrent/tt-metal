@@ -3548,6 +3548,10 @@ class ModelArgs:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
+            if any(k.endswith("mlp.experts.gate_up_proj") for k in state_dict):
+                from models.demos.mixtral8x7b.tt.load_checkpoints import expand_fused_moe_experts
+
+                state_dict = expand_fused_moe_experts(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)

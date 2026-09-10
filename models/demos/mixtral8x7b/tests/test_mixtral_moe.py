@@ -8,15 +8,15 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
+from models.demos.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
-from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 
 from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
+# pytest models/demos/mixtral8x7b/tests/test_mixtral_moe.py
 
 
 def convert2ref(state_dict):

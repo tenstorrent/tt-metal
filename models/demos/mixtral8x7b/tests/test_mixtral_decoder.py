@@ -16,7 +16,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 
 from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
+# pytest models/demos/mixtral8x7b/tests/test_mixtral_decoder.py
 
 
 def convert2ref(state_dict):
