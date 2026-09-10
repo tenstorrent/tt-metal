@@ -20,6 +20,10 @@ import torch
 
 import ttnn
 from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.ccl import KimiCCL
+from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.kda.chunked_prefill import (
+    chunked_kda_prefill_ttnn,
+    make_constants,
+)
 from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.kda.decode_step import recurrent_kda_decode_ttnn
 from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.weights import as_device_tensor
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -53,7 +57,8 @@ class KimiKDA:
         weight_cache_path: Path | None = None,
         long_prefill_chunks: int = 2048,
         gate_clamp_min: float | None = -5.0,
-        exact_tail: int | None = 32,
+        exact_tail: int
+        | None = None,  # 32 with the ttnn.experimental.kda kernel; unnecessary with the chunked fp32 recurrence
     ):
         self.mesh_device = mesh_device
         self.ccl = ccl
@@ -116,6 +121,13 @@ class KimiKDA:
         # long-lived device tensors must exist BEFORE the first trace capture (a later allocation can land in a trace's
         # scratch region and be overwritten by every replay): allocate the exact-tail decode scratch now.
         self._tail_ds = self.allocate_decode_state(batch=1) if self.exact_tail is not None else None
+        # Prefill recurrence implementation. "chunked_fp32": WY-form chunks in plain fp32 ttnn ops (tt/kda/chunked_prefill.py),
+        # exact triangular inverse, centred decays; "kernel": ttnn.experimental.kda recurrent_chunk_scan (overflows to inf on
+        # this model's layer 25 and on any chunk whose cumulative clamped decay nears -160). The chunked path needs the gate
+        # clamp at -2.5 so C*|g|/2 <= 40 keeps every exp() in fp32 range (PCC vs the unclamped exact recurrence 0.9996-0.9999).
+        self.prefill_impl = "chunked_fp32"
+        self.chunked_gate_clamp = -2.5
+        self._chunk_consts = make_constants(mesh_device, self.config.num_heads, KDA_CHUNK_SIZE)
 
     # ---- state -------------------------------------------------------------------------------
     def allocate_prefill_state(self) -> KdaState:
@@ -242,16 +254,29 @@ class KimiKDA:
         kda = self.kda
         projected = kda._project_inputs(hidden)
         q, k, v, new_conv = self._convolve(projected.qkv, state.convolution, valid_len)
-        gate, beta = kda._compute_gates(beta=projected.beta, decay_rank=projected.decay_rank)
-        if self.gate_clamp_min is not None:
-            gate = ttnn.clamp(gate, min=self.gate_clamp_min, max=0.0)
+        # Gates in fp32, quantised to bf16 only at the kernel boundary. The upstream bf16 gate chain (ttKDA._compute_gates)
+        # systematically shrinks this model's slow decay channels (41% vs 28% of channels below |g| = 0.01 at layer 0); fed
+        # that gate the kernel is faithful (PCC 0.99997 vs the exact fp32 recurrence over 1024 tokens), fed the bf16 chain
+        # the state drifts (PCC 0.53-0.85 by 1024 tokens, NaN by layer 25) and long prompts decode garbage.
+        gate, beta = self._decode_gates_fp32(projected.beta, projected.decay_rank)
+        clamp = self.chunked_gate_clamp if self.prefill_impl == "chunked_fp32" else self.gate_clamp_min
+        if clamp is not None:
+            gate = ttnn.clamp(gate, min=clamp, max=0.0)
         if valid_len < T:
             mask_bf, mask_f32 = self._valid_masks(T, valid_len)
             gate = ttnn.multiply(
-                gate, mask_bf, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                gate, mask_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )  # exp(0) = 1: no decay on pad rows
             beta = ttnn.multiply(beta, mask_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # beta 0: no write on pad rows
-        new_rec, out = kda.recurrence(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state.recurrent)
+        if self.prefill_impl == "chunked_fp32":
+            new_rec, out = chunked_kda_prefill_ttnn(
+                q, k, v, gate, beta, state.recurrent, self._chunk_consts, scale=self.scale, output_dtype=ttnn.bfloat16
+            )
+        else:
+            gate = ttnn.typecast(
+                gate, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )  # the kernel requires a bf16 gate
+            new_rec, out = kda.recurrence(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state.recurrent)
         out = kda._kda_rms_norm(out, projected.output_gate)
         out = ttnn.linear(
             out,

@@ -158,9 +158,81 @@ class KimiExperts:
             )
         return self._ones
 
-    def forward_prefill(self, x: ttnn.Tensor, routing: ttnn.Tensor, chunk: int = 32) -> ttnn.Tensor:
-        """x [1,1,T,H] (T % 32 == 0), routing [1,1,T,E] -> partial [1,1,T,H]. All experts per 32-token group (baseline)."""
+    prefill_group = 32  # tokens per all-experts sparse_matmul group (sparse path)
+    prefill_impl = "dense"  # "dense": batched dense matmuls over all experts (whole core grid); "sparse": 32-token sparse_matmul groups
+    prefill_dense_chunk = (
+        1024  # tokens per dense sub-chunk: g/u/h are [1,E,S,I_loc] bf16 (134 MB at 1024); 0.10 s/layer at 2048 tokens
+    )
+
+    def forward_prefill_dense(self, x: ttnn.Tensor, routing: ttnn.Tensor, chunk: int | None = None) -> ttnn.Tensor:
+        """Every expert is applied to every token in prefill anyway, so run it as dense matmuls that fill the core grid:
+        g,u = x @ W[e] for all e (batch-broadcast matmul, [1,E,S,I]); h = silu(g)*u scaled by the per-row routing weight
+        (0 for non-selected experts); permute to [S, E*I] and finish with ONE dense down projection against the down
+        weights viewed as [E*I, H] (a free reshape of [1,E,I,H]). ~7 ops per sub-chunk instead of ~10 per 32-token group.
+        """
         T = x.shape[2]
+        E, I, H = self.E, self.I_loc, self.H
+        chunk = chunk or min(self.prefill_dense_chunk, T)
+        while T % chunk:
+            chunk //= 2
+        down_flat = ttnn.reshape(self.down, (1, 1, E * I, H))  # view; E,I contiguous in [1,E,I,H]
+        outs = []
+        for s in range(0, T, chunk):
+            xs = x if T == chunk else ttnn.slice(x, (0, 0, s, 0), (1, 1, s + chunk, H))
+            rs = routing if T == chunk else ttnn.slice(routing, (0, 0, s, 0), (1, 1, s + chunk, E))
+            g = ttnn.matmul(
+                xs,
+                self.gate,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute,
+            )  # [1,E,S,I]
+            u = ttnn.matmul(
+                xs,
+                self.up,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute,
+            )
+            h = ttnn.multiply(ttnn.silu(g), u)
+            ttnn.deallocate(g)
+            ttnn.deallocate(u)
+            h = ttnn.multiply(
+                h, ttnn.permute(rs, (0, 3, 2, 1))
+            )  # [1,E,S,1] per-row expert weights (0 for non-selected)
+            hp = ttnn.permute(h, (0, 2, 1, 3))  # [1,S,E,I]
+            ttnn.deallocate(h)
+            hp = ttnn.reshape(hp, (1, 1, chunk, E * I))
+            o = ttnn.matmul(
+                hp,
+                down_flat,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute,
+            )  # [1,1,S,H]
+            ttnn.deallocate(hp)
+            outs.append(o)
+            if xs is not x:
+                ttnn.deallocate(xs)
+            if rs is not routing:
+                ttnn.deallocate(rs)
+        out = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+        if len(outs) > 1:
+            for o in outs:
+                ttnn.deallocate(o)
+        return out
+
+    def forward_prefill(self, x: ttnn.Tensor, routing: ttnn.Tensor, chunk: int | None = None) -> ttnn.Tensor:
+        if self.prefill_impl == "dense":
+            return self.forward_prefill_dense(x, routing, chunk)
+        return self.forward_prefill_sparse(x, routing, chunk)
+
+    def forward_prefill_sparse(self, x: ttnn.Tensor, routing: ttnn.Tensor, chunk: int | None = None) -> ttnn.Tensor:
+        """x [1,1,T,H] (T % 32 == 0), routing [1,1,T,E] -> partial [1,1,T,H]. All experts per ``chunk``-token group."""
+        T = x.shape[2]
+        chunk = chunk or min(self.prefill_group, T)
+        while T % chunk:
+            chunk //= 2
         ones = self._ones_sparsity()
         outs = []
         for s in range(0, T, chunk):
