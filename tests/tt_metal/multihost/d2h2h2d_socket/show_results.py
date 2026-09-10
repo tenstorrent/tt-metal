@@ -182,13 +182,19 @@ def main(argv):
         print("no rows with data -- did both roles write their CSV?", file=sys.stderr)
         return 1
 
-    legs = ("payload/window_ns [FALLBACK -- no hop_window_ns in the file(s); too wide by "
-            "pipeline fill and drain]" if stale_window else "payload/hop_window_ns")
-    table("BANDWIDTH (GB/s)   aggregate bytes over one elapsed interval",
-          f"legs = {legs}   end-to-end = payload/window_ns",
-          data, "bw", ".3f")
-    table("LATENCY (us)   mean per-message duration at that stage",
-          "= total_ns / samples / 1000", data, "lat", ".2f")
+    legs = (
+        "payload/window_ns [FALLBACK -- no hop_window_ns in the file(s); too wide by " "pipeline fill and drain]"
+        if stale_window
+        else "payload/hop_window_ns"
+    )
+    table(
+        "BANDWIDTH (GB/s)   aggregate bytes over one elapsed interval",
+        f"legs = {legs}   end-to-end = payload/window_ns",
+        data,
+        "bw",
+        ".3f",
+    )
+    table("LATENCY (us)   mean per-message duration at that stage", "= total_ns / samples / 1000", data, "lat", ".2f")
 
     print()
     print("  note: total_ns is RESIDENCE -- per-message durations summed over every core, so it")
