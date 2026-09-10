@@ -39,9 +39,10 @@ name: "Cleanup prebuilt tests images"
 # two of these per run, one per (base, profile) its impls need; runtime sanity
 # adds about 20 runs a day with one more. The model tiers bake one each on a cron,
 # seven runs a day between the three unit and three e2e pipelines, and All Model
-# Tests one more per dispatch. So roughly 530 a day, and N=1500 buys about three
-# days. Recompute if a caller is added, the same way the figure above is derived
-# from a rate.
+# Tests one more per dispatch. The L2 nightly bakes two, one per base its wired
+# legs need, on one cron. So roughly 532 a day, and N=1500 buys about three days.
+# Recompute if a caller is added, the same way the figure above is derived from a
+# rate.
 #
 # This deletes irreversibly. The package list is fixed in the matrix below and
 # never derives from event context, so this cannot resolve to a package it should
