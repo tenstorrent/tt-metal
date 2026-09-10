@@ -844,3 +844,17 @@ def test_typecast_to_int8_wraps(layout, pt_input_dtype, tt_input_dtype, device):
     result = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.int8))
 
     assert_integer_typecast_equal(narrow_to_8bit(torch_input, signed=True), result)
+
+
+@pytest.mark.parametrize("tt_output_dtype", [ttnn.int32, ttnn.uint16, ttnn.float32, ttnn.bfloat16])
+def test_unary_chain_typecast_int8(tt_output_dtype, device):
+    torch_input = torch.arange(-128, 128, dtype=torch.int8).reshape(1, 1, -1, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+
+    chained = ttnn.unary_chain(
+        input_tensor,
+        [ttnn.UnaryWithParam(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT8.value, tt_output_dtype.value)],
+    )
+
+    expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
+    assert_equal(expected, ttnn.to_torch(chained))

@@ -66,10 +66,9 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
  * For input/output to be Int8, the caller must additionally declare the circular buffers as UInt8 instead
- * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude.
- * Additionally, the caller must put Dest in 32 bit mode and unpack straight to Dest, since going through
- * SrcA re-converts the byte. The kernels below do the sign handling themselves on that raw byte. Int8 is
- * not available on Quasar.
+ * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude,
+ * and must put Dest in 32 bit mode. The kernels below do the sign handling themselves on that raw byte.
+ * Int8 is not available on Quasar.
  *
  * Return value: None
  *
