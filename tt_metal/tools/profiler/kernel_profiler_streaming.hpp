@@ -126,6 +126,13 @@ struct ppfmt {
     static constexpr uint32_t T_EVENT = 12u;            // PP_EVENT
     static constexpr uint32_t DATA_SIZE_SHIFT = 25u;    // PP_DATA_SIZE_SHIFT (in word2)
     static constexpr uint32_t DATA_SIZE_MASK = 0x7Fu;   // PP_DATA_SIZE_MASK
+    // PP_CLOCK: a clock read for the d2d sync (both link and local halves). 2 words: word0 = T_CLOCK
+    // whose low27 = kind<<24 | value24; word1 = wall_lo. Reserved here; produced/decoded in the
+    // streaming path (relay ship + receiver decode wired in the sync reconstruction).
+    static constexpr uint32_t T_CLOCK = 5u;                  // PP_CLOCK
+    static constexpr uint32_t CLOCK_KIND_SHIFT = 24u;        // PP_CLOCK_KIND_SHIFT
+    static constexpr uint32_t CLOCK_VALUE_MASK = 0xFFFFFFu;  // PP_CLOCK_VALUE_MASK
+    static constexpr uint32_t CLOCK_LOCAL_REFCLK = 0u;       // this chip refclk vs its own wall clock
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
@@ -133,6 +140,9 @@ struct ppfmt {
     static inline uint32_t zone_s_w0(uint32_t id) { return w0(T_ZONE_S, id & LOW27_MASK); }
     static inline uint32_t data_w0(uint32_t id) { return w0(T_DATA, id & LOW27_MASK); }
     static inline uint32_t data_w2(uint32_t size_words) { return (size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT; }
+    static inline uint32_t clock_w0(uint32_t kind, uint32_t value24) {
+        return w0(T_CLOCK, ((kind & 0x7u) << CLOCK_KIND_SHIFT) | (value24 & CLOCK_VALUE_MASK));
+    }
     static inline uint32_t event_w0(uint32_t id) { return w0(T_EVENT, id & LOW27_MASK); }
 };
 
