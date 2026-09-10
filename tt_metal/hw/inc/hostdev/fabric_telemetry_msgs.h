@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
 enum class RouterState : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, DRAINING = 3, RETRAINING = 4 };

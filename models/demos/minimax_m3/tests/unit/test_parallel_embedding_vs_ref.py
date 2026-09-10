@@ -4,9 +4,9 @@
 """PCC of TtParallelEmbedding vs torch F.embedding, for BOTH sharding modes:
 
   * 1D (shard_vocab_on_sp=False): emb_dim sharded on TP, vocab replicated across SP. No CCL in the
-    lookup; one TP all-gather rebuilds full hidden.
+    lookup; a TP all-gather rebuilds full hidden only under a replicated residual.
   * 2D (shard_vocab_on_sp=True):  vocab ALSO sharded on SP (Megatron vocab-parallel) -> per-row masked
-    lookup + SP reduce-scatter(seq) + TP all-gather. ~0.5 GiB/device less at the cost of 2 SP CCL ops.
+    lookup + SP reduce-scatter(seq) + (replicated residual only) TP all-gather.
 
 Both must reproduce the exact torch gather (embedding is a copy — no compute — so PCC ~1.0 in bf16).
 The 2D case is the real check: the per-row vocab mask + cross-SP reduce must reassemble every token's
@@ -28,7 +28,7 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
-from ..test_factory import parametrize_mesh_with_fabric
+from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 VOCAB, EMB_DIM = 2048, 256  # VOCAB % sp(8) == 0 and % tp(4) == 0; EMB_DIM % tp == 0
 
@@ -70,11 +70,10 @@ def test_parallel_embedding(mesh_device, device_params, shard_vocab, reset_seeds
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(sp_axis, None)),
     )
 
-    out = emb.forward(tt_tokens)  # per device [1, 1, s_local, EMB_DIM], SP-seq-sharded, TP-replicated
+    out = emb.forward(tt_tokens)  # per device [1, 1, s_local, EMB_DIM] or [..., EMB_DIM/tp]
 
-    # Reassemble: full hidden is TP-replicated, so col 0 suffices; concat the SP rows' seq shards.
     dts = ttnn.get_device_tensors(out)
-    full = torch.cat([ttnn.to_torch(dts[r * cols]).float() for r in range(rows)], dim=2)  # [1,1,S,EMB_DIM]
+    full = torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)  # [1,1,S,EMB_DIM]
 
     ref = F.embedding(tokens.long(), table.float()).reshape(1, 1, S, EMB_DIM)
 

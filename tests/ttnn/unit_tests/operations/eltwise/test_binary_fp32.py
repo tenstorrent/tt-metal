@@ -100,7 +100,7 @@ def test_div_fp32(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch, tt_out, ulp_threshold=0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -148,7 +148,7 @@ def test_div_bf16_nonzero(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch, tt_out, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -432,7 +432,7 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
         golden_tensor = torch.where(
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
-    assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
