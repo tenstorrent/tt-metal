@@ -171,6 +171,21 @@ def build_attention_mask_additive_device_dynamic(
     exactly what makes this trace-replay-compatible (a captured trace can't have its op
     graph depend on a Python-int branch, but it CAN depend on a tensor's contents).
 
+    The noise block's query positions are ``context_valid_len_tt + local_row_index``, NOT
+    ``ctx_len + local_row_index`` -- ``context_valid_len_tt``'s value IS the sequence's true
+    absolute position where the noise block begins (generate.py's ``context_len``, "always
+    the count of real rows accumulated so far, which is exactly the next absolute
+    position"), while ``ctx_len`` is only the FIXED buffer width and generally differs from
+    it during growth. Using ``ctx_len`` here was a bug (see generate.py's module docstring,
+    "KNOWN LATENT LIMITATION" -- now fixed): it left the causal check and the
+    context-validity check unaffected (their own reasoning doesn't depend on the query's
+    absolute value), but skewed the SLIDING-WINDOW distance check for a noise query
+    attending a context key by exactly ``ctx_len - context_valid_len_tt`` -- invisible while
+    ``sliding_window`` comfortably exceeds ``ctx_len`` (every config tested before this fix),
+    increasingly wrong as ``ctx_len`` approaches or exceeds ``sliding_window``. Verified
+    against a host-torch reference using true absolute positions, including configs where
+    the old formula demonstrably diverged (test_dflash_sliding_window_mask.py).
+
     NOT trace-safe by itself: builds the static grids from scratch every call via
     ``ttnn.arange``/``ones``/``zeros``/``full``, each of which does a host->device WRITE
     internally (confirmed: ``creation.cpp``'s ``arange_impl``/``full_impl`` build a host
@@ -187,12 +202,17 @@ def build_attention_mask_additive_device_dynamic(
     invisible, independent of (and applied after) the context-validity condition below."""
     total_real = ctx_len + q_len
     total = ctx_len + (q_len_padded if q_len_padded else q_len)
-    query_position = ttnn.arange(total_real - q_len, total_real, 1, device=mesh_device, dtype=ttnn.int32)
+    local_query_idx = ttnn.arange(0, q_len, 1, device=mesh_device, dtype=ttnn.int32)
     key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
-    query_col = ttnn.reshape(query_position, [q_len, 1])
+    local_query_col = ttnn.reshape(local_query_idx, [q_len, 1])
     key_row = ttnn.reshape(key_position, [1, total])
-    query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
     key_full = ttnn.repeat(key_row, ttnn.Shape([q_len, 1]))
+
+    # True absolute query position = context_valid_len_tt (the sequence's real current
+    # length) + local row offset -- NOT ctx_len + local row offset (see docstring).
+    start_col = ttnn.repeat(ttnn.reshape(context_valid_len_tt, [1, 1]), ttnn.Shape([q_len, 1]))
+    query_col = ttnn.add(local_query_col, start_col)
+    query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
 
     visible = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
     if is_causal:
@@ -202,8 +222,9 @@ def build_attention_mask_additive_device_dynamic(
         if not is_causal:
             visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
 
-    valid_len_col = ttnn.repeat(ttnn.reshape(context_valid_len_tt, [1, 1]), ttnn.Shape([q_len, 1]))
-    valid_len_full = ttnn.repeat(valid_len_col, ttnn.Shape([1, total]))
+    # context_valid_len_tt IS the true start (see above) -- reuse start_col/query_col's
+    # broadcast rather than rebuilding it.
+    valid_len_full = ttnn.repeat(start_col, ttnn.Shape([1, total]))
     is_valid_context_col = ttnn.lt(key_full, valid_len_full)  # key_position < context_valid_len
     is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
     visible = ttnn.logical_and(visible, ttnn.logical_or(is_valid_context_col, is_noise_col))
@@ -223,18 +244,43 @@ class DynamicMaskStaticParts:
     ``build_attention_mask_static_parts``) outside a trace capture, since ``ctx_len``,
     ``q_len``, ``is_causal`` and ``sliding_window`` are all fixed for the whole steady-state
     loop. Holds device tensors only (no host state), safe to reference from inside a
-    captured trace body."""
+    captured trace body.
 
-    __slots__ = ("key_full", "visible_base", "is_noise_col", "zero", "neg", "q_len", "total")
+    The causal and sliding-window checks are NOT part of ``visible_base`` (unlike an
+    earlier version of this class) -- they depend on the query's TRUE absolute position,
+    which is ``context_valid_len_tt``'s per-replay value, not anything fixed at build
+    time. ``visible_base`` here holds only the trailing-padding-columns-invisible
+    condition, which genuinely is value-independent. ``local_query_full`` is the LOCAL
+    (0-based) query row index broadcast over columns; ``combine_attention_mask_dynamic``
+    adds the per-replay start to it to get the true query position before running the
+    causal/sliding checks."""
 
-    def __init__(self, key_full, visible_base, is_noise_col, zero, neg, q_len, total):
+    __slots__ = (
+        "key_full",
+        "local_query_full",
+        "visible_base",
+        "is_noise_col",
+        "zero",
+        "neg",
+        "q_len",
+        "total",
+        "is_causal",
+        "sliding_window",
+    )
+
+    def __init__(
+        self, key_full, local_query_full, visible_base, is_noise_col, zero, neg, q_len, total, is_causal, sliding_window
+    ):
         self.key_full = key_full
+        self.local_query_full = local_query_full
         self.visible_base = visible_base
         self.is_noise_col = is_noise_col
         self.zero = zero
         self.neg = neg
         self.q_len = q_len
         self.total = total
+        self.is_causal = is_causal
+        self.sliding_window = sliding_window
 
 
 def build_attention_mask_static_parts(
@@ -242,11 +288,13 @@ def build_attention_mask_static_parts(
 ) -> DynamicMaskStaticParts:
     """One-time setup (call OUTSIDE ``begin_trace_capture``): builds every piece of
     ``build_attention_mask_additive_device_dynamic`` that's independent of
-    ``context_valid_len_tt``'s value -- the position grids, the causal/sliding base
-    visibility, the noise-column exemption, and the bf16 zero/neg constants. Uses
+    ``context_valid_len_tt``'s value -- the position grids, the trailing-padding-columns
+    condition, the noise-column exemption, and the bf16 zero/neg constants. Uses
     ``ttnn.arange``/``ones``/``zeros``/``full`` (host-write ops), which is fine here since
     this runs once, before capture begins -- see ``combine_attention_mask_dynamic`` for the
-    per-replay half that's actually inside the trace.
+    per-replay half that's actually inside the trace (which now includes the
+    causal/sliding-window checks -- see ``DynamicMaskStaticParts``'s docstring for why
+    those moved here from ``visible_base``).
 
     ``q_len_padded``: same meaning as ``build_attention_mask_additive_device``. The
     trailing-padding-columns-invisible condition is independent of
@@ -254,20 +302,14 @@ def build_attention_mask_static_parts(
     needing any change in ``combine_attention_mask_dynamic``."""
     total_real = ctx_len + q_len
     total = ctx_len + (q_len_padded if q_len_padded else q_len)
-    query_position = ttnn.arange(total_real - q_len, total_real, 1, device=mesh_device, dtype=ttnn.int32)
+    local_query_idx = ttnn.arange(0, q_len, 1, device=mesh_device, dtype=ttnn.int32)
     key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
-    query_col = ttnn.reshape(query_position, [q_len, 1])
+    local_query_col = ttnn.reshape(local_query_idx, [q_len, 1])
     key_row = ttnn.reshape(key_position, [1, total])
-    query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
+    local_query_full = ttnn.repeat(local_query_col, ttnn.Shape([1, total]))
     key_full = ttnn.repeat(key_row, ttnn.Shape([q_len, 1]))
 
     visible_base = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
-    if is_causal:
-        visible_base = ttnn.logical_and(visible_base, ttnn.le(key_full, query_full))
-    if sliding_window is not None:
-        visible_base = ttnn.logical_and(visible_base, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
-        if not is_causal:
-            visible_base = ttnn.logical_and(visible_base, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
     if total > total_real:
         visible_base = ttnn.logical_and(visible_base, ttnn.lt(key_full, total_real))
 
@@ -275,23 +317,47 @@ def build_attention_mask_static_parts(
 
     zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     neg = ttnn.full([q_len, total], fill_value=-1e4, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
-    return DynamicMaskStaticParts(key_full, visible_base, is_noise_col, zero, neg, q_len, total)
+    return DynamicMaskStaticParts(
+        key_full, local_query_full, visible_base, is_noise_col, zero, neg, q_len, total, is_causal, sliding_window
+    )
 
 
 def combine_attention_mask_dynamic(static: DynamicMaskStaticParts, context_valid_len_tt: ttnn.Tensor) -> ttnn.Tensor:
     """The per-replay half: ONLY elementwise ops on already-existing device tensors
-    (``reshape``/``repeat``/``lt``/``logical_and``/``logical_or``/``where``/``typecast``/
-    ``to_layout``) -- no ``arange``/``ones``/``zeros``/``full``, so no host->device write,
-    safe to call from inside a captured trace body. Recomputes exactly the
-    ``context_valid_len_tt``-dependent part of
+    (``reshape``/``repeat``/``add``/``subtract``/``le``/``lt``/``logical_and``/
+    ``logical_or``/``where``/``typecast``/``to_layout``) -- no ``arange``/``ones``/
+    ``zeros``/``full``, so no host->device write, safe to call from inside a captured
+    trace body. Recomputes exactly the ``context_valid_len_tt``-dependent part of
     ``build_attention_mask_additive_device_dynamic``, using ``static``'s precomputed,
     value-independent pieces for everything else. Confirmed bit-for-bit identical to that
-    function's output for the same inputs."""
+    function's output for the same inputs.
+
+    ``context_valid_len_tt`` IS the true absolute start position (see
+    ``build_attention_mask_additive_device_dynamic``'s docstring), so its broadcast is
+    reused for both the query-position correction and the context-validity check below --
+    they are, numerically, the same quantity used two different ways. The causal and
+    sliding-window checks are computed HERE (not in ``static.visible_base``) because they
+    depend on the query's true position, which only exists once ``context_valid_len_tt``'s
+    value is known -- this is the one part of this function that's genuinely new work per
+    replay rather than a value-independent constant, an unavoidable cost of the fix (see
+    ``DynamicMaskStaticParts``)."""
     q_len, total = static.q_len, static.total
-    valid_len_col = ttnn.repeat(ttnn.reshape(context_valid_len_tt, [1, 1]), ttnn.Shape([q_len, 1]))
-    valid_len_full = ttnn.repeat(valid_len_col, ttnn.Shape([1, total]))
-    is_valid_context_col = ttnn.lt(static.key_full, valid_len_full)
-    visible = ttnn.logical_and(static.visible_base, ttnn.logical_or(is_valid_context_col, static.is_noise_col))
+    start_col = ttnn.repeat(ttnn.reshape(context_valid_len_tt, [1, 1]), ttnn.Shape([q_len, 1]))
+    start_full = ttnn.repeat(start_col, ttnn.Shape([1, total]))
+    query_full = ttnn.add(static.local_query_full, start_full)
+
+    visible = static.visible_base
+    if static.is_causal:
+        visible = ttnn.logical_and(visible, ttnn.le(static.key_full, query_full))
+    if static.sliding_window is not None:
+        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, static.key_full), static.sliding_window))
+        if not static.is_causal:
+            visible = ttnn.logical_and(
+                visible, ttnn.lt(ttnn.subtract(static.key_full, query_full), static.sliding_window)
+            )
+
+    is_valid_context_col = ttnn.lt(static.key_full, start_full)
+    visible = ttnn.logical_and(visible, ttnn.logical_or(is_valid_context_col, static.is_noise_col))
     visible = ttnn.to_layout(ttnn.typecast(visible, ttnn.bfloat16), ttnn.TILE_LAYOUT)
     mask = ttnn.where(visible, static.zero, static.neg)
     return ttnn.unsqueeze_to_4D(ttnn.unsqueeze_to_4D(mask))  # [1,1,q_len,total]

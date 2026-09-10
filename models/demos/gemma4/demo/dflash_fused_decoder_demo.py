@@ -47,7 +47,40 @@ DEFAULT_PROMPT = (
     "palindrome, ignoring spaces, punctuation and case. Include a short "
     "docstring and two example calls."
 )
-MAX_SEQ_LEN = 2048
+# 2048 was a hard ceiling before two fixes landed: (1) the drafter's growing-
+# context sliding-window mask used to be wrong once ctx_len approached/exceeded
+# the drafter's own sliding_window=2048 (see generate.py's module docstring,
+# "FIXED (was a KNOWN LATENT LIMITATION...)"); (2) the target model's own
+# multi-chunk prefill (needed for any ISL > max_prefill_chunk_size=2048) used a
+# traced-chunk-replay path with a TT_FATAL at large chunk counts -- worked
+# around by disabling that path's auto-enable (generator_trace.py's
+# maybe_auto_enable_chunked_prefill_trace), which this demo already benefits
+# from since it never opts into GEMMA4_CHUNKED_PREFILL_TRACE itself, so its
+# prefill always took the (correct, if slower) eager per-chunk path anyway.
+# Both are fixed/worked-around now; MAX_SEQ_LEN is configurable via
+# GEMMA4_DFLASH_MAX_SEQ_LEN. The model's own HF-declared max_position_embeddings
+# is 262144 (both google/gemma-4-31b-it and the z-lab DFlash drafter checkpoint
+# agree) -- that is the architectural ceiling, not a value verified to fit in
+# practice: a real per-layer, unbounded (bounded_sliding_kv_cache=False, a
+# DFlash requirement) KV cache at that width, times 60 target layers plus the
+# drafter's own 5, is a large DRAM footprint that has NOT been checked against
+# T3K's actual budget at that scale. Verified working end-to-end on real
+# hardware (coherent output, correct mean-accepted-drafts, no crash) at real
+# prefill lengths of 8200 and 16716 tokens; not verified beyond that.
+#
+# MUST be a multiple of the target model's own max_prefill_chunk_size (2048 in
+# every config seen so far on WH T3K) -- the eager per-chunk prefill loop
+# ttnn_prefill_forward falls into above that chunk size rounds its LAST chunk
+# up to a full chunk width regardless of how much real content remains, and
+# that rounded-up position can exceed a non-chunk-aligned MAX_SEQ_LEN: hit a
+# real TT_FATAL this way (RoPE table sliced to position 10240 against a table
+# built only 9216 (a non-multiple) rows wide -- ttnn/cpp/.../slice_device_
+# operation.cpp's "Ends 10240 must be less than or equal to the shape of the
+# tensor 9216"). Not asserted here (max_prefill_chunk_size is resolved
+# dynamically and this demo doesn't import that resolver), but every verified
+# value above is a clean multiple of 2048 -- keep GEMMA4_DFLASH_MAX_SEQ_LEN
+# that way.
+MAX_SEQ_LEN = int(os.environ.get("GEMMA4_DFLASH_MAX_SEQ_LEN", 2048))
 PAGE_BLOCK_SIZE = 64
 
 
@@ -88,9 +121,22 @@ def _unwrap_kv_layers(kv_cache):
         # Gemma4-31B TP=8 issue, not specific to dFlash's own tap-capture
         # (confirmed: the plain, non-dFlash text_demo.py::test_demo hit the
         # identical TT_THROW at the identical L1 addresses at this bucket
-        # before the same fix was applied there too). Same fix/value as
-        # text_demo_v2.py's ``_device_params``.
-        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+        # before the same fix was applied there too).
+        #
+        # 8192, not text_demo_v2.py's 24576: a later commit
+        # (7c183561a7d, "Optimize DFlash ctx K/V commit and hidden_norm for
+        # trace-safe fused decode") grew DFlashDrafter's own L1 footprint
+        # enough that 24576 newly clashed with the TARGET model's prefill
+        # SDPA at the SMALLER 128-token bucket (a different clash than the
+        # one above -- same TT_THROW signature, different root cause: not
+        # enough main-pool L1 left once that reservation is carved out,
+        # rather than main-pool fragmentation from too little of one). 8192
+        # is the smallest value that resolved both the 1024-bucket clash and
+        # the 128-bucket one in the same run -- verified at both buckets on
+        # real hardware; 0 (no reservation) fixes 128 but reintroduces the
+        # 1024 clash, 24576 (and higher, tried up to 131072) fixes 1024 but
+        # breaks 128.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 8192)),
     },
 )
 def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):

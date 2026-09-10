@@ -35,22 +35,28 @@ tests/dflash/test_dflash_*.py for the individual PCC/exact-match checks):
   positions -- replacing what was previously a host-torch trig computation every
   iteration (build_noise_inputs, removed).
 
-KNOWN LATENT LIMITATION (not fixed here, believed pre-existing and currently
-unobservable at any tested scale): the attention mask's causal/sliding-window position
-grid is built relative to EACH CALL's own [context, noise] layout (``arange(0, ctx_len)``
-for context, ``arange(ctx_len, ctx_len+q_len)`` for noise), not the sequence's true
-absolute positions. Since context rows here always equal true absolute position (writes
-only ever append starting at row 0), causal-among-noise and the valid-length check are
-unaffected (the mismatch cancels out or doesn't apply), but the SLIDING-WINDOW distance
-check for a noise query attending a context key is off by a constant
-``max_seq_len - start`` that grows as generation proceeds -- benign while
-``sliding_window`` (2048) comfortably exceeds ``max_seq_len`` (as in every config tested
-so far), but would incorrectly under-mask or over-mask context once ``max_seq_len``
-approaches or exceeds ``sliding_window`` in a longer-context production deployment.
-Fixing it needs the mask's noise-side query position to depend on a per-iteration
-DYNAMIC ``start`` tensor rather than a static arange -- straightforward given the same
-dynamic-tensor-input pattern ``context_valid_len_tt`` already uses, just not done in this
-change to keep this fix scoped to the missing-context-accumulation bug.
+FIXED (was a KNOWN LATENT LIMITATION, unobservable at any scale tested before this fix):
+the attention mask's causal/sliding-window position grid used to be built relative to
+EACH CALL's own [context, noise] layout (``arange(0, ctx_len)`` for context,
+``arange(ctx_len, ctx_len+q_len)`` for noise), not the sequence's true absolute
+positions. Since context rows here always equal true absolute position (writes only ever
+append starting at row 0), causal-among-noise and the valid-length check were unaffected,
+but the SLIDING-WINDOW distance check for a noise query attending a context key was off
+by a constant ``ctx_len - context_valid_len_tt`` that grows as generation proceeds --
+invisible while ``sliding_window`` comfortably exceeds ``ctx_len`` (every config tested
+before this fix), but would have incorrectly under-masked or over-masked context once
+``ctx_len`` approached or exceeded ``sliding_window`` in a longer-context deployment.
+
+Fixed by making the noise-side query position ``context_valid_len_tt + local_row_index``
+instead of a static ``ctx_len``-relative arange -- ``context_valid_len_tt`` already IS the
+sequence's true absolute position (see above), so no new dynamic-tensor plumbing was
+needed, just reusing it for the query side too (attention.py's
+``build_attention_mask_additive_device_dynamic`` / ``DynamicMaskStaticParts`` /
+``combine_attention_mask_dynamic``). Verified against a host-torch reference using true
+absolute positions across configs where the old formula demonstrably diverged
+(test_dflash_sliding_window_mask.py), and confirmed bit-exact-unchanged against the old
+formula's own output for every config where the two formulas agree (i.e. every previously
+tested scale) -- this fix does not change behavior anywhere it was already correct.
 """
 
 from __future__ import annotations

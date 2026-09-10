@@ -30,7 +30,6 @@ import json
 import math
 import os as _os
 from pathlib import Path
-from types import SimpleNamespace
 
 import torch
 
@@ -45,7 +44,6 @@ from models.demos.gemma4.tt.dram_sharded import (
     linear_l1_safe,
     matmul_rows,
 )
-from models.demos.gemma4.tt.rms_norm import RMSNorm, dflash_context_hidden_norm, dflash_ctx_kv_hidden_norm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 _SHARD_ARGMAX_K = 32
@@ -291,15 +289,24 @@ class DFlashDrafter:
         self.fc = _dev_fc("fc", sd["fc.weight"], None)
         self._fc_k = int(self.fc.shape[-2])
         self._fc_n = int(self.fc.shape[-1])
-        self.hidden_norm = RMSNorm(
-            mesh_device,
-            SimpleNamespace(rms_norm_eps=self.rms_eps),
-            {"weight": sd["hidden_norm.weight"]},
-            tensor_cache_path=get_cache_file_name(
-                tensor_cache_path, f"dflash_{'rep_' if self.replicated else ''}hidden_norm"
-            ),
-            mesh_config=mesh_config,
-        )
+        # NOT routed through RMSNorm/dflash_context_hidden_norm here (unlike
+        # generate.py's context.py, which uses that mechanism safely -- see
+        # test_dflash_generate.py/test_dflash_generate_traced.py, both passing).
+        # Constructing an RMSNorm object here specifically -- whose weight is
+        # reshaped to (1,1,hidden/32,32) for its width-sharded fast path, then
+        # fed into the plain non-sharded ttnn.rms_norm anyway since
+        # dflash_context_hidden_norm/dflash_ctx_kv_hidden_norm always pass
+        # skip_sharded_path=True -- shifts the device allocator's state enough
+        # that the TARGET model's own prefill SDPA (called moments later, in
+        # dflash_fused_decoder_demo.py, unrelated code) then TT_THROWs
+        # "Statically allocated circular buffers... clash with L1 buffers" on
+        # its first compile. Confirmed by elimination: DFlashDrafter.__init__
+        # is the only DFlash code that runs before that prefill call, and
+        # fc_bfp8's default flip (this same commit's other __init__ change)
+        # was ruled out empirically (GEMMA4_DFLASH_FC_BFP8=0 still fails
+        # identically). Reverting to the plain flat-weight-tensor load this
+        # file used before restores a working demo.
+        self.hidden_norm_w = _dev("hidden_norm", sd["hidden_norm.weight"].reshape(1, 1, 1, -1), None, transpose=False)
         self.final_norm_w = _dev("final_norm", sd["norm.weight"].reshape(1, 1, 1, -1), None, transpose=False)
 
         self.layers = []
@@ -587,8 +594,10 @@ class DFlashDrafter:
         return ttnn.rms_norm(x, epsilon=self.rms_eps, weight=w)
 
     def _hidden_norm(self, x):
-        """``fc`` output -> context rows. Sweep winner: interleaved + L1 out."""
-        return dflash_context_hidden_norm(self.hidden_norm, x)
+        """``fc`` output -> context rows. See ``self.hidden_norm_w``'s comment
+        for why this stays a plain ``_rms`` call rather than routing through
+        ``dflash_context_hidden_norm``."""
+        return self._rms(x, self.hidden_norm_w)
 
     def _rope4d(self, positions):
         # On-device row gather from the persistent tables; only the position ids
@@ -626,7 +635,7 @@ class DFlashDrafter:
         iteration. Returns [(k, v)] per layer, k/v: [1, local_kv, R, hd].
         """
         R = raw_rows.shape[2]
-        hn = dflash_ctx_kv_hidden_norm(self.hidden_norm, raw_rows)
+        hn = self._rms(raw_rows, self.hidden_norm_w)
         out = []
         for lyr in self.layers:
             k = self._ctx_kv_linear(hn, lyr["k_proj"])
