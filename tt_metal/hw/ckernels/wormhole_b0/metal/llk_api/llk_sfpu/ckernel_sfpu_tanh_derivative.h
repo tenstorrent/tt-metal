@@ -44,8 +44,21 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
-    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+    // Same 3-segment SFPLUT table as tanh_init<APPROXIMATION_MODE=true>, kept in step with it
+    // deliberately: calculate_tanh_derivative computes 1 - lut(x)^2, so the tanh table IS this
+    // kernel's approximation. Retuned by Remez minimax fit -- derivation in
+    // APPROX_TANH_RETUNE.md. tanh's own max abs error went 0.1447 -> 0.0563, which carries
+    // through here as roughly a 3x improvement in the core region (at x = 1, 1 - lut^2 was
+    // 0.1787 against a true sech^2 of 0.4200, and is now 0.3398).
+    //
+    // The cancellation blow-up for |x| > ~3.4 in the warning above is NOT helped: it comes
+    // from segment 2 returning exactly 1.0, so 1 - 1 = 0 against a small nonzero sech^2, and
+    // segment 2 is unchanged (it is exact, not fitted).
+    //
+    // UnarySFPUGolden._tanh_derivative_lut models this table by hand and must be updated
+    // whenever these three pairs change.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
 }
 

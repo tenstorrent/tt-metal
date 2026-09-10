@@ -3144,11 +3144,13 @@ class UnarySFPUGolden:
         # from an accurate tanh, so the golden models that same piecewise-linear LUT
         # (breakpoints at 1.0 and 2.0). Validating it against an accurate tanh would fail by
         # design.
+        # These three segments must match tanh_derivative_init's SFPLUT table exactly; it
+        # shares tanh_init's retuned coefficients (see APPROX_TANH_RETUNE.md).
         a = abs(x)
         if a < 1.0:
-            t = 0.90625 * a
+            t = 0.8125 * a
         elif a < 2.0:
-            t = 0.09375 * a + 0.8125
+            t = 0.1875 * a + 0.625
         else:
             t = 1.0
         return 1.0 - t * t
