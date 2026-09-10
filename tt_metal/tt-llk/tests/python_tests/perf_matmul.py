@@ -37,8 +37,24 @@ KT_DIMS = [1, 4, 32]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 
 
-# 2-D dest blocks that are neither a vector (1×N / N×1) nor a square.
-RECT_DEST_BLOCKS = ((2, 4), (4, 2))
+# Dest occupancy (rt, ct) through dest Half 16-bit (8 tiles): 1×N, 2×N, 4×1 / 4×2.
+# Filtered by dest capacity. Dest-fill vectors/square and mid-fill stay separate.
+DEST_RT_CT_BLOCKS = (
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (4, 1),
+    (4, 2),
+)
 
 
 def _mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
@@ -51,10 +67,10 @@ def _mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
 
 
 def dest_corner_mn(max_tiles: int) -> List[tuple]:
-    """1×1, dest-fill vectors/square, 2×4 / 4×2, and half-dest mid-fill when they fit."""
+    """1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit."""
     square = int(max_tiles**0.5)
     corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
-    corners.extend((rt, ct) for rt, ct in RECT_DEST_BLOCKS if rt * ct <= max_tiles)
+    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
     corners.extend(_mid_fill_rt_ct_pairs(max_tiles))
     return list(dict.fromkeys(corners))
 

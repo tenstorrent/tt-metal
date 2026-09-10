@@ -58,8 +58,8 @@ MATH_FIDELITIES = [
     MathFidelity.HiFi4,
 ]
 
-# Dest-fill RT x CT from dest capacity, plus 2×4 / 4×2 and half-dest mid-fill
-# when they fit. KT 1 and 4 (long-K lives on perf_matmul).
+# Dest-fill RT x CT from dest capacity, dest occupancy blocks, and half-dest
+# mid-fill when they fit. KT 1 and 4 (long-K lives on perf_matmul).
 PERF_KT_DIMS = (1, 4)
 THROTTLE_LEVELS = (0, 5)
 DEST_HANDOFF_NUM_BLOCKS = 4
@@ -71,8 +71,24 @@ def _dest_capacity(dest_sync, dest_acc) -> int:
     )
 
 
-# 2-D dest blocks that are neither a vector (1×N / N×1) nor a square.
-RECT_DEST_BLOCKS = ((2, 4), (4, 2))
+# Dest occupancy (rt, ct) through dest Half 16-bit (8 tiles): 1×N, 2×N, 4×1 / 4×2.
+# Filtered by dest capacity. Dest-fill vectors/square and mid-fill stay separate.
+DEST_RT_CT_BLOCKS = (
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (4, 1),
+    (4, 2),
+)
 
 
 def _mid_fill_rt_ct_pairs(max_tiles):
@@ -85,14 +101,14 @@ def _mid_fill_rt_ct_pairs(max_tiles):
 
 
 def _dest_fill_rt_ct_pairs(max_tiles):
-    """Power-of-two dest-fill (rt, ct) pairs, plus 2×4 / 4×2 and mid-fill when they fit dest."""
+    """Power-of-two dest-fill (rt, ct) pairs, dest occupancy blocks, and mid-fill when they fit dest."""
     pairs = []
     rt_dim = 1
     while rt_dim <= max_tiles:
         if max_tiles % rt_dim == 0:
             pairs.append((rt_dim, max_tiles // rt_dim))
         rt_dim *= 2
-    pairs.extend((rt, ct) for rt, ct in RECT_DEST_BLOCKS if rt * ct <= max_tiles)
+    pairs.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
     pairs.extend(_mid_fill_rt_ct_pairs(max_tiles))
     return list(dict.fromkeys(pairs))
 
@@ -112,7 +128,7 @@ def _fits_tiny_perf_tile_shape(cfg) -> bool:
 
 
 def generate_perf_matmul_combinations():
-    """Regular matmul: dest-filling RT x CT grids, plus 2×4 / 4×2 and mid-fill when they fit dest, with KT in {1, 4}."""
+    """Regular matmul: dest-filling RT x CT grids, dest occupancy blocks, and mid-fill when they fit dest, with KT in {1, 4}."""
     combinations = []
     bfloat16_formats = {DataFormat.Float16_b, DataFormat.Float32}
 
@@ -217,11 +233,12 @@ def test_perf_math_matmul(
     """
     Performance test for matmul operations.
 
-    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, plus
-    2×4 / 4×2 and half-dest mid-fill (2×2, 1×(cap/2), (cap/2)×1) when they fit,
-    with KT in {1, 4} and throttle 0 or 5. Tiny tiles cover ct=1, cap/2, and
-    dest-fill ct. A dest-handoff slice repeats dest_index=0 grids (NUM_BLOCKS=4,
-    KT=1, throttle=0).
+    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, dest
+    occupancy blocks (1×N through dest Half, 2×N, 4×1 / 4×2), and half-dest
+    mid-fill (2×2, 1×(cap/2), (cap/2)×1) when they fit, with KT in {1, 4} and
+    throttle 0 or 5. Tiny tiles cover ct=1, cap/2, and dest-fill ct. A
+    dest-handoff slice repeats dest_index=0 grids (NUM_BLOCKS=4, KT=1,
+    throttle=0).
     """
     formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
