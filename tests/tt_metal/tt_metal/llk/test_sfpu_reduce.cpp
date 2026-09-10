@@ -465,7 +465,7 @@ void run_single_core_sfpu_reduce(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<std::uint32_t> output_tilized;
     distributed::EnqueueReadMeshBuffer(cq, output_tilized, dst_dram_buffer, /*blocking=*/true);
