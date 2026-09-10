@@ -157,25 +157,13 @@ void kernel_main() {
 #endif
 
         tile_regs_acquire();
-#ifdef ARCH_QUASAR
-        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-        // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-        // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-        copy_init(dfb_post_lhs_id);
-#else
         reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
         copy_init(dfb_post_lhs_id);
-#endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
-#ifdef ARCH_QUASAR
-        copy_init(dfb_post_rhs_id);
-#else
         reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
         copy_init(dfb_post_rhs_id);
-#endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
