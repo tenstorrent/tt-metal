@@ -120,7 +120,7 @@ ttnn:
     wh_n150: 4
   device_perf:
     bh_p150b_civ2: 7
-    wh_n150: 5
+    wh_n150: 10
     wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30

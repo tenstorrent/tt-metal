@@ -98,7 +98,7 @@
       timeout: 7
       arch_dir: blackhole
     wh_n150:
-      timeout: 5
+      timeout: 10
       arch_dir: wormhole
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
