@@ -93,6 +93,7 @@ class KimiGenerator(_ContractGenerator):
         self.tokenizer = tokenizer if tokenizer is not None else load_tokenizer(snapshot)
         self.vocab = self.cfg.vocab_size
         self._trace = None
+        self._pc_entries = -1
         logger.info(
             f"KimiGenerator ready in {time.time()-t0:.0f}s (max_seq_len {max_seq_len}, {self.num_blocks} blocks)"
         )
@@ -205,19 +206,45 @@ class KimiGenerator(_ContractGenerator):
         t0 = time.time()
         out = m.decode_device(*dev)  # compile pass
         ttnn.deallocate(out)
+        self._capture_decode_trace(dev)
+        logger.info(f"decode trace captured in {time.time()-t0:.1f}s ({self._pc_entries} cached programs)")
+        self.reset()
+
+    def _capture_decode_trace(self, dev) -> None:
+        """Record one decode step over the persistent ``dev`` inputs (capture does not execute: state is untouched)."""
+        m = self.model
         tid = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
         out = m.decode_device(*dev)
         ttnn.end_trace_capture(m.mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(m.mesh_device)
         self._trace = (tid, dev, out)
-        logger.info(f"decode trace captured in {time.time()-t0:.1f}s")
-        self.reset()
+        self._pc_entries = m.mesh_device.num_program_cache_entries()
+
+    def _ensure_trace_fresh(self) -> None:
+        """A program compiled after the decode trace was parked (a prefill of a shape not seen before) clobbers the
+        trace's kernel binaries on Blackhole: the next replay runs garbage and wedges the fabric, and the following eager
+        CCL hangs with 'device timeout in fetch queue wait' (the Qwen3.6 Blackhole demo documents the same failure). So
+        whenever the program cache grew since the capture, release and re-capture (~0.3 s, no compile, no execution)."""
+        if self._trace is None:
+            return
+        m = self.model
+        n = m.mesh_device.num_program_cache_entries()
+        if n == self._pc_entries:
+            return
+        tid, dev, out = self._trace
+        t0 = time.time()
+        ttnn.release_trace(m.mesh_device, tid)
+        ttnn.deallocate(out)
+        grew = n - self._pc_entries
+        self._capture_decode_trace(dev)
+        logger.info(f"decode trace re-captured after {grew} new programs in {time.time()-t0:.2f}s")
 
     def _decode_traced(self, tok: torch.Tensor, pos: torch.Tensor, pt: torch.Tensor) -> torch.Tensor:
         if self._trace is None:
             raise RuntimeError(
                 "decode trace not captured: call warmup_decode_trace() before the first prompt (tracing is required by the readiness runner)"
             )
+        self._ensure_trace_fresh()
         m = self.model
         tid, dev, out = self._trace
         for h, d in zip(m._host_decode_inputs(tok, pos, pt), dev):

@@ -185,7 +185,42 @@ class KimiLinearForCausalLM(Generator):
         slot_remap = kwargs.get("slot_remap")
         if slot_remap is not None and self.model[0].max_batch_size > 1:
             self.model[0].remap_slots(slot_remap)
-        return super().decode_forward(*args, **kwargs)
+        self._refresh_stale_decode_traces(kwargs.get("kv_cache"))
+        out = super().decode_forward(*args, **kwargs)
+        if self._pc_at_capture is None and any(bool(v) for v in self.trace_ids_decode.values()):
+            self._pc_at_capture = self.mesh_device.num_program_cache_entries()
+        return out
+
+    _pc_at_capture = None
+
+    def _refresh_stale_decode_traces(self, kv_cache) -> None:
+        """Blackhole: a program compiled after a decode trace was parked (every prefill of a new length compiles some)
+        clobbers the trace's kernel binaries; the next replay wedges the fabric and the following eager CCL hangs
+        ('device timeout in fetch queue wait'). Whenever the program cache grew since the capture, release the parked
+        decode traces and re-record them over the same persistent inputs (no compile pass, no execution: the slot
+        state is untouched). ~0.15 s on a 1x4."""
+        if self._pc_at_capture is None:
+            return
+        n = self.mesh_device.num_program_cache_entries()
+        if n == self._pc_at_capture:
+            return
+        t0 = time.time()
+        for key, trace_ids in list(self.trace_ids_decode.items()):
+            if not trace_ids:
+                continue
+            for i, tid in trace_ids.items():
+                ttnn.release_trace(self.model_args[i].mesh_device, tid)
+            prepared = {
+                "device_inputs": self.trace_inputs_decode[key],
+                "kv_cache": kv_cache,
+                "on_device_sampling": key,
+            }
+            new_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
+            self.trace_ids_decode[key] = new_ids
+            self.trace_inputs_decode[key] = device_inputs
+            self.trace_output_decode[key] = tt_out_trace
+        self._pc_at_capture = self.mesh_device.num_program_cache_entries()
+        logger.info(f"decode trace(s) re-captured after program-cache growth to {n} entries in {time.time()-t0:.2f}s")
 
     # --- warm-up ------------------------------------------------------------------------------------------------------------
     def warmup_model_prefill(self, kv_cache=None, enable_trace=False, *args, **kwargs):
