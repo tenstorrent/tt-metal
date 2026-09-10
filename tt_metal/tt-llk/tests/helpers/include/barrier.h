@@ -22,6 +22,9 @@ namespace llk_barrier
 
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_THREADS = 4; // unpack, math, pack, sfpu
+#ifndef QUASAR_POLL_BACKOFF_NOPS
+#define QUASAR_POLL_BACKOFF_NOPS 32
+#endif
 #else
 constexpr std::uint32_t NUM_THREADS = 3; // unpack, math, pack
 #endif
@@ -97,6 +100,17 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 // Quasar has no free semaphore, so it gets an L1 rendezvous; trisc.cpp supplies the address.
 extern volatile std::uint32_t* barrier_slots;
 
+// A waiting thread polls an L1 word, and on an isolate run type three threads do so for the whole
+// measured window, competing with the unpacker for L1 reads: on the emulator the unpack windows
+// came out 4% longer than with no waiters. Spacing the polls out takes that back.
+__attribute__((always_inline)) inline void poll_backoff()
+{
+    for (std::uint32_t k = 0; k < QUASAR_POLL_BACKOFF_NOPS; ++k)
+    {
+        asm volatile("nop");
+    }
+}
+
 // Generations only increase, so a late thread still sees the round it missed; hence < and not ==.
 template <typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
@@ -112,6 +126,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
     {
         while (i != THREAD_ID && slots[i] < arrive_gen)
         {
+            poll_backoff();
             ckernel::invalidate_data_cache();
         }
     }
@@ -128,6 +143,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
     {
         while (i != THREAD_ID && slots[i] < release_gen)
         {
+            poll_backoff();
             ckernel::invalidate_data_cache();
         }
     }
