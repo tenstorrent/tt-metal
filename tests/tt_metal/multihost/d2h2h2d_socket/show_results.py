@@ -124,10 +124,11 @@ def load(paths):
                 # files written before 2026-09-07, which is not a defect -- .get() returns None
                 # and the check does not run.
                 file_msgs = to_float(row.get("messages_per_second"))
-                if (msgs is not None and file_msgs is not None
-                        and abs(msgs - file_msgs) > 1e-3 * max(1.0, msgs)):
-                    problems.append(f"{where}: messages_per_second column {file_msgs:.1f} != "
-                                    f"samples x 1e9 / denominator {msgs:.1f}")
+                if msgs is not None and file_msgs is not None and abs(msgs - file_msgs) > 1e-3 * max(1.0, msgs):
+                    problems.append(
+                        f"{where}: messages_per_second column {file_msgs:.1f} != "
+                        f"samples x 1e9 / denominator {msgs:.1f}"
+                    )
                 if bw is not None and msgs is not None and per_msg:
                     closed = msgs * per_msg / 1e9
                     if abs(bw - closed) > 1e-6 * max(1.0, bw):
