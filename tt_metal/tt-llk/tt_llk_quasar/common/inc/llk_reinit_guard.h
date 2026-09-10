@@ -16,8 +16,8 @@
 
 #include <cstdint>
 
+#include "ckernel_buf_desc.h"
 #include "llk_assert.h"
-#include "llk_bfd_alloc.h"
 
 #if defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY) || defined(ENABLE_LLK_ASSERT)
 
