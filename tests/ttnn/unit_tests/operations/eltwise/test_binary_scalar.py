@@ -596,3 +596,45 @@ def test_scalar_tensor_row_major_sharded(device, op_name):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.bfloat16, torch.bfloat16), (ttnn.int32, torch.int32)))
+def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_dtype):
+    """The goldens key dtype-dependent branches off the tensor operand rather than the argument
+    position, so they stay callable when a scalar occupies operand a. Reading the dtype off
+    operand a instead raises AttributeError, which comparison mode swallows into a skip."""
+    torch.manual_seed(0)
+    if torch_dtype == torch.int32:
+        torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch_dtype)
+        scalar = 7
+    else:
+        torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
+        scalar = 3.14
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden = ttnn.get_golden_function(getattr(ttnn, op_name))
+    expected = golden(scalar, torch_input)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(scalar, input_tensor))
+
+    # The golden is the reference the device is graded against, so it has to carry operand order
+    # too: for subtract and div a reversed golden would still be a valid tensor of the right shape.
+    assert_with_pcc(expected.float(), output.float(), 0.999)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
+def test_scalar_tensor_comparison_mode_validates(device, op_name):
+    """Comparison mode must actually grade a scalar-first call, not skip it. A golden that raises
+    is caught at decorators.py and downgraded to a warning, so the op looks validated while it is
+    not; comparison_mode_should_raise_exception turns that silence into a failure.
+
+    The threshold is relaxed from the 0.9999 default because bf16 add and subtract miss it against
+    their goldens for tensor-first calls too -- a pre-existing tolerance gap this test is not
+    about. What is asserted here is that the comparison runs at all."""
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config("comparison_mode_pcc", 0.99):
+        with ttnn.manage_config("comparison_mode_should_raise_exception", True):
+            getattr(ttnn, op_name)(3.14, input_tensor)
