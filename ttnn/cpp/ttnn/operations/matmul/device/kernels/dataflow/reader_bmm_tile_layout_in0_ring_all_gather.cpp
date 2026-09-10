@@ -26,30 +26,30 @@ void kernel_main() {
 
     // Runtime args
     uint32_t rt_args_idx = 0;
-    uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
-    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE) {
+    const uint32_t core_type = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    if (core_type == static_cast<uint32_t>(CORE_TYPE::IDLE_CORE)) {
         return;
     }
-    bool is_hop_core = core_type == (uint32_t)CORE_TYPE::HOP_CORE;
+    const bool is_hop_core = core_type == static_cast<uint32_t>(CORE_TYPE::HOP_CORE);
 
-    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t next_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t next_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t noc_id = get_arg_val<uint32_t>(rt_args_idx++);
-    bool end_of_hop = (bool)get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t ring_idx = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t next_core_noc_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t next_core_noc_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t noc_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const bool end_of_hop = (bool)get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t* unpadded_in0_shard_widths_in_tiles = nullptr;
     if (!is_hop_core) {
-        unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
+        unpadded_in0_shard_widths_in_tiles = reinterpret_cast<uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx)));
         rt_args_idx += ring_size;
     }
 
-    Noc noc_obj(noc_id);
+    const Noc noc_obj(static_cast<uint8_t>(noc_id));
     Semaphore<> signal_sem(get_compile_time_arg_val(4));
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in2");
 
-    DataflowBuffer dfb_in0(dfb_id_in0);
+    const DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
@@ -59,18 +59,18 @@ void kernel_main() {
     // Reserving/pushing the local shard is done in compute
     dfb_in2.reserve_back((ring_size - 1) * shard_size_in_tiles);
 
-    uint32_t local_shard_read_addr = dfb_in0.get_read_ptr();
-    uint32_t l1_write_addr_in0 = dfb_in2.get_write_ptr();
+    const uint32_t local_shard_read_addr = dfb_in0.get_read_ptr();
+    const uint32_t l1_write_addr_in0 = dfb_in2.get_write_ptr();
 
-    uint32_t hop_core_offset = static_cast<uint32_t>(is_hop_core);
+    const uint32_t hop_core_offset = static_cast<uint32_t>(is_hop_core);
 
     for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
-        uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
-        bool skip_send = !is_hop_core && unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0;
+        const uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
+        const bool skip_send = !is_hop_core && unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0;
 
-        uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
-        uint32_t curr_shard_read_addr =
-            shard_cnt == 0 ? local_shard_read_addr : l1_write_addr_in0 + shard_size_bytes * (shard_cnt - 1);
+        const uint32_t curr_shard_write_addr = l1_write_addr_in0 + (shard_size_bytes * (shard_cnt - hop_core_offset));
+        const uint32_t curr_shard_read_addr =
+            shard_cnt == 0 ? local_shard_read_addr : l1_write_addr_in0 + (shard_size_bytes * (shard_cnt - 1));
 
         // Wait for signal from previous core that data has been added to this core's in0
         signal_sem.wait_min(shard_cnt);
@@ -78,7 +78,7 @@ void kernel_main() {
         // Send data to next core
         if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
             if (!skip_send) {
-                UnicastEndpoint dst_ep;
+                const UnicastEndpoint dst_ep;
                 noc_obj.async_write(
                     CoreLocalMem<uint32_t>(curr_shard_read_addr),
                     dst_ep,

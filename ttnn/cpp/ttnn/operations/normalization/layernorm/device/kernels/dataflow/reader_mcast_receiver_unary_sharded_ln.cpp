@@ -48,10 +48,10 @@ void kernel_main() {
     constexpr auto num_all_to_all_workers = get_arg(args::num_all_to_all_workers);
     constexpr auto num_tiles_per_worker = get_arg(args::num_tiles_per_worker);
     constexpr auto num_tiles_per_worker_last = get_arg(args::num_tiles_per_worker_last);
-    constexpr bool row_major = (bool)get_arg(args::row_major);
+    constexpr bool row_major = static_cast<bool>(get_arg(args::row_major));
     constexpr auto num_x = get_arg(args::num_x);
     constexpr auto num_y = get_arg(args::num_y);
-    constexpr bool use_two_stage_reduce = (bool)get_arg(args::use_two_stage_reduce);
+    constexpr bool use_two_stage_reduce = static_cast<bool>(get_arg(args::use_two_stage_reduce));
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
 #ifdef USE_WELFORD
@@ -63,9 +63,9 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Runtime arguments
     // ---------------------------------------------------------------------------
-    const bool is_last_all_to_all_worker = get_arg(args::is_last_all_to_all_worker);
+    const bool is_last_all_to_all_worker = get_arg(args::is_last_all_to_all_worker) == 1;
     const uint32_t all_to_all_tile_offset_bytes = get_arg(args::all_to_all_tile_offset_bytes);
-    const bool is_second_stage_reader = get_arg(args::is_second_stage_reader);
+    const bool is_second_stage_reader = get_arg(args::is_second_stage_reader) == 1;
     const uint32_t start_x = get_arg(args::start_x);
     const uint32_t start_y = get_arg(args::start_y);
 
@@ -81,8 +81,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_y; ++i) {
         remote_noc_y[i] = get_vararg(num_x + i);
     }
-    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)remote_noc_x;
-    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)remote_noc_y;
+    df::L1Ptr in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
+    df::L1Ptr in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
@@ -91,14 +91,14 @@ void kernel_main() {
     Semaphore reduce_receiver_sem(sem::reduce_receiver);
     Semaphore reduce_sender_sem(sem::reduce_sender);
     Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
-    UnicastEndpoint remote_ep;
+    const UnicastEndpoint remote_ep;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
     // RMSNorm only allocates the Var[x] partial buffer; the host skips the E[x] one.
 #ifdef RMSNORM
     DataflowBuffer dfb_partial_size_ref(dfb::ex_partial2);
 #else
-    DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
+    const DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
 #endif
     const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
 
@@ -126,7 +126,7 @@ void kernel_main() {
                 remote_coords_first_stage, in0_remote_noc_x, in0_remote_noc_y, start_x, start_y, num_x, num_y);
         }
     } else {
-        remote_coords_first_stage[0] = {in0_remote_noc_x[0], in0_remote_noc_y[0]};
+        remote_coords_first_stage[0] = {.x = in0_remote_noc_x[0], .y = in0_remote_noc_y[0]};
     }
 
     // ============================================================================
@@ -140,17 +140,17 @@ void kernel_main() {
                                              const uint32_t dfb_ex_global_id,
                                              const uint32_t dfb_reduce_first_stage_id,
                                              const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
-        DataflowBuffer dfb_partial_obj(dfb_partial_id);
-        DataflowBuffer dfb_external_obj(dfb_external_id);
-        DataflowBuffer dfb_ex_obj(dfb_ex_id);
-        DataflowBuffer dfb_ex_global_obj(dfb_ex_global_id);
-        DataflowBuffer dfb_reduce_first_stage_obj(dfb_reduce_first_stage_id);
+        DataflowBuffer dfb_partial_obj(static_cast<uint16_t>(dfb_partial_id));
+        DataflowBuffer dfb_external_obj(static_cast<uint16_t>(dfb_external_id));
+        DataflowBuffer dfb_ex_obj(static_cast<uint16_t>(dfb_ex_id));
+        DataflowBuffer dfb_ex_global_obj(static_cast<uint16_t>(dfb_ex_global_id));
+        DataflowBuffer dfb_reduce_first_stage_obj(static_cast<uint16_t>(dfb_reduce_first_stage_id));
 
         // ============================================================================
         // Partial reduction
         // ============================================================================
 
-        dfb_partial_obj.wait_front(block_h * num_tiles_scaler);
+        dfb_partial_obj.wait_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
 
         reduce_sender_sem.set(INVALID);
         reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
@@ -174,7 +174,7 @@ void kernel_main() {
                 l1_read_addr_ex = dfb_reduce_first_stage_obj.get_read_ptr();
             }
             for (uint32_t i = 0; i < num_tiles_to_read; i++) {
-                dfb_external_obj.reserve_back(num_blocks_first_stage * num_tiles_scaler);
+                dfb_external_obj.reserve_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
                 uint32_t write_offset = 0;
                 for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
                     noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -189,7 +189,7 @@ void kernel_main() {
                 }
                 l1_read_addr_ex_par += num_tiles_scaler * single_tile_size_bytes;
                 noc.async_read_barrier();
-                dfb_external_obj.push_back(num_blocks_first_stage * num_tiles_scaler);
+                dfb_external_obj.push_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
 
                 // ---------------------------------------------------------------------------
                 // Handle the two-stage reduce
@@ -201,7 +201,8 @@ void kernel_main() {
                             reduce_second_stage_sem.set(0);
                         }
 
-                        dfb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
+                        dfb_external_obj.reserve_back(
+                            static_cast<uint16_t>((num_blocks_second_stage - 1) * num_tiles_scaler));
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -216,13 +217,16 @@ void kernel_main() {
                         }
                         l1_read_addr_ex += num_tiles_scaler * single_tile_size_bytes;
                         noc.async_read_barrier();
-                        dfb_external_obj.push_back((num_blocks_second_stage - 1) * num_tiles_scaler);
+                        dfb_external_obj.push_back(
+                            static_cast<uint16_t>((num_blocks_second_stage - 1) * num_tiles_scaler));
                     } else {
                         // If we're not a second stage reader (i.e. we're not in the top
                         // row of cores), we don't do any additional combines, so we just
                         // do a dummy push so that we move in lockstep with the other cores
-                        dfb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
-                        dfb_external_obj.push_back((num_blocks_second_stage - 1) * num_tiles_scaler);
+                        dfb_external_obj.reserve_back(
+                            static_cast<uint16_t>((num_blocks_second_stage - 1) * num_tiles_scaler));
+                        dfb_external_obj.push_back(
+                            static_cast<uint16_t>((num_blocks_second_stage - 1) * num_tiles_scaler));
                     }
                 }
             }
@@ -232,15 +236,15 @@ void kernel_main() {
             // ---------------------------------------------------------------------------
             if constexpr (use_two_stage_reduce) {
                 if (is_second_stage_reader) {
-                    dfb_ex_obj.wait_front(num_tiles_to_read * num_tiles_scaler);
+                    dfb_ex_obj.wait_front(static_cast<uint16_t>(num_tiles_to_read * num_tiles_scaler));
                     reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
                 } else {
-                    dfb_reduce_first_stage_obj.wait_front(num_tiles_to_read * num_tiles_scaler);
+                    dfb_reduce_first_stage_obj.wait_front(static_cast<uint16_t>(num_tiles_to_read * num_tiles_scaler));
                     reduce_second_stage_sem.up(
                         noc, remote_coords_second_stage[0].x, remote_coords_second_stage[0].y, 1);
                 }
             } else {
-                dfb_ex_obj.wait_front(num_tiles_to_read * num_tiles_scaler);
+                dfb_ex_obj.wait_front(static_cast<uint16_t>(num_tiles_to_read * num_tiles_scaler));
                 reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
             }
         }
@@ -249,16 +253,17 @@ void kernel_main() {
         // Receive the multicasted final results into the global buffer
         // ============================================================================
         for (uint32_t block = 0; block < num_all_to_all_workers; ++block) {
-            uint32_t num_tiles = block == num_all_to_all_workers - 1 ? num_tiles_per_worker_last : num_tiles_per_worker;
-            dfb_ex_global_obj.reserve_back(num_tiles * num_tiles_scaler);
+            const uint32_t num_tiles =
+                block == num_all_to_all_workers - 1 ? num_tiles_per_worker_last : num_tiles_per_worker;
+            dfb_ex_global_obj.reserve_back(static_cast<uint16_t>(num_tiles * num_tiles_scaler));
             reduce_sender_sem.wait_min(block + 2);
-            dfb_ex_global_obj.push_back(num_tiles * num_tiles_scaler);
+            dfb_ex_global_obj.push_back(static_cast<uint16_t>(num_tiles * num_tiles_scaler));
         }
 
         // The partial-reduction buffer is waited up front and read (locally and by remote cores)
         // during the combine; by here all those reads have completed, so pop it to leave the buffer
         // balanced.
-        dfb_partial_obj.pop_front(block_h * num_tiles_scaler);
+        dfb_partial_obj.pop_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
     };
 
     // RMSNorm has no mean to reduce, so its buffers are not declared and the call is compiled out.
