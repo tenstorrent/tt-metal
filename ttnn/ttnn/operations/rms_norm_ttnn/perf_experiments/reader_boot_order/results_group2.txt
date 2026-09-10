@@ -1,0 +1,32 @@
+RESULT case                         base  a_pub_first b_scaler_pub      c_splitd_pub_first_split
+RESULT G_blk8192                   22864        20610        20699        22328        20625
+RESULT G_blk7168_gbr               32225        29593        29719        30980        29563
+RESULT G_band512_rm                22980        22975        22976        22954        22989
+RESULT I_int1024_prefill           86836        86499        86027        85381        85433
+RESULT --- speedup vs base (>1 = faster) ---
+RESULT G_blk8192                   1.000        1.109        1.105        1.024        1.109
+RESULT G_blk7168_gbr               1.000        1.089        1.084        1.040        1.090
+RESULT G_band512_rm                1.000        1.000        1.000        1.001        1.000
+RESULT I_int1024_prefill           1.000        1.004        1.009        1.017        1.016
+RESULT --- accuracy (worst pcc / worst rel-RMS over reps) ---
+RESULT ACC G_blk8192            base          pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            a_pub_first   pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            b_scaler_pub  pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            c_split       pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            d_pub_first_split pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk7168_gbr        base          pcc 0.999990  relrms 4.504e-03
+RESULT ACC G_blk7168_gbr        a_pub_first   pcc 0.999990  relrms 4.504e-03
+RESULT ACC G_blk7168_gbr        b_scaler_pub  pcc 0.999990  relrms 4.504e-03
+RESULT ACC G_blk7168_gbr        c_split       pcc 0.999990  relrms 4.504e-03
+RESULT ACC G_blk7168_gbr        d_pub_first_split pcc 0.999990  relrms 4.504e-03
+RESULT ACC G_band512_rm         base          pcc 0.999985  relrms 6.024e-03
+RESULT ACC G_band512_rm         a_pub_first   pcc 0.999985  relrms 6.024e-03
+RESULT ACC G_band512_rm         b_scaler_pub  pcc 0.999985  relrms 6.024e-03
+RESULT ACC G_band512_rm         c_split       pcc 0.999985  relrms 6.024e-03
+RESULT ACC G_band512_rm         d_pub_first_split pcc 0.999985  relrms 6.024e-03
+RESULT ACC I_int1024_prefill    base          pcc 0.999985  relrms 6.672e-03
+RESULT ACC I_int1024_prefill    a_pub_first   pcc 0.999985  relrms 6.672e-03
+RESULT ACC I_int1024_prefill    b_scaler_pub  pcc 0.999985  relrms 6.672e-03
+RESULT ACC I_int1024_prefill    c_split       pcc 0.999985  relrms 6.672e-03
+RESULT ACC I_int1024_prefill    d_pub_first_split pcc 0.999985  relrms 6.672e-03
+RESULT CORRECTNESS-OK (all variants pcc >= 0.9995)

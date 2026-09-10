@@ -1,0 +1,28 @@
+RESULT case                      shipped         base  a_pub_firstd_pub_first_split
+RESULT F_w7168_28c                  5335         5373         4121         4118
+RESULT I_int7168_1row               8736         8695         8648         8386
+RESULT G_blk8192                   22850        22882        20614        20622
+RESULT G_w5120_32c_gbr              5992         5999         4451         4459
+RESULT --- speedup vs shipped (>1 = faster) ---
+RESULT F_w7168_28c                 1.000        0.993        1.295        1.296
+RESULT I_int7168_1row              1.000        1.005        1.010        1.042
+RESULT G_blk8192                   1.000        0.999        1.108        1.108
+RESULT G_w5120_32c_gbr             1.000        0.999        1.346        1.344
+RESULT --- accuracy (worst pcc / worst rel-RMS over reps) ---
+RESULT ACC F_w7168_28c          shipped       pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          base          pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          a_pub_first   pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          d_pub_first_split pcc 0.999985  relrms 6.276e-03
+RESULT ACC I_int7168_1row       shipped       pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       base          pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       a_pub_first   pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       d_pub_first_split pcc 0.999986  relrms 6.512e-03
+RESULT ACC G_blk8192            shipped       pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            base          pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            a_pub_first   pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_blk8192            d_pub_first_split pcc 0.999985  relrms 5.888e-03
+RESULT ACC G_w5120_32c_gbr      shipped       pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      base          pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      a_pub_first   pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      d_pub_first_split pcc 0.999988  relrms 5.508e-03
+RESULT CORRECTNESS-OK (all variants pcc >= 0.9995)

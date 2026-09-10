@@ -1,0 +1,57 @@
+--- rms_norm_ttnn_program_descriptor.py	2026-09-06 20:52:01.879961486 +0000
++++ perf_experiments/rw_overlap/rms_norm_ttnn_program_descriptor.py	2026-09-07 00:58:41.753613792 +0000
+@@ -1057,7 +1057,35 @@
+     Empty (the default) means the build key is exactly what it was before D34, so
+     every non-profiled build stays byte-identical.
+     """
+-    return [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
++    d = [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
++    # ---- rw_overlap experiment knobs (this CLONE only) --------------------
++    if RW_WR_SUBROW:
++        d.append(("RMS_WR_SUBROW", str(RW_WR_SUBROW)))
++    # /perf-measure ablation peel, driven from the host so one session can measure
++    # base and peeled builds back to back.  The op is WRONG with any of these on --
++    # they are ceiling probes, never candidates.
++    for flag, name in (
++        (RW_ABL_COMPUTE, "RMS_ABLATE_COMPUTE"),
++        (RW_ABL_PER_CHANNEL, "RMS_ABLATE_PER_CHANNEL"),
++        (RW_ABL_READ_X, "RMS_ABLATE_READ_X"),
++        (RW_ABL_WRITE, "RMS_ABLATE_WRITE"),
++    ):
++        if flag:
++            d.append((name, "1"))
++    return d
++
++
++RW_MIN_BLOCKS = 0
++RW_ABL_COMPUTE = 0
++RW_ABL_PER_CHANNEL = 0
++RW_ABL_READ_X = 0
++RW_ABL_WRITE = 0
++
++
++# rw_overlap CANDIDATE knobs.  0 == the shipped op, byte-identical.
++#   RW_WR_SUBROW  writer drain granularity in TILES inside a TXN group (must divide
++#                 WT_CHUNK).  0 = the shipped whole TXN_ROWS*WT_CHUNK group.
++RW_WR_SUBROW = 0
+
+
+ # Refinement 4 (D33) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
+@@ -3107,7 +3135,16 @@
+             if brmax >= 1:
+                 # RESIDENT: the whole per-core row slice is resident; take the
+                 # coarsest row block that fits, i.e. the entire assignment when it does.
+-                return min(max_rows, brmax), wt_core, 1, depth, depth, True, CB_RM_STAGE_DEPTH, False
++                br = min(max_rows, brmax)
++                # rw_overlap CANDIDATE `minblocks`: when the coarsest block IS the whole
++                # per-core assignment there is exactly ONE block per core, so the
++                # reader/compute/writer stages never overlap -- the core reads all of it,
++                # then computes all of it, then writes all of it.  Capping the block so a
++                # core gets at least RW_MIN_BLOCKS of them restores the cross-block
++                # pipeline, and it makes the CBs SMALLER, not bigger.  0 == shipped.
++                if RW_MIN_BLOCKS > 1 and max_rows >= RW_MIN_BLOCKS:
++                    br = min(br, -(-max_rows // RW_MIN_BLOCKS))
++                return br, wt_core, 1, depth, depth, True, CB_RM_STAGE_DEPTH, False
+
+         if plan.band:
+             # The BAND scheme's WIDTH is shard-derived, so it cannot be chunked, and

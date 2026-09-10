@@ -1,0 +1,109 @@
+--- rms_norm_ttnn_program_descriptor.py	2026-09-06 11:47:34.005237964 +0000
++++ perf_experiments/fold_gather_overlap/rms_norm_ttnn_program_descriptor.py	2026-09-06 18:03:31.379109024 +0000
+@@ -973,14 +973,50 @@
+ #   RMS_STAGE_ZONES=1 scripts/run_safe_pytest.sh --profile <test>
+ STAGE_ZONES = os.environ.get("RMS_STAGE_ZONES", "0") not in ("", "0")
+
++# ---------------------------------------------------------------------------
++# perf_experiments/fold_gather_overlap -- ISOLATED BAKE-OFF KNOBS (not shipped)
++# ---------------------------------------------------------------------------
++# FOLD_RUNS: 0 = the op's current approach (ONE arrival semaphore, ONE
++# wait(sem == GROUP_SIZE - 1), one whole-window fold).  R > 1 = the PREFIX FOLD:
++# the GATHER_SLOTS ring is cut into R contiguous runs, each with its OWN arrival
++# semaphore (D28's mechanism, WITHOUT the tree's extra NoC hop), the root pushes
++# each run the moment it is complete and compute folds it into the SAME DEST
++# window across the waits.  Legal only on the FLAT (non-tree) combine, and only
++# when R divides GATHER_SLOTS into EVEN runs (the pairwise DEST walk halves a run).
++FOLD_RUNS = int(os.environ.get("RMS_FOLD_RUNS", "0"))
++LAST_FOLD_RUNS = 0
++# MCAST_NO_COPY: the root's stat multicast reads STRAIGHT out of cb_stat_handoff
++# instead of first copying it into the landing page (option (d)).
++MCAST_NO_COPY = os.environ.get("RMS_MCAST_NO_COPY", "0") not in ("", "0")
++# ABLATION (perf ceiling only -- the op is WRONG with it on): strip the root fold's
++# payload while keeping every CB handshake and trip count.  Its whole-op delta is the
++# ABSOLUTE CEILING on what hiding the fold in the arrival shadow could ever buy.
++# FOLD_NOPIPE: keep the R per-run semaphores and the R CB publishes, but do EVERY wait
++# before ANY push -- i.e. the prefix fold's COST with none of its overlap.  This is the
++# control that prices the per-publish overhead against the fold work it hides.
++FOLD_NOPIPE = os.environ.get("RMS_FOLD_NOPIPE", "0") not in ("", "0")
++ABLATE_ROOT_SUM = os.environ.get("RMS_ABLATE_ROOT_SUM", "0") not in ("", "0")
++ABLATE_MCAST_COPY = os.environ.get("RMS_ABLATE_MCAST_COPY", "0") not in ("", "0")
++
+
+-def _kernel_defines():
++def _kernel_defines(fold_runs: int = 0):
+     """Kernel `-D` defines shared by all three kernels.  ONE source of truth.
+
+     Empty (the default) means the build key is exactly what it was before D34, so
+     every non-profiled build stays byte-identical.
+     """
+-    return [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
++    d = [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
++    if fold_runs:
++        d.append(("RMS_FOLD_RUNS", str(int(fold_runs))))
++    if FOLD_NOPIPE:
++        d.append(("RMS_FOLD_NOPIPE", "1"))
++    if MCAST_NO_COPY:
++        d.append(("RMS_MCAST_NO_COPY", "1"))
++    if ABLATE_ROOT_SUM:
++        d.append(("RMS_ABLATE_ROOT_SUM", "1"))
++    if ABLATE_MCAST_COPY:
++        d.append(("RMS_ABLATE_MCAST_COPY", "1"))
++    return d
+
+
+ # Refinement 4 (D33) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
+@@ -3220,6 +3256,16 @@
+     mcast_pre_handshake = _combine_mcast_pre_handshake(combine, single_round)
+     combine_tree = _combine_tree_arity(plan.group_size, 1) if combine else None
+     tree_f0, tree_f1 = combine_tree if combine_tree else (0, 0)
++    # ---- BAKE-OFF: the PREFIX FOLD's run count (perf_experiments/fold_gather_overlap) ---
++    # R runs of GATHER_SLOTS/R slots, one arrival semaphore each.  Declined (and the
++    # build is byte-identical to the op's) unless the cut is EVEN -- the fold's pairwise
++    # DEST walk halves a run -- and the flat root is the one doing the folding.
++    _gather_slots = plan.group_size + plan.group_size % 2 if combine else 0
++    fold_runs = 0
++    if combine and combine_tree is None and FOLD_RUNS > 1:
++        if _gather_slots % FOLD_RUNS == 0 and (_gather_slots // FOLD_RUNS) % 2 == 0:
++            fold_runs = FOLD_RUNS
++    globals()["LAST_FOLD_RUNS"] = fold_runs
+     # D33: PAD tiles the chunking added past the core's real width.  ONE derivation,
+     # read by the CB sizes, by both dataflow kernels and by the asserts below; 0 on
+     # every divisor build, which is every INPUTS and every perf-group shape.
+@@ -3593,7 +3639,7 @@
+     reader_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_reader.cpp"),
+         core_ranges=all_cores,
+-        defines=_kernel_defines(),
++        defines=_kernel_defines(fold_runs),
+         compile_time_args=reader_ct_args,
+         runtime_args=reader_rt,
+         config=_reader_dm_config(plan),  # NoC0, or NoC1 when the combine swaps
+@@ -3601,7 +3647,7 @@
+     writer_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_writer.cpp"),
+         core_ranges=all_cores,
+-        defines=_kernel_defines(),
++        defines=_kernel_defines(fold_runs),
+         compile_time_args=writer_ct_args,
+         runtime_args=writer_rt,
+         config=_writer_dm_config(plan),  # NoC1, or NoC0 on a resident-x combine
+@@ -3609,7 +3655,7 @@
+     compute_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_compute.cpp"),
+         core_ranges=all_cores,
+-        defines=_kernel_defines(),
++        defines=_kernel_defines(fold_runs),
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt,
+         config=compute_kernel_config,  # passed through unmodified
+@@ -3618,7 +3664,8 @@
+     semaphores = []
+     if combine:
+         semaphores = list(plan.mcast.owned_semaphores())
+-        for lvl in range(1 if combine_tree is None else 2):
++        _n_gather_sems = fold_runs if fold_runs else (1 if combine_tree is None else 2)
++        for lvl in range(_n_gather_sems):
+             semaphores.append(
+                 ttnn.SemaphoreDescriptor(id=plan.gather_sem_id + lvl, core_ranges=all_cores, initial_value=0)
+             )

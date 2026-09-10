@@ -1,0 +1,16 @@
+RESULT case                         base  a_pub_first b_scaler_pubd_pub_first_split
+RESULT F_w7168_28c_grm              4820         4833         4835         4851
+RESULT F_w7168_28c                  5375         4127         4247         4140
+RESULT --- speedup vs base (>1 = faster) ---
+RESULT F_w7168_28c_grm             1.000        0.997        0.997        0.994
+RESULT F_w7168_28c                 1.000        1.302        1.266        1.298
+RESULT --- accuracy (worst pcc / worst rel-RMS over reps) ---
+RESULT ACC F_w7168_28c_grm      base          pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c_grm      a_pub_first   pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c_grm      b_scaler_pub  pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c_grm      d_pub_first_split pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          base          pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          a_pub_first   pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          b_scaler_pub  pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          d_pub_first_split pcc 0.999985  relrms 6.276e-03
+RESULT CORRECTNESS-OK (all variants pcc >= 0.9995)
