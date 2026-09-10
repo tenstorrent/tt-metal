@@ -1,6 +1,6 @@
 # MiniMax Music 3 on one Blackhole chip — bring-up report
 
-generated 2026-09-10T02:38:07Z on qb2-120-p11t03
+generated 2026-09-10T02:56:26Z on qb2-120-p11t03
 
 Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth decoder + 2.4B flow-matching DiT + DAC vocoder). Target: ONE Blackhole chip (P150; chip 0 of a P300/QB2). Package: tt-model-manager CONTAINER v5.1, kind `tt-dit-server`, profile `p150`.
 
@@ -12,12 +12,12 @@ Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth
 - long prompt prefill (3922 tokens): ok
 - depth decoder (bf16) teacher-forced on `readme` (200 frames): logits PCC min 0.9984, c1..c7 top-1 0.942 / top-5 1.000, 53.6 ms/frame (7 traced steps + host)
 - DiT (stage-05 run, bf16/HiFi4; the served default is bf16/HiFi2 at 93 ms, see the performance table): unit PCC min 0.9989; 30-step window: step-0 velocity PCC 0.9998, latents PCC 0.9996, vocoded audio PCC 0.999, spectral convergence 0.050; 137.2 ms per traced forward (L=689, batch 2)
-- end-to-end `readme` on the chip: 200 frames, 8.0 s audio in 31.7 s (RTF 3.96); audio rms 0.098, silence 0.00, c0 unique ratio 0.80
-- end-to-end `blues` on the chip: 300 frames, 12.0 s audio in 51.4 s (RTF 4.28); audio rms 0.078, silence 0.00, c0 unique ratio 0.56
+- end-to-end `readme` on the chip: 200 frames, 8.0 s audio in 32.8 s (RTF 4.10); audio rms 0.053, silence 0.00, c0 unique ratio 0.78
+- end-to-end `blues` on the chip: 300 frames, 12.0 s audio in 48.5 s (RTF 4.04); audio rms 0.091, silence 0.00, c0 unique ratio 0.64
 - seeded generation is deterministic on the chip (identical codes for the same seed)
-- bare-metal server (launcher env, p150): API proof passed (17/17 critical checks); speech RTF 3.135
-- container `tt-model serve --profile p150` on this QB2: API proof passed (17/17 critical checks); speech RTF 3.058
-- clean `tt-model pull` from the Hub + serve (p150): API proof passed (11/11 critical checks); speech RTF 3.100
+- bare-metal server (launcher env, p150): API proof passed (17/17 critical checks); speech RTF 2.983
+- container `tt-model serve --profile p150` on this QB2: API proof passed (17/17 critical checks); speech RTF 2.988
+- clean `tt-model pull` from the Hub + serve (p150): API proof passed (11/11 critical checks); speech RTF 2.949
 
 ## Not verified
 
@@ -40,17 +40,17 @@ Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth
 |---|---|---|---|
 | llm | bfp8 (selected) | c0_top1_min=0.811, c0_top5_min=1.000 | ms_per_step=52.0 |
 | llm | bf16  | c0_top1_min=0.831, c0_top5_min=1.000 | ms_per_step=58.8 |
-| depth | bf16  | depth_top1=0.940, depth_top5=1.000 | ms_per_frame=63.4 |
-| depth | bfp8 (selected) | depth_top1=0.940, depth_top5=1.000 | ms_per_frame=49.6 |
-| depth | bf16h2  | depth_top1=0.954, depth_top5=1.000 | ms_per_frame=63.2 |
-| dit | bf16 (selected) | step0_pcc=1.000, latents_pcc=1.000, spectral_convergence=0.050 | ms_per_forward=138.4 |
-| dit | bfp8  | step0_pcc=0.998, latents_pcc=0.998, spectral_convergence=0.076 | ms_per_forward=92.5 |
-| dit | bf16h2  | step0_pcc=0.999, latents_pcc=0.999, spectral_convergence=0.047 | ms_per_forward=93.3 |
+| depth | bf16  | depth_top1=0.944, depth_top5=1.000 | ms_per_frame=47.8 |
+| depth | bfp8 (selected) | depth_top1=0.949, depth_top5=1.000 | ms_per_frame=37.3 |
+| depth | bf16h2  | depth_top1=0.948, depth_top5=1.000 | ms_per_frame=46.0 |
+| dit | bf16 (selected) | step0_pcc=1.000, latents_pcc=1.000, spectral_convergence=0.050 | ms_per_forward=138.8 |
+| dit | bfp8  | step0_pcc=0.998, latents_pcc=0.998, spectral_convergence=0.076 | ms_per_forward=92.8 |
+| dit | bf16h2  | step0_pcc=0.999, latents_pcc=0.999, spectral_convergence=0.047 | ms_per_forward=93.2 |
 
 | clip | frames | prefill s | LLM ms/frame | depth ms/frame | denoise s | vocoder s | RTF |
 |---|---|---|---|---|---|---|---|
-| readme | 200 | 1.5 | 36.2 | 54.8 | 8.3 | 3.6 | 3.96 |
-| blues | 300 | 0.7 | 37.1 | 54.2 | 16.2 | 7.0 | 4.28 |
+| readme | 200 | 1.5 | 36.4 | 62.1 | 8.3 | 3.3 | 4.10 |
+| blues | 300 | 0.7 | 37.3 | 46.4 | 16.2 | 6.4 | 4.04 |
 
 ## Stage table
 
@@ -63,16 +63,16 @@ Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth
 | 03-llm-pcc-1chip | ok | 1 | 2026-09-10T01:40:29Z | 2026-09-10T01:41:10Z |
 | 04-depth-decoder-tt | ok | 0 | 2026-09-10T01:43:48Z | 2026-09-10T01:44:08Z |
 | 05-dit-tt | ok | 0 | 2026-09-10T02:21:21Z | 2026-09-10T02:22:29Z |
-| 06-e2e-generator | ok | 1 | 2026-09-10T02:22:29Z | 2026-09-10T02:24:24Z |
-| 07-optimize | ok | 1 | 2026-09-10T02:24:24Z | 2026-09-10T02:27:18Z |
-| 08-server-smoke | ok | 0 | 2026-09-10T02:27:18Z | 2026-09-10T02:29:38Z |
-| 09-package | ok | 0 | 2026-09-10T02:29:38Z | 2026-09-10T02:32:02Z |
-| 10-serve-prove | ok | 0 | 2026-09-10T02:32:02Z | 2026-09-10T02:34:30Z |
-| 11-report-push | ok | 0 | 2026-09-10T02:34:30Z | 2026-09-10T02:36:24Z |
+| 06-e2e-generator | ok | 1 | 2026-09-10T02:41:40Z | 2026-09-10T02:43:33Z |
+| 07-optimize | ok | 1 | 2026-09-10T02:43:33Z | 2026-09-10T02:46:45Z |
+| 08-server-smoke | ok | 0 | 2026-09-10T02:46:45Z | 2026-09-10T02:49:02Z |
+| 09-package | ok | 0 | 2026-09-10T02:49:02Z | 2026-09-10T02:52:14Z |
+| 10-serve-prove | ok | 0 | 2026-09-10T02:52:14Z | 2026-09-10T02:54:31Z |
+| 11-report-push | running | - | 2026-09-10T02:54:31Z |  |
 
 ## Package
 
-- manifest `/home/jashan/tt-model-builds/minimax-music3/tt_kernel_manifest.json` (schema 5.1, kind tt-dit-server, tt-metal 0.65.2.dev9787+g3cc3431f59b, image `tt-model/minimax-music3:4cbc019bf616` sha256:4cbc019bf616)
+- manifest `/home/jashan/tt-model-builds/minimax-music3/tt_kernel_manifest.json` (schema 5.1, kind tt-dit-server, tt-metal 0.65.2.dev9789+g5039f8a95a6, image `tt-model/minimax-music3:9abe0907aae5` sha256:9abe0907aae5)
 - weights pointer `MiniMaxAI/MiniMax-Music3` @ `fbdf52fbaaca` (ignore patterns skip the 28 GB of unconverted originals)
 - HF push:   → consumers:  tt-model serve jashansinghTT/minimax-music3-blackhole
 - code: tt-metal worktree `~/tt-metal-music3`, branch `jashan/minimax-music3`, `models/autoports/minimaxai_minimax_music3`
