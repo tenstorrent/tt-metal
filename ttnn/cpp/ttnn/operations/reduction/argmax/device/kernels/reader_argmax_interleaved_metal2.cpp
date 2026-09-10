@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr auto red_dim_units = get_arg(args::red_dim_units);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_arg(args::reduce_all);
+    constexpr bool reduce_all = get_arg(args::reduce_all) == 1;
 
     //-------------------------------------------------------------------------
     const auto s_src = TensorAccessor(tensor::src);

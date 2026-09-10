@@ -20,53 +20,6 @@
 namespace ttnn::experimental::prim {
 
 namespace {
-// The active route-buffer size is specialized into the device kernel. Bound host-generated custom routes by the
-// smallest supported Fabric2D tier; the kernel additionally checks its exact compile-time capacity before injection.
-// TODO: Replace this conservative bound when an existing Fabric API exposes the active route-buffer capacity.
-constexpr uint32_t minimum_fabric2d_route_capacity = 19;
-
-struct CustomFabric2DRoute {
-    uint32_t num_commands = 0;
-    tt::tt_fabric::eth_chan_directions initial_direction = tt::tt_fabric::eth_chan_directions::COUNT;
-    std::vector<uint32_t> packed_commands;
-};
-
-uint8_t fabric_direction_command(tt::tt_fabric::eth_chan_directions direction) {
-    using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
-    switch (direction) {
-        case tt::tt_fabric::eth_chan_directions::EAST: return MeshRoutingFields::FORWARD_EAST;
-        case tt::tt_fabric::eth_chan_directions::WEST: return MeshRoutingFields::FORWARD_WEST;
-        case tt::tt_fabric::eth_chan_directions::NORTH: return MeshRoutingFields::FORWARD_NORTH;
-        case tt::tt_fabric::eth_chan_directions::SOUTH: return MeshRoutingFields::FORWARD_SOUTH;
-        default:
-            TT_THROW("All-to-all custom route does not support fabric direction {}", static_cast<uint32_t>(direction));
-    }
-}
-
-uint8_t fabric_terminal_command(tt::tt_fabric::eth_chan_directions incoming_direction) {
-    switch (incoming_direction) {
-        case tt::tt_fabric::eth_chan_directions::EAST:
-            return fabric_direction_command(tt::tt_fabric::eth_chan_directions::WEST);
-        case tt::tt_fabric::eth_chan_directions::WEST:
-            return fabric_direction_command(tt::tt_fabric::eth_chan_directions::EAST);
-        case tt::tt_fabric::eth_chan_directions::NORTH:
-            return fabric_direction_command(tt::tt_fabric::eth_chan_directions::SOUTH);
-        case tt::tt_fabric::eth_chan_directions::SOUTH:
-            return fabric_direction_command(tt::tt_fabric::eth_chan_directions::NORTH);
-        default:
-            TT_THROW(
-                "All-to-all custom route does not support fabric direction {}",
-                static_cast<uint32_t>(incoming_direction));
-    }
-}
-
-void set_packed_route_command(CustomFabric2DRoute& route, uint32_t command_index, uint8_t command) {
-    constexpr uint32_t commands_per_word = 8;
-    TT_FATAL(command_index / commands_per_word < route.packed_commands.size(), "Custom route command is out of range");
-    route.packed_commands[command_index / commands_per_word] |= static_cast<uint32_t>(command)
-                                                                << ((command_index % commands_per_word) * 4);
-}
-
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& shape = input_tensor.padded_shape();
@@ -401,7 +354,6 @@ AllToAllAsyncGenericProgram::create_at(
 
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
-    const uint32_t fabric2d_route_capacity = is_fabric_2d ? minimum_fabric2d_route_capacity : 0;
     // FABRIC_2D_TORUS_X/Y wraps only one mesh axis even though get_fabric_topology() reports Torus for both.
     // Resolve wrapping for the collective's axis so a Ring on the other axis cannot open a nonexistent hop.
     const bool fabric_has_wrap_links = operation_attributes.axis_topology == tt::tt_fabric::Topology::Ring;
@@ -560,108 +512,9 @@ AllToAllAsyncGenericProgram::create_at(
     }
     const uint32_t num_direction_groups = static_cast<uint32_t>(direction_group_to_physical_direction.size());
     TT_FATAL(num_direction_groups > 0, "All-to-all collective has no remote direction groups");
-    auto get_direct_ring_hop_directions =
-        [&](const MeshCoordinate& source_coord,
-            int32_t device_offset) -> std::optional<std::vector<tt::tt_fabric::eth_chan_directions>> {
-        const uint32_t num_hops = std::abs(device_offset);
-        std::vector<tt::tt_fabric::eth_chan_directions> hop_directions;
-        hop_directions.reserve(num_hops);
-        auto previous_coord = source_coord;
-        for (uint32_t hop = 1; hop <= num_hops; ++hop) {
-            const int32_t hop_offset = device_offset > 0 ? static_cast<int32_t>(hop) : -static_cast<int32_t>(hop);
-            const auto next_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-                tensor_args.input_tensor,
-                source_coord,
-                hop_offset,
-                effective_topology,
-                operation_attributes.cluster_axis);
-            TT_FATAL(next_coord.has_value(), "No ring coordinate at offset {}", hop_offset);
-            const auto previous_node = device->get_fabric_node_id(previous_coord);
-            const auto next_node = device->get_fabric_node_id(*next_coord);
-            // Host boundaries do not affect this proof because every rank has the global physical direction map.
-            // Inter-mesh routers can replace a custom route at the boundary, so retain canonical routing for those
-            // arcs.
-            if (previous_node.mesh_id != next_node.mesh_id) {
-                return std::nullopt;
-            }
-            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(previous_node, next_node);
-            if (directions.empty()) {
-                return std::nullopt;
-            }
-            hop_directions.push_back(directions.front());
-            previous_coord = *next_coord;
-        }
-        return hop_directions;
-    };
-
-    auto custom_ring_route_is_representable = [&](const std::optional<std::vector<tt::tt_fabric::eth_chan_directions>>&
-                                                      maybe_hop_directions) {
-        if (!maybe_hop_directions.has_value() || maybe_hop_directions->empty() ||
-            maybe_hop_directions->size() > fabric2d_route_capacity) {
-            return false;
-        }
-        const auto& hop_directions = *maybe_hop_directions;
-        auto is_spine_direction = [](tt::tt_fabric::eth_chan_directions direction) {
-            return direction == tt::tt_fabric::eth_chan_directions::NORTH ||
-                   direction == tt::tt_fabric::eth_chan_directions::SOUTH;
-        };
-        auto is_branch_direction = [](tt::tt_fabric::eth_chan_directions direction) {
-            return direction == tt::tt_fabric::eth_chan_directions::EAST ||
-                   direction == tt::tt_fabric::eth_chan_directions::WEST;
-        };
-        // The mesh header has only one branch offset per E/W direction. A custom route with zeroed branch offsets is
-        // therefore safe only when a spine router never hands the packet to an E/W branch router. Canonical routing
-        // remains the correctness fallback for folded arcs that need that transition (including multi-turn snakes).
-        for (uint32_t hop = 1; hop < hop_directions.size(); ++hop) {
-            if (is_spine_direction(hop_directions[hop - 1]) && is_branch_direction(hop_directions[hop])) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    bool split_antipode_across_arcs = is_ring && !is_fabric_2d;
-    if (is_ring && is_fabric_2d && operation_attributes.num_devices > 2 && operation_attributes.num_devices % 2 == 0) {
-        const int32_t half_ring = static_cast<int32_t>(operation_attributes.num_devices / 2);
-        split_antipode_across_arcs = true;
-        for (uint32_t source_device = 0; source_device < operation_attributes.num_devices; ++source_device) {
-            MeshCoordinate source_coord = mesh_coordinate;
-            source_coord[cluster_axis] = source_device;
-            const auto positive_hops = get_direct_ring_hop_directions(source_coord, half_ring);
-            const auto negative_hops = get_direct_ring_hop_directions(source_coord, -half_ring);
-            const bool source_can_split = custom_ring_route_is_representable(positive_hops) &&
-                                          custom_ring_route_is_representable(negative_hops) &&
-                                          positive_hops->front() != negative_hops->front();
-            if (!source_can_split) {
-                split_antipode_across_arcs = false;
-                break;
-            }
-        }
-    }
-
-    auto build_custom_ring_route = [&](int32_t device_offset) {
-        CustomFabric2DRoute route;
-        const auto maybe_hop_directions = get_direct_ring_hop_directions(mesh_coordinate, device_offset);
-        TT_FATAL(maybe_hop_directions.has_value(), "All-to-all custom Fabric2D route requires direct ring edges");
-        const auto& hop_directions = *maybe_hop_directions;
-        const uint32_t num_hops = hop_directions.size();
-        TT_FATAL(
-            custom_ring_route_is_representable(maybe_hop_directions),
-            "All-to-all custom Fabric2D route with {} hops is not representable by the active {}-command header",
-            num_hops,
-            fabric2d_route_capacity);
-        route.num_commands = num_hops;
-        route.packed_commands.resize((num_hops + 7) / 8, 0);
-        route.initial_direction = hop_directions.front();
-
-        // Injection selects hop 0's egress. Each intermediate router consumes the next hop's direction, and the
-        // destination consumes the direction opposite its ingress to drain locally.
-        for (uint32_t command = 0; command + 1 < num_hops; ++command) {
-            set_packed_route_command(route, command, fabric_direction_command(hop_directions[command + 1]));
-        }
-        set_packed_route_command(route, num_hops - 1, fabric_terminal_command(hop_directions.back()));
-        return route;
-    };
+    // Fabric2D route selection and encoding are owned by Fabric. Until Fabric exposes an arc-constrained routing API,
+    // send each antipodal destination through canonical unicast routing instead of constructing a route in TTNN.
+    const bool split_antipode_across_arcs = is_ring && !is_fabric_2d;
 
     const uint32_t max_useful_workers_per_direction =
         is_ring ? preferred_workers_per_direction
@@ -697,18 +550,10 @@ AllToAllAsyncGenericProgram::create_at(
     }
     // A single direct worker per direction is safe for generic scatter order. Bank-owned batches can cyclically block
     // independent direct directions, so use the compact schedule when a restricted subdevice cannot fit a mux tier.
-    // Fabric2D antipodes are safe once streams are grouped by their concrete first hop.
     if (workers_per_direction == 1 && use_bank_owned_schedule) {
         workers_per_direction = 0;
     }
     const bool use_direction_owned_schedule = workers_per_direction > 0;
-    // Explicit antipode routes belong to the direction-owned schedule. The compact schedule uses canonical Fabric2D
-    // routing, which also keeps its per-target runtime record below the Tensix RTA limit.
-    if (is_fabric_2d && !use_direction_owned_schedule) {
-        split_antipode_across_arcs = false;
-    }
-    const uint32_t custom_fabric2d_route_words =
-        is_fabric_2d && split_antipode_across_arcs ? (operation_attributes.num_devices / 2 + 7) / 8 : 0;
     const bool use_worker_mux = workers_per_direction > 1;
     const uint32_t mux_cores_per_direction = workers_per_direction + 1;
     const uint32_t direction_senders_per_link = num_direction_groups * workers_per_direction + 1;
@@ -1063,7 +908,6 @@ AllToAllAsyncGenericProgram::create_at(
             is_fabric_2d,                                // is_fabric_2d
             sender_stream_direction_masks[stream],       // fabric_direction_mask
             number_pages_per_packet,                     // max_pages_per_packet
-            custom_fabric2d_route_words,                 // custom_fabric2d_route_words
             use_multicast_initialization                 // use_multicast_initialization
         };
 
@@ -1092,15 +936,6 @@ AllToAllAsyncGenericProgram::create_at(
     const uint32_t mcast_dest_noc_start_y = coordinate_device->worker_core_from_logical_core(sender_box.end_coord).y;
     const uint32_t mcast_dest_noc_end_y = coordinate_device->worker_core_from_logical_core(sender_box.start_coord).y;
     const uint32_t mcast_size = sender_box.size();
-
-    CustomFabric2DRoute positive_antipode_route;
-    CustomFabric2DRoute negative_antipode_route;
-    if (is_fabric_2d && split_antipode_across_arcs) {
-        const int32_t half_ring = static_cast<int32_t>(operation_attributes.num_devices / 2);
-        positive_antipode_route = build_custom_ring_route(half_ring);
-        negative_antipode_route = build_custom_ring_route(-half_ring);
-    }
-    const CustomFabric2DRoute no_custom_route;
 
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
         const auto& core = sender_worker_cores[core_id];
@@ -1162,30 +997,6 @@ AllToAllAsyncGenericProgram::create_at(
                 // The low-latency 1D header uses the second route field as a hop count.
                 sender_writer_rt_args.push_back(0);
                 sender_writer_rt_args.push_back(std::abs(device_offset));
-            }
-
-            const CustomFabric2DRoute* custom_route = &no_custom_route;
-            if (is_fabric_2d && split_antipode_across_arcs &&
-                std::abs(device_offset) * 2 == operation_attributes.num_devices) {
-                custom_route = device_offset > 0 ? &positive_antipode_route : &negative_antipode_route;
-            }
-            if (custom_fabric2d_route_words > 0) {
-                TT_FATAL(
-                    custom_route->packed_commands.empty() ||
-                        custom_route->packed_commands.size() == custom_fabric2d_route_words,
-                    "All-to-all custom route ABI expected {} packed words, got {}",
-                    custom_fabric2d_route_words,
-                    custom_route->packed_commands.size());
-                sender_writer_rt_args.push_back(custom_route->num_commands);
-                sender_writer_rt_args.push_back(static_cast<uint32_t>(custom_route->initial_direction));
-                if (custom_route->packed_commands.empty()) {
-                    sender_writer_rt_args.insert(sender_writer_rt_args.end(), custom_fabric2d_route_words, 0);
-                } else {
-                    sender_writer_rt_args.insert(
-                        sender_writer_rt_args.end(),
-                        custom_route->packed_commands.begin(),
-                        custom_route->packed_commands.end());
-                }
             }
         }
         const bool is_remote_sender = sender_stream != local_sender_stream || num_senders_per_link == 1;

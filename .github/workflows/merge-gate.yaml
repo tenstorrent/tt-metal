@@ -51,6 +51,8 @@ permissions:
   pull-requests: write
   checks: write
   packages: write
+  # The producer downloads the artifact via REST; a called workflow only downgrades.
+  actions: read
 
 jobs:
   # ===========================================================================
@@ -106,6 +108,7 @@ jobs:
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       models-changed: ${{ steps.find-changes.outputs.models-changed }}
     steps:
@@ -124,7 +127,8 @@ jobs:
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.docs-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
+            needs.find-changes.outputs.build-workflows-changed == 'true' ||
+            needs.find-changes.outputs.ttsim-ci-changed == 'true'
         }}
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
@@ -270,15 +274,37 @@ jobs:
   #            runtime_validation_basic_tests.yaml
   # ===========================================================================
 
-  runtime-smoke-tests:
-    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
+  build-runtime-smoke-image:
+    needs: [find-changes, docker-images, build-tsan]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-smoke-tests:
+    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor, docker-images, build-runtime-smoke-image]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && (github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        ) }}
     uses: ./.github/workflows/smoke.yaml
     with:
+      # Empty on forks or a failed build, where smoke falls back to the artifact.
+      prebuilt-image: ${{ needs.build-runtime-smoke-image.outputs.image }}
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       # Canonical (non-Harbor-prefixed) ref for the github_hosted_cpu leg, which runs
       # on GitHub-hosted runners without Harbor access.
@@ -289,16 +315,40 @@ jobs:
       product: tt-metalium
       enable-kernel-ccache: true
 
-  runtime-basic-tests:
+  build-runtime-basic-image:
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changes.outputs.cmake-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
-    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
+    needs: [build-asan, docker-images, find-changes]
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-basic-tests:
+    # Not !failure(): a failed image build must still let basic use the artifact.
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changes.outputs.cmake-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
+    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor, docker-images, build-runtime-basic-image]
     uses: ./.github/workflows/basic.yaml
     with:
+      # Empty on forks or a failed build; basic then uses the artifact.
+      prebuilt-image: ${{ needs.build-runtime-basic-image.outputs.image }}
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
@@ -330,16 +380,39 @@ jobs:
   #            ttnn_merge_gate_tests.yaml
   # ===========================================================================
 
-  ttnn-smoke-tests:
-    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
+  build-ttnn-smoke-image:
+    needs: [find-changes, docker-images, build-tsan]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-smoke-tests:
+    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor, docker-images, build-ttnn-smoke-image]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && (github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        ) }}
     uses: ./.github/workflows/smoke.yaml
     with:
+      # Empty on forks or a failed build, where smoke falls back to the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
@@ -347,16 +420,40 @@ jobs:
       product: tt-nn
       enable-kernel-ccache: true
 
-  ttnn-basic-tests:
-    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
+  build-ttnn-basic-image:
+    needs: [build-asan, docker-images, find-changes]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-basic-tests:
+    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor, docker-images, build-ttnn-basic-image]
+    # Not !failure(): a failed image build must still let basic use the artifact.
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' && (github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+        }}
     uses: ./.github/workflows/basic.yaml
     with:
+      # Empty on forks or a failed build; basic then uses the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-basic-image.outputs.image }}
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
@@ -537,6 +634,34 @@ jobs:
           || '' }}
 
   # ===========================================================================
+  # Team: ttsim
+  # test list: ttsim_merge_gate_tests.yaml
+  # ===========================================================================
+
+  # Quasar coverage on the ttsim simulator (sim_quasar SKU, no hardware). The impl owns
+  # its test list (tests/pipeline_reorg/ttsim_merge_gate_tests.yaml), so adding or
+  # retiring a leg here is a change to that yaml alone. Its fetch-ttsim job downloads
+  # libttsim_qsr.so and setup-ttsim installs it for the matrix's sim SKU.
+  ttsim-quasar-merge-gate-tests:
+    needs: [build, find-changes]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (
+            github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.llk-quasar-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true' ||
+            needs.find-changes.outputs.ttsim-ci-changed == 'true')
+        }}
+    secrets: inherit
+    uses: ./.github/workflows/ttsim-merge-gate-tests-impl.yaml
+    with:
+      # Canonical (non-Harbor-prefixed) ref: sim_quasar's runs_on is ubuntu-latest, a
+      # GitHub-hosted runner with no Harbor access.
+      docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  # ===========================================================================
   # Team: shield
   # No merge-gate jobs yet.
   # ===========================================================================
@@ -564,14 +689,14 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

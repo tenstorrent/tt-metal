@@ -33,6 +33,7 @@ class GlobalConfig:
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
     quasar_use_dvalid: bool = False
+    skip_for_perf: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property
@@ -116,6 +117,9 @@ class FuserConfig(TestConfig):
         """Run performance tests for different isolation levels (L1, unpack, math, pack, congestion) and collect profiling data."""
 
         from .kernel_generator import FUSED_TESTS_DIR
+
+        if self.global_config.skip_for_perf:
+            pytest.skip(f"'{self.global_config.test_name}' opts out of perf runs")
 
         self.global_config.profiler_enabled = True
         self.profiler_build = ProfilerBuild.Yes

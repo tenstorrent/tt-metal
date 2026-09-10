@@ -44,7 +44,7 @@ def test_quasar_conv2d_unpack_tilize_probe(mesh_device):
     # only on the Quasar path; on WH it is NOT selected and the conv falls through to the FUSED conv_bmm_tilize
     # (confirmed in the stack: conv_bmm_tilize_metal2, MATH MWDD in matmul_block, PACK in
     # program_packer_destination, SyncHalf, cb stuck; genuine, asserts-on). So on WH this hits the same
-    # fast_tilize->matmul cadence race (kRaceGuardSpin family) as relu_now_sfpu / stem_7x7 / unpack_to_dest.
+    # fast_tilize->matmul cadence race (kRaceGuardSpin family) as relu / stem_7x7 / unpack_to_dest.
     # This is a Quasar-oriented diagnostic (the probe only means anything on Quasar), NOT the WH model path.
     if is_wormhole_b0():
         pytest.xfail(

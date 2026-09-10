@@ -24,6 +24,12 @@ class GLM52Config:
     EMB_SIZE = 6144  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Inherited from GLM 5.1 rather than
+    # measured separately: the crossover is a function of the routed-expert matmul shape, expert
+    # count and activation, and this model matches 5.1 on all of them (6144x2048, 256 experts,
+    # top-8, no pre-projection, SiLU). Re-measure if any of those diverge.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 1792
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
@@ -32,6 +38,11 @@ class GLM52Config:
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at
+    # 0.9941 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.984
 
     # Model architecture
     NUM_LAYERS = 78

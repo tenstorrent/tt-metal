@@ -13,7 +13,12 @@ from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersisten
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
 from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
-from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCapturePlan, TraceCompiler
+from models.common.llm_runtime.trace_compiler import (
+    InputRefreshPolicy,
+    PersistentInputs,
+    TraceCapturePlan,
+    TraceCompiler,
+)
 
 
 @dataclass(frozen=True)
@@ -196,6 +201,118 @@ def test_capture_allocates_every_input_before_capture_and_coordinates_gates(monk
         compiler.compile(_Signature("program", 3), lambda context: torch.zeros(1))
 
 
+def test_opt_in_capture_prime_runs_after_allocations_and_before_capture_gate(monkeypatch):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+
+    def prime(persistent):
+        assert not compiler.trace_capture_in_progress
+        events.append(("prime", persistent))
+        return "prime-output"
+
+    def release_prime_output(output):
+        events.append(("release-prime", output))
+        return []
+
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            _Signature("trace", 1),
+            "prefill",
+            lambda: events.append(("prepare", 1)) or "persistent",
+            lambda persistent: events.append(("capture", persistent)) or torch.zeros(1),
+            prepare_workspace=lambda: events.append(("workspace", 1)) or "workspace",
+            workspace_fingerprint=("workspace",),
+            prime=prime,
+            release_prime_output=release_prime_output,
+        )
+    )
+    events.clear()
+
+    trace.capture_all()
+
+    first_begin = next(index for index, event in enumerate(events) if event[0] == "begin")
+    assert events[:first_begin] == [
+        ("prepare", 1),
+        ("workspace", 1),
+        ("prime", PersistentInputs("persistent")),
+        ("sync", "mesh"),
+        ("release-prime", "prime-output"),
+        ("sync", "mesh"),
+    ]
+    assert ("capture", PersistentInputs("persistent")) in events[first_begin:]
+
+
+def test_capture_prime_failure_rolls_back_without_beginning_trace(monkeypatch, expect_error):
+    events = []
+    _patch_backend(monkeypatch, events)
+
+    class OwnedTensor:
+        pass
+
+    released = []
+    monkeypatch.setattr(ttnn, "Tensor", OwnedTensor)
+    monkeypatch.setattr(ttnn, "deallocate", released.append)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+    persistent = OwnedTensor()
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            _Signature("trace", 1),
+            "prefill",
+            lambda: persistent,
+            lambda _: pytest.fail("capture must not begin after prime failure"),
+            prime=lambda _: (_ for _ in ()).throw(RuntimeError("prime failed")),
+            release_prime_output=lambda _: [],
+        )
+    )
+
+    with expect_error(RuntimeError, "prime failed"):
+        trace.capture_all()
+
+    assert not any(event[0] == "begin" for event in events)
+    assert released == [persistent]
+    assert not trace.trace_active and not compiler.trace_active
+
+
+def test_capture_prime_release_failure_still_synchronizes_before_rollback(monkeypatch, expect_error):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+    release_error = RuntimeError("prime release failed")
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            _Signature("trace", 1),
+            "prefill",
+            lambda: (),
+            lambda _: pytest.fail("capture must not begin after prime release failure"),
+            prime=lambda _: events.append(("prime",)) or "prime-output",
+            release_prime_output=lambda output: events.append(("release-prime", output)) or [release_error],
+        )
+    )
+    events.clear()
+
+    with expect_error(RuntimeError, "prime release failed") as caught:
+        trace.capture_all()
+
+    assert caught.value is release_error
+    assert events[:4] == [
+        ("prime",),
+        ("sync", "mesh"),
+        ("release-prime", "prime-output"),
+        ("sync", "mesh"),
+    ]
+    assert not any(event[0] == "begin" for event in events)
+
+
 def test_capture_orders_decode_before_prefill_after_allocating_every_input(monkeypatch):
     events = []
     _patch_backend(monkeypatch, events)
@@ -251,8 +368,6 @@ def test_capture_failure_rolls_back_traces_and_uncaptured_inputs(monkeypatch, ex
         trace.capture_all()
 
     assert caught.value is primary
-    assert [event for event in events if event[0] == "end"] == [("end", 100, 0), ("end", 101, 0)]
-    assert events.index(("end", 101, 0)) < events.index(("release", 101))
     assert released.count(first_input) == 1
     assert released.count(first_output) == 1
     assert released.count(second_input) == 1

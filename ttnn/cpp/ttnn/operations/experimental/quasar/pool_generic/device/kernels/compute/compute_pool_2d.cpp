@@ -36,7 +36,7 @@ void kernel_main() {
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
     constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
-    constexpr uint32_t scratch_npages = get_arg(args::scratch_npages);  // [DEBUG scratch->out] whole-CB count
+    constexpr uint32_t scratch_npages = get_arg(args::scratch_npages);
 
     constexpr uint32_t split_reader = get_arg(args::split_reader);
 
@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr auto in_scalar_cb_id_1 = dfb::in_scalar_cb_1;
 #endif
     constexpr auto out_cb_id = dfb::out_cb;
-    constexpr auto scratch_cb_id_0 = dfb::scratch_cb_0;  // [DEBUG scratch-pack] per-reader scratch targets
+    constexpr auto scratch_cb_id_0 = dfb::scratch_cb_0;
 #ifdef SPLIT_READER
     constexpr auto scratch_cb_id_1 = dfb::scratch_cb_1;
 #endif
@@ -130,7 +130,7 @@ void kernel_main() {
     DataflowBuffer in_cb_1(in_cb_id_1);
 #endif
     DataflowBuffer out_cb(out_cb_id);
-    DataflowBuffer scratch_cb_0(scratch_cb_id_0);  // [DEBUG scratch-pack]
+    DataflowBuffer scratch_cb_0(scratch_cb_id_0);
 #ifdef SPLIT_READER
     DataflowBuffer scratch_cb_1(scratch_cb_id_1);
 #endif
@@ -139,16 +139,8 @@ void kernel_main() {
     DataflowBuffer fast_tilize_cb(fast_tilize_cb_id);
 #endif
 
-    // [DEBUG] Pack-target CB (follows PACK_TO_SCRATCH). The reduce init and the pack_untilize init MUST
-    // target the same CB the per-stick loop actually packs into, or the Quasar packer (which bakes its
-    // destination L1 address at init and ignores the runtime `ocb` arg thereafter -- the same class of
-    // bug fixed in the halo op's pack_untilize, see pack_untilize.cpp) writes to the wrong place.
-    // PACK_TO_SCRATCH's scratch-CB workaround only exists for the ROW_MAJOR output path (the `else`
-    // branch below, which packs into curr_scratch_cb); the TILED output path (is_output_tiled) packs
-    // straight into pre_tilize_cb (== tilize_untilize_cb) and never touches scratch_cb_0 at all, so the
-    // init here must follow suit -- init'ing against scratch_cb_0 unconditionally left the TILED path's
-    // packer permanently mis-targeted, and its downstream reader (which always waits on scratch_cb
-    // regardless of is_output_tiled) never received the pushes it was waiting for -> reader deadlock.
+    // Packer dest is baked at init (hw_startup + pack_untilize_dest_init) and must match the CB
+    // the per-stick loop packs into. tilizeA_B_reduce_init only programs unpack+math (no ocb).
 #if PACK_TO_SCRATCH == 1
     // Both scratch CBs share the same full-tile geometry, so init once with scratch_cb_0.
     constexpr uint32_t pack_target_cb_id = is_output_tiled ? tilize_untilize_cb : scratch_cb_id_0;
@@ -286,34 +278,13 @@ void kernel_main() {
                     fast_tilize_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.wait_front(in_ntiles_c);
 
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+                    // Quasar tilize_init does not program PACK; retarget from pack-untilize (pre_tilize) to out_cb.
+                    pack_init(out_cb_id);
+#endif
                     fast_tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_uninit(fast_tilize_cb_id, out_cb_id, in_ntiles_c);
-#else
-                    // QSR: fast_tilize is unported on Quasar (fast_tilize.h is #ifndef ARCH_QUASAR). Use the
-                    // supported compute-API tilize on the same fast_tilize_cb view — all CB push/wait/pop
-                    // plumbing above and below is preserved.
-                    //
-                    // QSR packer retarget (same defect class as the halo pack_untilize fix and the
-                    // OUTPUT_TILED deadlock fix above): Quasar's `tilize_init` (tilize.h) only programs
-                    // UNPACK+MATH -- unlike WH/BH it does NOT call a PACK-side init, because on Quasar the
-                    // packer's destination CB/tensor-shape descriptor is baked into tensix state by an
-                    // explicit init call and is NOT reprogrammed implicitly (see reconfig_data_format.h's
-                    // ARCH_QUASAR note: "When the pack output operand changes, call pack_init(new_cb_id)
-                    // before pack_tile"). Immediately before this point the packer was left in
-                    // pack-untilize mode targeting pre_tilize_cb_id (from the per-stick reduce loop's
-                    // pack_untilize_dest_init below / at kernel entry). `pack_reconfig_data_format` above
-                    // only reprograms the THCON data-format (gasket), not the pack MOP/descriptor, so
-                    // without an explicit `llk_pack_init(out_cb_id)` here, `tilize_block`'s Quasar-path
-                    // `llk_pack<out_of_order>(...)` call packs through a descriptor still bound to
-                    // pre_tilize_cb_id in untilize mode -- the real out_cb never receives the tilized tile
-                    // (observed as PCC 0.0 / all-zero output on the OUTPUT_TILED avg-pool path).
-                    PACK((llk_pack_init(out_cb_id)));
-                    tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    tilize_uninit(fast_tilize_cb_id, out_cb_id);
-#endif
 
                     out_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.pop_front(in_ntiles_c);
@@ -323,41 +294,18 @@ void kernel_main() {
 
                     tilize_stick_counter = 0;
 
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
-                    // init math for reduction again since FPU gets reprogrammed by tilize.
-                    // Both WH and Quasar llk_math_reduce_init require the (operandA, operandB) CBs.
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
-                        in_cb_id_0, in_scalar_cb_id_0)));
-#ifdef ARCH_BLACKHOLE
-                    // need this on BH to set swizzle bit before pack untilize dest
-                    MATH((llk_math_reconfig_remap(true)));
-#endif
-
+                    // Re-init fused tilize+reduce: tilize_init reprogrammed the FPU (A2D datacopy).
+                    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce);
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
-#ifndef ARCH_QUASAR
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id)));
-#else
-                    // QSR: Quasar llk_pack_untilize_init takes only <block_ct_dim, full_ct_dim>; use the
-                    // compute-API pack_untilize_dest_init (as at the top of the kernel), which forwards 2 on Quasar.
-                    pack_untilize_dest_init<max_tiles_per_iter>(pre_tilize_cb_id);
-#endif
+                    pack_untilize_dest_init<max_tiles_per_iter, max_tiles_per_iter, false /*narrow_row*/, TILE_C_DIM>(
+                        pre_tilize_cb_id);
                 }
 #endif  // OUTPUT_TILED
             } else {
-                // [DEBUG] Pack the reduced DEST and DPRINT the packed L1. PACK_TO_SCRATCH picks the CB:
-                //   ==1: full-tile (32x32) pack into the scratch CB; out_cb (reserved above) gets a
-                //        garbage balancing push so nothing waiting on it stalls.
-                //   ==0: production RM path — narrow pack_untilize straight into out_cb (reserved above).
-                // pack_cb is bound to whichever CB is active so the pack + DPRINT are written once.
 #if PACK_TO_SCRATCH == 1
-                // Produce the full-tile pack into THIS stick's reader scratch CB (reader0->scratch_cb_0,
-                // reader1->scratch_cb_1 — same reader0 split as the input CB). The DM reader consumes +
-                // DPRINTs it. NO compute-side consume. out_cb still gets a garbage balancing push so its
-                // self-loop stays balanced.
 #ifdef SPLIT_READER
                 const uint32_t curr_scratch_cb_id = reader0 ? scratch_cb_id_0 : scratch_cb_id_1;
                 DataflowBuffer curr_scratch_cb = reader0 ? scratch_cb_0 : scratch_cb_1;
@@ -365,33 +313,12 @@ void kernel_main() {
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
                 DataflowBuffer curr_scratch_cb = scratch_cb_0;
 #endif
-                // Model A (wide-reduction fix): the scratch CB holds ONE contiguous full-width (in_ntiles_c)
-                // output stick, so reserve it ONCE per stick (on the first c-block) -- NOT per c-block.
-                // reader_pool_2d.cpp consumes one stick per output row: a single wait_front / full-row copy /
-                // pop_front(scratch_npages), treating row 0 of the entry as all channels. Reserving and pushing
-                // per c-block advances the CB write entry mid-stick, so each c-block's slice lands in a different
-                // entry (at a non-zero offset within it) and the reader sees in_nblocks_c entries for every one it
-                // pops. Each c-block packs its channel slice into this shared stick below; the whole stick is
-                // pushed once on the last c-block so the reader consumes exactly one stick per pop.
+                // One full-width stick per output row: reserve/push once, pack each c-block into its channel slice.
                 if (first_c_block) {
                     curr_scratch_cb.reserve_back(scratch_npages);
                 }
-                // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
-                // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
-                // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
-                // all-zero tile. Re-init the pack_untilize for THIS stick's scratch CB before packing so
-                // both scratch_cb_0 (even) and scratch_cb_1 (odd) get a valid, CB-matched descriptor.
-                // Pack this c-block into its channel slice of the shared full-width stick. full_ct_dim =
-                // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick, and
-                // block_c_index places the slice (llk_pack_untilize: l1_tile_idx = base_l1 + block_rt *
-                // y_stride + block_c_index * block_ct_dim). For in_ntiles_c = 12, MAX_TILES_PER_REDUCTION = 8:
-                //   c0 -> width 8, block_c_index 0            -> tiles 0..7
-                //   c1 -> width 4, block_c_index (1*8)/4 = 2  -> tiles 8..11
-                // NOTE: the offset is expressed in units of block_ct_dim, so the last (narrow) block only
-                // lands correctly when partial_iter_output_tiles divides c_i * max_tiles_per_iter. It does
-                // not for in_ntiles_c % MAX_TILES_PER_REDUCTION in {3,5,6,7}: e.g. in_ntiles_c = 11 gives
-                // 8/3 = 2 -> tiles 6..8, overwriting c0's tail and leaving 9..10 stale.
-                // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
+                // Re-init pack-untilize for this stick's scratch CB (split reader: scratch_cb_0 vs _1).
+                // full_ct_dim = in_ntiles_c; block_c_index places the slice. Init width must match pack width.
                 if (last_c_block) {
                     pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
                     pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(

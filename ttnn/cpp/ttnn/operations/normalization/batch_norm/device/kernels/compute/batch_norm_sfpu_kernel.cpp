@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -33,41 +34,43 @@ ALWI uint32_t batchnorm_bcast_tiles(
     uint32_t dfb_tmp_1,
     uint32_t dfb_output_0,
     uint32_t dfb_output_final,
-    uint32_t weight_has,
-    uint32_t bias_has,
+    bool weight_has,
+    bool bias_has,
     uint32_t last_srca_dfb) {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t index = 0;
-    uint32_t weight_has_value = weight_has;
-    uint32_t bias_has_value = bias_has;
+    const bool weight_has_value = weight_has;
+    const bool bias_has_value = bias_has;
     auto dfb_affine_or_out = (weight_has_value || bias_has_value) ? dfb_tmp_1 : dfb_output_0;
     auto dfb_scaled_output = (bias_has_value) ? dfb_tmp_1 : dfb_output_0;
 
-    DataflowBuffer dfb_bcast_obj(dfb_bcast);          // batch_mean, broadcast against the input
-    DataflowBuffer dfb_other_obj(dfb_other);          // input tiles
-    DataflowBuffer dfb_batch_var_obj(dfb_batch_var);  // batch_var
-    DataflowBuffer dfb_den_obj(dfb_den);              // 1/(sqrt(batch_var + eps))
-    DataflowBuffer dfb_weight_obj(dfb_weight);        // weight tensor
-    DataflowBuffer dfb_bias_obj(dfb_bias);            // bias tensor
-    DataflowBuffer dfb_tmp_1_obj(dfb_tmp_1);          // (input - batch_mean)/(sqrt(batch_var + eps))
+    DataflowBuffer dfb_bcast_obj(static_cast<uint16_t>(dfb_bcast));          // batch_mean, broadcast against the input
+    DataflowBuffer dfb_other_obj(static_cast<uint16_t>(dfb_other));          // input tiles
+    DataflowBuffer dfb_batch_var_obj(static_cast<uint16_t>(dfb_batch_var));  // batch_var
+    DataflowBuffer dfb_den_obj(static_cast<uint16_t>(dfb_den));              // 1/(sqrt(batch_var + eps))
+    DataflowBuffer dfb_weight_obj(static_cast<uint16_t>(dfb_weight));        // weight tensor
+    DataflowBuffer dfb_bias_obj(static_cast<uint16_t>(dfb_bias));            // bias tensor
+    DataflowBuffer dfb_tmp_1_obj(static_cast<uint16_t>(dfb_tmp_1));  // (input - batch_mean)/(sqrt(batch_var + eps))
     // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    DataflowBuffer dfb_output_0_obj(dfb_output_0);
-    DataflowBuffer dfb_affine_or_out_obj(dfb_affine_or_out);
-    DataflowBuffer dfb_scaled_output_obj(dfb_scaled_output);
+    DataflowBuffer dfb_output_0_obj(static_cast<uint16_t>(dfb_output_0));
+    DataflowBuffer dfb_affine_or_out_obj(static_cast<uint16_t>(dfb_affine_or_out));
+    DataflowBuffer dfb_scaled_output_obj(static_cast<uint16_t>(dfb_scaled_output));
 
     // 1/(sqrt(batch_var + eps)) = dfb_den
     dfb_den_obj.reserve_back(onetile);
     dfb_batch_var_obj.wait_front(onetile);
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_batch_var);
+    reconfig_data_format_srca(last_srca_dfb, dfb_batch_var);
+    copy_init(dfb_batch_var);
     last_srca_dfb = dfb_batch_var;
     copy_tile(dfb_batch_var, index, index * 2);
     add_binary_tile_init();
-    copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_eps);
+    reconfig_data_format_srca(last_srca_dfb, dfb_eps);
+    copy_init(dfb_eps);
     last_srca_dfb = dfb_eps;
-    copy_tile(dfb_eps, index, index * 2 + 1);
-    add_binary_tile(index * 2, index * 2 + 1, index * 2);
+    copy_tile(dfb_eps, index, (index * 2) + 1);
+    add_binary_tile(index * 2, (index * 2) + 1, index * 2);
     rsqrt_tile_init();
     rsqrt_tile(index * 2);
     tile_regs_commit();
@@ -93,20 +96,23 @@ ALWI uint32_t batchnorm_bcast_tiles(
 
         // (input - batch_mean) * den
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_other);
+        reconfig_data_format_srca(last_srca_dfb, dfb_other);
+        copy_init(dfb_other);
         last_srca_dfb = dfb_other;
         copy_tile(dfb_other, index, index * 2);
         sub_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_bcast);
+        reconfig_data_format_srca(last_srca_dfb, dfb_bcast);
+        copy_init(dfb_bcast);
         last_srca_dfb = dfb_bcast;
-        copy_tile(dfb_bcast, index, index * 2 + 1);
-        sub_binary_tile(index * 2, index * 2 + 1, index * 2);
+        copy_tile(dfb_bcast, index, (index * 2) + 1);
+        sub_binary_tile(index * 2, (index * 2) + 1, index * 2);
 
         mul_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_den);
+        reconfig_data_format_srca(last_srca_dfb, dfb_den);
+        copy_init(dfb_den);
         last_srca_dfb = dfb_den;
-        copy_tile(dfb_den, index, index * 2 + 1);
-        mul_binary_tile(index * 2, index * 2 + 1, index * 2);
+        copy_tile(dfb_den, index, (index * 2) + 1);
+        mul_binary_tile(index * 2, (index * 2) + 1, index * 2);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -121,14 +127,16 @@ ALWI uint32_t batchnorm_bcast_tiles(
             dfb_scaled_output_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_affine_or_out);
+            reconfig_data_format_srca(last_srca_dfb, dfb_affine_or_out);
+            copy_init(dfb_affine_or_out);
             last_srca_dfb = dfb_affine_or_out;
             copy_tile(dfb_affine_or_out, index, index * 2);
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_weight);
+            reconfig_data_format_srca(last_srca_dfb, dfb_weight);
+            copy_init(dfb_weight);
             last_srca_dfb = dfb_weight;
-            copy_tile(dfb_weight, index, index * 2 + 1);
-            mul_binary_tile(index * 2, index * 2 + 1, index * 2);
+            copy_tile(dfb_weight, index, (index * 2) + 1);
+            mul_binary_tile(index * 2, (index * 2) + 1, index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -144,14 +152,16 @@ ALWI uint32_t batchnorm_bcast_tiles(
             dfb_output_0_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_tmp_1);
+            reconfig_data_format_srca(last_srca_dfb, dfb_tmp_1);
+            copy_init(dfb_tmp_1);
             last_srca_dfb = dfb_tmp_1;
             copy_tile(dfb_tmp_1, index, index * 2);
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_bias);
+            reconfig_data_format_srca(last_srca_dfb, dfb_bias);
+            copy_init(dfb_bias);
             last_srca_dfb = dfb_bias;
-            copy_tile(dfb_bias, index, index * 2 + 1);
-            add_binary_tile(index * 2, index * 2 + 1, index * 2);
+            copy_tile(dfb_bias, index, (index * 2) + 1);
+            add_binary_tile(index * 2, (index * 2) + 1, index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -164,11 +174,12 @@ ALWI uint32_t batchnorm_bcast_tiles(
 
         if constexpr (NeedsOutputTypecast) {
             dfb_output_0_obj.wait_front(onetile);
-            DataflowBuffer dfb_output_final_obj(dfb_output_final);
+            DataflowBuffer dfb_output_final_obj(static_cast<uint16_t>(dfb_output_final));
             dfb_output_final_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_output_0);
+            reconfig_data_format_srca(last_srca_dfb, dfb_output_0);
+            copy_init(dfb_output_0);
             last_srca_dfb = dfb_output_0;
             copy_tile(dfb_output_0, index, index * 2);
             typecast_tile_init<TcInFmt, TcOutFmt>();
@@ -210,11 +221,11 @@ constexpr auto dfb_output_final = dfb::out;
 #endif
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg(args::num_tiles);
-    uint32_t tile_freq = get_arg(args::tile_freq);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t tile_freq = get_arg(args::tile_freq);
     uint32_t tile_start = get_arg(args::tile_start);
-    constexpr uint32_t weight_has_value = get_arg(args::weight_has_value) == 1;
-    constexpr uint32_t bias_has_value = get_arg(args::bias_has_value) == 1;
+    constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
+    constexpr bool bias_has_value = get_arg(args::bias_has_value) == 1;
 
     if (num_tiles == 0) {
         return;
@@ -227,11 +238,12 @@ void kernel_main() {
     constexpr auto dfb_bcast = dfb::batch_mean;
     constexpr auto dfb_other = dfb::input;
 
-    unary_op_init_common(dfb_other, dfb::out);
+    compute_kernel_hw_startup(dfb_other, dfb::out);
+    copy_init(dfb_other);
     uint32_t last_srca_dfb = dfb_other;
 
-    uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
-    uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+    const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
+    const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
     DataflowBuffer dfb_eps_obj(dfb::eps);  // one tile of eps, filled by the reader

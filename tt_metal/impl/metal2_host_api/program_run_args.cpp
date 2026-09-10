@@ -35,6 +35,16 @@ const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const Progra
     return kp.advanced_options.common_runtime_varargs;
 }
 
+// The sharded distribution geometry a spec resolves to, or nullopt when it is interleaved. Mirrors
+// shard_distribution_of in tensor_spec_relaxations.cpp, which is file-private there. Distinct name
+// because these two translation units share a unity build.
+static std::optional<BufferDistributionSpec> resolve_shard_distribution(const TensorSpec& spec) {
+    if (!spec.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    return spec.compute_buffer_sharding_args().buffer_distribution_spec();
+}
+
 // Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
 // throw. Called only on the rejection path: the branches mirror the match to produce a specific
 // message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
@@ -51,14 +61,54 @@ static void report_tensor_arg_mismatch(
             "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
             "page_config, memory_config, and alignment must still match exactly.",
             param_name);
-        TT_FATAL(
-            runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
-            "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
-            "remain constant.",
-            param_name,
-            runtime_spec.logical_shape().rank(),
-            expected_spec.logical_shape().rank());
+        // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
+        // frees it. When it is set, tensor_layout above is the whole match, so there is nothing
+        // further to report and the trailing TT_THROW handles the rejection.
+        if (!relaxation.relax_logical_rank) {
+            TT_FATAL(
+                runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
+                "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
+                "remain constant. Set relax_logical_rank as well if it must not.",
+                param_name,
+                runtime_spec.logical_shape().rank(),
+                expected_spec.logical_shape().rank());
+        }
+        if (relaxation.match_page_size) {
+            TT_FATAL(
+                runtime_spec.compute_page_size_bytes() == expected_spec.compute_page_size_bytes(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose page size ({} bytes) differs from the "
+                "binding's declared page size ({} bytes). match_page_size declares that the page size is constant "
+                "even though the shape varies, so it is pinned rather than re-emitted per dispatch -- which is what "
+                "lets the TensorAccessor keep it as a compile-time constant. Drop match_page_size if the width really "
+                "does vary; on an interleaved row-major tensor the page size is last_dim_width * element_size, so it "
+                "varies with the shape unless the last dimension is held fixed.",
+                param_name,
+                runtime_spec.compute_page_size_bytes(),
+                expected_spec.compute_page_size_bytes());
+        }
+        // The distribution geometry stays load-bearing even though the shape values are free, so it
+        // is the remaining way this mode can reject. Worth its own message: with the layout and rank
+        // both matching, the generic backstop below would leave a user staring at a spec that looks
+        // like it should have been accepted.
+        const std::optional<BufferDistributionSpec> runtime_dist = resolve_shard_distribution(runtime_spec);
+        const std::optional<BufferDistributionSpec> expected_dist = resolve_shard_distribution(expected_spec);
+        if (runtime_dist.has_value() && expected_dist.has_value()) {
+            TT_FATAL(
+                runtime_dist->shard_shape_in_pages() == expected_dist->shard_shape_in_pages() &&
+                    runtime_dist->cores() == expected_dist->cores(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose sharded distribution geometry does not "
+                "match the binding's declared geometry: shard shape in pages {} vs {}, over {} banks vs {}. "
+                "dynamic_tensor_shape frees the shape VALUES, but the shard shape and bank list are baked when the "
+                "ProgramSpec is built and are not re-emitted per dispatch. Note that sharing a shard spec does NOT "
+                "guarantee sharing geometry: the tensor and shard shapes are jointly squeezed to minimize rank, and "
+                "the squeeze depends on the shape values.",
+                param_name,
+                runtime_dist->shard_shape_in_pages(),
+                expected_dist->shard_shape_in_pages(),
+                runtime_dist->cores().size(),
+                expected_dist->cores().size());
+        }
     } else if (relaxation.match_padded_shape_only) {
         TT_FATAL(
             runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
@@ -94,15 +144,26 @@ static void report_tensor_arg_mismatch(
 //   - No duplicate tensor_parameter_name entries
 //   - Every entry references a TensorParameter declared in the ProgramSpec
 //   - The supplied MeshTensor's TensorSpec matches the binding's expected TensorSpec, with the
-//     match relaxed according to the TensorParameter's loosening flags. The three cases form a
-//     lattice from strictest to loosest (dynamic_tensor_shape strictly subsumes
-//     match_padded_shape_only; when both are set, dynamic wins):
+//     match relaxed according to the TensorParameter's loosening flags, ordered here roughly from
+//     strictest to loosest. dynamic_tensor_shape takes PRECEDENCE over match_padded_shape_only when
+//     both are set -- precedence, not containment: the two are not strictly ordered, since padded
+//     shape matching tolerates the logical-rank changes padding absorbs while dynamic_tensor_shape
+//     pins the rank. The worked pair is in CPU_DynamicDoesNotContainPaddedShapeOnly
+//     (test_tensor_spec_relaxations.cpp).
 //       - Neither flag set (default): full TensorSpec equality.
 //       - match_padded_shape_only=true (only): tensor_layout() must match exactly, and
 //         padded_shape() must match exactly. logical_shape() may differ.
 //       - dynamic_tensor_shape=true: tensor_layout() must match exactly, and the logical_shape
 //         rank must match. Both logical_shape and padded_shape per-dim values may differ.
-//     See the field doc comments in tensor_parameter.hpp for the full contracts.
+//       - dynamic_tensor_shape=true with relax_logical_rank=true: tensor_layout() alone must
+//         match. The rank is freed along with the per-dim values.
+//       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
+//         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
+//         even though the shape varies, so the accessor can keep the page size compile-time.
+//     relax_logical_rank is inert unless dynamic_tensor_shape is also set; the load-bearing field
+//     set for every combination is derived in one place, by pertinent_fields()
+//     (tensor_spec_relaxations.cpp), which both this validation and the relaxation-aware hash use.
+//     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its
 //     previously-bound MeshTensor is retained. Supplied entries are still validated as above.
@@ -404,9 +465,11 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
     TT_FATAL(
         tensor_shape.rank() == handle.num_runtime_field_crta_words,
-        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
-        "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
-        "only the per-dim shape values may vary.",
+        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose sharded distribution rank ({}) differs "
+        "from the rank ({}) reserved at ProgramSpec resolution time. This is the shard-layout rank -- the dim count "
+        "of the shape-in-pages after squeezing -- NOT the tensor's logical rank, so relax_logical_rank does not "
+        "permit it. A permitted shape change can alter it, when the shard shape tiles the tensor differently. Not "
+        "supported; see TensorSpecRelaxations.",
         handle.tensor_parameter_name,
         tensor_shape.rank(),
         handle.num_runtime_field_crta_words);
@@ -698,8 +761,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     }
                 }
                 if (has_varargs) {
-                    std::copy(
-                        vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
+                    std::copy(vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
                 }
                 kernel->set_runtime_args(node, combined);
             }

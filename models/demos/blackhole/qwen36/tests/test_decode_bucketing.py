@@ -822,6 +822,10 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
 
 @torch.no_grad()
 @_parametrize_traced(trace_bytes=1073741824)  # exactly the b8 model spec's trace_region_size
+# The full 64-layer 27B build from /mnt/MLPerf dominates this test: 44 s of a 63 s warm run, 231 s of a
+# 251 s cold run in CI, and >5 min on a cold NAS tile. The trace-region check itself is ~20 s. The
+# repo-wide 300 s default therefore sat below the test's median and it flaked 60-70% of scheduled runs.
+@pytest.mark.timeout(1800)
 def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
     """Four live decode and sampling traces fit in 1 GB and remain replay-safe."""
     from models.tt_transformers.tt.common import copy_host_to_device

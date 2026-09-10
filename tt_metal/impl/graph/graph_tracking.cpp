@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 
 #include <algorithm>
+#include <any>
+#include <string>
+#include <string_view>
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -236,3 +240,17 @@ void GraphTracker::clear_hook() {
 }
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal::internal {
+
+void unwind_open_functions(std::string_view reason) {
+    const auto& processors = GraphTracker::instance().get_processors();
+    if (processors.empty()) {
+        return;
+    }
+    std::any payload{GraphFunctionAbort{std::string(reason), true}};
+    std::for_each(
+        processors.begin(), processors.end(), [&](auto& processor) { processor->track_function_end(payload); });
+}
+
+}  // namespace tt::tt_metal::internal

@@ -69,8 +69,8 @@ inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_(std::uint32_t isr
 {
     TTI_STALLWAIT(
         p_stall::STALL_MATH,
-        p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
-                                                                     // data_valid, so we want to wait on that
+        p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
+                                                                                     // data_valid, so we want to wait on that
     std::uint32_t src_index = isrc + get_dest_buffer_base();
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);

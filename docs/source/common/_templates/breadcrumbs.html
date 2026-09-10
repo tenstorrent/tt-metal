@@ -1,0 +1,30 @@
+{#- Breadcrumb bar: plain "Home" text instead of sphinx_rtd_theme's home icon.
+
+    This used to be done at runtime by transformBreadcrumbs() in api_style.js,
+    which rewrote the already-rendered bar in every visitor's browser. Nothing
+    about it depends on runtime state, so it belongs in the generated HTML: no
+    flash of the icon before it is replaced, and it is correct for no-JS and
+    crawler clients too.
+
+    Only the `breadcrumbs` block is overridden — extending "!breadcrumbs.html"
+    (the theme's own file) keeps the rest of the bar, including the prev/next
+    buttons and the source-link slot, tracking upstream theme changes.
+
+    The two other mutations that function performed are handled elsewhere:
+      * "View page source"  -> html_show_sourcelink = False in each conf.py
+                               (plus .wy-breadcrumbs-aside in tt_theme.css)
+      * the <hr/> divider    -> .wy-breadcrumbs ~ hr in tt_theme.css; the <hr/>
+                               sits outside every Jinja block, so a template
+                               override cannot reach it.
+-#}
+{%- extends "!breadcrumbs.html" %}
+
+{%- block breadcrumbs %}
+  <li><a href="{{ pathto(master_doc) }}">{{ _('Home') }}</a></li>
+  {%- for doc in parents %}
+    {#- doc.link is already a resolved relative URL; wrapping it in pathto()
+        would resolve it a second time and break the parent links. -#}
+    <li class="breadcrumb-item"><a href="{{ doc.link|e }}">{{ doc.title }}</a></li>
+  {%- endfor %}
+  <li class="breadcrumb-item active">{{ title }}</li>
+{%- endblock %}

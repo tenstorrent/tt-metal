@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Test(BaseModel):
@@ -472,8 +472,7 @@ class PerfMetric(BaseModel):
     metric_name: str = Field(description="Metric name.")
     metric_value: float = Field(description="Metric value.")
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class OpParam(BaseModel):
@@ -492,8 +491,7 @@ class OpParam(BaseModel):
         default=None, description="Test parameter value as JSON (object or array)."
     )
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class OpTest(BaseModel):
@@ -501,6 +499,10 @@ class OpTest(BaseModel):
     Contains information about ML kernel operation tests, such as test execution,
     results, configuration.
     """
+
+    # model_name below is a genuine field name, not pydantic's protected `model_` config
+    # namespace; disable the reserved-namespace check to silence pydantic's warning.
+    model_config = ConfigDict(protected_namespaces=())
 
     # Made this optional since TTNN (Steven) or Forge (Collin) side may have tests that
     # are not executed by CI runners.

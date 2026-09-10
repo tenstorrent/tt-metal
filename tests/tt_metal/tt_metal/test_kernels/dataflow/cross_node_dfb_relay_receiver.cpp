@@ -27,7 +27,6 @@ void kernel_main() {
         relay.push_back(batch_size);
 
         // TRISC pop is the lifetime boundary for the aliased L1 entries.
-        relay.wait_consumed(batch_size);
         cn_dfb.pop_front(batch_size, noc);
     }
 }

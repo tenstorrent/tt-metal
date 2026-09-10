@@ -26,10 +26,11 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _MESH_CONFIGS, _SEED, _config
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 
-_CHUNK = 5120
+_CHUNK = PREFILL_CHUNK_TOKENS
 _CHUNKS = 2
 _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05

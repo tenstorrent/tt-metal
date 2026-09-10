@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_sdpa_bcast_col_srca_srcb_reuse.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY
@@ -19,6 +20,7 @@ template <
     bool skip_addrmod = false>
 inline void llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands(
     const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand_A);  // both operands must have same number of faces
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
@@ -28,6 +30,7 @@ inline void llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands(
 
 template <DstSync DST, bool IS_FP32_MATH_DEST_EN, bool clear_dest = false>
 inline void llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble(std::uint32_t isrc) {
+    SAN_HOOK(unsupported());
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST, IS_FP32_MATH_DEST_EN, clear_dest>(isrc);
 }
 
@@ -39,6 +42,7 @@ template <
     bool skip_signalling = false,
     std::uint32_t output_granularity>
 inline void llk_math_sdpa_bcast_col_srca_srcb_reuse(const std::uint32_t dst_index) {
+    SAN_HOOK(unsupported());
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
         eltwise_binary_type,
         num_tiles,
