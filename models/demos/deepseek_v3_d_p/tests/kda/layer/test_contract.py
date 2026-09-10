@@ -37,11 +37,12 @@ def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> tuple[ttnn.
         return layer.forward(_hidden_to_device(hidden, layer.device), state)
 
 
-def _assert_state_metadata(state: KdaState, config) -> None:
+def _assert_state_metadata(state: KdaState, config, layer: ttKDA) -> None:
     assert tuple(state.recurrent.shape) == (1, config.num_heads, config.head_k_dim, config.head_v_dim)
     assert state.recurrent.dtype == ttnn.float32
     assert state.recurrent.layout == ttnn.TILE_LAYOUT
-    assert state.recurrent.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert state.recurrent.memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert state.recurrent.memory_config().nd_shard_spec == layer.recurrent_state_memory_config.nd_shard_spec
     assert tuple(state.convolution.shape) == (
         1,
         config.conv_kernel_size - 1,
@@ -91,8 +92,8 @@ def test_allocate_state_contract(device: ttnn.Device) -> None:
     first = layer.allocate_state()
     second = layer.allocate_state()
 
-    _assert_state_metadata(first, config)
-    _assert_state_metadata(second, config)
+    _assert_state_metadata(first, config, layer)
+    _assert_state_metadata(second, config, layer)
     assert first.recurrent.buffer_address() != second.recurrent.buffer_address()
     assert first.convolution.buffer_address() != second.convolution.buffer_address()
 
@@ -120,7 +121,7 @@ def test_forward_contract(device: ttnn.Device) -> None:
     assert first_output.dtype == ttnn.float32
     assert first_output.layout == ttnn.TILE_LAYOUT
     assert first_output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    _assert_state_metadata(final_state, config)
+    _assert_state_metadata(final_state, config, layer)
     assert next_state.recurrent is not input_state.recurrent
     assert next_state.convolution is not input_state.convolution
     assert input_state.recurrent.buffer_address() == recurrent_address

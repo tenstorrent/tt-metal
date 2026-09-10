@@ -10,7 +10,7 @@ Implement the design's canonical recurrent and convolution ND-DRAM state on late
 
 ## Design constraints
 
-- **Required:** exact recurrent `[1,1,128,32]` FP32 tile and convolution `[1,3,64]` BF16 row-major ND shards.
+- **Required:** exact recurrent `[1,128,32]` FP32 tile and convolution `[1,3,64]` BF16 row-major ND shards. The rank-3 recurrent shard shape remains valid across the layer's rank-4 state and rank-3 flattened-head kernel view.
 - **Required:** state remains TP-sharded and SP-replicated.
 - **Required:** input state is immutable and output state is replacement storage.
 - **Required:** no generic TTNN operation changes.

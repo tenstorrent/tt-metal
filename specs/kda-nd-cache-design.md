@@ -79,6 +79,7 @@ Recurrent and convolution operations accept only the additional ND layouts requi
 ## Invariants and acceptance criteria
 
 - Exact shard payloads remain 16,384 bytes for recurrent state and 384 bytes for convolution state.
+- The recurrent shard shape is rank 3 (`[1,K,32]`) so the same physical layout remains valid across rank-4 layer state and rank-3 flattened-head kernel views.
 - All three production layouts—SP1xTP8, SP2xTP4, SP4xTP2—return canonical ND state.
 - Real Kimi-K3 `B=1,T=5120` output and both final states meet the existing acceptance threshold.
 - Existing KDA operation and layer correctness tests pass through `scripts/run_safe_pytest.sh` with no required skips.
