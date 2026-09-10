@@ -22,6 +22,10 @@ from models.autoports.minimaxai_minimax_music3.config import (
     DepthConfig,
 )
 from models.autoports.minimaxai_minimax_music3.tt.weights import cache_root
+from models.tt_dit.utils.matmul import get_matmul_config, get_matmul_core_grid
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+MATMUL_MODE = os.environ.get("MUSIC3_DEPTH_MATMUL", "minimal")  # minimal (tt_dit minimal_matmul, fused SwiGLU) | linear
 
 ROWS = 32  # one tile; positions 0..7 are used
 
@@ -84,6 +88,15 @@ class TTDepthDecoder:
                     ),
                     "w_gate": dev(w[p + "gate_proj.weight"].T, f"l{i}_wgate"),
                     "w_up": dev(w[p + "up_proj.weight"].T, f"l{i}_wup"),
+                    # packed [up | gate] re-interleaved for the fused SwiGLU matmul epilogue: out = up * silu(gate)
+                    "w_ffn_fused": dev(
+                        prepare_for_fused_swiglu(
+                            torch.cat([w[p + "up_proj.weight"], w[p + "gate_proj.weight"]], dim=0).T.float(),
+                            ndev=1,
+                            gate_is_first=False,
+                        ),
+                        f"l{i}_wffn_fused",
+                    ),
                     "w_down": dev(w[p + "down_proj.weight"].T, f"l{i}_wdown"),
                 }
             )
@@ -111,6 +124,8 @@ class TTDepthDecoder:
         )
         fid = os.environ.get("MUSIC3_DEPTH_FIDELITY", "hifi4" if weights_dtype == ttnn.bfloat16 else "hifi2")
         self.ck_mm = self.ck_hifi4 if fid == "hifi4" else self.ck_hifi2
+        self.matmul_mode = MATMUL_MODE
+        self.mm_grid = get_matmul_core_grid(mesh_device)
         # persistent I/O: the input stays ROW_MAJOR on device (host writes are a memcpy, tilize happens in the trace);
         # one trace per step index slices the needed row / head columns on device so the readback is ~20 KB
         self.x_raw = ttnn.from_torch(
@@ -127,13 +142,28 @@ class TTDepthDecoder:
         self.log(f"depth decoder weights on device in {time.time() - t0:.1f}s ({_dtype_tag(weights_dtype)})")
 
     # ------------------------------------------------------------------ graph
+    def _lin(self, x, w, act=None, swiglu=False):
+        if self.matmul_mode == "minimal":
+            M, K, N = x.padded_shape[-2], x.padded_shape[-1], w.padded_shape[-1]
+            return ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=w,
+                config=get_matmul_config(M, K, N, self.mm_grid),
+                fused_activation=act,
+                compute_kernel_config=self.ck_mm,
+                dtype=ttnn.bfloat16,
+                fuse_swiglu=swiglu,
+            )
+        assert not swiglu
+        return ttnn.linear(x, w, activation=act, compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
+
     def _forward(self, x_raw: ttnn.Tensor):
         x = ttnn.to_layout(x_raw, ttnn.TILE_LAYOUT)
-        x = ttnn.linear(x, self.w_proj, compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
+        x = self._lin(x, self.w_proj)
         x = ttnn.add(x, self.pos_emb)
         for L in self.layers:
             h = ttnn.rms_norm(x, epsilon=self.eps, weight=L["norm1"])
-            qkv = ttnn.linear(h, L["wqkv"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
+            qkv = self._lin(h, L["wqkv"])
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qkv, num_heads=self.n_heads, num_kv_heads=self.n_heads, transpose_k_heads=False
             )
@@ -141,15 +171,15 @@ class TTDepthDecoder:
                 q, k, v, is_causal=True, compute_kernel_config=self.ck_hifi4
             )
             a = ttnn.experimental.nlp_concat_heads(a)
-            x = ttnn.add(x, ttnn.linear(a, L["wo"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16))
+            x = ttnn.add(x, self._lin(a, L["wo"]))
             h = ttnn.rms_norm(x, epsilon=self.eps, weight=L["norm2"])
-            g = ttnn.linear(h, L["w_gate"], activation="silu", compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
-            u = ttnn.linear(h, L["w_up"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
-            x = ttnn.add(
-                x, ttnn.linear(ttnn.multiply(g, u), L["w_down"], compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
-            )
+            if self.matmul_mode == "minimal":
+                ff = self._lin(h, L["w_ffn_fused"], swiglu=True)  # up * silu(gate) in one matmul
+            else:
+                ff = ttnn.multiply(self._lin(h, L["w_gate"], act="silu"), self._lin(h, L["w_up"]))
+            x = ttnn.add(x, self._lin(ff, L["w_down"]))
         h = ttnn.rms_norm(x, epsilon=self.eps, weight=self.norm_f)
-        logits = ttnn.linear(h, self.w_heads, compute_kernel_config=self.ck_mm, dtype=ttnn.bfloat16)
+        logits = self._lin(h, self.w_heads)
         return h, logits
 
     def _step_outputs(self, index: int):
