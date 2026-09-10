@@ -141,6 +141,24 @@ struct PlacementSolveStats {
     std::size_t slowest_inner_n_global = 0;
     bool slowest_inner_used_sat = false;
 
+    // Two-layer joint placement (Plan 4): per-variant candidate enumeration + one SAT master solve.
+    // Populated only when that path ran; `candidate_lists_complete == false` means an UNSAT verdict from
+    // the master solve is NOT trustworthy (some variant's list was truncated).
+    bool master_solve_attempted = false;
+    bool master_solve_success = false;
+    std::size_t master_candidates_enumerated = 0;  ///< Distinct footprints across all definitions/variants
+    std::size_t master_growth_rounds = 0;          ///< Column-generation rounds after the initial batch
+    std::size_t master_sat_attempts = 0;           ///< Master SAT encode+solve attempts (tiers x rounds)
+    bool candidate_lists_complete = false;
+    /// On failure: size of a maximal co-placeable subset of meshes (greedy, under the relaxed seam tier when
+    /// the policy allows it). 0 when the diagnosis did not run. The subset itself is logged.
+    std::size_t master_closest_meshes_placed = 0;
+    std::size_t master_sat_vars = 0;     ///< Variables in the last master encoding
+    std::size_t master_sat_clauses = 0;  ///< Clauses in the last master encoding
+    std::chrono::microseconds master_enumeration_elapsed{};
+    std::chrono::microseconds master_encode_elapsed{};
+    std::chrono::microseconds master_solve_elapsed{};
+
     std::string to_string() const;
 };
 
