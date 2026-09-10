@@ -1,0 +1,14 @@
+stages  seed  mode         wall_s   sols   pathOK
+64      1     incr         216      5      INCR-OK
+64      1     fromscratch  135      5      FS-OK
+64      42    incr         218      5      INCR-OK
+64      42    fromscratch  147      5      FS-OK
+80      1     incr         902      1      INCR-OK
+80      1     fromscratch  901      4      FS-OK
+80      42    incr         902      1      INCR-OK
+80      42    fromscratch  902      4      FS-OK
+96      1     incr         310      5      INCR-OK
+96      1     fromscratch  902      1      FS-OK
+96      42    incr         314      5      INCR-OK
+96      42    fromscratch  902      1      FS-OK
+[23:07:10] STORY3 SEEDS DONE

@@ -1,0 +1,5 @@
+128 WITH host cap (occupied<=32, 178426 clauses); incremental prod baseline ~22min
+  gimsatul-t8      : >900s      TIMEOUT
+  gimsatul-t16     : 530s       s SATISFIABLE
+  gimsatul-t32     : 67s        s SATISFIABLE
+[23:18:05] HARDCAP128 DONE

@@ -1,0 +1,23 @@
+buckets sampled: 18 (of 144); raw NV=55869 NC=178426
+--- per-bucket (slot time_s verdict) ---
+  1 400 TIMEOUT
+  9 400 TIMEOUT
+  17 400 TIMEOUT
+  25 390 s SATISFIABLE
+  33 400 TIMEOUT
+  41 400 TIMEOUT
+  49 400 TIMEOUT
+  57 400 TIMEOUT
+  65 400 TIMEOUT
+  73 400 TIMEOUT
+  81 400 TIMEOUT
+  89 400 TIMEOUT
+  97 400 TIMEOUT
+  105 400 TIMEOUT
+  113 400 TIMEOUT
+  121 400 TIMEOUT
+  129 400 TIMEOUT
+  137 400 TIMEOUT
+SUMMARY: buckets=18 SAT=0  first_SAT=999999s  slowest_bucket=400s  parallel_wall=401s
+  (compare: cadical-single >400s TIMEOUT ; gimsatul-t32 ~67s)
+[17:14:45] PARTITION TEST DONE

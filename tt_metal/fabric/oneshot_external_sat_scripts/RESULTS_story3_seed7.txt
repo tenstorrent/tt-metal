@@ -1,0 +1,8 @@
+stages  mode         wall_s   sols   pathOK
+64      incr         310      5      INCR-OK
+64      fromscratch  252      5      FS-OK
+80      incr         900      1      INCR-OK
+80      fromscratch  902      3      FS-OK
+96      incr         347      5      INCR-OK
+96      fromscratch  902      1      FS-OK
+[21:04:20] STORY3 SMALL DONE
