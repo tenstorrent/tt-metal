@@ -1114,7 +1114,11 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(kernel_path + "compute/sdpa_flash_decode.cpp"),
-        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+        // Quasar's trisc code region is smaller; O3 overflows it (trisc0 ~0x6924 > 0x6000). Optimize
+        // for size on Quasar to fit; keep O3 on WH/BH.
+        .compiler_options =
+            {.defines = std::move(compute_defines),
+             .opt_level = (device->arch() == tt::ARCH::QUASAR) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_dfb),
         .compile_time_args = std::move(compute_cta),
         .runtime_arg_schema =
