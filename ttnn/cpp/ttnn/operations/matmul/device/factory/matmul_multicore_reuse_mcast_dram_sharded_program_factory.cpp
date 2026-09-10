@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -319,8 +319,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             num_blocks_per_shard);
     }
 
-    // Positional, and read back by index in reader_bmm_tile_layout_in0_sender_dram_sharded.cpp -
-    // the indices below are load-bearing, so keep them annotated and contiguous.
     std::vector<uint32_t> in0_sender_compile_time_args = {
         (std::uint32_t)in0_block_num_tiles,                         // [0]  in0_block_num_tiles
         (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // [1]  in0_block_size_bytes
@@ -675,11 +673,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
     }
 
-    // The sender-coordinate table is the same on every node that reads it, so it goes out as common
-    // runtime args: one multicast write per kernel group, instead of a copy appended to every
-    // sender's and every receiver's unique arg list. Note this does not shrink per-core L1 - unique
-    // and common args draw on the same kernel-config budget - the saving is in the dispatch payload.
-    // The kernel reads the two blocks at get_common_arg_addr(0) and (num_storage_cores).
+    // The sender-coordinate table is the same on every node.
     in0_sender_kernel_desc.common_runtime_args.reserve(in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
     in0_sender_kernel_desc.common_runtime_args.insert(
         in0_sender_kernel_desc.common_runtime_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());

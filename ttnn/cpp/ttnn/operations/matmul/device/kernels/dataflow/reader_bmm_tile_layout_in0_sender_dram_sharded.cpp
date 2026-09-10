@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,8 +44,7 @@ void kernel_main() {
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
     const bool is_last_ktile_padded = static_cast<bool>(get_arg_val<uint32_t>(2));
 
-    // Common runtime args: the sender-coordinate table is identical on every node, so the factory
-    // sends it once per kernel group rather than appending a copy to each core's unique args.
+    // The sender-coordinate table is identical on every node.
     tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_common_arg_addr(0));
     tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_common_arg_addr(num_storage_cores));
 

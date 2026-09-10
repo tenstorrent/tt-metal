@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -234,9 +234,6 @@ void kernel_main() {
 #endif
     DataflowBuffer mm_out_dfb(mm_out_dfb_id);
 
-    // Hardware startup must precede every operation-specific init, including the SFPU activation
-    // init below - keep this call above them. Mirrors the ordering already in the quasar copy of
-    // this kernel.
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
