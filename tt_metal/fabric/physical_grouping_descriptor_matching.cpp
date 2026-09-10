@@ -1400,19 +1400,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     return committed;
                 };
 
-                // Prefer the variant whose flattened grid has the MGD's own device_topology dims (either
-                // orientation) over one that merely contains the same topology: a 4x1 RING is a 4-cycle, and so
-                // is a 2x2 halftray MESH, but a mesh declared [4, 1] belongs on the 4x1 grouping. Within equal
-                // shape agreement, prefer the simplest topology that fits: MESH, then whichever torus wraps
-                // remain after dropping wraps on dims of size 2 or less (those axes keep ordinary MESH links).
-                auto shape_rank = [&](const MeshTopologyMatch& m) -> int {
-                    if (!device_topo.has_value()) {
-                        return 0;
-                    }
-                    const auto& dims = mesh_flat_groupings.at(m.name)[m.idx].flattened_node_grid_dims;
-                    const std::vector<int32_t> reversed(dims.rbegin(), dims.rend());
-                    return (dims == device_topo->dims || reversed == device_topo->dims) ? 0 : 1;
-                };
+                // Prefer the simplest topology that fits: MESH, then whichever torus wraps remain after
+                // dropping wraps on dims of size 2 or less (those axes keep ordinary MESH links).
                 auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
                     return effective_torus_variant_priority(mesh_flat_groupings.at(m.name)[m.idx]);
                 };
@@ -1420,11 +1409,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     best_matches_topology.begin(),
                     best_matches_topology.end(),
                     [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
-                        const int shape_a = shape_rank(a);
-                        const int shape_b = shape_rank(b);
-                        if (shape_a != shape_b) {
-                            return shape_a < shape_b;
-                        }
                         return variant_priority(a) < variant_priority(b);
                     });
 
