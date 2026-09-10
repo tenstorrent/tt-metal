@@ -21,9 +21,11 @@ NEW_TRACE_API = r"""
 #     record_compiled(builder, compiled, pending)
 #       compiled.map_trace_parameters
 #         Adapter::map_trace_parameters
-#           Softmax::map_trace_parameters
-#       metal MeshTraceBuilder::add
-#   builder.build / update_args / replay
+#           Softmax::map_trace_parameters  → paths + encode fn
+#       metal MeshTraceBuilder::add(paths only)
+#       TTNN builder keeps encode fns
+#   builder.build → TTNN MeshTrace(metal, layout)
+#   update_args: layout.encode(op_param) → metal uint32 words
 # Hot path (unchanged cost): launch = compile + dispatch
 # =============================================================================
 
@@ -83,19 +85,34 @@ class MeshTraceBuilder:
         self._cxx = experimental.MeshTraceBuilder(mesh_device)
         self._interned: dict[int, str] = {}
         self._used_names: set[str] = set()
+        # Registry name → layout registered by factories (kind + encode fn).
+        self._layout: dict[str, experimental.TraceParamLayout] = {}
 
     def add(self, op, *args, **kwargs):
         pending, call = self._unwrap(op, args, kwargs)
         cxx_pending = [self._to_cxx_bind(b) for b in pending]
         compiled = experimental.compile(op, call)  # no enqueue
-        return experimental.record_compiled(self._cxx, compiled, cxx_pending)
+        outputs, mapped = experimental.record_compiled(self._cxx, compiled, cxx_pending)
+        self._merge_layout(mapped)
+        return outputs
 
     def build(self, cq_id):
-        return self._cxx.build(self._cxx.device().mesh_command_queue(cq_id))
+        return MeshTrace(
+            self._cxx.build(self._cxx.device().mesh_command_queue(cq_id)),
+            layout=dict(self._layout),
+        )
+
+    def _merge_layout(self, mapped):
+        for name, entry in mapped.layout.items():
+            if name in self._layout:
+                prev = self._layout[name]
+                if prev.kind != entry.kind or bool(prev.encode) != bool(entry.encode):
+                    raise ValueError(f"TraceParam {name!r} kind/encode conflict across ops")
+            self._layout[name] = entry
 
     def _unwrap(self, op, args, kwargs):
         # invoke_name comes from nanobind nb::arg names via inspect.signature.
-        bound = inspect.signature(op).bind(*args, **kwargs)
+        bound = inspect.signature(getattr(op, "function", op)).bind(*args, **kwargs)
         bound.apply_defaults()
         pending, call = [], {}
         for name, value in bound.arguments.items():
@@ -124,6 +141,34 @@ class MeshTraceBuilder:
         )
 
 
+class MeshTrace:
+    def __init__(self, cxx, layout):
+        self._cxx = cxx
+        self._layout = layout  # registry_name → TraceParamLayout (factory-registered)
+
+    def update_args(self, patch):
+        metal = experimental.TraceArgPatch()
+        for key, value in patch.items():
+            name = key.name if isinstance(key, TraceParam) else key
+            entry = self._layout[name]
+            if entry.kind == experimental.TraceParamKind.Tensor:
+                metal.tensor_args[name] = value.mesh_tensor()
+            else:
+                # encode empty → value is already a uint32 word
+                word = entry.encode(value) if entry.encode else int(value)
+                if entry.kind == experimental.TraceParamKind.Runtime:
+                    metal.runtime_args[name] = word
+                else:
+                    metal.common_runtime_args[name] = word
+        self._cxx.update_args(metal)
+
+    def replay(self, blocking=True):
+        experimental.EnqueueMeshTrace(self._cxx.device().mesh_command_queue(self._cxx.cq_id()), self._cxx, blocking)
+
+    def deallocate(self):
+        self._cxx.deallocate()
+
+
 # After unwrap:
 #   pending = [IN → "input_tensor", SCALE → "scale"]
 #   call    = {input_tensor=attn_scores, scale=0.125, mask=attn_mask, is_causal_mask=True}
@@ -141,13 +186,31 @@ struct PendingBind {
     std::string invoke_name; // Op signature name, ex: "input_tensor", "scale"
 };
 
+// TTNN-only. Metal TraceParameters stay location-only; encode never reaches metal add().
+// kind routes to Metal's three TraceArgPatch tables. encode empty → uint32 passthrough.
+enum class TraceParamKind { Tensor, Runtime, CommonRuntime };
+
+struct TraceScalar {
+    std::variant<float, int32_t, uint32_t> value;
+};
+
+struct TraceParamLayout {
+    TraceParamKind kind;
+    std::function<uint32_t(const TraceScalar&)> encode;  // empty: no conversion
+};
+
+struct MappedTraceParameters {
+    tt::tt_metal::distributed::experimental::TraceParameters paths;
+    std::unordered_map<std::string, TraceParamLayout> layout;  // keyed by registry_name
+};
+
 struct CompiledMeshWorkload {
     tt::tt_metal::distributed::MeshWorkload workload;
     tt::tt_metal::experimental::ProgramRunArgs run_params;
     typename mesh_device_operation_t::tensor_return_value_t outputs;
     bool has_trace_parameters = false;
-    std::function<TraceParameters(const Program&, const ProgramRunArgs&,
-                                  const std::vector<PendingBind>&)>
+    std::function<MappedTraceParameters(const Program&, const ProgramRunArgs&,
+                                        const std::vector<PendingBind>&)>
         map_trace_parameters;
 };
 
@@ -195,12 +258,12 @@ auto record_compiled(
     tt::tt_metal::distributed::experimental::MeshTraceBuilder& metal_builder,
     CompiledMeshWorkload& compiled,
     const std::vector<PendingBind>& pending) {
-    TraceParameters parameters;
+    MappedTraceParameters mapped;
     if (!pending.empty()) {
         if (compiled.has_trace_parameters) {
             for (auto& [range, program] : compiled.workload.get_programs()) {
-                merge_trace_parameters(
-                    parameters,
+                merge_mapped_trace_parameters(
+                    mapped,
                     compiled.map_trace_parameters(program, compiled.run_params, pending));
             }
         } else {
@@ -209,8 +272,8 @@ auto record_compiled(
                 "TraceParam arguments are unsupported");
         }
     }
-    metal_builder.add(compiled.workload, parameters);
-    return compiled.outputs;
+    metal_builder.add(compiled.workload, mapped.paths);  // encode fns stay in TTNN
+    return std::pair{compiled.outputs, mapped};
     // dispatch is not called
 }
 
@@ -226,7 +289,7 @@ struct ProgramSpecMeshWorkloadFactoryAdapter {
     static constexpr bool has_trace_parameters =
         requires { SpecFactory::map_trace_parameters; };
 
-    static TraceParameters map_trace_parameters(
+    static MappedTraceParameters map_trace_parameters(
         const Program& program,
         const ProgramRunArgs& run_params,
         const std::vector<PendingBind>& pending) {
@@ -250,7 +313,7 @@ struct ProgramSpecMeshWorkloadFactoryAdapter {
 #   AddRuntimeArgsForNode(reader, node, {{"pre_scale", bit_cast(scale)}, ...});
 
 struct SoftmaxProgramFactoryAttentionOptimized {
-    static TraceParameters map_trace_parameters(
+    static MappedTraceParameters map_trace_parameters(
         const Program& program,
         const ProgramRunArgs& run_params,
         const std::vector<PendingBind>& pending) {
@@ -272,19 +335,26 @@ struct SoftmaxProgramFactoryAttentionOptimized {
             }
         }
 
-        TraceParameters parameters;
+        MappedTraceParameters mapped;
         for (const auto& bind : pending) {
             if (bind.invoke_name == "input_tensor") {
-                parameters.tensor_parameters[TraceTensorArgName(bind.registry_name)].push_back(
+                mapped.paths.tensor_parameters[TraceTensorArgName(bind.registry_name)].push_back(
                     TraceTensorArgPath{.program = program, .param_name = SRC});
+                mapped.layout[bind.registry_name] = TraceParamLayout{.kind = TraceParamKind::Tensor};
             } else if (bind.invoke_name == "scale") {
                 TT_FATAL(!pre_scale_nodes.empty(), "scale is only a reader RTA when a mask is fused");
-                parameters.runtime_parameters[TraceRuntimeArgName(bind.registry_name)].push_back(
+                mapped.paths.runtime_parameters[TraceRuntimeArgName(bind.registry_name)].push_back(
                     TraceRuntimeArgPath{
                         .program = program,
                         .kernel_name = READER,
                         .arg_name = "pre_scale",
                         .nodes = pre_scale_nodes});
+                mapped.layout[bind.registry_name] = TraceParamLayout{
+                    .kind = TraceParamKind::Runtime,
+                    // Same conversion create_program_artifacts already does.
+                    .encode = [](const TraceScalar& s) -> uint32_t {
+                        return std::bit_cast<uint32_t>(std::get<float>(s.value));
+                    }};
             } else {
                 TT_THROW(
                     "scale_mask_softmax does not expose invoke '{}' as a trace parameter "
@@ -292,28 +362,31 @@ struct SoftmaxProgramFactoryAttentionOptimized {
                     bind.invoke_name);
             }
         }
-        return parameters;
+        return mapped;
     }
 };
 
-// This call: tensor_parameters["input"] = {program, "src"}
-//            runtime_parameters["scale"] = {program, "reader", "pre_scale", nodes…}
+// This call: paths.tensor_parameters["input"] = {program, "src"}
+//            paths.runtime_parameters["scale"] = {program, "reader", "pre_scale", nodes…}
+//            layout["scale"] = Runtime + [](s) { return bit_cast<uint32_t>(get<float>(s)); }
+// Other factories can do math or packing in the same slot, e.g.
+//   [](const TraceScalar& s) { return bit_cast<uint32_t>(1.f / get<float>(s.value)); }
+//   [](const TraceScalar& s) {
+//       auto bf = bfloat16(get<float>(s.value));
+//       return pack_two_bfloat16_into_uint32({bf, bf});
+//   }
 
 
 # -----------------------------------------------------------------------------
 # 7. update_args / replay
 # -----------------------------------------------------------------------------
-static uint32_t encode_trace_runtime(std::string_view invoke_name, const SoftmaxParams& attrs) {
-    if (invoke_name == "scale") {
-        return std::bit_cast<std::uint32_t>(attrs.scale.value_or(1.0f));
-    }
-    TT_THROW("scale_mask_softmax has no runtime encode for '{}'", invoke_name);
-}
+# MeshTrace::update_args: kind picks the Metal table; encode (if set) turns the op param
+# into a uint32. Empty encode means the patch value is already a uint32 word.
 
 # trace_cq0.update_args({IN: new_scores, "scale": 0.25})
-#   "input" → TraceArgPatch.tensor_args["input"] = new_scores.mesh_tensor()
-#   "scale" → encode_trace_runtime("scale", attrs) = bit_cast(0.25f) = 0x3E800000
-# MeshTrace::update_args(patch); replay uses the patched words.
+#   layout["input"] is Tensor → TraceArgPatch.tensor_args["input"] = new_scores.mesh_tensor()
+#   layout["scale"].encode(TraceScalar{0.25f}) = bit_cast → 0x3E800000
+# Metal MeshTrace::update_args(patch) sees only tensors and uint32 words.
 """
 
 
