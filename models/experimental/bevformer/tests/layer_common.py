@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 import torch
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import img_metas_for_dataset
+from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
 from models.experimental.bevformer.reference.encoder import BEVFormerLayer
 from models.experimental.bevformer.reference.point_sampling_3d_2d import (
     generate_reference_points,
