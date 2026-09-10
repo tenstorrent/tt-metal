@@ -9,6 +9,8 @@
 #include <limits>
 
 #include <tt-logger/tt-logger.hpp>
+#include <cstdlib>
+#include <cstdio>
 
 #include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
@@ -406,11 +408,58 @@ void D2dSyncConsumer::log_summary() const {
     }
 }
 
+// The hedge next to the Tracy plots: a CSV of the local and linked corrections per chip over time and the
+// local-vs-linked error, so the accuracy numbers exist even if the Tracy capture is fiddly. One row per 1 ms
+// bucket per chip. Gated on TT_METAL_STREAMING_PROFILER_D2D_CSV=<path>.
+void D2dSyncConsumer::dump_csv() const {
+    const char* path = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV");
+    if (path == nullptr || *path == 0) {
+        return;
+    }
+    std::FILE* f = std::fopen(path, "w");
+    if (f == nullptr) {
+        log_warning(tt::LogMetal, "[streaming profiler] d2d sync: cannot open CSV {}", path);
+        return;
+    }
+    std::fprintf(f, "chip,wall_tick,local_ns,linked_ns,error_ns\n");
+    size_t rows = 0;
+    double err_sum = 0.0, err_max = 0.0;
+    for (const auto& kv : local_) {
+        const uint32_t dev = kv.first;
+        const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
+        for (const auto& bk : kv.second.fit.buckets) {
+            const LocalClockFit::Accum& b = bk.second;
+            if (b.n < 2 || b.slope() <= 0.0) {
+                continue;
+            }
+            const uint64_t T =
+                static_cast<uint64_t>(b.wall_of_refclk(static_cast<double>(bk.first * LocalClockFit::kBucketTicks)));
+            const long long loc = static_cast<long long>(SyncCorrections::lookup_local_ns(chip, T));
+            const long long lnk = static_cast<long long>(SyncCorrections::lookup_ns(chip, T));
+            const long long err = lnk - loc;
+            std::fprintf(f, "%u,%llu,%lld,%lld,%lld\n", chip, static_cast<unsigned long long>(T), loc, lnk, err);
+            rows++;
+            const double ae = static_cast<double>(err < 0 ? -err : err);
+            err_sum += ae;
+            err_max = std::max(err_max, ae);
+        }
+    }
+    std::fclose(f);
+    log_info(
+        tt::LogMetal,
+        "[streaming profiler] d2d sync CSV: {} rows to {}; |local-linked| mean {:.1f} ns, max {:.1f} ns",
+        rows,
+        path,
+        rows ? err_sum / static_cast<double>(rows) : 0.0,
+        err_max);
+}
+
 void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
     (void)ctx;
     try_solve_links(/*final=*/true);
     publish_all(/*final=*/true);
     log_summary();
+    dump_csv();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.
     local_.clear();
     link_.clear();

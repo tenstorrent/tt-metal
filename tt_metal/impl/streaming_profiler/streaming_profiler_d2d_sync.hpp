@@ -144,6 +144,7 @@ private:
     Frame frame_of(uint32_t dev) const;
     void publish_all(bool final);
     void log_summary() const;
+    void dump_csv() const;
 
     CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;                     // device index -> local fit
