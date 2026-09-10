@@ -14,6 +14,7 @@ from models.autoports.minimaxai_minimax_music3.reference.sampling import guided_
 from models.autoports.minimaxai_minimax_music3.tests.tt_common import (  # noqa: E402
     Report,
     agreement,
+    cpu_targets,
     golden,
     pcc,
     thresholds,

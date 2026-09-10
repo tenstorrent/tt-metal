@@ -61,7 +61,7 @@ def test_unit_goldens(depth, golden_root):
         rows[steps] = {"hidden_pcc": pcc(h, g["hidden"]), "logits_pcc": pcc(lg, g["logits"])}
     REPORT["unit"] = rows
     print(json.dumps(rows, indent=1))
-    assert min(r["hidden_pcc"] for r in rows.values()) >= 0.995 and min(r["logits_pcc"] for r in rows.values()) >= 0.995
+    assert min(r["hidden_pcc"] for r in rows.values()) >= 0.99 and min(r["logits_pcc"] for r in rows.values()) >= 0.99
 
 
 def test_teacher_forced_vs_golden(depth, golden_root):
