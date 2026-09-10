@@ -49,7 +49,7 @@ using RelayStateFn = std::function<void(uint32_t device_index, uint32_t socket_i
 // own socket. Destruction releases the spool, so it must precede the mesh allocator's.
 class Devices {
 public:
-    Devices() = default;
+    Devices();
     ~Devices();
     Devices(const Devices&) = delete;
     Devices& operator=(const Devices&) = delete;
@@ -64,6 +64,14 @@ public:
     // After the relays swept to empty and the capture detached: the producer-owned stall counters, and every
     // worker lane's own tail against the consumed-words mirror `heads` (empty when nothing decoded the device).
     void verify_completeness(uint32_t device_index);
+    // Launch the planned boot-time eth link syncs. MUST be called after the host receiver's ingest threads
+    // are draining the sockets, or the armed sync kernels wedge on a FIFO no reader empties.
+    void run_link_sync();
+    // Stop every resident link sync at quiesce: the sender first (its final round still echoes off the live
+    // receiver), then the receiver, each confirmed by its done word.
+    void stop_link_syncs(tt::Cluster& cluster);
+    // The eth link syncs launch_link_sync() ran at boot, for the consumers' CaptureContext.
+    const std::vector<CaptureContext::Link>& links() const { return links_; }
 
 private:
     static constexpr uint32_t kMaxRelays = 8;
@@ -78,6 +86,21 @@ private:
     struct WorkerCore {
         CoreCoord logical, physical, virt;
     };
+    // An idle-eth core that pushes its own profiler ring (and its linked active eth core) over its own socket.
+    // Out of the relay roster entirely; enumerated to the decoder as a standard 5-lane core with idle siblings.
+    struct EthPusher {
+        CoreCoord logical, virt, phys;
+        std::unique_ptr<Program> program;
+        uint32_t sock_idx = 0;  // index into out.sockets, after the relays
+        // The chip's active eth cores this pusher drains (their rings are NoC-read, their heads written back):
+        // they run the fabric router and can spend no cycles on egress, so the idle sibling carries them.
+        struct Linked {
+            CoreCoord logical, virt;
+            uint32_t xy = 0;       // packed virtual XY, the frame identity the decoder resolves
+            uint32_t prof_l1 = 0;  // that core type's profiler L1 base (ACTIVE_ETH)
+        };
+        std::vector<Linked> linked;
+    };
     struct DeviceCtx {
         uint32_t chip_id = 0;
         IDevice* device = nullptr;
@@ -85,6 +108,7 @@ private:
         std::vector<WorkerCore> cores;  // the compute grid, row-major, so a relay's band is a contiguous run
         Relay relays[kMaxRelays];
         uint32_t n_relays = 0;
+        std::vector<EthPusher> eth;  // idle-eth clock pushers, one socket each
 
         DeviceCtx();
         ~DeviceCtx();
@@ -112,6 +136,20 @@ private:
         DeviceCtx& ctx,
         const distributed::MeshCoordinate& coord,
         uint32_t d);
+    // Idle-eth cores as padded standard cores in the decode roster (never the relay roster); false = none.
+    void enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
+    // Builds the eth core socket, launches the pusher and confirms its heartbeat. False: this pusher is dropped;
+    // the capture continues without it.
+    bool launch_eth_pusher(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        DeviceCtx& ctx,
+        const distributed::MeshCoordinate& coord,
+        uint32_t k);
+    void write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
+    // One-shot device<->device link sync at boot: the eth sync kernels on every connected active-eth pair of local
+    // devices, whose SYNC-ZONE zones the idle pushers then drain. Only when fabric is DISABLED: after fabric init
+    // those cores hold live routers, and a launch onto one would write a launch message into a router.
+    void plan_link_sync();
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
     // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
     void set_producers_armed(const DeviceCtx& ctx, bool armed);
@@ -125,11 +163,31 @@ private:
     uint64_t drisc_l1_noc_ = 0;
     uint32_t slot_bytes_ = 0;  // staging slot; mirrors the relay kernel's kSlotWords
     RelayL1 l1_;
+    // Idle-eth pusher L1 (IDLE_ETH): the profiler base, and carved from the top of UNRESERVED: socket config,
+    // ctrl words (done/heartbeat, stop), one frame slot.
+    bool eth_ok_ = false;
+    uint64_t eth_prof_l1_ = 0;
+    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0;
+    bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
+    uint64_t aeth_prof_l1_ = 0;
+    uint32_t aeth_unreserved_ = 0, aeth_unres_size_ = 0;  // ACTIVE_ETH unreserved region: the resident sync stop word
+    // Resident 1 kHz link sync programs (a sender+receiver pair per link), launched after the receiver is up and
+    // stopped at quiesce. Kept alive here so the Program objects outlive the run, like the relays and pushers.
+    struct ResidentSync {
+        std::unique_ptr<Program> ps, pr;
+        IDevice* dev_a = nullptr;
+        IDevice* dev_b = nullptr;
+        CoreCoord virt_a, virt_b;
+        uint32_t chip_a = 0, chip_b = 0;
+        uint32_t stop_a = 0, stop_b = 0;
+    };
+    std::vector<ResidentSync> link_syncs_;
     // GDDR spool: the HAL's PROFILER DRAM region, which MetalEnv sizes for the spool when the streaming profiler
     // is on, so it lies below every allocator's unreserved base. Bytes 0 = direct push.
     uint32_t spool_bytes_ = 0;
     uint32_t spool_addr_ = 0;
     std::vector<DeviceCtx> devices_;
+    std::vector<CaptureContext::Link> links_;
 };
 
 }  // namespace streaming_profiler

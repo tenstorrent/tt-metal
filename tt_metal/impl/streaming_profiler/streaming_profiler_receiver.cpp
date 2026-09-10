@@ -70,7 +70,10 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
             streams_.push_back(std::move(s));
         }
         ctx_.devices.push_back(dev.ctx);
+        ctx_.devices.back().chip_id = dev.chip_id;
+        ctx_.devices.back().clock = dev.clock;
     }
+    ctx_.links = relays_->links();
     for (const auto& st : streams_) {
         streams_view_.push_back(
             {st->fifo, &st->walked_bytes, st->dev, std::span<const std::atomic<uint64_t>>(st->marks)});
@@ -104,6 +107,9 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
             receiver->ingest_threads_.emplace_back(&Receiver::ingest_thread, receiver.get(), std::move(owned));
         }
     }
+    // The ingest threads are draining the sockets now, so the idle pushers will not block; launch the boot-time
+    // eth link syncs (their armed producers need that live drain). Skipped when nothing was planned.
+    receiver->relays_->run_link_sync();
     return receiver;
 }
 
@@ -304,6 +310,7 @@ void Receiver::finish_stream(uint32_t stream, uint64_t dropped_bytes, const Stre
     c.zones = std::max(c.zones, st.zones);
     c.order_regressions = std::max(c.order_regressions, st.order_regressions);
     c.epoch_fixes = std::max(c.epoch_fixes, st.epoch_fixes);
+    c.clock_samples = std::max(c.clock_samples, st.clock_samples);
 }
 
 void Receiver::log_report() const {
@@ -320,6 +327,7 @@ void Receiver::log_report() const {
         t.zones += c.zones;
         t.order_regressions += c.order_regressions;
         t.epoch_fixes += c.epoch_fixes;
+        t.clock_samples += c.clock_samples;
     }
     log_info(
         tt::LogMetal,
@@ -334,6 +342,12 @@ void Receiver::log_report() const {
     if (t.epoch_fixes != 0) {
         log_info(
             tt::LogMetal, "[streaming profiler] {} timestamps repaired for the wall-clock latch race", t.epoch_fixes);
+    }
+    if (t.clock_samples != 0) {
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] {} PP_CLOCK samples decoded from the idle-eth clock trackers",
+            t.clock_samples);
     }
     if (consumer_dropped != 0) {
         log_warning(
