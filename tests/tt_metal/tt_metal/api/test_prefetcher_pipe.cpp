@@ -66,6 +66,35 @@ Program& persistent_run_on_mesh_device(
     return workload_out.get_programs().at(device_range);
 }
 
+// Run `num_pushes` entries of credit through the pipe with no payload, so both endpoints reach
+// a counter state that would otherwise take that many entries of real traffic. Producer and
+// consumer sit in one program so they run at the same time: the producer can only get a ring
+// ahead, so this costs one NoC round trip per lap. Every counter and cursor moves the way it
+// does under real traffic, because it is the same credit path that moves it.
+void spin_pipe_credits(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    experimental::PrefetcherPipe& pipe,
+    uint32_t entry_size,
+    uint32_t num_pushes) {
+    Program program = CreateProgram();
+    EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), entry_size), 0u);
+    const auto spin_kernel = [&](const CoreRangeSet& cores, uint32_t is_sender) {
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_credit_spin.cpp",
+            cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {0u, num_pushes, 1u, is_sender}});
+    };
+    spin_kernel(pipe.sender_cores(), 1u);
+    spin_kernel(pipe.receiver_cores(), 0u);
+
+    distributed::MeshWorkload workload;
+    persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
+}
+
 uint32_t run_persistent_sender_push(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     experimental::PrefetcherPipe& pipe,
@@ -619,6 +648,43 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_PerReceiverCreditInterleaved_RingDe
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0}))};
     auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, 1024);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/5), 2u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CursorSurvivesCreditCounterWrap) {
+    // entries_sent is a free-running uint32, so a cursor derived from it as (sent % ring_units)
+    // only survives the 2^32 wrap when ring_units divides 2^32. This ring is 384 KiB = 24576
+    // units, which does not. The spin below runs the pipe up to the last lap boundary before the
+    // wrap; the data phase then writes and verifies a full ring across it.
+    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        // 2^32 units of credit is half a million NoC round trips. Under half a second on
+        // silicon, six and a half minutes under simulation, where it would be the longest
+        // test in the binary by two orders of magnitude. The property is architecture-
+        // independent, so the hardware SKUs cover it.
+        GTEST_SKIP() << "credit-wrap spin is too slow to be worth its runtime under simulation";
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 128 * 1024;
+    constexpr uint32_t num_entries = 3;
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
+    auto pipe = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 0), receiver_cores, entry_size * num_entries);
+
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t entry_units = entry_size / l1_alignment;
+    const uint32_t ring_units = entry_units * num_entries;
+    ASSERT_NE(ring_units & (ring_units - 1), 0u) << "the wrap is only lossy when ring_units is not a power of two";
+    // Stop on a lap boundary: the ring is empty and every cursor is back at its base, which is the
+    // state the data phase's verification expects. What is left of the counter is then 2^32 mod
+    // ring_units, a whole number of entries, so the wrap falls between two verified entries.
+    const uint32_t spin_units = static_cast<uint32_t>((0x100000000ull / ring_units) * ring_units);
+    const uint32_t units_to_wrap = static_cast<uint32_t>(0x100000000ull - spin_units);
+    ASSERT_EQ(units_to_wrap % entry_units, 0u);
+    ASSERT_LT(units_to_wrap / entry_units, num_entries) << "the wrap must leave a verified entry behind it";
+    spin_pipe_credits(mesh_device, pipe, entry_size, spin_units / entry_units);
+
+    // Entry `units_to_wrap / entry_units` crosses the wrap; a derived cursor would put the entry
+    // after it back at the ring base, on top of the first.
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, /*write_primitive=*/0), 2u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_DecoupledWriteThenCredit) {

@@ -126,9 +126,7 @@ ALWI void process_tile(
         dfb_raw_row.pop_front(num_tiles_per_cycle);
 
         pack_reconfig_data_format(dfb_llk_post_id, dfb_out_id);
-#if defined(ARCH_BLACKHOLE)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
+#ifdef ARCH_QUASAR
         // Retarget the packer destination ring back to dfb_out for the binary-op pack below (see above).
         pack_init(dfb_out_id);
 #endif

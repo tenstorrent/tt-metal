@@ -121,7 +121,6 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
-        # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
         self._on_layer_complete = None
         # Per-layer completion sink (pipelined mode), set by set_layer_completion_sink().
         # Signature: sink(layer_idx, request_id). prefill() binds the current request_id into
@@ -410,23 +409,11 @@ class TtPrefillRuntime:
 
         use_trace: set up the persistent buffers + controller and warm-compile the metadata programs here,
         but do NOT record the capture yet — the driver calls capture_trace() AFTER any pipeline D2D
-        endpoints are built and after set_layer_ack_channel(); prefill_chunk() then only replays."""
+        endpoints are built and after set_layer_completion_sink(); prefill_chunk() then only replays."""
         assert self.model_built
         chunk = self.config.chunk_size
         t0 = time.perf_counter()
         if self.config.use_trace:
-            # Cache-level companion to the config-level guard in TtPrefillTransformer.set_trace_controller
-            # (which rejects a sparse/DSA model outright). Checked separately because it catches the other
-            # direction: a sparse INDEX cache handed to a model that resolved as dense. _forward_traced
-            # never threads index_kv_cache, so such a run would replay without the indexer cache and
-            # produce wrong KV silently instead of failing.
-            assert kv_caches.index is None, (
-                "use_trace=True with a sparse/DSA index KV cache is not supported: the captured forward "
-                "does not thread index_kv_cache, so the indexer would be skipped silently. Supported "
-                "traced models are the dense-MLA ones (deepseek_v3, kimi_k2_6, kimi_k2_7); GLM and other "
-                "sparse variants need their indexer ops ported to the metadata form first — run them "
-                "with use_trace=False (PREFILL_USE_TRACE=0) until then."
-            )
             logger.info(
                 f"TtPrefillRuntime.compile() — warming traced {chunk}-token chunk (metadata path); capture deferred to capture_trace()"
             )
@@ -444,13 +431,13 @@ class TtPrefillRuntime:
         )
         self.compiled = True
 
-    def capture_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def capture_trace(self, kv_caches: MlaKvCaches) -> None:
         """Record the segmented trace, ONCE, before the chunk loop opens.
 
         The driver must call this AFTER building any D2D pipeline endpoints (their receiver-socket L1 must
         be allocated first, or it lands on the captured trace buffers on the last rank and corrupts replay)
-        and AFTER set_layer_ack_channel() / set_layer_completion_sink() (the ack callback has to be known
-        here so the capture splits at each ack point — a host shm bump cannot live inside a trace).
+        and AFTER set_layer_completion_sink() (the ack callback has to be known here so the capture splits
+        at each ack point — a host shm bump cannot live inside a trace).
         No-op if not use_trace or already captured. See compile().
 
         The SubDeviceTraceController chops the capture at the MoE sub-device swaps (and, with an ack
@@ -469,7 +456,7 @@ class TtPrefillRuntime:
         # the capture splits at each ack point. No ack (standalone) => nothing extra to warm.
         if self._on_layer_complete is not None:
             controller.set_layer_ack_callback(lambda _layer_idx: None)
-            self._forward_traced(kv_cache)  # compile zero_padded_kv_cache + ack path (no real ack fires)
+            self._forward_traced(kv_caches)  # compile zero_padded_kv_cache + ack path (no real ack fires)
             ttnn.synchronize_device(self.mesh_device)
             controller.set_layer_ack_callback(self._on_layer_complete)
         elif self._trace_d2h_service is not None:
@@ -477,11 +464,11 @@ class TtPrefillRuntime:
             # a capture cannot absorb a program-cache miss. The D2H ack has no no-op stand-in (it is a
             # device op, not a callback), so this warm pass emits num_layers REAL records. The caller is
             # required to drain them; see set_d2h_ack_service().
-            self._forward_traced(kv_cache)
+            self._forward_traced(kv_caches)
             ttnn.synchronize_device(self.mesh_device)
 
         controller.begin_capture()
-        out = self._forward_traced(kv_cache)
+        out = self._forward_traced(kv_caches)
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
@@ -543,14 +530,20 @@ class TtPrefillRuntime:
         ops read, so it holds the current chunk's words intact after replay. None off the traced path."""
         return self._trace_metadata_msg
 
-    def _forward_traced(self, kv_cache: ttnn.Tensor):
+    def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
         Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
-        over D2D), or the last/single rank's ignored KV-only tuple."""
+        over D2D), or the last/single rank's ignored KV-only tuple.
+
+        index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
+        omitting it would replay the indexer against no cache. This warm pass is also what memoizes
+        tt_ccl.get_indexer_ring_k_buffer, whose first call does a host ttnn.from_torch — a hard TT_FATAL
+        if it were to land inside begin_capture()."""
         return self.model.forward(
             self._trace_input,
-            kv_cache.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
+            kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
+            index_kv_cache=kv_caches.index,
             # FULL chunk on purpose: downstream (TtMoe.forward) uses actual_isl only as the
             # padding-config GUARD on this path — a static capture-time "padding awareness is ON" —
             # while the real per-chunk bound is read on-device from `metadata` (actual_start/
@@ -566,7 +559,7 @@ class TtPrefillRuntime:
             metadata=self._trace_metadata,
         )
 
-    def _prepare_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def _prepare_trace(self, kv_caches: MlaKvCaches) -> None:
         """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
         capture_trace() later, once any ack/completion callback is registered. Called once from compile()."""
@@ -591,7 +584,7 @@ class TtPrefillRuntime:
         self.model.set_trace_controller(controller)
         self._controller = controller
 
-        self._forward_traced(kv_cache)  # warm/compile the metadata-variant programs
+        self._forward_traced(kv_caches)  # warm/compile the metadata-variant programs
         ttnn.synchronize_device(self.mesh_device)
 
     def prefill_chunk(
@@ -621,8 +614,8 @@ class TtPrefillRuntime:
         calling this once per chunk, in order; a chunk's KV must be populated before the next reads
         it. If d2h_service + metadata_msg are passed, the model sends one per-layer ack completion signal back
         to host (via the outbound_socket_service_sync device op) once each layer's KV cache is populated.
-        Alternatively, if a host-side per-layer callback is registered (set_layer_ack_channel /
-        set_layer_completion_sink), the model fires that once per layer instead.
+        Alternatively, if a host-side per-layer callback is registered (via set_layer_completion_sink),
+        the model fires that once per layer instead.
 
         Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
         last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
@@ -817,38 +810,6 @@ class TtPrefillRuntime:
         if release is not None:
             release()
 
-    def set_layer_ack_channel(self, layer_ack_channel) -> None:
-        """Register the per-layer-ack channel (docs/scheduler/prefill.md §3.11).
-
-        `layer_ack_channel` is a `ttnn.InterProcessCounterChannel` on
-        `/tt_prefill_layer_acks_<service_id>`. The runner bumps it once per
-        layer (`inject(1)`); the scheduler reads the delta and drives the
-        migration worker. The ack carries no payload — the scheduler correlates
-        acks with the chunk it pushed (its InFlightChunkFIFO).
-
-        Per-layer cadence means NUM_LAYERS acks per chunk, so the scheduler must
-        be configured with layers_per_chunk == NUM_LAYERS.
-
-        use_trace: the capture splits the trace at each ack point (a host shm bump cannot live inside a
-        trace), so the ack callback must be known at CAPTURE time. Call this BEFORE capture_trace() — it
-        only registers the callback on the controller and asserts nothing has been captured yet.
-        """
-        assert self.compiled or self.config.use_trace, "Call compile() before set_layer_ack_channel()"
-
-        def on_layer_complete(layer_idx: int) -> None:
-            layer_ack_channel.inject(1)
-
-        self._on_layer_complete = on_layer_complete
-        if self.config.use_trace and self._controller is not None:
-            # Register on the controller so the (later) capture splits at each ack point. Ordering is a
-            # precondition, not something to recover from: re-capturing here would throw away the
-            # recorded segments and record a second time, and the caller can simply register first.
-            assert not self._trace_captured, (
-                "use_trace: set_layer_ack_channel() must run BEFORE capture_trace() — the ack callback has "
-                "to be known at capture time so the segments split at each ack point"
-            )
-            self._controller.set_layer_ack_callback(on_layer_complete)
-
     def warmup_ack_count(self) -> int:
         """How many D2H ack records capture_trace()'s warm pass will emit — one per layer of this rank's
         slice. Zero unless a traced run has a D2H ack service registered."""
@@ -870,7 +831,7 @@ class TtPrefillRuntime:
         assert self.config.use_trace, "set_d2h_ack_service() is the traced path; eager passes d2h_service per call"
         assert self._on_layer_complete is None, (
             "d2h_service and the host ack callback are mutually exclusive transports; the block takes "
-            "d2h_service and would silently drop set_layer_ack_channel()'s callback"
+            "d2h_service and would silently drop set_layer_completion_sink()'s callback"
         )
         assert not self._trace_captured, (
             "use_trace: set_d2h_ack_service() must run BEFORE capture_trace() — the ack is a device op "
@@ -1133,11 +1094,11 @@ class TtPrefillRuntime:
         master host and re-emits it (in seq order) into the scheduler-facing
         counter channel (see ttnn._experimental.layer_completion).
 
-        use_trace: same constraint as set_layer_ack_channel — the callback must be known at CAPTURE
-        time (a host push cannot live inside a trace), so it is registered on the controller and the
-        eager capture is re-recorded to split at each ack point. The per-call request_id closure the
-        eager path uses is not available there, so the captured callback reads _trace_request_id,
-        which prefill_chunk() publishes before each replay.
+        use_trace: the callback must be known at CAPTURE time (a host push cannot live inside a
+        trace), so it is registered on the controller and the eager capture is re-recorded to split at
+        each ack point. The per-call request_id closure the eager path uses is not available there, so
+        the captured callback reads _trace_request_id, which prefill_chunk() publishes before each
+        replay.
         """
         assert self.compiled or self.config.use_trace, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
@@ -1157,7 +1118,6 @@ class TtPrefillRuntime:
             "use_trace: compile() must run (building the trace controller) before "
             "set_layer_completion_sink(); without it the sink would never fire under trace replay."
         )
-        # Same ordering precondition as set_layer_ack_channel: register before capture_trace().
         assert not self._trace_captured, (
             "use_trace: set_layer_completion_sink() must run BEFORE capture_trace() — the completion "
             "callback has to be known at capture time so the segments split at each completion point"

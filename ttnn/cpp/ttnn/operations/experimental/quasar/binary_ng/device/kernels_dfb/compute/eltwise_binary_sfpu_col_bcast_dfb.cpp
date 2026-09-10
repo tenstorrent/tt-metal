@@ -117,9 +117,7 @@ ALWI void process_tile(
     tile_regs_release();
 
     pack_reconfig_data_format(dfb_llk_post_id, dfb_out_id);
-#if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
+#ifdef ARCH_QUASAR
     // Retarget the packer destination ring back to dfb_out for the binary-op pack below; without this the
     // gasket-only pack_reconfig above leaves the ring on llk_post and pack_tile(0, out) writes the wrong
     // buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.

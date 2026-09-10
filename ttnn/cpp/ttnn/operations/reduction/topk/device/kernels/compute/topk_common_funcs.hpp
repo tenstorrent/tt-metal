@@ -20,21 +20,21 @@ void process_and_sort_tiles(
     bool switch_dir,
     bool& ascending,
     int end_phase) {
-    DataflowBuffer input_dfb(input_dfb_index);
-    DataflowBuffer index_dfb(index_dfb_index);
-    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
-    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
+    DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
+    DataflowBuffer index_dfb(static_cast<uint16_t>(index_dfb_index));
+    DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
+    DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
 
-    input_transposed_dfb.reserve_back(Wt);
-    index_transposed_dfb.reserve_back(Wt);
+    input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
 
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         // local sort into k groups
         // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
-        uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
-        input_dfb.wait_front(tiles_to_wait);
-        index_dfb.wait_front(tiles_to_wait);
+        const uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
+        input_dfb.wait_front(static_cast<uint16_t>(tiles_to_wait));
+        index_dfb.wait_front(static_cast<uint16_t>(tiles_to_wait));
 
         tile_regs_acquire();
         reconfig_data_format_srca(input_dfb_index);
@@ -50,11 +50,11 @@ void process_and_sort_tiles(
             transpose_tile(index_dfb_index, 1, 3);
         }
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, end_phase);
+        ckernel::topk_local_sort<stable_sort>(0, static_cast<int>(ascending), end_phase);
         tile_regs_commit();
 
-        input_dfb.pop_front(tiles_to_wait);
-        index_dfb.pop_front(tiles_to_wait);
+        input_dfb.pop_front(static_cast<uint16_t>(tiles_to_wait));
+        index_dfb.pop_front(static_cast<uint16_t>(tiles_to_wait));
 
         tile_regs_wait();
         // pack value tiles into cb_intermed0
@@ -73,8 +73,8 @@ void process_and_sort_tiles(
         ascending = switch_dir ? !ascending : ascending;
     }
 
-    input_transposed_dfb.push_back(Wt);
-    index_transposed_dfb.push_back(Wt);
+    input_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
 }
 
 template <bool stable_sort = false>
@@ -111,7 +111,13 @@ void process_tile_pair(
 
     // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
     // sort within the larger 32 values
-    ckernel::topk_rebuild<stable_sort>(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
+    ckernel::topk_rebuild<stable_sort>(
+        0,
+        static_cast<uint32_t>(ascending),
+        static_cast<int>(m_iter),
+        static_cast<int>(K),
+        static_cast<int>(logk),
+        target_tiles_is_one);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -147,11 +153,11 @@ void process_tiles(
     uint32_t index_dest_start,
     uint32_t index_dest_end,
     bool largest,
-    int seq_per_2tiles) {
-    uint32_t dist = ((1 << m_iter) * K) >> 5;
+    uint32_t seq_per_2tiles) {
+    const uint32_t dist = ((1 << m_iter) * K) >> 5;
     for (uint32_t i = 0; i < num_k_sequences; i += seq_per_2tiles) {
         for (uint32_t t = 0; t < tiles_per_seq; t++) {
-            uint32_t left_tile_id = ((i * (1 << m_iter) * K) >> 5) + t;
+            const uint32_t left_tile_id = ((i * (1 << m_iter) * K) >> 5) + t;
             uint32_t right_tile_id = left_tile_id + dist;
             if (left_tile_id == right_tile_id) {
                 right_tile_id = left_tile_id + 1;
@@ -176,9 +182,9 @@ void process_tiles(
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
-                ckernel::topk_merge<false, stable_sort>(0, m_iter, K);
+                ckernel::topk_merge<false, stable_sort>(0, static_cast<int>(m_iter), static_cast<int>(K));
             } else {
-                ckernel::topk_merge<true, stable_sort>(0, m_iter, K);
+                ckernel::topk_merge<true, stable_sort>(0, static_cast<int>(m_iter), static_cast<int>(K));
             }
 
             // ckernel::topk_merge(0, m_iter, K);
@@ -217,13 +223,13 @@ void process_iteration(
     bool largest,
     bool switch_dir,
     uint32_t logk,
-    int& seq_per_2tiles,
+    uint32_t& seq_per_2tiles,
     bool largest_param) {
-    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
-    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
+    DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
+    DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
 
-    input_transposed_dfb.wait_front(Wt);
-    index_transposed_dfb.wait_front(Wt);
+    input_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
 
     process_tiles<stable_sort>(
         m_iter,
@@ -240,30 +246,30 @@ void process_iteration(
         largest_param,
         seq_per_2tiles);
 
-    input_transposed_dfb.reserve_back(Wt);
-    index_transposed_dfb.reserve_back(Wt);
+    input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
 
-    input_transposed_dfb.pop_front(Wt);
-    index_transposed_dfb.pop_front(Wt);
+    input_transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
 
-    input_transposed_dfb.push_back(Wt);
-    index_transposed_dfb.push_back(Wt);
+    input_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
 
     // we have decreased our search space by half
     num_k_sequences = num_k_sequences >> 1;
-    int target_tiles = (Wt == 1 || ((num_k_sequences == 1) && (tiles_per_seq == 1))) ? 1 : 2;
+    const uint32_t target_tiles = (Wt == 1 || ((num_k_sequences == 1) && (tiles_per_seq == 1))) ? 1 : 2;
 
-    int sel_tile_id[2];
-    int sel_tile_id_ptr = 0;
+    uint32_t sel_tile_id[2];
+    uint32_t sel_tile_id_ptr = 0;
     seq_per_2tiles = (seq_per_2tiles == 2) ? 2 : seq_per_2tiles >> 1;
     bool ascending = !largest;
 
-    input_transposed_dfb.wait_front(Wt);
-    index_transposed_dfb.wait_front(Wt);
+    input_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
 
     for (uint32_t idx = 0; idx < num_k_sequences; idx += (seq_per_2tiles >> 1)) {
         for (uint32_t t = 0; t < tiles_per_seq; t++) {
-            uint32_t left_ind = ((idx * (1 << (m_iter + 1)) * K) >> 5) + t;
+            const uint32_t left_ind = ((idx * (1 << (m_iter + 1)) * K) >> 5) + t;
             if (left_ind >= Wt) {
                 break;
             }
@@ -290,19 +296,19 @@ void process_iteration(
         }
     }
 
-    input_transposed_dfb.reserve_back(Wt);
-    index_transposed_dfb.reserve_back(Wt);
+    input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
 
-    input_transposed_dfb.pop_front(Wt);
-    index_transposed_dfb.pop_front(Wt);
+    input_transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
 
-    input_transposed_dfb.push_back(Wt);
-    index_transposed_dfb.push_back(Wt);
+    input_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
+    index_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
 }
 
-void transpose_and_pack(uint32_t transposed_dfb_index, uint32_t dest_dfb_index, uint32_t Kt, uint32_t Wt) {
-    DataflowBuffer transposed_dfb(transposed_dfb_index);
-    DataflowBuffer dest_dfb(dest_dfb_index);
+inline void transpose_and_pack(uint32_t transposed_dfb_index, uint32_t dest_dfb_index, uint32_t Kt, uint32_t Wt) {
+    DataflowBuffer transposed_dfb(static_cast<uint16_t>(transposed_dfb_index));
+    DataflowBuffer dest_dfb(static_cast<uint16_t>(dest_dfb_index));
 
     reconfig_data_format_srca(transposed_dfb_index);
     transpose_init(transposed_dfb_index);
@@ -310,7 +316,7 @@ void transpose_and_pack(uint32_t transposed_dfb_index, uint32_t dest_dfb_index, 
     // intermediate) while dest_dfb is the original bfp8/bfp4 output format.
     pack_reconfig_data_format(dest_dfb_index);
 
-    transposed_dfb.wait_front(Kt);
+    transposed_dfb.wait_front(static_cast<uint16_t>(Kt));
     for (uint32_t i = 0; i < Kt; ++i) {
         tile_regs_acquire();
         transpose_tile(transposed_dfb_index, i, 0);
@@ -324,6 +330,6 @@ void transpose_and_pack(uint32_t transposed_dfb_index, uint32_t dest_dfb_index, 
 
         dest_dfb.push_back(1);
     }
-    transposed_dfb.wait_front(Wt);
-    transposed_dfb.pop_front(Wt);
+    transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
+    transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
 }

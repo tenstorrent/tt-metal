@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <array>
 #include <type_traits>
 
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"

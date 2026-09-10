@@ -20,13 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
-from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
-
-_TRACE_REGION_SIZE = 31_000_000
-# Trace capture + Flux2 VAE-style L1_SMALL; align fabric with topology per case.
-line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE}
-line_params_8k_flux2_transformer = {**line_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
-ring_params_8k_flux2_transformer = {**ring_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+from .device_params import line_params_flux2_transformer, ring_params_8k_flux2, ring_params_8k_flux2_req_exact
 
 
 class ModelLocationGenerator(Protocol):
@@ -44,13 +38,22 @@ class ModelLocationGenerator(Protocol):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
+    "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, shard_prompt, device_params",
     [
-        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
+        [(2, 2), 0, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2_transformer],
+        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, False, line_params_flux2_transformer],
+        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, False, line_params_flux2_transformer],
+        # shard_prompt=True on 4x8. With it False the prompt is replicated across the sp axis
+        # while the spatial stream is sharded, and the joint attention PCC in the single blocks
+        # degrades as sp increases.
+        #
+        # In practice, for sp=1/2, PCC is not sufficiently degraded to matter, but it's terrible
+        # for sp=4 (way below PCC thresholds), which is why we _must_ set shard_prompt=True for this mesh.
+        # True is also what the pipeline and test_performance_flux2.py use.
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, True, ring_params_8k_flux2_req_exact],
     ],
     ids=[
+        "bh_2x2_linear",
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",
@@ -76,6 +79,8 @@ def test_transformer(
     tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
+    fsdp: bool,
+    shard_prompt: bool,
     batch_size: int,
     height: int,
     width: int,
@@ -89,7 +94,7 @@ def test_transformer(
 
     logger.info(
         f"test_transformer: mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, "
-        f"topology={topology}, num_links={num_links}"
+        f"topology={topology}, num_links={num_links}, fsdp={fsdp}"
     )
 
     model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
@@ -124,10 +129,19 @@ def test_transformer(
     else:
         padding_config = None
 
+    num_layers = torch_model.config.num_layers - skip_layers
+    num_single_layers = torch_model.config.num_single_layers - skip_single_layers
+
+    # HACK: The cache subfolder name modification is to ensure the cache contains all tensors for both the
+    # all_blocks and single_blocks test variants. Without this, we would get invalid caches for one or the other.
+    cache_subfolder = (
+        "transformer" if skip_layers == skip_single_layers == 0 else f"transformer_L{num_layers}_S{num_single_layers}"
+    )
+
     tt_model = Flux2Transformer(
         in_channels=in_channels,
-        num_layers=torch_model.config.num_layers - skip_layers,
-        num_single_layers=torch_model.config.num_single_layers - skip_single_layers,
+        num_layers=num_layers,
+        num_single_layers=num_single_layers,
         attention_head_dim=head_dim,
         num_attention_heads=num_heads,
         joint_attention_dim=joint_attention_dim,
@@ -136,16 +150,19 @@ def test_transformer(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
+        is_fsdp=fsdp,
+        shard_prompt=shard_prompt,
     )
 
     cache.load_model(
         tt_model,
         get_torch_state_dict=torch_model.state_dict,
         model_name="FLUX.2-dev",
-        subfolder="transformer",
+        subfolder=cache_subfolder,
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,
+        is_fsdp=fsdp,
     )
 
     spatial_seq_len = height * width // 16**2
@@ -163,7 +180,10 @@ def test_transformer(
     spatial_rope_cos, spatial_rope_sin = torch_model.pos_embed.forward(image_ids)
 
     tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
-    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    # The prompt and its RoPE follow shard_prompt, the same pairing test_transformer_profile uses.
+    prompt_mesh_axes = [None, sp_axis, None] if shard_prompt else None
+    prompt_rope_mesh_axes = [None, None, sp_axis, None] if shard_prompt else None
+    tt_prompt = tensor.from_torch(prompt, device=mesh_device, mesh_axes=prompt_mesh_axes)
     tt_embedded_prompt = tt_model.context_embedder(tt_prompt)
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
     tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
@@ -174,8 +194,12 @@ def test_transformer(
     tt_spatial_rope_sin = tensor.from_torch(
         spatial_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
     )
-    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device)
-    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device)
+    tt_prompt_rope_cos = tensor.from_torch(
+        prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
+    )
+    tt_prompt_rope_sin = tensor.from_torch(
+        prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
+    )
     tt_combined_rope = (
         ttnn.concat([tt_spatial_rope_cos, tt_prompt_rope_cos], dim=2),
         ttnn.concat([tt_spatial_rope_sin, tt_prompt_rope_sin], dim=2),

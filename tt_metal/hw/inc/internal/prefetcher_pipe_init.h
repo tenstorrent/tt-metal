@@ -46,6 +46,8 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.config_ptr = config_page_ptr;
         iface.fifo_start_addr = fifo_start_addr;
         iface.fifo_page_size = entry_size;
+        // Receiver 0's checkpoint, for parity with the shared interface. A sender addresses
+        // through the per-receiver cursors in the credit slots, not through this field.
         iface.fifo_wr_ptr = fifo_ptr_checkpoint;
         iface.receiver_noc_xy_ptr = noc_xy_addr;
         iface.aligned_pages_sent_ptr = aligned_cnt_ptr;

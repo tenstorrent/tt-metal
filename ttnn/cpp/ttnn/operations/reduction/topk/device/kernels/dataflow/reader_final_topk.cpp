@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(9);   // Aggregated TopK values
     constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);  // Aggregated TopK indices
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> receiver_sem(receiver_sem_id);
     Semaphore<> sender_sem(sender_sem_id);
     DataflowBuffer final_values_dfb(final_values_dfb_index);

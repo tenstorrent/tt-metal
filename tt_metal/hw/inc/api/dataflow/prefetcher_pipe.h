@@ -78,9 +78,11 @@ namespace experimental {
 // Sync counters (pages_sent / pages_acked) are in L1_ALIGNMENT-byte units.
 //
 // Each receiver owns a private ring, so the sender needs an independent write position
-// per receiver. No cursor state is stored for that: a receiver's write offset is derived
-// from its local entries_sent counter (sent % ring), which persists across programs
-// (unlike CrossNode, which zeros credits every launch).
+// per receiver. Each one is stored beside that receiver's credit counters as a byte offset
+// from the ring base, and is advanced whenever that receiver is credited. It is not derived
+// from entries_sent: that counter wraps at 2^32, which only preserves a (sent % ring_units)
+// derivation when ring_units is a power of two. Cursors persist across programs for the same
+// reason the counters do (unlike CrossNode, which zeros credits every launch).
 //
 // Writes are contiguous: a reserve/write/push of n entries must fit from the current
 // write position to fifo_limit without straddling the wrap (same rule as local CBs).
@@ -216,8 +218,7 @@ public:
         if (is_sender) {
             CrossNodeSenderDFBInterface& iface = interface_.sender;
             if (iface.fifo_start_addr == epoch_fifo_start && iface.fifo_page_size == epoch_entry_size) {
-                l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] =
-                    iface.fifo_start_addr + derived_wr_offset(iface, 0);
+                l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_start_addr + sender_wr_offset(iface, 0);
             }
         } else {
             CrossNodeReceiverDFBInterface& iface = interface_.receiver;
@@ -228,9 +229,9 @@ public:
     }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-    // Change the size of subsequent sender operations. Each receiver's independently
-    // derived write cursor is snapped forward and the skipped bytes are published as
-    // pad credits, matching GlobalCB. Outstanding old-size payload need not drain.
+    // Change the size of subsequent sender operations. Each receiver's stored write
+    // cursor is snapped forward and the skipped bytes are published as pad credits,
+    // matching GlobalCB. Outstanding old-size payload need not drain.
     FORCE_INLINE void set_entry_size(uint32_t entry_size) {
         volatile tt_l1_ptr uint32_t* l1_config =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
@@ -277,7 +278,7 @@ public:
         for (uint32_t i = 0; i < num_recv; ++i) {
             volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, i);
             volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-            const uint32_t wr_offset = wr_offset_from_sent(iface, *sent_ptr);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             const uint32_t total_units_needed = units_for_write(iface, wr_offset, num_entries);
             do {
@@ -296,7 +297,7 @@ public:
 
         volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx);
         volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-        const uint32_t wr_offset = wr_offset_from_sent(iface, *sent_ptr);
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         const uint32_t total_units_needed = units_for_write(iface, wr_offset, num_entries);
         do {
@@ -308,9 +309,9 @@ public:
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 
     // ------------------------------------------------------------------
-    // Write primitives — kick off NoC writes at each receiver's write position,
-    // derived from that receiver's entries_sent credits. They do NOT increment
-    // credits, so repeating a write before crediting overwrites the same slots.
+    // Write primitives — kick off NoC writes at each receiver's stored write cursor.
+    // They do NOT credit that receiver, and crediting is what advances the cursor, so
+    // repeating a write before crediting overwrites the same slots.
     // Call push_back() or push_back_to_receiver() after all writes.
     // ------------------------------------------------------------------
 
@@ -336,7 +337,7 @@ public:
         uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
         uint32_t recv_src_offset = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_bytes(iface, wr_offset, bytes_per_recv);
 
             uint32_t current_src_addr = src_addr + recv_src_offset;
@@ -374,7 +375,7 @@ public:
 
         destination_offset_bytes_ = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
         }
@@ -394,7 +395,7 @@ public:
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t len_bytes = num_entries * entry_size;
-        const uint32_t wr_offset = derived_wr_offset(iface, receiver_idx);
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
         noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
@@ -405,15 +406,15 @@ public:
     // the subsequently posted credit is the end-to-end synchronization point.
     FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) { noc.async_writes_flushed<NocOptions::POSTED>(); }
 
-    // Credit-only: NOC-inc pages_sent on ALL receivers by num_entries. Advancing each
-    // receiver's entries_sent is what moves its derived write position forward.
+    // Credit-only: NOC-inc pages_sent on ALL receivers by num_entries. Crediting a
+    // receiver is also what advances its stored write cursor.
     // Call after all write_* for this slot.
     FORCE_INLINE void push_back(uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
         const uint8_t noc_id = noc.get_noc_id();
         for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             const uint32_t num_units = units_for_write(iface, wr_offset, num_entries);
             increment_sender_credits_for_receiver<detail::default_noc_mode>(
@@ -422,12 +423,12 @@ public:
     }
 
     // Credit-only for one receiver: NOC-inc pages_sent on receiver_idx by num_entries,
-    // which also advances that receiver's derived write position. Used for round-robin /
+    // which also advances that receiver's stored write cursor. Used for round-robin /
     // uneven per-receiver credit distribution (caller manages receiver index).
     FORCE_INLINE void push_back_to_receiver(uint32_t receiver_idx, uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
 
-        const uint32_t wr_offset = derived_wr_offset(iface, receiver_idx);
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         const uint32_t num_units = units_for_write(iface, wr_offset, num_entries);
         assert_contiguous_write(iface, wr_offset, num_entries);
         const uint8_t noc_id = noc.get_noc_id();
@@ -622,16 +623,34 @@ private:
         return iface.fifo_limit_page_aligned - iface.fifo_start_addr;
     }
 
-    // Byte offset of a receiver's next free slot given its durable entries_sent counter.
-    // Payload and pad/gap bytes are all represented in the monotonic counter, so the
-    // full-ring modulus remains valid while receivers advance independently (Flow C).
-    FORCE_INLINE static uint32_t wr_offset_from_sent(const CrossNodeSenderDFBInterface& iface, uint32_t sent_units) {
-        const uint32_t ring_units = fifo_size(iface) / L1_ALIGNMENT;
-        return (sent_units % ring_units) * L1_ALIGNMENT;
+    // A receiver's write cursor: a byte offset from the ring base, stored beside that receiver's
+    // credit counters and advanced with them (see advance_wr_offset). Durable across programs for
+    // the same reason the counters are -- it lives in the config page -- and independent of them
+    // for the reason PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD gives: entries_sent wraps at 2^32, which
+    // only preserves a (sent % ring_units) derivation when ring_units is a power of two. Receivers
+    // advance independently (Flow C), so each one carries its own cursor.
+    FORCE_INLINE static volatile tt_l1_ptr uint32_t* local_wr_offset_ptr(
+        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
+        return local_sent_ptr(iface, receiver_idx) + PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD;
     }
 
-    FORCE_INLINE static uint32_t derived_wr_offset(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
-        return wr_offset_from_sent(iface, *local_sent_ptr(iface, receiver_idx));
+    FORCE_INLINE static uint32_t sender_wr_offset(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
+        return *local_wr_offset_ptr(iface, receiver_idx);
+    }
+
+    // Advance a receiver's cursor by the units just credited to it. Payload and any trailing gap
+    // are both in `units` (units_for_write), so a lap is exactly the full allocation, and the
+    // contiguity rule caps a single credit at one lap: one conditional subtract is enough.
+    FORCE_INLINE static void advance_wr_offset(
+        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint32_t units) {
+        volatile tt_l1_ptr uint32_t* offset_ptr = local_wr_offset_ptr(iface, receiver_idx);
+        const uint32_t ring_bytes = fifo_size(iface);
+        uint32_t next = *offset_ptr + units * L1_ALIGNMENT;
+        ASSERT(next <= ring_bytes);
+        if (next >= ring_bytes) {
+            next -= ring_bytes;
+        }
+        *offset_ptr = next;
     }
 
     // Producer writes must be contiguous (same rule as local CBs): wr_offset + len must
@@ -647,7 +666,8 @@ private:
     }
 
     // Credits include the trailing allocation gap when this payload reaches the
-    // page-aligned limit, so the full-ring modulus wraps the next cursor to zero.
+    // page-aligned limit, so one lap of credits is exactly the full allocation and both
+    // endpoints come back to the ring base on the same lap.
     FORCE_INLINE static uint32_t units_for_read(
         const CrossNodeReceiverDFBInterface& iface, uint32_t offset, uint32_t payload_bytes) {
         uint32_t credited_bytes = payload_bytes;
@@ -691,6 +711,7 @@ private:
         const uint64_t remote_sent_noc_addr = noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr, noc);
 
         *sent_ptr += adjustment;
+        advance_wr_offset(iface, receiver_idx, adjustment);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -703,9 +724,12 @@ private:
             MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
 
-    // Snap every receiver's independently derived
-    // cursor forward to the new page grid and publish only the skipped bytes.
-    template <bool update_remote_over_noc = false>
+    // Snap every receiver's stored cursor forward to the new page grid and publish the
+    // skipped bytes as pad credits. update_remote_over_noc is not defaulted: with it false
+    // only this core's page grid changes and every stored cursor stays on the old grid with
+    // no pad credits published, which desynchronizes the receivers. That is for a caller
+    // manipulating the local epoch alone, and nothing but the tests should want it.
+    template <bool update_remote_over_noc>
     FORCE_INLINE void resize_sender_interface(
         uint32_t page_size,
         uint8_t noc,
@@ -722,12 +746,11 @@ private:
         uint32_t fifo_start_addr = sender_cb_interface.fifo_start_addr;
         uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
         uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
-        uint32_t checkpoint_offset = 0;
         if constexpr (update_remote_over_noc) {
             const uint32_t num_recv =
                 cross_node_dfb_num_receivers(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
             for (uint32_t i = 0; i < num_recv; ++i) {
-                const uint32_t current_offset = derived_wr_offset(sender_cb_interface, i);
+                const uint32_t current_offset = sender_wr_offset(sender_cb_interface, i);
                 uint32_t next_offset = align(current_offset, page_size);
                 uint32_t adjustment_bytes = next_offset - current_offset;
                 if (next_offset >= cb_size_page_aligned) {
@@ -742,25 +765,16 @@ private:
                     increment_sender_credits_for_receiver<DM_DEDICATED_NOC>(
                         sender_cb_interface, i, adjustment, noc, posted, cmd_buf);
                 }
-                if (i == 0) {
-                    checkpoint_offset = next_offset;
-                }
-            }
-        } else {
-            const uint32_t current_offset = sender_cb_interface.fifo_wr_ptr - fifo_start_addr;
-            checkpoint_offset = align(current_offset, page_size);
-            if (checkpoint_offset >= cb_size_page_aligned) {
-                checkpoint_offset = 0;
             }
         }
-        sender_cb_interface.fifo_wr_ptr = fifo_start_addr + checkpoint_offset;
         sender_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
         sender_cb_interface.fifo_page_size = page_size;
     }
 
-    // Consume the pad credits that the sender
-    // published when it snapped its cursor to the new page grid.
-    template <bool update_remote_over_noc = false>
+    // Consume the pad credits that the sender published when it snapped its cursor to the
+    // new page grid. Not defaulted for the same reason resize_sender_interface is not: with
+    // update_remote_over_noc false the read cursor moves without acking those credits.
+    template <bool update_remote_over_noc>
     FORCE_INLINE void resize_receiver_interface(
         uint32_t page_size,
         uint8_t noc,
@@ -850,7 +864,7 @@ FORCE_INLINE uint64_t noc_traits_t<experimental::PrefetcherPipe>::dst_addr(
     volatile tt_l1_ptr uint32_t* xy =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * args.receiver_idx;
     const uint32_t local_address = iface.fifo_start_addr +
-                                   experimental::PrefetcherPipe::derived_wr_offset(iface, args.receiver_idx) +
+                                   experimental::PrefetcherPipe::sender_wr_offset(iface, args.receiver_idx) +
                                    dst.destination_offset_bytes_;
     return noc_address_backend::worker_address(xy[0], xy[1], local_address, noc.get_noc_id());
 }
