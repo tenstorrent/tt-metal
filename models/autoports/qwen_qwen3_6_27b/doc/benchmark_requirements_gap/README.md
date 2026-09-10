@@ -65,31 +65,64 @@ reduction vs cold.
 Per-user decode must clear a **20 t/s usability floor**. ≥128K is served at
 ≤ batch 8; batch 16 is short/mid context only.
 
-## 2. What CI actually runs
+## 2. What CI actually runs, and which of it is needed
 
-19 points attempted, `(ISL, OSL, concurrency)`:
+19 points attempted. The "needed?" column judges each against Section 1:
+**CLOSE** means the ISL and batch match a requirement and only OSL is wrong;
+**NO** means no requirement asks for that ISL, or for that concurrency at all.
 
-| ISL | OSL | conc | n | outcome |
-| ---: | ---: | ---: | ---: | --- |
-| 128 | 128 | 1 | 8 | ok |
-| 128 | 128 | 32 | 256 | ok |
-| 128 | 1024 | 1 | 4 | ok |
-| 128 | 1024 | 32 | 128 | ok |
-| 1024 | 128 | 1 | 4 | ok |
-| 1024 | 128 | 32 | 128 | ok |
-| 2048 | 128 | 1 | 4 | ok |
-| 2048 | 128 | 32 | 128 | ok |
-| 4096 | 128 | 1 | 4 | ok |
-| 4096 | 128 | 32 | 128 | **KILLED** at 7200 s, 33/128 |
-| 8192 | 128 | 1 | 2 | ok |
-| 8192 | 128 | 32 | 64 | **KILLED**, 1/64 |
-| 8192 | 1024 | 1 | 2 | ok |
-| 8192 | 1024 | 32 | 64 | **KILLED**, 1/64 |
-| 10000 | 1024 | 1 | 2 | ok |
-| 10000 | 1024 | 32 | 64 | **KILLED**, 1/64 |
-| 16384 | 128 | 1 | 2 | ok |
-| 16384 | 128 | 31 | 62 | **KILLED**, 0/62 |
-| 32768 | 128 | 1 | 1 | run cancelled during it (18 h job cap) |
+| ISL | OSL | conc | n | needed? | outcome |
+| ---: | ---: | ---: | ---: | --- | --- |
+| 128 | 128 | 1 | 8 | **CLOSE** — right ISL+batch, OSL should be 252 | ok |
+| 128 | 128 | 32 | 256 | NO — conc 32 is in no requirement | ok |
+| 128 | 1024 | 1 | 4 | **CLOSE** — right ISL+batch, OSL should be 252 | ok |
+| 128 | 1024 | 32 | 128 | NO — conc 32 is in no requirement | ok |
+| 1024 | 128 | 1 | 4 | **CLOSE** — right ISL+batch, OSL should be 252 | ok |
+| 1024 | 128 | 32 | 128 | NO — conc 32 is in no requirement | ok |
+| 2048 | 128 | 1 | 4 | NO — this ISL is in no requirement | ok |
+| 2048 | 128 | 32 | 128 | NO — ISL and conc both unrequired | ok |
+| 4096 | 128 | 1 | 4 | **CLOSE** — right ISL+batch, OSL should be 252 | ok |
+| 4096 | 128 | 32 | 128 | NO — conc 32; 4096 *is* required at batch 8 and 16 | **KILLED** 33/128 |
+| 8192 | 128 | 1 | 2 | NO — this ISL is in no requirement | ok |
+| 8192 | 128 | 32 | 64 | NO — ISL and conc both unrequired | **KILLED** 1/64 |
+| 8192 | 1024 | 1 | 2 | NO — this ISL is in no requirement | ok |
+| 8192 | 1024 | 32 | 64 | NO — ISL and conc both unrequired | **KILLED** 1/64 |
+| 10000 | 1024 | 1 | 2 | NO — this ISL is in no requirement | ok |
+| 10000 | 1024 | 32 | 64 | NO — ISL and conc both unrequired | **KILLED** 1/64 |
+| 16384 | 128 | 1 | 2 | **CLOSE** — right ISL+batch, OSL should be 252 | ok |
+| 16384 | 128 | 31 | 62 | NO — conc 31 is in no requirement | **KILLED** 0/62 |
+| 32768 | 128 | 1 | 1 | **CLOSE** — right ISL+batch, OSL should be 252 | run cancelled during it |
+
+Tally:
+
+| category | points | note |
+| --- | ---: | --- |
+| fully required as configured | **0** | OSL is never 252 |
+| CLOSE — only OSL is wrong | **6** | all at conc 1, covering ISL 128, 1024, 4096, 16384, 32768 |
+| unrequired concurrency (31/32) | **5** | includes 4 of the 5 killed points |
+| unrequired ISL (2048, 8192, 10000) | **8** | includes the 5th killed point |
+
+**So 13 of the 19 points are testing something no requirement asks for, and
+they contain all five kills.** The other 6 are one parameter away from being
+useful.
+
+### What one edit would buy
+
+Changing OSL 128/1024 → **252** on the six conc-1 points turns them into 5 of
+the 8 required batch-1 rows: **ISL 128, 1024, 4096, 16384, 32768**. Still
+missing after that:
+
+| still missing | count |
+| --- | ---: |
+| batch 1 at ISL 65536, 131072, 262144 | 3 |
+| batch 8 at ISL 4096, 32768, 131072 | 3 |
+| batch 16 at ISL 4096, 32768 | 2 |
+| warm-prefill / APC rows | 8 |
+
+Dropping the 13 unrequired points frees the whole 10 h the kills consume plus
+the time on ISL 2048/8192/10000 — which is roughly what the 16 missing
+measurements would need, since the required set has no conc-32 long-ISL points
+and it is exactly those that blow the 7200 s cap.
 
 ## 3. The gap, ranked by consequence
 
