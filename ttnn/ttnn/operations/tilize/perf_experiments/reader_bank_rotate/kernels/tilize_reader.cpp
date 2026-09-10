@@ -3,35 +3,19 @@
 //
 // tilize reader (NoC0) — `load_block`.
 //
-// One `tilize_kernel::read_sticks_rotated` call per BLOCK. That block operation
-// owns the whole block: it reserves `block_width_tiles` pages, issues `tile_h`
-// NoC reads behind ONE barrier, and pushes — once per tile-row, for all
-// `block_row_extent` tile-rows of the block. Nothing here is per-tile-row.
+// One `read_sticks_for_tilize` call per BLOCK. The helper owns the whole block:
+// it reserves `block_width_tiles` pages, issues `tile_h` NoC reads behind ONE
+// barrier, and pushes — once per tile-row, for all `block_row_extent` tile-rows
+// of the block. Nothing here is per-tile-row.
 //
-// It is `dataflow_kernel_lib::read_sticks_for_tilize`'s TILE mode with the
-// stick ISSUE ORDER rotated per core, which is a measured -17.5% on the read
-// stage of the flagged perf profile; the full mechanism, the measured pair and
-// the helper-capability gap that forced the bypass are documented at the head of
-// `tilize_stick_read.hpp`. The three block extents map onto its parameters
-// exactly:
-//   num_tile_rows           = block_row_extent            (the tile_row extent)
+// The three block extents map onto the helper's parameters exactly:
+//   total_num_rows          = block_row_extent * tile_h   (the tile_row extent)
 //   row_bytes               = block_row_bytes             (the tile_col extent)
-//   byte_offset_within_page = w_chunk * block_row_bytes   (the column-chunk id)
-//   rotation                = block_id                    (any core-dependent
-//                                                          value; perf only)
+//   byte_offset_within_page = w_chunk * block_row_bytes    (the column-chunk id)
 //
-// `byte_offset_within_page` selects this block's column slice INSIDE each stick
-// page, so the CB footprint scales with the chunk width and not with the
-// tensor's W. `rotation` cannot affect the bytes: every stick lands at
-// `l1_base + row * row_bytes`, addressed by row and not by issue slot, and all
-// `tile_h` reads sit behind one barrier.
-//
-// THE ROTATION IS APPLIED ON EVERY BRANCH THAT READS STICKS — the plain branch,
-// the PADDED branch and the STRIDED branch all issue `tile_h` reads into one
-// barrier at row-indexed L1 offsets, so the reorder is equally free and equally
-// correct on all three. The RETILE branch is the one exception and it is an
-// exception of KIND, not of measurement: it walks tile FACES, not sticks, so
-// there is no stick order to rotate.
+// `byte_offset_within_page` is the helper's documented wide-W chunking
+// parameter: it selects this block's column slice INSIDE each stick page, so
+// the CB footprint scales with the chunk width and not with the tensor's W.
 //
 // NATIVE SHARDED INPUT (`input_is_native`). When the block IS this core's own
 // resident shard, cb_input_rows is PLACED ON the shard buffer by the host, so
@@ -109,8 +93,13 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
-#include "tilize_stick_read.hpp"  // `read_sticks_rotated` + the TILIZE_NOC_READ ablation macro
+#ifdef TILIZE_ABLATE_READS
+#define TILIZE_NOC_READ(...) ((void)0)
+#else
+#define TILIZE_NOC_READ(...) noc_async_read(__VA_ARGS__)
+#endif
 
 namespace {
 
@@ -303,9 +292,6 @@ void kernel_main() {
             // host guarantees the whole segment sits inside ONE source page.
             const uint32_t page_col = col_bytes / in_page_width_bytes;
             const uint32_t byte_in_page = col_bytes - page_col * in_page_width_bytes;
-            // Same core-dependent rotated issue order as the plain branch
-            // (tilize_stick_read.hpp), hoisted out of the block loop.
-            const uint32_t first_row = (tile_h > 1) ? (block_id % tile_h) : 0;
 
             for (uint32_t tr = 0; tr < block_row_extent; ++tr) {
                 // SEGMENTED per image: with an H tail the source sticks restart
@@ -327,17 +313,9 @@ void kernel_main() {
                 const uint32_t stick_base =
                     (image * in_rows_per_image + first_src_row) * input_pages_per_row + page_col;
 
-                // Phase 1 — every NoC transfer of the tile-row, behind ONE
-                // barrier, issued in the SAME core-dependent rotated order the
-                // plain branch uses (see tilize_stick_read.hpp). Free for the
-                // same reason: each row lands at `block_addr + row *
-                // block_row_bytes`, addressed by row and not by issue slot.
-                // Two straight runs, as in tilize_stick_read.hpp: the rotated
-                // order is `[first_row, tile_h)` then `[0, first_row)`, each of
-                // them contiguous, so it costs no per-row arithmetic over the
-                // ascending order it replaces.
-                auto read_row = [&](uint32_t row) {
-                    const uint32_t l1_write_addr = block_addr + row * block_row_bytes;
+                // Phase 1 — every NoC transfer of the tile-row, behind ONE barrier.
+                uint32_t l1_write_addr = block_addr;
+                for (uint32_t row = 0; row < tile_h; ++row) {
                     if (row < valid_rows && valid_bytes > 0) {
                         TILIZE_NOC_READ(
                             in_acc.get_noc_addr(stick_base + row * input_pages_per_row, byte_in_page),
@@ -347,12 +325,7 @@ void kernel_main() {
                         // A fully padded row: one L1 -> L1 transfer from the seeded row.
                         TILIZE_NOC_READ(get_noc_addr(pad_row_addr), l1_write_addr, block_row_bytes);
                     }
-                };
-                for (uint32_t row = first_row; row < tile_h; ++row) {
-                    read_row(row);
-                }
-                for (uint32_t row = 0; row < first_row; ++row) {
-                    read_row(row);
+                    l1_write_addr += block_row_bytes;
                 }
                 noc_async_read_barrier();
 
@@ -361,10 +334,10 @@ void kernel_main() {
                 // was just writing the head of, and a store issued while that
                 // write is in flight is a race on the row's last aligned word.
                 if (pad_bytes > 0 && valid_bytes > 0) {
-                    uint32_t tail_addr = block_addr + valid_bytes;
-                    for (uint32_t r = 0; r < valid_rows; ++r) {
-                        dataflow_kernel_lib::fill_l1_range<elem_size>(tail_addr, pad_bytes, pad_word);
-                        tail_addr += block_row_bytes;
+                    l1_write_addr = block_addr + valid_bytes;
+                    for (uint32_t row = 0; row < valid_rows; ++row) {
+                        dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, pad_bytes, pad_word);
+                        l1_write_addr += block_row_bytes;
                     }
                 }
                 cb_push_back(cb_input_rows, block_width_tiles);
@@ -387,28 +360,16 @@ void kernel_main() {
             const uint32_t col_bytes = col_byte_offset + w_chunk * block_row_bytes;
             const uint32_t page_col = col_bytes / in_page_width_bytes;
             const uint32_t byte_in_page = col_bytes - page_col * in_page_width_bytes;
-            // Same core-dependent rotated issue order as the plain branch
-            // (tilize_stick_read.hpp) — the L1 destination is row-indexed and
-            // the whole tile-row sits behind one barrier, so it is equally free
-            // and equally correct here.
-            const uint32_t first_row = (tile_h > 1) ? (block_id % tile_h) : 0;
             for (uint32_t tr = 0; tr < block_row_extent; ++tr) {
                 cb_reserve_back(cb_input_rows, block_width_tiles);
-                const uint32_t l1_base = get_write_ptr(cb_input_rows);
+                uint32_t l1_write_addr = get_write_ptr(cb_input_rows);
                 const uint32_t first_stick = (row_start + tr) * tile_h;
-                // Two straight runs, as in tilize_stick_read.hpp — the rotated
-                // order costs no per-stick arithmetic over the ascending one.
-                for (uint32_t row = first_row; row < tile_h; ++row) {
+                for (uint32_t row = 0; row < tile_h; ++row) {
                     TILIZE_NOC_READ(
                         in_acc.get_noc_addr((first_stick + row) * input_pages_per_row + page_col, byte_in_page),
-                        l1_base + row * block_row_bytes,
+                        l1_write_addr,
                         block_row_bytes);
-                }
-                for (uint32_t row = 0; row < first_row; ++row) {
-                    TILIZE_NOC_READ(
-                        in_acc.get_noc_addr((first_stick + row) * input_pages_per_row + page_col, byte_in_page),
-                        l1_base + row * block_row_bytes,
-                        block_row_bytes);
+                    l1_write_addr += block_row_bytes;
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_input_rows, block_width_tiles);
@@ -436,12 +397,104 @@ void kernel_main() {
                 }
                 rows_reader = block_row_extent - rows_writer;
             }
-            tilize_kernel::read_sticks_rotated<cb_input_rows, block_width_tiles, tile_h, block_row_bytes>(
+#ifdef TILIZE_ABLATE_READS
+            // The helper's own reserve / barrier / push cycle with the PAYLOAD
+            // removed: same trip count, same CB quantum, no NoC read. Written
+            // out here because the reads live inside `read_sticks_for_tilize`
+            // and a shared kernel_lib helper is not the place for an op's
+            // ablation switch.
+            for (uint32_t tr = 0; tr < rows_reader; ++tr) {
+                cb_reserve_back(cb_input_rows, block_width_tiles);
+                noc_async_read_barrier();
+                cb_push_back(cb_input_rows, block_width_tiles);
+            }
+#elif defined(TILIZE_ROTATE_VARIANT)
+            // ---- perf_experiments/reader_bank_rotate (isolated bake-off) ----
+            // Same bytes, same transaction size (block_row_bytes), same trip
+            // count (tile_h stick reads per block iteration, behind ONE
+            // barrier) as `read_sticks_for_tilize`'s TILE mode -- only the
+            // ISSUE ORDER of the tile_h reads changes. Every stick still lands
+            // at its helper-identical L1 offset (`l1_base + row *
+            // block_row_bytes`), addressed by ROW not by issue slot, so
+            // reordering behind one shared barrier is free and the block is
+            // bit-identical to the baseline regardless of which order wins.
+            //
+            // Mechanism this chases: on an interleaved DRAM tensor, source
+            // page p maps to bank (p % NUM_BANKS) (round-robin assignment,
+            // `tensor_accessor.h:get_bank_and_offset_from_page_id`). On a
+            // geometry where every core shares `start_page` (R==1, one row
+            // group -- true for the focus shape and both R==1 domain points
+            // below) the whole 64-core grid issues row 0 first, row 1 second,
+            // ... in lockstep, so at read-step r every core hammers bank
+            // `r % NUM_BANKS` while the other NUM_BANKS-1 banks idle. Rotating
+            // core k's start row de-synchronizes the grid so all NUM_BANKS
+            // banks are hit every step instead of one at a time.
+            //
+            // TILIZE_ROTATE_VARIANT (compile define, set by the test's
+            // monkeypatched `_ablation_defines`):
+            //   1 = raw loop, ASCENDING (r0 = 0). Isolates "raw vs helper" --
+            //       the control that separates a win from writing the loop out
+            //       (no rotation) from a win from the rotation itself.
+            //   2 = rotate start row by `(w_chunk * TILIZE_ROTATE_STRIDE) %
+            //       tile_h` (stride via a second compile define, default 1).
+            //       Stride 1 IS "rotate by the core's own linear index": on
+            //       the smooth/no-tail plans exercised here `w_chunk` is the
+            //       core's own linear (raster) position whenever
+            //       num_blocks_this_core == 1 (`split_work_to_cores`'s
+            //       row-wise, contiguous block-id assignment), so this is the
+            //       cheapest possible derivation -- no new runtime arg, reuses
+            //       a value the block-resolve arithmetic already computed.
+            //   3 = rotate so THIS block iteration's FIRST read lands on DRAM
+            //       bank `w_chunk % NUM_DRAM_BANKS` exactly, solved from the
+            //       page->bank rule above rather than guessed.
+            {
+                // NUM_DRAM_BANKS is a box constant (12, stated in the shared
+                // perf-tournament context for this n150 Wormhole B0 box), NOT
+                // a general derivation -- a graduated version would need this
+                // read from the device/accessor rather than hardcoded. Fine
+                // for an isolated bench; flagged in the report as a gap for
+                // whoever integrates variant 3.
+                constexpr uint32_t kNumDramBanks = 12;
+#ifdef TILIZE_ROTATE_STRIDE
+                constexpr uint32_t kStride = TILIZE_ROTATE_STRIDE;
+#else
+                constexpr uint32_t kStride = 1;
+#endif
+                const uint32_t byte_off = col_byte_offset + w_chunk * block_row_bytes;
+                for (uint32_t blk = 0; blk < rows_reader; ++blk) {
+                    const uint32_t start_page = row_start * tile_h + blk * tile_h;
+                    uint32_t r0 = 0;
+#if TILIZE_ROTATE_VARIANT == 2
+                    r0 = (w_chunk * kStride) % tile_h;
+#elif TILIZE_ROTATE_VARIANT == 3
+                    {
+                        const uint32_t target_bank = w_chunk % kNumDramBanks;
+                        const uint32_t base_bank = start_page % kNumDramBanks;
+                        // kNumDramBanks(12) < tile_h(32), so r0 < tile_h always.
+                        r0 = (target_bank + kNumDramBanks - base_bank) % kNumDramBanks;
+                    }
+#endif
+                    cb_reserve_back(cb_input_rows, block_width_tiles);
+                    const uint32_t l1_base = get_write_ptr(cb_input_rows);
+                    for (uint32_t i = 0; i < tile_h; ++i) {
+                        const uint32_t row = (r0 + i) % tile_h;  // issue ORDER only
+                        TILIZE_NOC_READ(
+                            in_acc.get_noc_addr(start_page + row, byte_off),
+                            l1_base + row * block_row_bytes,
+                            block_row_bytes);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_input_rows, block_width_tiles);
+                }
+            }
+#else
+            dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rows, dataflow_kernel_lib::TilizeGranularity::TILE>(
                 in_acc,
-                /* num_tile_rows           */ rows_reader,
+                /* total_num_rows          */ rows_reader * tile_h,
+                /* row_bytes               */ block_row_bytes,
                 /* start_page              */ row_start * tile_h,
-                /* byte_offset_within_page */ col_byte_offset + w_chunk * block_row_bytes,
-                /* rotation                */ block_id);
+                /* byte_offset_within_page */ col_byte_offset + w_chunk * block_row_bytes);
+#endif
         }
     }
 }

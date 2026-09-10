@@ -58,6 +58,7 @@ not on the per-core mix.
 from __future__ import annotations
 
 import math
+import os
 import struct
 from pathlib import Path
 
@@ -234,6 +235,37 @@ SPLIT_READER_WRITER_SHARE_PCT = 38
 # falls back to the divisor rule and is byte-identical to Refinement 5.
 # Inert on smooth `C` either way (`C % bw == 0` emits no tail group).
 RAGGED_COLUMN_TAIL = True
+
+# ---------------------------------------------------------------------------
+# Ablation switches — PERF MEASUREMENT ONLY, never on in a normal run
+# ---------------------------------------------------------------------------
+#
+# `/perf-measure`'s ablation: remove a stage's PAYLOAD while keeping its
+# SYNCHRONIZATION (loop trip counts, CB reserve/push/wait/pop, the NoC barrier)
+# so the pipeline still runs at the same shape and the wall reports what that
+# payload cost. Because the stages OVERLAP — the reader's NoC reads run against
+# the TRISCs' tilize — a single stage removed alone under-counts itself: the
+# still-running partner fills the gap. So they are peeled CUMULATIVELY, e.g.
+#     TILIZE_ABLATE=compute            then
+#     TILIZE_ABLATE=compute,reads      then
+#     TILIZE_ABLATE=compute,reads,writes
+# with the last run reporting the pure dispatch + synchronization floor.
+#
+# Off by default and read from the environment rather than exposed as an op
+# argument, because a run with it on produces WRONG OUTPUT by construction.
+# The kernel-side halves are the `TILIZE_ABLATE_*` `#ifdef`s in the three
+# kernels; they compile to nothing here.
+_ABLATE_STAGES = ("reads", "writes", "compute")
+
+
+def _ablation_defines() -> list:
+    raw = os.environ.get("TILIZE_ABLATE", "")
+    stages = {s.strip().lower() for s in raw.split(",") if s.strip()}
+    unknown = stages - set(_ABLATE_STAGES)
+    if unknown:
+        raise ValueError(f"TILIZE_ABLATE: unknown stage(s) {sorted(unknown)}; known: {_ABLATE_STAGES}")
+    return [(f"TILIZE_ABLATE_{s.upper()}", "1") for s in sorted(stages)]
+
 
 # Legal output tile heights (power-of-two fractions of 32).
 LEGAL_TILE_HEIGHTS = (1, 2, 4, 8, 16, 32)
@@ -1742,6 +1774,7 @@ def create_program_descriptor(
                 core_ranges=group.cores,
                 compile_time_args=reader_ct_args,
                 runtime_args=reader_rt_args,
+                defines=_ablation_defines(),
                 config=ttnn.ReaderConfigDescriptor(),  # reads on NoC0
             )
         )
@@ -1756,6 +1789,7 @@ def create_program_descriptor(
                     core_ranges=group.cores,
                     compile_time_args=writer_ct_args,
                     runtime_args=writer_rt_args,
+                    defines=_ablation_defines(),
                     config=ttnn.WriterConfigDescriptor(),  # writes on NoC1
                 )
             )
@@ -1773,6 +1807,7 @@ def create_program_descriptor(
                     core_ranges=group.cores,
                     compile_time_args=compute_ct_args,
                     runtime_args=compute_rt_args,
+                    defines=_ablation_defines(),
                     config=compute_config,
                 )
             )

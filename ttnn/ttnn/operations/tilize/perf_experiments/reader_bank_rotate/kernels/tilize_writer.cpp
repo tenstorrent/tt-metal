@@ -30,13 +30,6 @@
 // to `read_sticks_for_tilize` on the tiled side. This kernel is that block
 // operation, written out.
 //
-// ISSUE-ORDER ROTATION (Perf 1). The `store_block` loop below issues its
-// batch's writes starting at a core-dependent offset in BOTH axes rather than
-// at (row 0, col 0). Same bytes, same destinations, same count, same single
-// barrier — see the comment at the loop for the mechanism and the measured
-// pair. It is the writer twin of the reader's rotation (tilize_stick_read.hpp),
-// floated with it because a shape is only as fast as its slower NoC half.
-//
 // BATCHING. `write_rows_per_barrier` whole-tile-page writes' worth of tile-rows
 // go in flight behind ONE barrier, so the transaction count per barrier is
 // `write_rows_per_barrier * block_width_tiles` — at or above the measured ~4-8
@@ -78,8 +71,7 @@
 // the write was free; it means the issue loop already paid for it.
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
-
-#include "tilize_stick_read.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
@@ -148,16 +140,21 @@ void kernel_main() {
             if (rows_writer > 0) {
                 MaybeDeviceZoneScope("writer_split_read");
                 const uint32_t rows_reader = block_row_extent - rows_writer;
-                // The identical block operation the reader runs, over the row
-                // range the reader deliberately left — including its rotated
-                // issue order, so both halves of a split read spread across the
-                // DRAM banks the same way.
-                tilize_kernel::read_sticks_rotated<cb_input_rows_split, block_width_tiles, tile_h, block_row_bytes>(
-                    in_acc,
-                    /* num_tile_rows           */ rows_writer,
-                    /* start_page              */ (row_start + rows_reader) * tile_h,
-                    /* byte_offset_within_page */ col_byte_offset + w_chunk * block_row_bytes,
-                    /* rotation                */ block_id);
+#ifdef TILIZE_ABLATE_READS
+                for (uint32_t tr = 0; tr < rows_writer; ++tr) {
+                    cb_reserve_back(cb_input_rows_split, block_width_tiles);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_input_rows_split, block_width_tiles);
+                }
+#else
+                dataflow_kernel_lib::
+                    read_sticks_for_tilize<cb_input_rows_split, dataflow_kernel_lib::TilizeGranularity::TILE>(
+                        in_acc,
+                        /* total_num_rows          */ rows_writer * tile_h,
+                        /* row_bytes               */ block_row_bytes,
+                        /* start_page              */ (row_start + rows_reader) * tile_h,
+                        /* byte_offset_within_page */ col_byte_offset + w_chunk * block_row_bytes);
+#endif
             }
         }
 
@@ -183,43 +180,15 @@ void kernel_main() {
                 cb_wait_front(cb_output_tiles, pages_this_batch);
             }
 
-            const uint32_t l1_read_base = get_read_ptr(cb_output_tiles);
-            // ISSUE-ORDER ROTATION, both axes, by the core-dependent `block_id`.
-            // The mirror of the reader's (tilize_stick_read.hpp), and free for
-            // the same reason: every write's L1 source is `l1_read_base +
-            // (r*block_width_tiles + i) * out_tile_bytes`, computed from the
-            // indices rather than from a running cursor, and the whole batch
-            // sits behind ONE barrier — so the bytes, the destinations and the
-            // transaction count are identical whatever the order.
-            //
-            // It rotates WHEN a core hits a bank, never WHICH banks its block
-            // reaches (the reachable set is fixed by `page_base` and
-            // `block_width_tiles`), which is why the effect is real but modest.
-            // Measured (device kernel ns, medians): `[1,1,1024,1024]` 24404 ->
-            // 22767 (-6.7%, three consistent reps); `[1,1,16384,32]` 18092 ->
-            // 17445 (-3.6%) — that one comes entirely from the ROW axis, since
-            // a `block_width_tiles == 1` block has no column order to permute,
-            // which is why both axes are rotated rather than just the column.
-            // Flat elsewhere, no regression measured anywhere.
-            const uint32_t col_rot = block_id % block_width_tiles;
-            const uint32_t row_rot = block_id % rows_this_batch;
+            uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
             {
                 MaybeDeviceZoneScope("writer_issue");
-                for (uint32_t rs = 0; rs < rows_this_batch; ++rs) {
-                    uint32_t r = rs + row_rot;
-                    if (r >= rows_this_batch) {
-                        r -= rows_this_batch;
-                    }
+                for (uint32_t r = 0; r < rows_this_batch; ++r) {
                     // Output page id of tile (row, col) in an interleaved TILE
                     // tensor is row * C + col, with `row` already folding the
                     // leading dims (R = num_images * rows_per_image).
                     const uint32_t page_base = (row_start + rows_done + r) * tensor_col_tiles + col_base;
-                    const uint32_t l1_row_addr = l1_read_base + r * block_width_tiles * out_tile_bytes;
-                    for (uint32_t cs = 0; cs < block_width_tiles; ++cs) {
-                        uint32_t i = cs + col_rot;
-                        if (i >= block_width_tiles) {
-                            i -= block_width_tiles;
-                        }
+                    for (uint32_t i = 0; i < block_width_tiles; ++i) {
                         // `out_tile_bytes` as `max_page_size` takes the ONE-PACKET
                         // issue path (dataflow_api.h:838): a whole tile page is
                         // always <= NOC_MAX_BURST_SIZE, so the generic
@@ -229,8 +198,9 @@ void kernel_main() {
                         (void)out_acc.get_noc_addr(page_base + i);
 #else
                         noc_async_write<out_tile_bytes>(
-                            l1_row_addr + i * out_tile_bytes, out_acc.get_noc_addr(page_base + i), out_tile_bytes);
+                            l1_read_addr, out_acc.get_noc_addr(page_base + i), out_tile_bytes);
 #endif
+                        l1_read_addr += out_tile_bytes;
                     }
                 }
             }

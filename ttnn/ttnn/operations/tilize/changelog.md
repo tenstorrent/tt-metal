@@ -1022,3 +1022,205 @@
   rough-`C` witnesses), and `test_tilize_column_tail_and_split.py` (11
   correctness cases pinning both mechanisms, their knobs-off equivalence, and
   every structural leg of the split gate).
+
+---
+
+## Perf 1 — Tournament on the flagged `attention` profile
+
+**Target**: `LOOSE_CASES[0]`, the entry carrying the `attention:` PERF FOCUS note —
+`[1,1,32,16384]`, `bfloat16 -> bfloat16`, interleaved DRAM -> interleaved DRAM, rank 4,
+tile-aligned, 32x32 tile, default compute config. Every knob of that config is in
+`SUPPORTED`, so it was measured exactly and never through a proxy. Nothing was added to
+`SUPPORTED`; this round moves device-ns only.
+
+Box for every number below: **Wormhole B0 `n150 L`, 8x8 = 64/64 cores, 1 GHz, 12 DRAM banks.**
+Run-to-run spread on this box for an identical build is **+-8%** (12628 / 13700 / 14259 all
+observed for the same kernels), which is the bar every claim here clears or is reported as
+not clearing.
+
+### The measured breakdown (Step 1)
+
+Permanent `MaybeDeviceZoneScope` instrumentation was added to all three kernels
+(`ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`), and permanent payload-ablation
+switches (`TILIZE_ABLATE=reads,writes,compute` -> kernel `defines`) to the program
+descriptor. **Both are permanent** — the zones compile to nothing off a profiled build, and
+round 2 needs the same breakdown on a moved critical path.
+
+Plan on the focus shape: `R=1`, `C=512`, `block_width_tiles=8`, `num_w_chunks=64`, 64 blocks
+over 64 cores, so each core owns exactly ONE block = 1 tile-row x 8 tile-columns. Per core:
+32 reads of 512 B behind one barrier, one `tilize<8>` over one tile-row, 8 writes of 2048 B
+behind one barrier. **One wave per core**, so read -> compute -> write is strictly serial in-core.
+
+Cumulative payload peel (device kernel ns; stages overlap, so they are peeled cumulatively —
+a stage removed alone under-counts itself):
+
+| peel | ns | stage cost | share |
+|---|---|---|---|
+| full | 14259 | — | — |
+| minus compute | 13466 | compute **793** | 5.6% |
+| minus compute + reads | 8788 | reads **4678** | 32.8% |
+| minus compute + reads + writes | 948 | writes **7840** | **55.0%** |
+| floor — every payload stubbed at once, sync + dispatch only | 948 | — | 6.6% |
+
+The four terms sum to 14259 exactly, which is itself the finding: **almost no overlap is
+being harvested** on this geometry. The whole-op-ablated rung (every stage stubbed in ONE
+run) is what licenses that statement; it also refutes "this is mostly overhead" — the floor
+is 6.6%.
+
+Per-stage zones, mean over 64 cores:
+
+| run | zone | mean ns | share of that RISC's span |
+|---|---|---|---|
+| full | `NCRISC reader_read_block` | 6245 | 97.8% |
+| full | `BRISC writer_wait_out` | 7059 | 69.2% (**starved**, not expensive) |
+| full | `BRISC writer_issue` | 1788 | 17.5% |
+| full | `BRISC writer_barrier` | 1106 | 10.8% |
+| writes only | `BRISC writer_issue` / `writer_barrier` | 4368 / 850 | 16 KB per core in 5218 ns |
+| reads only | `NCRISC reader_read_block` | 5297 | 16 KB per core in 5297 ns |
+
+`writer_wait_out` at 69% is the single most useful number: the writer is not slow, it is
+*idle* until the serial read+compute delivers. That is what makes the zones occupancy and
+the ablation the ranking.
+
+**Ranked bottleneck: writes (55%) > reads (33%) >> compute (5.6%).**
+
+**Roofline gate.** The NPE `noc_estimate` CLI is a test target and is not built in this
+clone, so the gate is the **same-box empirical ceiling** instead, taken from
+`[1,1,2048,2048]` (1024 B reads, 4 waves/core): **258 GB/s read, 221 GB/s write, 262 GB/s
+mixed**. The focus shape sits at 193 / 200 / 205 GB/s. So both data-movement stages had real
+headroom and **compute was gated out** — at 793 ns it is smaller than the run-to-run noise
+band and no idea was spent on it.
+
+Core-time spread on the focus shape: BRISC span mean 10202 ns vs **max 13016 ns**, a 1.28x
+tail on perfectly uniform per-core work — a contention/ordering signature, not a work-split one.
+
+### The portfolio floated (Step 2), and every verdict (Steps 3-4)
+
+Six ideas, one `perf-part-optimizer` each, all in parallel. Deliberately overlapping: two
+reader levers with their two writer twins, plus one host-side plan lever. Four came back
+null or worse, and those four are the reason the fifth is trustworthy.
+
+| # | idea | verdict | measured |
+|---|---|---|---|
+| 1 | `writer_state_reuse` — `noc_async_write_one_packet_set_state`/`_with_state` + address recurrence, to cut the 546 ns/call write issue | **NULL** | focus 13628 -> 13080/13135 (all inside noise). Decisive: `writer_issue` for 8 writes is **4337 ns at 64 cores but 545 ns at 1 core** (542 -> 68 ns/call), so the cost is **fabric back-pressure, not RISC command programming**. The `set_state` form is additionally **incorrect** here: `_with_state` never reprograms `NOC_RET_ADDR_COORDINATE`, so every page after the first lands on the wrong DRAM bank (round-robin destination). Also disproved the premise: an interleaved `TensorAccessor` already divides by a magic-multiply reciprocal, not a software divide. |
+| 2 | `writer_dual_risc` — split the store across NCRISC+BRISC, the twin of the shipped split reader | **REGRESSION** | focus 13142 -> 19962 (column split) / 33340 (role swap); 1.5x-2.5x worse on all 5 shapes. `writer_issue` at fixed per-core payload goes 643 ns (4 cores) -> 4154 ns (64 cores): the store is bandwidth-bound, so a second RISC-V adds traffic to a saturated resource. Side-measurement worth keeping: reads on NoC1 cost **2.3x** reads on NoC0 and writes on NoC0 cost **4.9x** writes on NoC1 — the `noc_placement` catalog entry, reproduced on this op. |
+| 3 | `reader_state_reuse` — same lever on the reader's 32 stick reads | **REGRESSION** | focus 12789 (helper) -> 15784 (bank-grouped state reuse, +23%); +18-25% on every shape. 12 banks is not a power of two, so 32 consecutive stick reads visit each bank only ~2.7 times and most `set_state` calls pay full price while the grouping bookkeeping is pure added cost. The address-**recurrence** half alone is -4.6% on `[1,1,16384,32]` and +0.3..+3.9% (noise, wrong sign) on the other four — a wash, not graduated; recorded as a round-2 candidate. |
+| 4 | `reader_bank_rotate` — rotate the per-core stick issue order to de-synchronize DRAM bank access | **WIN** | isolated reader stage on the focus shape 5545 -> **4694 ns mean / 7139 -> 5975 max (-17.5% / -18.8%)**, with a raw-loop-ascending CONTROL at 5572 confirming the win is the rotation and not the helper bypass. Stride is irrelevant (1/5/7/11/13 and a bank-exact solve all land within a point), so the cheapest source wins. |
+| 5 | `writer_bank_rotate` — the writer twin, both axes | **WIN (modest)** | `[1,1,1024,1024]` 24404 -> 22767 (**-6.7%**, three consistent reps); `[1,1,16384,32]` 18092 -> 17445 (-3.6%, and that one comes entirely from the ROW axis, since `block_width_tiles == 1` has no column order to permute); flat on the focus shape alone. Structural ceiling recorded: issue order changes **when** a core hits a bank, never **which** banks its block reaches. |
+| 6 | `short_wide_block_width` — re-solve the transaction-size vs occupancy trade against the new per-stage numbers | **NULL** | bw 2/4/8/16/32 = 15534 / 13319 / **13664 (production)** / 14293 / 16077. At bw=16 the **read stage alone is 14% faster** (7675 -> 6635, bigger transaction genuinely amortizes) and the write stage is flat, yet the whole op regresses 4.6% because only 32 of 64 cores do any of that faster reading. `derive_plan` already refuses to widen past the occupancy target by construction. **No rule change.** |
+
+**Aggregation.** Ideas 1, 2, 3 and 6 are discarded, and together they say one thing: on this
+op every RISC-side and transaction-shape lever is already spent, and the wall is DRAM bank
+service. Ideas 4 and 5 are the only two that attack *that*, they touch different NoC halves,
+and they compose — so both graduate, as a pair.
+
+### What graduated, and how widely
+
+**One unqualified path, no predicate, no fallback, and the code it replaced is deleted.**
+
+* **Reader** — `dataflow_kernel_lib::read_sticks_for_tilize` is no longer called on the plain
+  branch. It is replaced by `tilize_kernel::read_sticks_rotated`
+  (`kernels/tilize_stick_read.hpp`, new), which is the same block operation with the stick
+  issue order rotated by `block_id`. The rotation is applied to **every branch of the reader
+  that reads sticks** — plain, PADDED and STRIDED — and to the split reader's own call inside
+  `tilize_writer.cpp`, so the two halves of a split read spread the same way.
+* **Writer** — `store_block` issues each batch starting at a core-dependent offset in **both**
+  the tile-row and the tile-column axis (`block_id % rows_this_batch`,
+  `block_id % block_width_tiles`).
+* Correctness needs no argument in either case and that is the point: every read lands at
+  `l1_base + row * row_bytes` and every write sources from
+  `l1_read_base + (r*bw + i) * out_tile_bytes` — addressed by index, never by issue slot — and
+  each batch sits behind ONE barrier, so no consumer can observe the order. Bit-identical for
+  any rotation value, which is why `rotation` is a pure perf knob.
+
+**Carve-outs: exactly one, and it is a carve-out of KIND, not of measurement.** The RETILE
+branch walks tile FACES, not sticks, so there is no stick order to rotate — the pattern has
+no meaning there. It is not written as a predicate; it is simply a different block operation
+that the rotation never enters. **Nothing is fenced off for being slow, and nothing is fenced
+off for being untested** — the rotation rides on the padded, strided and sharded paths, which
+were not separately benchmarked, because untested is not an exception and a predicate around
+the shapes that happened to get measured would freeze the win at the size of the test matrix.
+
+**One regression was found, and it was DELETED rather than carved out.** The first draft
+carried the rotation as a single loop with a wrap (`++row; if (row == tile_h) row = 0;`) plus
+an index-to-address multiply. That measured **+7.2% on `[1,1,2048,64]`** — a 5 us kernel where
+32 iterations of extra RISC arithmetic is a visible share of the wall. Rewriting the rotation
+as **two straight runs** (`[first_row, tile_h)` then `[0, first_row)`, each contiguous in both
+page index and L1 offset, so both walk on plain increments exactly like the ascending loop it
+replaces) gave it back — `[1,1,2048,64]` went to **+3.0%**, inside the noise band — while
+*widening* nothing and *narrowing* nothing. The right answer to a regression is to remove its
+cause, not to fence off the shape that exposed it.
+
+### Whole-op before/after and the guard-set no-regression result
+
+Four to five profiled runs per configuration; medians. The **ROT EFFECT** column is the clean
+A/B — identical code, `rotation` forced to 0 vs `rotation = block_id` — so it isolates the
+rotation from the permanent zones' own profiled-build cost. (`vs orig` additionally carries
+that zone cost, which is zero in a normal, non-profiled run.)
+
+| guard-set case | shape | orig (committed) | zones, rot=0 | zones, rot=`block_id` | **ROT EFFECT** | vs orig |
+|---|---|---|---|---|---|---|
+| **attention (FOCUS)** | `[1,1,32,16384]` | 12998 | 13978 | **12480** | **-10.7%** | -4.0% |
+| grid2d_full_width | `[1,1,2048,64]` | 4931 | 5096 | 5249 | +3.0% | +6.4% |
+| grid2d_width_chunked | `[1,1,32,2048]` | 3866 | 3960 | 3719 | -6.1% | -3.8% |
+| square_large | `[1,1,2048,2048]` | 85403 | 85953 | 86505 | +0.6% | +1.3% |
+| tall_narrow (split reader) | `[1,1,16384,32]` | 18136 | 18565 | 17556 | -5.4% | -3.2% |
+| square_mid | `[1,1,1024,1024]` | 23450 | 22995 | 23034 | +0.2% | -1.8% |
+| short_wide_wide | `[1,1,32,32768]` | 24551 | 24664 | 24038 | -2.5% | -2.1% |
+| padded (segmented+fill reader) | `[8,1,249,2048]` | 85330 | 85444 | 86996 | +1.8% | +2.0% |
+| sharded (native, no writer kernel) | `[1,1,2048,2048]` HEIGHT | 4820 | 4983 | 4970 | -0.3% | +3.1% |
+
+**No-regression: clean.** Every non-focus case is inside the +-8% band; the largest positive
+is `[1,1,2048,64]` at +3.0%, which is under half the band and has no mechanism left behind it
+after the two-run rewrite. So no cell earned a carve-out.
+
+Stage-level confirmation that the win is the mechanism and not luck, same zones, focus shape,
+before -> after: `NCRISC reader_read_block` **6245 -> 5178 ns mean** (-17.1%) and
+**9760 -> 7590 max** (-22.2%), matching the isolated bench's -17.5% / -18.8%; `writer_wait_out`
+**7059 -> 5969** (-15.4%, the writer is starved less); BRISC span **10202 -> 9715** mean.
+Marker budget 10/250 on the busiest RISC, and the zones cover the whole kernel span, so the
+breakdown is not truncated.
+
+- **Accuracy achieved**: **bit-identical** (`torch.equal`) everywhere — tilize does no
+  arithmetic, so PCC is not the bar. All 9 guard-set cases assert `torch.equal` and pass.
+- **Golden test progress**: `scripts/run_safe_pytest.sh --run-all eval/golden_tests/tilize/` gives
+  **59-61 failed, 1773-1775 passed, 2696 skipped, 14 xfailed, 4 errors**, against a committed
+  baseline measured back-to-back in the same session at **59 failed, 1775 passed, 2696 skipped,
+  14 xfailed, 4 errors**. The 58 `test_translated.py` failures and the 4 harness setup errors are
+  identical on both trees. **The whole spread is one flaky family, and it is flaky BEFORE this
+  round as well** — the `[1,1,50,50] x bfloat4_b-output x pad x hw_non_aligned` near-miss
+  Refinement 5 attributed to the pad fill sharing a 16-element bfp4 exponent block with real data.
+  It sits on the PCC threshold and the harness redraws its input per run, so the count moves
+  run to run on an unchanged tree. Measured directly, four consecutive runs of just that family
+  (`-k "50x50 and BFLOAT4_B"`, 10 cases):
+
+  | tree | run 1 | run 2 | run 3 | run 4 |
+  |---|---|---|---|---|
+  | committed baseline (`HEAD~1`) | 0 failed | 2 | 1 | 1 |
+  | this round | 0 failed | 0 | 1 | 2 |
+
+  Same distribution, so **no delta attributable to this round**. Recorded rather than rounded
+  off, because "the counts matched" would have been a false claim on a suite where they do not
+  match themselves. (That the family is threshold-flaky at all is a pre-existing gap worth its
+  own fix; it is not this round's to make.)
+- **Issues encountered**: (1) the subagents' `perf_experiments/*/__init__.py` files made
+  `ttnn/ttnn/operations/__init__.py`'s `pkgutil.walk_packages` **execute their benches on every
+  `import ttnn`**, which broke `import ttnn` repo-wide the moment a bench referenced an op hook
+  that a stashed tree did not have (`AttributeError: ... has no attribute '_ablation_defines'`,
+  raised out of `conftest.py`). Fixed by emptying `__path__` in
+  `perf_experiments/__init__.py`, with the reason written down there. (2) One subagent hung the
+  device writing `NOC_RET_ADDR_COORDINATE` with no `noc_cmd_buf_ready` guard — recorded because
+  the guard it then needed is part of why that idea could not win.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_ablation_perf1.py` (the
+  cumulative-peel harness; unlike Refinement 6's it needs no kernel edits, the switches being
+  `TILIZE_ABLATE` defines), and `ttnn/ttnn/operations/tilize/perf_experiments/zone_report.py`
+  (per-stage zone report with the marker-budget check). All six subagents' benches are kept
+  under `perf_experiments/` — a measured null is a completed investigation and round 2 should
+  not repeat it.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::read_sticks_for_tilize` | capability | Its TILE-mode inner loop is `for (row = 0; row < rows_this_block; row++)` over `start_page + block_row + row` (`tilize_helpers_dataflow.inl:121`), and its signature carries no order, start-row or permutation parameter — so no call-site argument can express a rotated start row, which is the whole lever. The helper's own overhead is NOT the gap: a raw ascending loop ties it (5572 vs 5545 ns), so this is one missing optional `start_row_offset` parameter away from being closable, after which this file goes back to being a call. | 5545 (helper, ascending) | 4694 (raw, rotated) | `kernels/tilize_stick_read.hpp:read_sticks_rotated`, called from `tilize_reader.cpp:411` and `tilize_writer.cpp:141` |
+| *(none — no tiled-side write helper exists)* | capability | The writer was already raw before this round and stays raw; this round only permuted its issue order. The gap is the one the kernel head has recorded since Phase 0 — `write_tile_pages_for_tilize<cb>(accessor, num_tile_rows, tiles_per_row, tensor_col_tiles, start_tile_row, col_offset, rows_per_barrier)`, the symmetric counterpart to `read_sticks_for_tilize` on the tiled side — now with **one more parameter**: an issue-order rotation, without which a materialized helper would re-introduce the lockstep this round removed. `write_sticks_after_untilize` addresses by stick index into a ROW_MAJOR destination and `local_copy_helpers_dataflow` requires an `AddressType::LOCAL_L1` destination; neither can address an interleaved TILE tensor. | n/a (no helper to call) | 22767 (`[1,1,1024,1024]`, vs 24404 unrotated) | `kernels/tilize_writer.cpp:205-235` |
