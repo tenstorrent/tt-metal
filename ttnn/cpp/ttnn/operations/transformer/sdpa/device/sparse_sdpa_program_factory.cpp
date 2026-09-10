@@ -48,7 +48,7 @@ enum SparseCB : uint32_t {
     cb_k_latent_tile,   // scaled FP8 only: one TILE_HEIGHT-row BFP8 latent slab
     cb_k_rope_tile,     // scaled FP8 only: one K chunk's BF16 RoPE tiles
     cb_attention_sink,  // persistent first-column vector: one sink scalar per head
-    cb_sink_scratch,    // reader scratch for gathering tiled sink scalars
+    cb_sink_scratch,    // writer scratch for gathering sink scalars
     cb_count
 };
 
@@ -176,7 +176,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
 
     if (use_attention_sink) {
         cb(cb_attention_sink, tile_bytes, Sqt, bf);
-        cb(cb_sink_scratch, tile_bytes, 1, bf);
+        cb(cb_sink_scratch, H * sizeof(uint16_t), 1, bf);
     }
 
     // ---- compile-time args ----
@@ -212,7 +212,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_ct.insert(
         reader_ct.end(),
         {static_cast<uint32_t>(scaled_kv), v_dim, cb_k_scale_bcast, packed_page_bytes, cb_kreq, cb_kack});
-    reader_ct.insert(reader_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink, cb_sink_scratch});
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -225,20 +224,21 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
-    tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
-        .append_to(reader_ct, reader_crt);
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     writer_ct.insert(
         writer_ct.end(),
         {static_cast<uint32_t>(scaled_kv), k_dim, kv_elem_bytes, cb_idx, cb_kreq, cb_kack, packed_page_bytes});
+    writer_ct.insert(writer_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink, cb_sink_scratch});
     TT_FATAL(
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {H,
@@ -348,16 +348,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        reader_desc.emplace_runtime_args(
+        reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
+        writer_desc.emplace_runtime_args(
             core,
-            {q_buf,
-             kv_buf,
-             idx_buf,
+            {out_buf,
              tok_start,
              tok_count,
+             kv_buf,
              kv_batch_page_offset,
              use_attention_sink ? t.attention_sink->buffer() : nullptr});
-        writer_desc.emplace_runtime_args(core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
 
@@ -383,15 +382,15 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     for (uint32_t i = 0; i < grid.x * grid.y; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         auto& r = tt::tt_metal::GetRuntimeArgs(program, 0, core);  // {q, kv, idx, tok_start, tok_count, offset}
-        auto& w = tt::tt_metal::GetRuntimeArgs(program, 1, core);  // {out, tok_start, tok_count, kv, offset}
+        auto& w = tt::tt_metal::GetRuntimeArgs(program, 1, core);  // {out, tok_start, tok_count, kv, offset, sink}
         r[0] = q;
         r[1] = kv;
         r[2] = idx;
         r[5] = offset;
-        r[6] = t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
         w[0] = out;
         w[3] = kv;
         w[4] = offset;
+        w[5] = t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
     }
 }
 

@@ -381,9 +381,11 @@ void bind_sdpa(nb::module_& mod) {
 
         Keyword args:
             kv_format (SparseKVFormat): explicit physical/logical format of `kv`.
-            attention_sink (ttnn.Tensor, optional): [1, H, 1, 1] tiled DRAM tensor, BF16/BFP8/BFP4.
-                One scalar per head, shared across tokens. As in classic SDPA, the sink is multiplied by
-                scale and contributes only to the softmax denominator. Defaults to None.
+            attention_sink (ttnn.Tensor, optional): [1, 1, 1, H] unpadded interleaved ROW_MAJOR BF16
+                tensor in DRAM. One scalar per head, shared across tokens. As in classic SDPA, the sink
+                is multiplied by scale and contributes only to the softmax denominator. DeepSeek-V4
+                sinks are already scaled logits: pass (model_sink / scale).reshape(1, 1, 1, H)
+                (scale != 0) to contribute exp(model_sink). Defaults to None.
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).

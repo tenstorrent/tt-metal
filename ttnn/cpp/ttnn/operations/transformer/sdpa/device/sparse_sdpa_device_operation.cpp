@@ -33,14 +33,16 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
             sink.storage_type() == StorageType::DEVICE && sink.buffer() != nullptr,
             "Attention sink tensor must be on device");
         TT_FATAL(sink.device() == q.device(), "Attention sink must be on the same device as Q");
-        TT_FATAL(
-            sink.layout() == Layout::TILE && sink.dtype() == DataType::BFLOAT16,
-            "Sparse SDPA device attention sink must be tiled BF16");
+        TT_FATAL(sink.dtype() == DataType::BFLOAT16, "Attention sink must be BF16");
+        TT_FATAL(sink.layout() == Layout::ROW_MAJOR, "Attention sink must be ROW_MAJOR");
         TT_FATAL(sink.memory_config().buffer_type() == BufferType::DRAM, "Attention sink must be in DRAM");
+        TT_FATAL(!sink.memory_config().is_sharded(), "Attention sink must be interleaved");
         TT_FATAL(
-            sink.logical_shape() == ttnn::Shape({1, q.logical_shape()[1], 1, 1}),
-            "Attention sink must have shape [1, H, 1, 1] matching Q heads");
+            sink.logical_shape() == ttnn::Shape({1, 1, 1, q.logical_shape()[1]}),
+            "Attention sink must have shape [1, 1, 1, H] matching Q heads");
+        TT_FATAL(sink.padded_shape() == sink.logical_shape(), "Attention sink must not be padded");
     }
+
     // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
     for (const Tensor* tp : {&q, &idx}) {
         TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
