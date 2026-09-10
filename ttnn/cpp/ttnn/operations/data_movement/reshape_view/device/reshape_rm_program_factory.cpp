@@ -23,8 +23,8 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
 namespace {
-// Page-size alignment the kernel needs to write straight from the source DFB; must stay in
-// sync with MASK_16/OFFSET_16 and the can_be_clean predicate in rm_reshape_interleaved.cpp.
+// Page-size alignment the kernel needs to write straight from the source staging scratchpad; must
+// stay in sync with MASK_16/OFFSET_16 and the can_be_clean predicate in rm_reshape_interleaved.cpp.
 constexpr uint32_t noc_page_alignment_bytes = 16;
 
 // Depth of the L1 staging ring used when pages are not NoC-aligned. Eight destination
@@ -41,15 +41,15 @@ uint32_t choose_num_dest_write_slots(
     IDevice* device,
     bool pages_noc_aligned,
     bool can_use_dual_kernel,
-    uint32_t dfb_size0,
+    uint32_t source_stage_size_bytes,
     uint32_t dest_slot_size_bytes) {
     if (pages_noc_aligned) {
         return 1u;
     }
 
-    // Budget the staging ring against live L1 occupancy so DFBs never collide with
-    // tensors already allocated in L1 (vadv2 regression). DFBs grow upward from the
-    // base; L1 tensors are allocated downward from the top. The ceiling is the lowest
+    // Budget the staging ring against live L1 occupancy so the staging scratchpads never collide
+    // with tensors already allocated in L1 (vadv2 regression). Scratchpads (like DFBs) grow upward
+    // from the base; L1 tensors are allocated downward from the top. The ceiling is the lowest
     // occupied L1 address — or the full core size when nothing is live.
     const uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const std::optional<DeviceAddr> lowest_occupied = device->lowest_occupied_compute_l1_address();
@@ -59,16 +59,16 @@ uint32_t choose_num_dest_write_slots(
     const uint32_t l1_available = l1_ceiling - l1_base;
 
     const uint32_t num_kernel_copies = can_use_dual_kernel ? 2u : 1u;
-    const uint32_t source_dfb_bytes = dfb_size0 * 2u * num_kernel_copies;
-    const uint32_t min_dest_dfb_bytes = dest_slot_size_bytes * num_kernel_copies;
+    const uint32_t source_stage_bytes = source_stage_size_bytes * 2u * num_kernel_copies;
+    const uint32_t min_dest_stage_bytes = dest_slot_size_bytes * num_kernel_copies;
     TT_FATAL(
-        l1_available >= source_dfb_bytes + min_dest_dfb_bytes,
+        l1_available >= source_stage_bytes + min_dest_stage_bytes,
         "RM reshape dest staging does not fit in L1: need at least {} B dest + {} B source, have {} B",
-        min_dest_dfb_bytes,
-        source_dfb_bytes,
+        min_dest_stage_bytes,
+        source_stage_bytes,
         l1_available);
 
-    const uint32_t max_slots = (l1_available - source_dfb_bytes) / (dest_slot_size_bytes * num_kernel_copies);
+    const uint32_t max_slots = (l1_available - source_stage_bytes) / (dest_slot_size_bytes * num_kernel_copies);
     return std::max(1u, std::min(small_dest_write_slots, max_slots));
 }
 }  // namespace
@@ -82,7 +82,6 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
 
     // get datum size
-    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     IDevice* device = input.device();
     // Multi device pre-computation
@@ -114,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
         responsibility++;
     }
-    const uint32_t dfb_size0 = source_read_size_bytes;
+    const uint32_t source_stage_size_bytes = source_read_size_bytes;
     const uint32_t dest_slot_size_bytes = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
     const bool pages_noc_aligned = (source_page_size_bytes % noc_page_alignment_bytes == 0) &&
@@ -127,9 +126,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     // but doesn't affect the size of writes hitting DRAM.
     const bool can_use_dual_kernel = pages_divisible && (dest_noc_aligned || !dst_buffer->is_dram());
 
-    const uint32_t num_dest_write_slots =
-        choose_num_dest_write_slots(device, pages_noc_aligned, can_use_dual_kernel, dfb_size0, dest_slot_size_bytes);
-    const uint32_t dfb_size1 = dest_slot_size_bytes * num_dest_write_slots;
+    const uint32_t num_dest_write_slots = choose_num_dest_write_slots(
+        device, pages_noc_aligned, can_use_dual_kernel, source_stage_size_bytes, dest_slot_size_bytes);
+    const uint32_t dest_stage_size_bytes = dest_slot_size_bytes * num_dest_write_slots;
 
     const uint32_t write_alignment =
         dst_buffer->is_dram() ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
@@ -139,20 +138,21 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
 
     // ---- Metal 2.0 spec construction ----
     // Resource names. The RM source is instantiated as two KernelSpecs over the SAME node set (a
-    // dual-instance work-split): the reader-config instance touches src0/src1 as scratch, the
-    // writer-config instance touches src2/src3. The two instances touch DISJOINT DFBs, so each DFB
-    // has a single toucher and is self-looped (its owning kernel bound PRODUCER + CONSUMER).
+    // dual-instance work-split): each instance owns a private source-staging and dest-staging L1
+    // region. These are kernel-private scratchpads (formerly self-loop DFBs each instance filled and
+    // drained itself; that FIFO synchronized nothing and is rejected on Quasar for DM kernels). Two
+    // ScratchpadSpecs per instance, since the instances share nodes and a scratchpad is 1:1 per node.
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const DFBSpecName SRC0{"src0"};
-    const DFBSpecName SRC1{"src1"};
-    const DFBSpecName SRC2{"src2"};
-    const DFBSpecName SRC3{"src3"};
+    const ScratchpadSpecName READER_SOURCE_STAGE{"reader_source_stage"};
+    const ScratchpadSpecName READER_DEST_STAGE{"reader_dest_stage"};
+    const ScratchpadSpecName WRITER_SOURCE_STAGE{"writer_source_stage"};
+    const ScratchpadSpecName WRITER_DEST_STAGE{"writer_dest_stage"};
     const TensorParamName SRC{"src"};
     const TensorParamName DST{"dst"};
 
-    // Named CTAs — identical for both instances. The per-instance difference is the DFB binding
-    // (src0/src1 vs src2/src3), not a compile-time arg, so a single CTA table serves both.
+    // Named CTAs — identical for both instances. The per-instance difference is the scratchpad
+    // binding (reader_* vs writer_* stages), not a compile-time arg, so a single CTA table serves both.
     const KernelSpec::CompileTimeArgs cta = {
         {"src_aligned_to_64", (source_page_size_bytes % 64 == 0) ? 1u : 0u},
         {"src_aligned_to_16", (source_page_size_bytes % 16 == 0) ? 1u : 0u},
@@ -173,21 +173,19 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
              "nop"},
     };
 
-    // Both instances read `tensor::src` and write `tensor::dst`; each self-loops its own scratch DFBs
-    // (accessor_names in0/in1, mapped to distinct DFB specs per instance).
+    // Both instances read `tensor::src` and write `tensor::dst`; each binds its own staging scratchpads
+    // (accessor_names source_stage/dest_stage, mapped to distinct ScratchpadSpecs per instance).
     auto make_rm_kernel = [&](const KernelSpecName& id,
                               DataMovementHardwareConfig hw,
-                              const DFBSpecName& d0,
-                              const DFBSpecName& d1) {
+                              const ScratchpadSpecName& source_stage,
+                              const ScratchpadSpecName& dest_stage) {
         return KernelSpec{
             .unique_id = id,
             .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
-            .dfb_bindings =
+            .scratchpad_bindings =
                 {
-                    DFBBinding{.dfb_spec_name = d0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                    DFBBinding{.dfb_spec_name = d0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-                    DFBBinding{.dfb_spec_name = d1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-                    DFBBinding{.dfb_spec_name = d1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                    ScratchpadBinding{.scratchpad_spec_name = source_stage, .accessor_name = "source_stage"},
+                    ScratchpadBinding{.scratchpad_spec_name = dest_stage, .accessor_name = "dest_stage"},
                 },
             .tensor_bindings =
                 {
@@ -200,24 +198,27 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
         };
     };
 
-    auto make_scratch_dfb = [&](const DFBSpecName& id, uint32_t entry_size, uint32_t num_entries) {
-        return DataflowBufferSpec{
+    auto make_stage_scratchpad = [](const ScratchpadSpecName& id, uint32_t size_per_node) {
+        return ScratchpadSpec{
             .unique_id = id,
-            .entry_size = entry_size,
-            .num_entries = num_entries,
-            .data_format_metadata = dfb_data_format,
+            .size_per_node = size_per_node,
         };
     };
 
+    // Scratchpad sizes carry the former DFBs' whole allocation (entry_size * num_entries): the source
+    // stage was a 2-entry ring of source_stage_size_bytes, the dest stage a single entry holding the
+    // whole num_dest_write_slots ring. The kernel only ever addressed entry 0 of each.
     ProgramSpec spec;
     spec.name = "reshape_view_rm";
-    spec.kernels.push_back(make_rm_kernel(READER, create_reader_datamovement_config(device->arch()), SRC0, SRC1));
-    spec.dataflow_buffers.push_back(make_scratch_dfb(SRC0, dfb_size0, 2));
-    spec.dataflow_buffers.push_back(make_scratch_dfb(SRC1, dfb_size1, 1));
+    spec.kernels.push_back(make_rm_kernel(
+        READER, create_reader_datamovement_config(device->arch()), READER_SOURCE_STAGE, READER_DEST_STAGE));
+    spec.scratchpads.push_back(make_stage_scratchpad(READER_SOURCE_STAGE, source_stage_size_bytes * 2u));
+    spec.scratchpads.push_back(make_stage_scratchpad(READER_DEST_STAGE, dest_stage_size_bytes));  // * 1 entry
     if (can_use_dual_kernel) {
-        spec.kernels.push_back(make_rm_kernel(WRITER, create_writer_datamovement_config(device->arch()), SRC2, SRC3));
-        spec.dataflow_buffers.push_back(make_scratch_dfb(SRC2, dfb_size0, 2));
-        spec.dataflow_buffers.push_back(make_scratch_dfb(SRC3, dfb_size1, 1));
+        spec.kernels.push_back(make_rm_kernel(
+            WRITER, create_writer_datamovement_config(device->arch()), WRITER_SOURCE_STAGE, WRITER_DEST_STAGE));
+        spec.scratchpads.push_back(make_stage_scratchpad(WRITER_SOURCE_STAGE, source_stage_size_bytes * 2u));
+        spec.scratchpads.push_back(make_stage_scratchpad(WRITER_DEST_STAGE, dest_stage_size_bytes));  // * 1 entry
     }
     spec.tensor_parameters = {
         TensorParameter{.unique_id = SRC, .spec = input_mt.tensor_spec()},
