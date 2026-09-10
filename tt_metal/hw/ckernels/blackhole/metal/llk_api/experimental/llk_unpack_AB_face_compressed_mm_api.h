@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "experimental/llk_unpack_AB_face_compressed_mm.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB FACE_COMPRESSED_MM
@@ -42,6 +43,7 @@
 template <bool transpose = false>
 inline void llk_unpack_AB_face_compressed_mm_init(
     const std::uint32_t operand0, [[maybe_unused]] const std::uint32_t operand1) {
+    SAN_HOOK(unsupported());
     // operand0 is the activation, which goes to SrcB; operand1 is the compressed-weight CB.
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
@@ -70,6 +72,7 @@ inline void llk_unpack_AB_face_compressed_mm(
     [[maybe_unused]] const std::uint32_t operand1,
     const std::uint32_t base_address_meta,
     const std::uint32_t kt_dim) {
+    SAN_HOOK(unsupported());
     // operand0, the activation, supplies the SrcB base address. The compressed weights are addressed
     // from base_address_meta, so operand1's CB is never read here.
     const std::uint32_t operandB_id = get_operand_id(operand0);
@@ -87,6 +90,7 @@ inline void llk_unpack_AB_face_compressed_mm(
  */
 inline void llk_unpack_AB_face_compressed_mm_uninit(
     [[maybe_unused]] const std::uint32_t operand0, const std::uint32_t operand1) {
+    SAN_HOOK(unsupported());
     // Restore the compressed-weight (SrcA) tile descriptor num_faces from operand1, which the init forced
     // to a single face.
     const std::uint32_t operandA_id = get_operand_id(operand1);

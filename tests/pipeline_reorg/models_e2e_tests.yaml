@@ -948,6 +948,52 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── FLUX.2 (TT-DiT) ────────────────────────────────────────────────
+- name: TT-DiT Flux.2-dev e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    status=0
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+      -k "bh_qb and 1024x1024" || status=1
+    # smoke test only.
+    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k 2x2 || status=1
+    exit $status
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Flux.2-dev multihost e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 4200 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+        -k "bh_glx_ring_sp0tp1_nofsdp and 1024x1024"
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_sc1:
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Z-Image ────────────────────────────────────────────────────────
 
 - name: Z-Image-Turbo e2e tests
@@ -1808,7 +1854,10 @@
   model: bge_m3
   skus:
     wh_n150:
-      timeout: 4
+      # #54669 (2026-08-31) grew the benchmark from 5 to 10 parametrisations (5 single-request
+      # ISLs + a batch-25 sweep of 50 requests each). Model download + the first 5 cases already
+      # take ~4 min on N150, so the job was wall-clock killed every day from 2026-09-01.
+      timeout: 10
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
