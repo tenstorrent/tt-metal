@@ -122,15 +122,16 @@ class _StaticLayerCache:
       * ``sliding`` ``[B, 1, window, Dh]`` -- a ring buffer (slot ``pos % window``);
         attention masks unwritten / out-of-window slots. Sliding-only layers only;
         for CSA/HCA the ring lives in ``combined`` (below).
-      * ``win_kv`` / ``win_gate`` ``[B, 1, compress_rate, feat]`` -- the compressor
-        projections of the window *currently being filled*, at slot
-        ``pos % compress_rate``. Only the ``compress_rate`` tokens of one window are
-        held, because pooling is incremental: the step that closes a window pools
-        just that window and appends its single entry (see :meth:`_pool_window`).
+      * ``win_kv`` / ``win_gate`` -- the compressor projections of the window
+        *currently being filled*, at slot ``pos % compress_rate``. HCA keeps
+        these as TILE DRAM ``[B, 1, compress_rate, Dh]`` for ``paged_update_cache``.
+        CSA keeps them (and ``prev_*``) as ROW_MAJOR L1 WIDTH_SHARDED
+        ``[B*compress_rate, 1, 1, 2*Dh]`` so ``csa_pool_window`` can consume them
+        in place. Only one window is held, because pooling is incremental.
         ``None`` for sliding-only layers.
-      * ``prev_kv`` / ``prev_gate`` ``[B, 1, compress_rate, 2*Dh]`` -- the previous
-        window's projections, kept only by CSA because its entry ``w`` also needs
-        window ``w-1``'s Ca slice. Refreshed from ``win_*`` after each pool.
+      * ``prev_kv`` / ``prev_gate`` -- CSA only: previous window's projections
+        (same layout as CSA ``win_*``), because entry ``w`` also needs window
+        ``w-1``'s Ca slice. Refreshed from ``win_*`` after each pool.
         ``prev_gate`` starts at ``_MASK_NEG`` so window 0's absent Ca half carries
         softmax weight 0. ``None`` for HCA and sliding-only layers.
       * ``combined`` ``[B, 1, window + cap // compress_rate, Dh]`` -- the single
@@ -197,6 +198,27 @@ def build_static_layer_cache(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _csa_window(rows: int, width: int, value: float = 0.0) -> ttnn.Tensor:
+        """ROW_MAJOR L1 WIDTH_SHARDED ``[batch*rows, 1, 1, width]`` (1-high faces).
+
+        The width split ``csa_pool_window`` consumes: ``width // 32`` cores, one
+        32-column shard each (32 cores at CSA ``2*Dh == 1024``). The op only reads
+        the packed row count and the shard spec, so the rows sit on dim 0 rather
+        than dim 2 -- that is the axis ``indexed_fill`` scatters a token into on its
+        shard-local path (see :func:`_scatter_window_rows`).
+        """
+        height = batch * rows
+        cfg = width_sharded_l1_config(height, width, device, tile_height=1)
+        return ttnn.to_memory_config(
+            ttnn.from_torch(
+                torch.full((height, 1, 1, width), value),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            ),
+            cfg,
+        )
+
     # CSA/HCA layers keep the sliding ring inside ``combined`` rather than in its
     # own buffer, so only sliding-only layers allocate ``sliding``.
     sliding = None if paged or layer_type != "sliding_attention" else _filled(sliding_window, head_dim)
@@ -207,13 +229,16 @@ def build_static_layer_cache(
         is_csa = layer_type == "compressed_sparse_attention"
         feat = (2 if is_csa else 1) * head_dim
         # Only one window's worth of projections: pooling is incremental.
-        win_kv = _filled(cr, feat)
-        win_gate = _filled(cr, feat)
         if is_csa:
+            win_kv = _csa_window(cr, feat)
+            win_gate = _csa_window(cr, feat)
             # Entry w pools window w-1's Ca with window w's Cb, so CSA also keeps the
             # previous window. ``-inf`` gates give window 0's absent Ca weight 0.
-            prev_kv = _filled(cr, feat)
-            prev_gate = _filled(cr, feat, _MASK_NEG)
+            prev_kv = _csa_window(cr, feat)
+            prev_gate = _csa_window(cr, feat, _MASK_NEG)
+        else:
+            win_kv = _filled(cr, feat)
+            win_gate = _filled(cr, feat)
         # ``[sliding ring | compressed entries]`` on one axis. The width matches the
         # mask that :func:`host_decode_mask` builds for this layer.
         if not paged:
@@ -569,6 +594,36 @@ def _update_cache_at(
         )
 
 
+def _scatter_window_rows(cache: ttnn.Tensor, rows: ttnn.Tensor, index: ttnn.Tensor) -> None:
+    """In-place ``cache[index[i]] = rows[i]`` on a packed CSA window buffer.
+
+    ``cache`` is ROW_MAJOR L1 WIDTH_SHARDED ``[B*cr, 1, 1, F]``, ``rows`` an
+    INTERLEAVED ``[n, 1, 1, F]`` and ``index`` an INT32 ROW_MAJOR ``[n]``.
+    ``paged_update_cache`` cannot target a width-sharded L1 cache, so the scatter
+    goes through ``indexed_fill``, which needs ``dim == 0`` to take its shard-local
+    path -- at any other dim it falls back to a generic path that is documented as
+    wrong for a sharded destination. ``indexed_fill`` returns a fresh tensor, so
+    the result is copied back into the persistent buffer.
+    """
+    written = ttnn.indexed_fill(index, cache, rows, memory_config=cache.memory_config(), dim=0)
+    ttnn.copy(written, cache)
+    ttnn.deallocate(written)
+
+
+def _update_window_at(cache: ttnn.Tensor, row: ttnn.Tensor, index: ttnn.Tensor) -> None:
+    """Write ``row`` ``[1, B, 1, F]`` into a CSA window at the packed rows ``index``.
+
+    CSA windows are user-major: user ``u``'s token ``t`` sits at row ``u*cr + t``, so
+    ``index`` carries one row per user.
+    """
+    users, feat = row.shape[1], row.shape[-1]
+    # Interleaved first: the incoming row is height-sharded one user per core, and a
+    # reshape across that shard's dims is not a view.
+    src = ttnn.reshape(ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG), [users, 1, 1, feat])
+    _scatter_window_rows(cache, src, index)
+    ttnn.deallocate(src)
+
+
 def _rm_width_sharded(tensor: ttnn.Tensor, height: int, width: int) -> ttnn.Tensor:
     """ROW_MAJOR WIDTH_SHARDED ``[1, 1, height, width]`` in L1 (1-high faces)."""
     if list(tensor.shape) != [1, 1, height, width]:
@@ -595,10 +650,13 @@ def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) 
 def _retire_window(prev: ttnn.Tensor, current: ttnn.Tensor) -> None:
     """Copy the just-closed window buffer ``current`` into ``prev``, in place.
 
-    ``fill_cache`` is an in-place whole-tensor cache writer, so (unlike ``ttnn.copy``) it is
-    accepted mid trace capture, and both buffers are distinct tensors. It writes a single
-    batch index per call, though, so a batched layer retires its users one slice at a time.
+    CSA windows are the same L1 WIDTH_SHARDED spec, so a device copy is a whole-buffer
+    write into the persistent ``prev`` address. TILE DRAM windows (unused by CSA)
+    still go through ``fill_cache``, which writes a single batch index per call.
     """
+    if current.is_sharded():
+        ttnn.copy(current, prev)
+        return
     users, heads, rows, width = current.shape
     if users == 1:
         ttnn.fill_cache(prev, current, 0)
@@ -806,6 +864,29 @@ class DeepSeekV4CSACompressor:
         )
         if self.position_bias is not None:
             self.position_bias = _rm_width_sharded(self.position_bias, self.compress_rate, 2 * self.head_dim)
+        # Per-user row offsets into the packed window buffer, built on first use and
+        # then reused (see :meth:`_win_index`). Batch 1 needs none: user 0's row is
+        # the window slot itself.
+        self._win_offsets: ttnn.Tensor | None = None
+
+    def _win_index(self, win_slot: ttnn.Tensor, users: int) -> ttnn.Tensor:
+        """Packed window rows ``u*compress_rate + pos % compress_rate`` for each user.
+
+        ``win_slot`` is the ``[B]`` slot vector the caller already built. Above batch 1
+        the user offsets are added on device, from a vector allocated on the first call
+        -- eagerly, since the traced path compiles each step before capturing it, and a
+        host-to-device write inside a capture is rejected.
+        """
+        if users == 1:
+            return win_slot
+        if self._win_offsets is None:
+            self._win_offsets = ttnn.from_torch(
+                torch.arange(users, dtype=torch.int32) * self.compress_rate,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+        return ttnn.add(win_slot, self._win_offsets)
 
     def prefetch_weights(self):
         """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
@@ -838,27 +919,14 @@ class DeepSeekV4CSACompressor:
         """Pool each user's closing window ``w`` into its single compressed entry,
         returned as ``[1, B, 1, Dh]`` ready for the cache write.
 
-        ``win_*`` hold window ``w``'s ``[B, 1, compress_rate, 2*Dh]`` projections and
-        ``prev_*`` window ``w-1``'s; the entry is the softmax-gated combination of
-        window ``w-1``'s Ca half with window ``w``'s Cb half over a width-``2*cr``
-        window. On the very first window ``prev_gate`` is still ``_MASK_NEG``, which
+        ``win_*`` / ``prev_*`` are the persistent ROW_MAJOR L1 WIDTH_SHARDED
+        ``[B*compress_rate, 1, 1, 2*Dh]`` buffers allocated by
+        :func:`build_static_layer_cache`. The fused op consumes them in place.
+        On the very first window ``prev_gate`` is still ``_MASK_NEG``, which
         gives the absent Ca half softmax weight 0.
-
-        Both buffers are shaped like the ``[B, n_win, compress_rate, 2*Dh]`` the pool
-        wants with ``n_win == 1``, so ``position_bias`` -- indexed by a token's offset
-        within its own window -- broadcasts over users and windows for each half.
         """
-        dh = self.head_dim
-        users = win_kv.shape[0]
-        cr = self.compress_rate
-        feat = 2 * dh
-        rows = users * cr
-        prev_kv_s = _rm_width_sharded(prev_kv, rows, feat)
-        prev_gate_s = _rm_width_sharded(prev_gate, rows, feat)
-        win_kv_s = _rm_width_sharded(win_kv, rows, feat)
-        win_gate_s = _rm_width_sharded(win_gate, rows, feat)
         compressed = ttnn.experimental.deepseek.csa_pool_window(
-            prev_kv_s, prev_gate_s, win_kv_s, win_gate_s, self.position_bias
+            prev_kv, prev_gate, win_kv, win_gate, self.position_bias
         )
         _profile(self.device)
         compressed = self.kv_norm(compressed)
@@ -878,10 +946,10 @@ class DeepSeekV4CSACompressor:
         paged: PagedLayerView | None = None,
     ) -> None:
         """Trace-safe decode: write each user's ``2*Dh`` token projection in place at
-        ``win_slot`` into the one-window ``[B, 1, compress_rate, 2*Dh]`` buffers, and
-        -- on the step that closes the window -- pool just that window (Ca/Cb overlap
-        against the retained previous window) and append its single entry at row
-        ``win_row`` of the layer's KV axis (``combined_cache``, or ``paged``'s pool).
+        ``win_slot`` into the one-window L1 WIDTH_SHARDED buffers, and -- on the step
+        that closes the window -- pool just that window (Ca/Cb overlap against the
+        retained previous window) and append its single entry at row ``win_row``
+        of the layer's KV axis (``combined_cache``, or ``paged``'s pool).
 
         ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``.
 
@@ -894,8 +962,9 @@ class DeepSeekV4CSACompressor:
         kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
         kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, feat]))
         gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, feat]))
-        _update_cache_at(scache.win_kv, kv, win_slot)
-        _update_cache_at(scache.win_gate, gate, win_slot)
+        win_index = self._win_index(win_slot, users)
+        _update_window_at(scache.win_kv, kv, win_index)
+        _update_window_at(scache.win_gate, gate, win_index)
         if pool and (combined_cache is not None or paged is not None):
             pooled = self._pool_window(
                 scache.prev_kv, scache.prev_gate, scache.win_kv, scache.win_gate, cos_row, sin_row
@@ -904,6 +973,8 @@ class DeepSeekV4CSACompressor:
             ttnn.deallocate(pooled)
             _retire_window(scache.prev_kv, scache.win_kv)
             _retire_window(scache.prev_gate, scache.win_gate)
+        if win_index is not win_slot:
+            ttnn.deallocate(win_index)
         _signpost("CSA_END")
 
 
