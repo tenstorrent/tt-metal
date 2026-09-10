@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 from pathlib import Path
@@ -379,6 +380,27 @@ def test_transformer_cache_dir_key(monkeypatch):
     assert path.parts[-1] == "SP2a0_TP2a1_mesh2x2_L32_BFLOAT8_B_bf16_0-3_28-31"
     assert path.parent.name == "transformer"
     assert path.parent.parent.name == "hunyuan-image-3.0"
+
+
+def test_ensure_cache_dir_writable(tmp_path, monkeypatch):
+    from models.experimental.hunyuan_image_3_0.ttnn.cache import ensure_cache_dir
+
+    monkeypatch.setenv("TT_CACHE_PATH", str(tmp_path / "ro_root"))
+    preferred = tmp_path / "ro_root" / "hunyuan-image-3.0" / "transformer" / "L8_key"
+    (tmp_path / "ro_root").mkdir()
+    real_mkdir = Path.mkdir
+
+    def ro_mkdir(self, *args, **kwargs):
+        if self == preferred:
+            raise OSError(errno.EROFS, "Read-only file system")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", ro_mkdir)
+    monkeypatch.setenv("TT_METAL_HOME", str(tmp_path / "work"))
+    resolved = ensure_cache_dir(preferred)
+    assert resolved != preferred
+    assert resolved.is_dir()
+    assert "hunyuan_tt_cache" in resolved.parts
 
 
 def test_cache_disabled_without_env(monkeypatch):

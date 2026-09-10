@@ -157,7 +157,9 @@ class HunyuanTtModel(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
         if self.weight_cache_path is not None:
-            self.weight_cache_path.mkdir(parents=True, exist_ok=True)
+            from .cache import ensure_cache_dir
+
+            self.weight_cache_path = ensure_cache_dir(self.weight_cache_path)
             if os.environ.get("HY_VERBOSE", "1") != "0":
                 print(f"[backbone] TT cache dir: {self.weight_cache_path}", flush=True)
 

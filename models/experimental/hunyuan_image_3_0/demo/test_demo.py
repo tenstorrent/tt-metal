@@ -9,9 +9,9 @@
 # it as a subprocess with the CI configuration and asserts the whole prompt ->
 # recaption(off) -> denoise -> VAE -> PNG chain runs end-to-end on the 2x2 mesh.
 #
-# Fast/real knobs come from the HY_* env (see demo.py header). CI sets
-# HY_NUM_LAYERS=8 / HY_STEPS=8 (MoE .tensorbin cold-cache on NFS cannot finish
-# 32L×50 within tier-3 limits). Local defaults below use 32L when unset.
+# Fast/real knobs come from the HY_* env (see demo.py header). CI sets HY_STEPS=8
+# against the pre-staged L32 TT cache on NAS (read-only); HY_NUM_LAYERS=8 would miss
+# that cache key. Local defaults below use 32L when unset.
 
 import os
 import subprocess
