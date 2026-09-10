@@ -20,54 +20,39 @@ def _mesh_device():
 class Sharding:
     """A tensor's mesh layout (placements + distribution shape), read from its live topology."""
 
-    def __init__(
-        self, placements: list | None, dist_shape: list[int] | None, read_error: Exception | None = None
-    ) -> None:
+    def __init__(self, placements: list, dist_shape: list[int]) -> None:
         self._placements = placements
         self._dist_shape = dist_shape
-        self._read_error = read_error
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
-        try:
-            # NATIVE: read topology without coercing precision (avoids a float32/bf16 typecast + cache).
-            topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
-            placements = list(topology.placements())
-            dist_shape = list(topology.distribution_shape())
-        except Exception as e:
-            # A unit mesh reads back as 1-D [Replicate], so anything caught here is a genuine
-            # failure (e.g. `get_value` on an unmaterialized lazy param). Fail open, keep the cause.
-            return cls(None, None, read_error=e)
-        return cls(placements, dist_shape)
+        """Read off the live topology; a unit mesh reads back as 1-D [Replicate], so this raises only
+        for a tensor with no topology to read, which nothing downstream can place correctly anyway."""
+        topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
+        return cls(list(topology.placements()), list(topology.distribution_shape()))
 
     @property
-    def read_error(self) -> Exception | None:
-        """The exception that prevented reading the topology, if any."""
-        return self._read_error
-
-    @property
-    def placements(self) -> list | None:
+    def placements(self) -> list:
         """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``).
 
         A fully replicated tensor flattens to a single ``Replicate``, so this can be shorter
-        than the mesh rank: never index it by mesh axis. None only if unreadable.
+        than the mesh rank: never index it by mesh axis.
         """
         return self._placements
 
     @property
-    def dist_shape(self) -> list[int] | None:
-        """Mesh extent the tensor is laid out over per axis; None only if unreadable."""
+    def dist_shape(self) -> list[int]:
+        """Mesh extent the tensor is laid out over per axis."""
         return self._dist_shape
 
     @property
     def is_fully_replicated(self) -> bool:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
-        return self._placements is None or not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
+        return not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
 
     def _is_single_device(self) -> bool:
-        """True when the tensor isn't really distributed (no topology, or a 1-device distribution) → one
-        host buffer, readable/placeable without a composer/mapper."""
-        return self._dist_shape is None or prod(self._dist_shape) <= 1
+        """True for a 1-device distribution."""
+        return prod(self._dist_shape) <= 1
 
     def derive_mapper(self):
         """``TensorToMesh`` redistributing a host array onto the mesh exactly as the tensor was distributed,
