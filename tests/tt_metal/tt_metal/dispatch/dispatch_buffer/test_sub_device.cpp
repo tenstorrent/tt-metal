@@ -31,7 +31,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/distributed/trace_allocation_tracker.hpp"
 
-#include "tt_metal/impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal {
 

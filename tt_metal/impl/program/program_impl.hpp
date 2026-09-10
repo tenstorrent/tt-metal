@@ -14,6 +14,7 @@
 #include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"    // KernelHandle
 #include "tt-metalium/program.hpp"         // KernelGroup
+#include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
@@ -62,7 +63,7 @@ class MeshWorkloadImpl;
 namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
-class PrefetcherPipe;
+class PrefetcherPipeImpl;
 }  // namespace experimental
 
 namespace program_dispatch {
@@ -367,9 +368,9 @@ public:
     uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
 
     uint8_t add_prefetcher_pipe_attachment(
-        experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+        experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
 
-    const experimental::PrefetcherPipe& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
+    const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
 
     // Mark a normal local DFB as the typed relay for a PrefetcherPipe this core participates in.
@@ -587,7 +588,7 @@ private:
     uint8_t next_cross_node_dfb_slot_ = 0;
 
     std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
-    std::unordered_map<uint8_t, experimental::PrefetcherPipe*> prefetcher_pipe_attachments_;
+    std::unordered_map<uint8_t, experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
     // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
     std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
     uint8_t next_prefetcher_pipe_slot_ = 0;
@@ -705,8 +706,20 @@ private:
 
 }  // namespace detail
 
-// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload.
-// Takes ownership of `program`. When `wait_until_cores_done` is true, enqueue is blocking.
-void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done);
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, blocking until completion.
+//
+// Exception: a service workload (a program targeting claimed service cores) is routed by
+// EnqueueMeshWorkload to slow dispatch, which rings GO and returns without waiting - `blocking` is not
+// consulted on that path. Callers that launch onto claimed service cores must synchronize themselves.
+//
+// @return MeshWorkload that takes ownership of the program.
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program);
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, without blocking.
+//
+// @return MeshWorkload that takes ownership of the program, and must be kept alive until Finish (or a blocking enqueue)
+// on the same command queue. The reason is that MeshWorkload owns kernel-binary DRAM that fast dispatch may
+// still prefetch after this function returns.
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program);
 
 }  // namespace tt::tt_metal

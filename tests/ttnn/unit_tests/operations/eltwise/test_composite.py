@@ -236,7 +236,7 @@ def test_unary_polygamma_ttnn(input_shapes, k, device):
     output_tensor = ttnn.polygamma(input_tensor, k)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 # Locks in accuracy at the lower domain boundary (x ~ 0.5), where the exact-summation
@@ -260,7 +260,7 @@ def test_unary_polygamma_boundary_ttnn(input_shapes, k, device):
     output_tensor = ttnn.polygamma(input_tensor, k)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(

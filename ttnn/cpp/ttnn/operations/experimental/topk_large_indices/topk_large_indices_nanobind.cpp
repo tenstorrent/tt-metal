@@ -51,12 +51,17 @@ void bind_topk_large_indices(nb::module_& mod) {
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
+            valid_length_tensor: optional 1-element UINT32 row-major DRAM tensor read on-device. Use for
+                dynamic valid lengths during trace replay. Mutually exclusive with valid_length.
+            valid_length_offset: constant added to valid_length_tensor[0] (default 0).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),
-        nb::arg("valid_length") = std::nullopt);
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("valid_length_tensor") = nb::none(),
+        nb::arg("valid_length_offset") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

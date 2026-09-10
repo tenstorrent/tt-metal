@@ -111,6 +111,18 @@ inline uint32_t clamp_count_tiles(
     return (count_tiles < cap) ? count_tiles : cap;
 }
 
+// Active-token band, applied to the RAW token count before it becomes tiles.
+//
+// A hybrid dispatch runs this op and moe_fused_swiglu over the SAME counts vector and
+// splits the experts by load: each op is given the band it is faster on and drops the
+// rest. Dropping is spelled as count 0 because that is already the uniform skip every
+// kernel agrees on -- effective_chunks becomes 0 and the expert costs no CB traffic, no
+// collective and no semaphore. Applied to tokens, not tiles: a tile-granular bound
+// cannot separate 300 from 320.
+inline uint32_t count_in_band(uint32_t count_value, uint32_t min_tokens, uint32_t max_tokens) {
+    return (count_value < min_tokens || count_value > max_tokens) ? 0u : count_value;
+}
+
 // Number of chunks for `count_tiles`: full chunks of max_chunk + one tail chunk.
 inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
     if (count_tiles < 1) {

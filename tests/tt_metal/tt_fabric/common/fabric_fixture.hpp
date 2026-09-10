@@ -23,6 +23,8 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 
+#include <unordered_map>
+
 namespace tt::tt_fabric::fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
@@ -63,6 +65,9 @@ public:
     inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
+
+    std::unordered_map<tt::tt_metal::distributed::MeshDevice*, std::vector<tt::tt_metal::distributed::MeshWorkload>>
+        pending_async_workloads_;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
@@ -135,12 +140,13 @@ public:
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program&& program) {
-        tt_metal::LaunchProgram(*device, std::move(program), /*wait_until_cores_done=*/false);
+        pending_async_workloads_[device.get()].push_back(tt_metal::LaunchProgramAsync(*device, std::move(program)));
     }
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void WaitForSingleProgramDone(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device) {
         tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        pending_async_workloads_.erase(device.get());
     }
 
     // Utility function reused across tests to get address params

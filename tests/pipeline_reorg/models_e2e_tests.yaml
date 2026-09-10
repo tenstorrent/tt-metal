@@ -586,6 +586,13 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    # The legacy tensor_cache_bf16/ dirs for E4B on bh_p300 / bh_quietbox_2 hold placeholder-derived
+    # tensorbins written after #50648 renamed the cache files (#54831). Build into the mesh-qualified
+    # dir instead of falling back to legacy; E4B is small enough to cold-build inside the budget.
+    export GEMMA4_WEIGHT_CACHE_MESH_ONLY=1
+    # Warm as_tensor cache loads hang forever on bh_quietbox_2 when the mmapped tensorbin is fed to
+    # the pinned host-memory write path (#55957); use the memcpy path until that is fixed.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -602,7 +609,7 @@
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
-      timeout: 5
+      timeout: 10
       tier: 3
       release_ready: false
     bh_quietbox_2:
@@ -945,6 +952,52 @@
       timeout: 20
       tier: 1
       release_ready: true
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── FLUX.2 (TT-DiT) ────────────────────────────────────────────────
+- name: TT-DiT Flux.2-dev e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    status=0
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+      -k "bh_qb and 1024x1024" || status=1
+    # smoke test only.
+    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k 2x2 || status=1
+    exit $status
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Flux.2-dev multihost e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 4200 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+        -k "bh_glx_ring_sp0tp1_nofsdp and 1024x1024"
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_sc1:
+      timeout: 75
+      tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1808,7 +1861,10 @@
   model: bge_m3
   skus:
     wh_n150:
-      timeout: 4
+      # #54669 (2026-08-31) grew the benchmark from 5 to 10 parametrisations (5 single-request
+      # ISLs + a batch-25 sweep of 50 requests each). Model download + the first 5 cases already
+      # take ~4 min on N150, so the job was wall-clock killed every day from 2026-09-01.
+      timeout: 10
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
