@@ -365,6 +365,36 @@ struct TensorAccessor {
     // which is right -- the mismatch it catches is a HOST configuration error.
     uint32_t get_aligned_page_size() const { return kEntryBytes; }
 };
+template <typename T>
+class CoreLocalMem {
+public:
+    explicit CoreLocalMem(uint32_t address) : address_(address) {}
+    uint32_t get_address() const { return address_; }
+
+private:
+    uint32_t address_;
+};
+struct UnicastEndpoint {};
+struct MulticastEndpoint {};
+struct TensorNocArgs {
+    uint32_t page_id{};
+    uint32_t offset_bytes{};
+};
+struct LocalNocArgs {
+    uint32_t offset_bytes{};
+};
+struct UnicastNocArgs {
+    uint32_t noc_x{};
+    uint32_t noc_y{};
+    uint32_t addr{};
+};
+struct MulticastNocArgs {
+    uint32_t noc_x_start{};
+    uint32_t noc_y_start{};
+    uint32_t noc_x_end{};
+    uint32_t noc_y_end{};
+    uint32_t addr{};
+};
 inline void noc_async_read(uint64_t src, uint32_t, uint32_t) {
     T2("noc_async_read (t" + n(uint32_t(src >> 32)) + ",page=" + n(uint32_t(src & 0xffffffffu)) + ")");
 }
@@ -392,6 +422,7 @@ inline uint64_t get_noc_multicast_addr(uint32_t xs, uint32_t ys, uint32_t xe, ui
 inline void noc_async_write_multicast(uint32_t, uint64_t, uint32_t, uint32_t num_dests) {
     T2("noc_async_write_multicast(dests=" + n(num_dests) + ")");
 }
+inline void noc_async_write_multicast_loopback_src(uint32_t, uint64_t, uint32_t, uint32_t);
 template <ProgrammableCoreType = ProgrammableCoreType::TENSIX>
 inline uintptr_t get_semaphore(uint32_t id) {
     return 0x9000 + id * 16;
@@ -401,6 +432,44 @@ public:
     Noc() = default;
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
     uint8_t get_noc_id() const { return noc_id_; }
+    template <typename Dst>
+    void async_read(
+        const TensorAccessor& src, const Dst&, uint32_t bytes, const TensorNocArgs& src_args, const LocalNocArgs&)
+        const {
+        noc_async_read(src.get_noc_addr(src_args.page_id), 0, bytes);
+    }
+    template <typename Dst>
+    void async_read(
+        const UnicastEndpoint&, const Dst&, uint32_t bytes, const UnicastNocArgs& src_args, const LocalNocArgs&) const {
+        noc_async_read(get_noc_addr(src_args.noc_x, src_args.noc_y, src_args.addr), 0, bytes);
+    }
+    template <typename Src>
+    void async_write(
+        const Src&, const TensorAccessor& dst, uint32_t bytes, const LocalNocArgs&, const TensorNocArgs& dst_args)
+        const {
+        noc_async_write(0, dst.get_noc_addr(dst_args.page_id), bytes);
+    }
+    template <typename Src>
+    void async_write(
+        const Src&, const UnicastEndpoint&, uint32_t bytes, const LocalNocArgs&, const UnicastNocArgs& dst_args) const {
+        noc_async_write(0, get_noc_addr(dst_args.noc_x, dst_args.noc_y, dst_args.addr), bytes);
+    }
+    template <NocOptions Options = NocOptions::DEFAULT, typename Src, typename Dst>
+    void async_write_multicast(
+        const Src& src,
+        const Dst&,
+        uint32_t bytes,
+        uint32_t num_dests,
+        const LocalNocArgs&,
+        const MulticastNocArgs& dst_args) const {
+        const uint64_t dst = get_noc_multicast_addr(
+            dst_args.noc_x_start, dst_args.noc_y_start, dst_args.noc_x_end, dst_args.noc_y_end, dst_args.addr);
+        if constexpr (Options == NocOptions::MCAST_INCL_SRC) {
+            noc_async_write_multicast_loopback_src(src.get_address(), dst, bytes, num_dests);
+        } else {
+            noc_async_write_multicast(src.get_address(), dst, bytes, num_dests);
+        }
+    }
     // Traced as the free functions were, for the same reason DataflowBuffer is: the
     // handle carries which NOC it used, but on this harness there is one fake NOC, so
     // printing the id would make every pre-port trace differ for no real difference.
@@ -818,7 +887,7 @@ void example_syntax_free() {
         ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
         noc_store<0>(mm_out.store(rsqrt(sqrt_(recip(exp_(relu(matmul(a, b))))))), t2, 0);
     }
-    {  // ReduceNode -- likewise
+    {                                                         // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(red_in, t0, 0).wait();
         noc_store<0>(red_out.store(rsqrt(sqrt_(recip(exp_(relu(reduce_sum<ReduceAxis::Rows>(a, sc))))))), t2, 0);
@@ -865,7 +934,7 @@ void example_syntax_method() {
         ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
         noc_store<0>(mm_out.store(matmul(a, b).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
-    {  // ReduceNode -- likewise
+    {                                                         // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(red_in, t0, 0).wait();
         noc_store<0>(red_out.store(reduce_sum<ReduceAxis::Rows>(a, sc).relu().exp().recip().sqrt().rsqrt()), t2, 0);

@@ -6,6 +6,8 @@ maintenance benefit relative to implementation cost.
 
 ## Stack rank
 
+Progress: items 1 and 2 are complete on this branch.
+
 1. **Restore `unified_selftest.cpp` and require it in CI.** The documented DM0,
    DM1, and compute builds no longer compile: the harness lacks the current tile
    geometry hooks and still directly constructs `Storage`. This is a cheap fix
