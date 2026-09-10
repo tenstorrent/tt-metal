@@ -50,7 +50,8 @@ def _assert_state_metadata(state: KdaState, config, layer: ttKDA) -> None:
     )
     assert state.convolution.dtype == ttnn.bfloat16
     assert state.convolution.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert state.convolution.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert state.convolution.memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert state.convolution.memory_config().nd_shard_spec == layer.convolution_state_memory_config.nd_shard_spec
 
 
 def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> None:

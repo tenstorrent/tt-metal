@@ -31,7 +31,6 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     check_allocated_device_tensor(in.history, operation_name, "history");
     check_layout(in.history, Layout::ROW_MAJOR, operation_name, "history");
     check_dtype(in.history, DataType::BFLOAT16, operation_name, "history");
-    check_interleaved(in.history, operation_name, "history");
     check_allocated_device_tensor(in.tap0, operation_name, "tap0");
     check_layout(in.tap0, Layout::TILE, operation_name, "tap0");
     check_dtype(in.tap0, DataType::BFLOAT16, operation_name, "tap0");

@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.tt.kda.config import kda_nd_dram_memory_config
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -266,6 +267,28 @@ def test_qkv_causal_conv1d_silu_contract(
         ):
             assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
         ttnn.release_trace(device, trace_id)
+
+
+def test_qkv_causal_conv1d_silu_reads_nd_sharded_history(device: ttnn.Device) -> None:
+    """The convolution kernel consumes the canonical KDA cache without an adapter."""
+    widths = (512, 256, 128)
+    inputs, history, taps = _host_inputs(widths=widths)
+    input_tt = _to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    history_memory_config = kda_nd_dram_memory_config(input_tt, (1, 3, 2 * ttnn.TILE_SIZE))
+    history_tt = _to_device(
+        history,
+        device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=history_memory_config,
+    )
+    taps_tt = tuple(_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps)
+
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        outputs = _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=sum(widths))
+
+    assert history_tt.memory_config() == history_memory_config
+    for name, expected, actual in zip(("q", "k", "v"), _reference(inputs, history, taps, widths), outputs, strict=True):
+        assert_accurate(expected, ttnn.to_torch(actual), name=f"{name} with ND history", pcc_threshold=0.999)
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)

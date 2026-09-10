@@ -68,13 +68,30 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             for (uint32_t row = 0; row < tile_height; ++row) {
                 const int32_t source_row = static_cast<int32_t>(mt * tile_height + row + tap) - 3;
                 if (source_row < 0) {
-                    noc.async_read(
-                        history,
-                        activation,
-                        block_row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row + 3),
-                         .offset_bytes = ct_start * block_offset_scale},
-                        {.offset_bytes = row * block_row_bytes});
+                    if constexpr (decltype(history)::DSpec::is_interleaved) {
+                        noc.async_read(
+                            history,
+                            activation,
+                            block_row_bytes,
+                            {.page_id = static_cast<uint32_t>(source_row + 3),
+                             .offset_bytes = ct_start * block_offset_scale},
+                            {.offset_bytes = row * block_row_bytes});
+                    } else {
+                        const uint32_t history_page_bytes = history.get_aligned_page_size();
+                        const uint32_t history_pages_per_row =
+                            (num_blocks * block_ct * block_offset_scale) / history_page_bytes;
+                        for (uint32_t ct = 0; ct < block_ct; ++ct) {
+                            const uint32_t channel_offset = (ct_start + ct) * block_offset_scale;
+                            noc.async_read(
+                                history,
+                                activation,
+                                block_offset_scale,
+                                {.page_id = static_cast<uint32_t>(source_row + 3) * history_pages_per_row +
+                                            channel_offset / history_page_bytes,
+                                 .offset_bytes = channel_offset % history_page_bytes},
+                                {.offset_bytes = row * block_row_bytes + ct * block_offset_scale});
+                        }
+                    }
                 } else {
                     noc.async_read(
                         input,

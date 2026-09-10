@@ -61,7 +61,7 @@ class KdaState:
     """Caller-owned KDA carries.
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
-    ``convolution`` is the BF16 row-major DRAM stream tail with shape
+    ``convolution`` is the BF16 row-major ND-sharded DRAM stream tail with shape
     ``[B, kernel_size - 1, Q_local + K_local + V_local]``. Its channels are
     sharded across TP and the complete tail is replicated across SP. The halo
     exchange derives each partition entry carry from it. Construct state with
@@ -129,6 +129,10 @@ class ttKDA:
             self.weights.input_projection,
             (1, self.config.head_k_dim, ttnn.TILE_SIZE),
         )
+        self.convolution_state_memory_config = kda_nd_dram_memory_config(
+            self.weights.input_projection,
+            (1, self.config.conv_kernel_size - 1, 2 * ttnn.TILE_SIZE),
+        )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
         )
@@ -188,7 +192,7 @@ class ttKDA:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.convolution_state_memory_config,
             ),
         )
 
@@ -226,6 +230,15 @@ class ttKDA:
             raise ValueError("recurrent state must use the canonical ND-sharded DRAM layout")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
+        convolution_memory = state.convolution.memory_config()
+        if (
+            convolution_memory.buffer_type != ttnn.BufferType.DRAM
+            or convolution_memory.nd_shard_spec != self.convolution_state_memory_config.nd_shard_spec
+        ):
+            raise ValueError(
+                "convolution state must use the canonical ND-sharded DRAM layout: "
+                f"actual={convolution_memory}, expected={self.convolution_state_memory_config}"
+            )
 
     def _convolve_qkv(
         self,
@@ -241,28 +254,31 @@ class ttKDA:
             ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        state_row_major = ttnn.to_layout(
-            convolution_state,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         if self.sequence_parallel_size > 1:
-            state_row_major, new_state = exchange_convolution_carry(
+            convolution_history, new_state = exchange_convolution_carry(
                 qkv_row_major,
-                state_row_major,
+                convolution_state,
                 sequence_parallel_axis=self.sequence_parallel_axis,
+                state_memory_config=self.convolution_state_memory_config,
             )
         else:
-            new_state = ttnn.slice(
+            convolution_history = convolution_state
+            new_state = ttnn.empty_like(
+                convolution_state,
+                memory_config=self.convolution_state_memory_config,
+            )
+            ttnn.slice(
                 qkv_row_major,
                 (0, sequence - (config.conv_kernel_size - 1), 0),
                 (qkv_row_major.shape[0], sequence, channels),
+                memory_config=self.convolution_state_memory_config,
+                output_tensor=new_state,
             )
-        # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
+        # The replacement state is BF16 row-major ND DRAM [B, K - 1, Q_local + K_local + V_local],
         # channel-sharded across TP and replicated across SP.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
-            state_row_major,
+            convolution_history,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,

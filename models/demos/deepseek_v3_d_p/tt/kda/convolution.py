@@ -12,6 +12,7 @@ def exchange_convolution_carry(
     initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
+    state_memory_config: ttnn.MemoryConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
@@ -47,7 +48,13 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    entry_carries = [initial_carry]
+    initial_entry = ttnn.slice(
+        initial_carry,
+        (0, 0, 0),
+        (batch, history, channels),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    entry_carries = [initial_entry]
     for rank in range(sp_size - 1):
         tiled_rank_tail = ttnn.slice(
             gathered_tails,
@@ -79,10 +86,12 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     final_row_major = ttnn.to_layout(tiled_final_carry, ttnn.ROW_MAJOR_LAYOUT)
-    final_carry = ttnn.slice(
+    final_carry = ttnn.empty_like(initial_carry, memory_config=state_memory_config)
+    ttnn.slice(
         final_row_major,
         (0, 0, 0),
         (batch, history, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=state_memory_config,
+        output_tensor=final_carry,
     )
     return partition_carry, final_carry
