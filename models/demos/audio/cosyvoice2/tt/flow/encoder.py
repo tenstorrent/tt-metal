@@ -74,11 +74,18 @@ import torch.nn.functional as F
 
 import ttnn
 
+from ..hifigan.conv import accurate_compute_config, safe_compute_config
+
 # The real checkpoint's verified encoder config (cosyvoice2.yaml's flow.encoder).
 D_MODEL = 512
 ATTENTION_HEADS = 8
 LINEAR_UNITS = 2048
 LAYER_NORM_EPS = 1e-12  # ConformerEncoderLayer/TransformerEncoderLayer's own eps -- NOT the CFM decoder's 1e-5.
+EMBED_LAYER_NORM_EPS = 1e-5  # LinearNoSubsampling.out's / after_norm's own eps -- different again.
+NUM_BLOCKS = 6  # token-rate Conformer stack (cosyvoice2.yaml's num_blocks)
+NUM_UP_BLOCKS = 4  # mel-rate Conformer stack -- hardcoded in real source, not a yaml param
+PRE_LOOKAHEAD_LEN = 3
+UPSAMPLE_STRIDE = 2
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +215,128 @@ class ConformerEncoderLayerRef(nn.Module):
         return x
 
 
+class LinearNoSubsamplingRef(nn.Module):
+    """`cosyvoice.transformer.subsampling.LinearNoSubsampling` +
+    `EspnetRelPositionalEncoding.forward`'s `x*xscale` step folded in (the two are
+    always used together in this encoder, and `position_encoding`'s own table is
+    `sinusoidal_rel_pos_table_torch`, already built above) -- `right_context=0`,
+    `subsampling_rate=1`: despite the name, this changes width (input_size ->
+    output_size) but never length."""
+
+    def __init__(self, idim: int = D_MODEL, odim: int = D_MODEL):
+        super().__init__()
+        self.linear = nn.Linear(idim, odim)
+        self.norm = nn.LayerNorm(odim, eps=EMBED_LAYER_NORM_EPS)
+        self.xscale = math.sqrt(odim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, T, idim] -> [B, T, odim], already scaled by `xscale` -- the
+        caller builds `pos_emb` separately via `sinusoidal_rel_pos_table_torch`."""
+        x = self.norm(self.linear(x))
+        return x * self.xscale
+
+
+class PreLookaheadLayerRef(nn.Module):
+    """`cosyvoice.transformer.upsample_encoder.PreLookaheadLayer`, `finalize=True`
+    path only (`context` always empty -- see module docstring: `streaming=False`
+    is this phase's scope). `conv1` is padded on the RIGHT by `pre_lookahead_len`
+    (a genuine look-ahead, the mirror image of the CFM estimator's causal convs,
+    not causal itself); `conv2` is causal (left-pad by `kernel_size-1`)."""
+
+    def __init__(self, channels: int = D_MODEL, pre_lookahead_len: int = PRE_LOOKAHEAD_LEN):
+        super().__init__()
+        self.pre_lookahead_len = pre_lookahead_len
+        self.conv1 = nn.Conv1d(channels, channels, kernel_size=pre_lookahead_len + 1, stride=1, padding=0)
+        self.conv2 = nn.Conv1d(channels, channels, kernel_size=3, stride=1, padding=0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, T, C] -> [B, T, C]."""
+        residual = x
+        h = x.transpose(1, 2)  # [B, C, T]
+        h = F.pad(h, (0, self.pre_lookahead_len), value=0.0)
+        h = F.leaky_relu(self.conv1(h))
+        h = F.pad(h, (self.conv2.kernel_size[0] - 1, 0), value=0.0)
+        h = self.conv2(h)
+        return h.transpose(1, 2) + residual
+
+
+class Upsample1DRef(nn.Module):
+    """`cosyvoice.transformer.upsample_encoder.Upsample1D` -- the encoder's OWN
+    upsample class (distinct from the CFM decoder's unused `matcha.Upsample1D`):
+    nearest-interpolate by `stride`, then a causal (left-pad by `stride*2`) conv
+    of kernel `stride*2+1` -- shape-preserving after the interpolation, so the net
+    effect is exactly length x `stride`. This is what replaces CosyVoice1's
+    separate `length_regulator` for the token-rate -> mel-rate expansion."""
+
+    def __init__(self, channels: int = D_MODEL, stride: int = UPSAMPLE_STRIDE):
+        super().__init__()
+        self.stride = stride
+        self.conv = nn.Conv1d(channels, channels, stride * 2 + 1, stride=1, padding=0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, T, C] -> [B, T*stride, C]."""
+        h = x.transpose(1, 2)  # [B, C, T]
+        h = F.interpolate(h, scale_factor=float(self.stride), mode="nearest")
+        h = F.pad(h, (self.stride * 2, 0), value=0.0)
+        h = self.conv(h)
+        return h.transpose(1, 2)
+
+
+class UpsampleConformerEncoderRef(nn.Module):
+    """`cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder`,
+    `streaming=False` (`finalize=True`, `context` always empty) only -- see module
+    docstring. Two independent `LinearNoSubsamplingRef` instances (`embed`/
+    `up_embed`, real source builds them as two separate weight sets, not a shared
+    one) and two independent Conformer stacks (6 blocks at token rate, 4 more at
+    mel rate -- `NUM_UP_BLOCKS=4` is hardcoded in real source, not a yaml
+    parameter)."""
+
+    def __init__(
+        self,
+        d_model: int = D_MODEL,
+        num_heads: int = ATTENTION_HEADS,
+        linear_units: int = LINEAR_UNITS,
+        num_blocks: int = NUM_BLOCKS,
+        num_up_blocks: int = NUM_UP_BLOCKS,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.embed = LinearNoSubsamplingRef(d_model, d_model)
+        self.pre_lookahead_layer = PreLookaheadLayerRef(d_model)
+        self.encoders = nn.ModuleList(
+            [ConformerEncoderLayerRef(d_model, num_heads, linear_units) for _ in range(num_blocks)]
+        )
+        self.up_layer = Upsample1DRef(d_model, UPSAMPLE_STRIDE)
+        self.up_embed = LinearNoSubsamplingRef(d_model, d_model)
+        self.up_encoders = nn.ModuleList(
+            [ConformerEncoderLayerRef(d_model, num_heads, linear_units) for _ in range(num_up_blocks)]
+        )
+        self.after_norm = nn.LayerNorm(d_model, eps=EMBED_LAYER_NORM_EPS)
+
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        """xs: [B, T, d_model] -> [B, 2T, d_model]. No padding (single full-length
+        utterance) -- masks are all-valid throughout, matching this package's
+        existing batch=1/no-padding testing scope."""
+        b, t_len, _ = xs.shape
+        mask = torch.ones(b, 1, t_len, dtype=torch.bool)
+
+        xs = self.embed(xs)
+        pos_emb = sinusoidal_rel_pos_table_torch(t_len, self.d_model)
+        xs = self.pre_lookahead_layer(xs)
+        for layer in self.encoders:
+            xs = layer(xs, mask, pos_emb)
+
+        xs = self.up_layer(xs)
+        t_len2 = xs.shape[1]
+        mask2 = torch.ones(b, 1, t_len2, dtype=torch.bool)
+        xs = self.up_embed(xs)
+        pos_emb2 = sinusoidal_rel_pos_table_torch(t_len2, self.d_model)
+        for layer in self.up_encoders:
+            xs = layer(xs, mask2, pos_emb2)
+
+        return self.after_norm(xs)
+
+
 # ---------------------------------------------------------------------------
 # TTNN port. [N, L, C] throughout, per this package's convention.
 # ---------------------------------------------------------------------------
@@ -328,3 +457,195 @@ class TtConformerEncoderLayer:
         h = ttnn.silu(h)
         h = ttnn.linear(h, self.w2, bias=self.b2)
         return ttnn.add(x, h)
+
+
+class TtPaddedConv1d:
+    """A `ttnn.conv1d` with an explicit, possibly-asymmetric `(pad_left, pad_right)`
+    -- confirmed from `ttnn.conv1d`'s own docstring to accept a `[pad_left,
+    pad_right]` tuple directly (see tt/flow/decoder.py's `TtCausalConv1d` for the
+    same confirmation). Self-contained here rather than reusing `TtCausalConv1d`
+    from decoder.py: this module needs a RIGHT-padded conv too
+    (`PreLookaheadLayer.conv1`, a genuine look-ahead, not causal), so a single
+    general class covers all three convs this file needs (look-ahead, causal x2)
+    without special-casing `TtCausalConv1d`'s left-only contract. Same
+    `accurate_compute_config`/`safe_compute_config` verify-and-fallback discipline
+    as every other conv in this package.
+    """
+
+    def __init__(
+        self,
+        device,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        pad: tuple[int, int],
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+    ):
+        assert weight.dim() == 3
+        self.device = device
+        self.out_channels, self.in_channels, self.kernel_size = weight.shape
+        self.pad = pad
+        self.dtype = dtype
+        self._weight_4d = ttnn.from_torch(
+            weight.detach().float().unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self._bias = ttnn.from_torch(
+            bias.detach().float().reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
+        self._accurate = accurate_compute_config(device)
+        self._safe = safe_compute_config(device)
+        self._verified: dict = {}
+
+    @classmethod
+    def from_module(cls, device, module: nn.Conv1d, pad: tuple[int, int], dtype=ttnn.bfloat16):
+        return cls(device, module.weight, module.bias, pad, dtype=dtype)
+
+    def _conv(self, x, input_length: int, batch_size: int, compute_config):
+        return ttnn.conv1d(
+            input_tensor=x,
+            weight_tensor=self._weight_4d,
+            bias_tensor=self._bias,
+            device=self.device,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_length=input_length,
+            kernel_size=self.kernel_size,
+            stride=1,
+            padding=self.pad,
+            dilation=1,
+            groups=1,
+            conv_config=self.conv_config,
+            compute_config=compute_config,
+            dtype=self.dtype,
+            return_output_dim=True,
+        )
+
+    def __call__(self, x, input_length: int, batch_size: int = 1):
+        key = (input_length, batch_size)
+        cfg = self._verified.get(key, self._accurate)
+        out, out_length = self._conv(x, input_length, batch_size, cfg)
+        if key not in self._verified:
+            ref, _ = self._conv(x, input_length, batch_size, self._safe)
+            a = float(ttnn.to_torch(out).float().abs().max())
+            b = float(ttnn.to_torch(ref).float().abs().max())
+            if a == a and abs(a - b) <= 0.02 * max(b, 1e-9):
+                self._verified[key] = self._accurate
+                ttnn.deallocate(ref)
+            else:
+                self._verified[key] = self._safe
+                ttnn.deallocate(out)
+                out = ref
+        return ttnn.reshape(out, (batch_size, out_length, self.out_channels))
+
+
+class TtLinearNoSubsampling:
+    def __init__(self, device, module: LinearNoSubsamplingRef, dtype=ttnn.bfloat16):
+        self.weight = _linear_weight(device, module.linear.weight, dtype)
+        self.bias = _bias(device, module.linear.bias, dtype)
+        self.norm_w = ttnn.from_torch(
+            module.norm.weight.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.norm_b = ttnn.from_torch(
+            module.norm.bias.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.xscale = module.xscale
+
+    def __call__(self, x):
+        h = ttnn.linear(x, self.weight, bias=self.bias)
+        h = ttnn.layer_norm(h, weight=self.norm_w, bias=self.norm_b, epsilon=EMBED_LAYER_NORM_EPS)
+        return ttnn.multiply(h, self.xscale)
+
+
+class TtPreLookaheadLayer:
+    def __init__(self, device, module: PreLookaheadLayerRef, dtype=ttnn.bfloat16):
+        self.pre_lookahead_len = module.pre_lookahead_len
+        self.conv1 = TtPaddedConv1d.from_module(device, module.conv1, pad=(0, module.pre_lookahead_len), dtype=dtype)
+        self.conv2 = TtPaddedConv1d.from_module(
+            device, module.conv2, pad=(module.conv2.kernel_size[0] - 1, 0), dtype=dtype
+        )
+
+    def __call__(self, x, length: int, batch_size: int = 1):
+        # conv1 is right-padded by pre_lookahead_len: TtPaddedConv1d's `pad` already
+        # encodes that, and ttnn.conv1d's `input_length` is the UNPADDED length
+        # (padding is applied internally, same convention TtCausalConv1d already
+        # relies on in decoder.py) -- so this is just `self.conv1(x, length, ...)`.
+        h = self.conv1(x, length, batch_size)
+        h = ttnn.leaky_relu(h, negative_slope=0.01)
+        h = self.conv2(h, length, batch_size)
+        return ttnn.add(h, x)
+
+
+class TtUpsample1D:
+    """The encoder's OWN upsample (distinct from the CFM decoder's unused
+    `matcha.Upsample1D`): `ttnn.repeat_interleave` along the sequence axis is
+    exactly nearest-neighbor upsampling by an integer factor (each element
+    repeated `stride` times, matching `F.interpolate(..., mode="nearest")` at an
+    integer scale) -- simpler than reshaping to `[N,1,L,C]` for `ttnn.upsample`,
+    and exact rather than approximate for this integer-scale case."""
+
+    def __init__(self, device, module: Upsample1DRef, dtype=ttnn.bfloat16):
+        self.stride = module.stride
+        self.conv = TtPaddedConv1d.from_module(device, module.conv, pad=(module.stride * 2, 0), dtype=dtype)
+
+    def __call__(self, x, length: int, batch_size: int = 1):
+        h = ttnn.repeat_interleave(x, self.stride, dim=1)
+        return self.conv(h, length * self.stride, batch_size)
+
+
+class TtUpsampleConformerEncoder:
+    """`UpsampleConformerEncoderRef` on device -- `streaming=False` only (see
+    module docstring)."""
+
+    def __init__(self, device, module: UpsampleConformerEncoderRef, dtype=ttnn.bfloat16):
+        self.device = device
+        self.d_model = module.d_model
+        self.embed = TtLinearNoSubsampling(device, module.embed, dtype=dtype)
+        self.pre_lookahead_layer = TtPreLookaheadLayer(device, module.pre_lookahead_layer, dtype=dtype)
+        self.encoders = [TtConformerEncoderLayer(device, layer, dtype=dtype) for layer in module.encoders]
+        self.up_layer = TtUpsample1D(device, module.up_layer, dtype=dtype)
+        self.up_embed = TtLinearNoSubsampling(device, module.up_embed, dtype=dtype)
+        self.up_encoders = [TtConformerEncoderLayer(device, layer, dtype=dtype) for layer in module.up_encoders]
+        self.after_norm_w = ttnn.from_torch(
+            module.after_norm.weight.detach().float().reshape(1, 1, -1),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        self.after_norm_b = ttnn.from_torch(
+            module.after_norm.bias.detach().float().reshape(1, 1, -1),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+    def _pos_emb(self, t_len: int):
+        emb = sinusoidal_rel_pos_table_torch(t_len, self.d_model)
+        return ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+    def __call__(self, xs, length: int, batch_size: int = 1):
+        """xs: ttnn [B, T, d_model] -> ttnn [B, T*stride, d_model]. No padding
+        (single full-length utterance, matching this package's batch=1/
+        no-padding testing scope) -- `attn_bias` is all-zero (all-valid) at both
+        stages."""
+        bias1 = ttnn.from_torch(
+            torch.zeros(batch_size, 1, 1, length), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        h = self.embed(xs)
+        pos_emb = self._pos_emb(length)
+        h = self.pre_lookahead_layer(h, length, batch_size)
+        for layer in self.encoders:
+            h = layer(h, pos_emb, bias1)
+
+        h = self.up_layer(h, length, batch_size)
+        length2 = length * self.up_layer.stride
+        bias2 = ttnn.from_torch(
+            torch.zeros(batch_size, 1, 1, length2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        h = self.up_embed(h)
+        pos_emb2 = self._pos_emb(length2)
+        for layer in self.up_encoders:
+            h = layer(h, pos_emb2, bias2)
+
+        return ttnn.layer_norm(h, weight=self.after_norm_w, bias=self.after_norm_b, epsilon=EMBED_LAYER_NORM_EPS)
