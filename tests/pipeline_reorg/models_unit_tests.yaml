@@ -198,18 +198,25 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_all_buckets_fit_trace_region or test_bucket_trace_teardown_releases_all_stores"
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
+    # Last on purpose: this test builds the full 64-layer 27B model from /mnt/MLPerf (the trace-region
+    # property it proves needs full depth). Passing CI runs took 58-251 s, and the layer load alone
+    # ranges 44 s (warm page cache) to >5 min (cold NAS), so 300 s sat below the median. Give it its
+    # own budget so a slow load does not also take out the seven files that used to follow it.
+    pytest --timeout 1800 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_all_buckets_fit_trace_region"
   model: qwen3.6-27b
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 28
+      # 28 min assumed the 300 s cap on test_decode_bucketing; with its real cost (up to ~13 min on a
+      # cold NAS) the whole entry reconstructs to ~33 min from the 2026-09-08 run.
+      timeout: 40
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
