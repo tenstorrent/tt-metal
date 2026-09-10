@@ -1116,7 +1116,7 @@ inline void calculate_acosh() {
 // overflows (the old x^2 + 1 produced +inf at ~1.84e19).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
-    sfpi::lreg_pressure _;
+    //    sfpi::lreg_pressure _;
 
     constexpr float LOG1P_LARGE = 0x1.0p28;
     constexpr float LN2 = 0.6931471805599453f;
@@ -1156,6 +1156,8 @@ inline void calculate_asinh() {
         // Small region (|x| < 0.75): asinh(|x|) = |x| * P(x^2), a degree-6 (in x^2)
         // minimax fit (<=1 ulp on [0, 0.75]). No sqrt/reciprocal/log1p here.
         v_if(sfpi::abs(inp) < 0.75f) {
+            sfpi::lreg_pressure _;
+
             sfpi::vFloat s = inp * inp;
             sfpi::vFloat p = 4.375355784e-03f;
             p = p * s + -1.484858524e-02f;
