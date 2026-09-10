@@ -26,6 +26,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
@@ -211,6 +212,71 @@ TEST_P(NDShardingTensorSpecTests, TestTensorSpec) {
         case ShardingTensorSpecMethod::BlockSharded: tensor_spec = tensor_spec.block_sharded(cores.ranges()[0]); break;
     }
     EXPECT_EQ(tensor_spec.memory_config().nd_shard_spec().value().shard_shape, params.expected_shard_shape);
+}
+
+struct ShardedBuilderGridTrimParams {
+    Shape tensor_shape;
+    ShardingTensorSpecMethod method = ShardingTensorSpecMethod::HeightSharded;
+    CoreRangeSet grid;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
+    TensorMemoryLayout expected_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+    uint32_t expected_shard_height = 0;
+    uint32_t expected_shard_width = 0;
+    std::optional<CoreRangeSet> expected_grid;
+    std::vector<CoreCoord> cores_in_grid;
+    std::vector<CoreCoord> cores_not_in_grid;
+};
+
+class ShardedBuilderGridTrimTests : public ::testing::TestWithParam<ShardedBuilderGridTrimParams> {};
+
+// The width/height/block builders derive the shard shape from the grid and keep only the
+// cores that receive a shard: the first N in shard-assignment order for the linear
+// layouts, the leading rows x cols block for GRID_2D. Assert that contract directly, and
+// the invariant behind it: the grid holds exactly one core per shard.
+TEST_P(ShardedBuilderGridTrimTests, GridHoldsOnlyShards) {
+    const auto& params = GetParam();
+
+    TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig(BufferType::L1)));
+    switch (params.method) {
+        case ShardingTensorSpecMethod::WidthSharded:
+            tensor_spec = tensor_spec.width_sharded(params.grid, params.orientation);
+            break;
+        case ShardingTensorSpecMethod::HeightSharded:
+            tensor_spec = tensor_spec.height_sharded(params.grid, params.orientation);
+            break;
+        case ShardingTensorSpecMethod::BlockSharded:
+            ASSERT_EQ(params.grid.ranges().size(), 1u);
+            tensor_spec = tensor_spec.block_sharded(params.grid.ranges()[0], params.orientation);
+            break;
+        default: FAIL() << "method must be one of the width/height/block builders";
+    }
+
+    const auto& mem_config = tensor_spec.memory_config();
+    EXPECT_EQ(mem_config.memory_layout(), params.expected_layout);
+
+    ASSERT_TRUE(mem_config.shard_spec().has_value());
+    const auto& shard_spec = *mem_config.shard_spec();
+    EXPECT_EQ(shard_spec.shape[0], params.expected_shard_height);
+    EXPECT_EQ(shard_spec.shape[1], params.expected_shard_width);
+
+    ASSERT_TRUE(mem_config.nd_shard_spec().has_value());
+    EXPECT_EQ(mem_config.nd_shard_spec()->grid, shard_spec.grid);
+
+    if (params.expected_grid.has_value()) {
+        EXPECT_EQ(shard_spec.grid, *params.expected_grid);
+    }
+    for (const auto& core : params.cores_in_grid) {
+        EXPECT_TRUE(shard_spec.grid.contains(core)) << core.str() << " missing from " << shard_spec.grid.str();
+    }
+    for (const auto& core : params.cores_not_in_grid) {
+        EXPECT_FALSE(shard_spec.grid.contains(core)) << core.str() << " unexpectedly in " << shard_spec.grid.str();
+    }
+
+    const auto& physical = tensor_spec.physical_shape();
+    const uint64_t num_shards = static_cast<uint64_t>(div_up(physical.height(), shard_spec.shape[0])) *
+                                div_up(physical.width(), shard_spec.shape[1]);
+    EXPECT_EQ(shard_spec.grid.num_cores(), num_shards);
 }
 
 class NDShardingSqueezeRankStressTests : public ::testing::Test {};
@@ -852,6 +918,89 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_pages = Shape({5, 1, 1}),
             .expected_tensor_shape_pages = Shape({5, 121}),
             .expected_shard_shape_pages = Shape({5, 1}),
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    NdShardingTests,
+    ShardedBuilderGridTrimTests,
+    ::testing::Values(
+        // 1x512x1 f32 tile: physical 512x32, the RMSNorm-mean geometry from an 11x8 grid.
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 1}),
+            .method = ShardingTensorSpecMethod::HeightSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+            .orientation = ShardOrientation::ROW_MAJOR,
+            .expected_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .expected_shard_height = 32,
+            .expected_shard_width = 32,
+            // 16 shards keep the first 16 cores row-wise: all of row 0, then x=0..4 of row 1.
+            .cores_in_grid = {CoreCoord{0, 0}, CoreCoord{10, 0}, CoreCoord{4, 1}},
+            .cores_not_in_grid = {CoreCoord{5, 1}, CoreCoord{0, 2}, CoreCoord{10, 7}},
+        },
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 1}),
+            .method = ShardingTensorSpecMethod::HeightSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+            .orientation = ShardOrientation::COL_MAJOR,
+            .expected_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .expected_shard_height = 32,
+            .expected_shard_width = 32,
+            // Column-wise assignment keeps columns x=0 and x=1 whole.
+            .cores_in_grid = {CoreCoord{0, 7}, CoreCoord{1, 0}, CoreCoord{1, 7}},
+            .cores_not_in_grid = {CoreCoord{2, 0}, CoreCoord{10, 7}},
+        },
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 1}),
+            .method = ShardingTensorSpecMethod::WidthSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+            .orientation = ShardOrientation::ROW_MAJOR,
+            .expected_layout = TensorMemoryLayout::WIDTH_SHARDED,
+            .expected_shard_height = 512,
+            .expected_shard_width = 32,
+            .expected_grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0})),
+        },
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 1}),
+            .method = ShardingTensorSpecMethod::BlockSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+            .orientation = ShardOrientation::ROW_MAJOR,
+            .expected_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .expected_shard_height = 64,
+            .expected_shard_width = 32,
+            // 8 height shards x 1 width shard keep the leading 1x8 column of the grid.
+            .expected_grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 7})),
+        },
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 1}),
+            .method = ShardingTensorSpecMethod::BlockSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+            .orientation = ShardOrientation::COL_MAJOR,
+            .expected_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .expected_shard_height = 64,
+            .expected_shard_width = 32,
+            // Transposed mapping keeps the leading 8x1 row of the grid.
+            .expected_grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{7, 0})),
+        },
+        // A tensor that fills the grid keeps it untouched: 8x11 shards on 88 cores.
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 2048}),
+            .method = ShardingTensorSpecMethod::BlockSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+            .orientation = ShardOrientation::ROW_MAJOR,
+            .expected_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .expected_shard_height = 64,
+            .expected_shard_width = 192,
+            .expected_grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{10, 7})),
+        },
+        ShardedBuilderGridTrimParams{
+            .tensor_shape = Shape({1, 512, 32}),
+            .method = ShardingTensorSpecMethod::HeightSharded,
+            .grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{1, 1})),
+            .orientation = ShardOrientation::ROW_MAJOR,
+            .expected_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .expected_shard_height = 128,
+            .expected_shard_width = 32,
+            .expected_grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{1, 1})),
         }));
 
 INSTANTIATE_TEST_SUITE_P(
