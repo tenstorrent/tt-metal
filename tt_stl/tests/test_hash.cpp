@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -264,6 +265,69 @@ TEST(CanonicalKeyTest, CPU_ToHashTakesPrecedenceOverReflection) {
 
     EXPECT_NE(hash_objects_with_default_seed(same_hash_left), hash_objects_with_default_seed(different_hash));
     EXPECT_NE(canonical_key(same_hash_left), canonical_key(different_hash));
+}
+
+// --- std::shared_ptr transparency ------------------------------------------------------------
+//
+// A handle held behind a shared_ptr -- an op attribute naming one, say -- must key on what the
+// handle *is*, so two pointers to equal handles agree and a handle that moved in memory does not
+// change the key. Pointers to types that never asked for reflection keep std::hash's address
+// behaviour.
+
+// A handle that asked to be traversed through a shared_ptr. Not an aggregate, so only the
+// attribute_names path applies to it -- the same shape the reflected handles in tt_metal have.
+struct ReflectiveHandle {
+    explicit ReflectiveHandle(uint32_t address) : address(address) {}
+    uint32_t address;
+
+    static constexpr bool ttsl_reflect_through_shared_ptr = true;
+    static constexpr auto attribute_names = std::forward_as_tuple("address");
+    auto attribute_values() const { return std::make_tuple(address); }
+};
+
+// Reflectable, but describing geometry rather than identity, so it did not opt in: a pointer to one
+// must keep hashing by address.
+struct OpaqueHandle {
+    explicit OpaqueHandle(uint32_t value) : value(value) {}
+    uint32_t value;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("value");
+    auto attribute_values() const { return std::make_tuple(value); }
+};
+
+TEST(SharedPtrReflectionTest, CPU_ReflectivePointeeIsTraversedByValue) {
+    using Handle = ReflectiveHandle;
+    static_assert(ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<Handle>>);
+
+    const auto left = std::make_shared<Handle>(7);
+    const auto right = std::make_shared<Handle>(7);
+    const auto other = std::make_shared<Handle>(8);
+
+    EXPECT_EQ(hash_objects_with_default_seed(left), hash_objects_with_default_seed(right));
+    EXPECT_EQ(canonical_key(left), canonical_key(right));
+    EXPECT_NE(hash_objects_with_default_seed(left), hash_objects_with_default_seed(other));
+    EXPECT_NE(canonical_key(left), canonical_key(other));
+
+    // The exact key holds the pointee's value, so a vector of handles distinguishes its contents
+    // rather than the addresses they happen to live at -- what a program-cache key needs.
+    EXPECT_EQ(canonical_key(std::vector{left}), canonical_key(std::vector{right}));
+    EXPECT_NE(canonical_key(std::vector{left}), canonical_key(std::vector{other}));
+
+    const std::shared_ptr<Handle> null;
+    EXPECT_NE(canonical_key(null), canonical_key(left));
+    EXPECT_NE(hash_objects_with_default_seed(null), hash_objects_with_default_seed(left));
+}
+
+TEST(SharedPtrReflectionTest, CPU_PointeeThatDidNotOptInHashesByAddress) {
+    using Opaque = OpaqueHandle;
+    static_assert(not ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<Opaque>>);
+
+    const auto left = std::make_shared<Opaque>(7);
+    const auto right = std::make_shared<Opaque>(7);
+
+    EXPECT_NE(hash_objects_with_default_seed(left), hash_objects_with_default_seed(right))
+        << "a pointer to a type that did not opt in must keep hashing by address, even when the pointee is "
+           "reflectable";
 }
 
 // Coverage over the same adversarial set used for the hash: the exact key must be injective here
