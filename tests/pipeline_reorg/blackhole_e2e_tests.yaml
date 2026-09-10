@@ -124,7 +124,11 @@
 
 - id: bh-host-io-fast-unit-viommu
   name: Host IO socket loopback unit tests (slow dispatch, viommu)
-  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  # Keep the slow-dispatch Host IO selection aligned with multi-card sanity.
+  cmd: >-
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
+    models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+    tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
   skus:
     bh_p300:
       timeout: 10
