@@ -4,8 +4,18 @@
 # Chunked KV prefill + trace capture/replay for HunyuanImage-3.0 AR recaption decode.
 #
 # Prefill runs eager once (chunked for long prefixes). Decode uses a captured CQ0 graph
-# replayed per AR token; host updates token/mask/RoPE/write-pos buffers between replays.
-# Stage forcing stays in the host ``generate_text`` loop (Whisper-style).
+# replayed per AR token; host updates token/mask/RoPE/write-pos buffers **between**
+# ``execute_trace`` replays (Whisper-style) — those H2D copies are outside the captured
+# graph, not part of trace capture.
+#
+# Text-only prefill: no S×S mask (SDPA ``is_causal``); prefix prefill is never
+# trace-captured (KV ``replace()`` writes are illegal during capture).
+#
+# Text-only decode trace: RoPE rows come from on-device ``slice_cos_sin`` (+ ``assign``
+# into persistent trace buffers). The 1×W decode mask row still uses a host build + H2D
+# copy between replays because ``trace_fixed`` KV is padded to ``max_cache_len`` and
+# SDPA requires an explicit causal row over that width (zeros would attend into padding).
+# Stage forcing stays in the host ``generate_text`` loop.
 
 from __future__ import annotations
 
@@ -19,6 +29,7 @@ import ttnn
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import (
     build_attention_mask,
     build_attention_mask_query_row,
+    mask_has_image_spans,
     to_additive,
 )
 from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (
@@ -73,8 +84,9 @@ def run_kv_prefill(tracer, *, use_trace_prefill: bool) -> ttnn.Tensor:
 
 
 def _upload_prefill_mask(tracer, query_start: int, query_end: int, total_len: int) -> ttnn.Tensor | None:
-    # Text-only: SDPA ``is_causal`` handles prefill — skip host S×S build/upload.
-    if not tracer.attn_slices:
+    # Text-only (incl. ``[[]]`` from ``run_recaption_on_device``): SDPA ``is_causal``
+    # handles prefill — skip host S×S build/upload (~1 GB at max ISL).
+    if not mask_has_image_spans(tracer.attn_slices):
         return None
     if query_start == 0 and query_end == total_len:
         mask_bool = build_attention_mask(total_len, tracer.attn_slices, bsz=1)
@@ -118,7 +130,8 @@ def _single_prefill_step(tracer, *, start: int, end: int, return_logits: bool) -
     logits_tt = None
     if return_logits:
         logits_tt = tracer.lm_head(hidden, last_token_only=True)
-    ttnn.deallocate(mask_tt)
+    if mask_tt is not None:
+        ttnn.deallocate(mask_tt)
     ttnn.deallocate(hidden_tt)
     ttnn.deallocate(cos_tt)
     ttnn.deallocate(sin_tt)
@@ -313,6 +326,15 @@ class RecaptionDecodeTracer:
             return out[:1]
         return ttnn.to_torch(tensor)
 
+    def _is_text_only(self) -> bool:
+        return not mask_has_image_spans(self.attn_slices)
+
+    def _ensure_cos_sin_full(self) -> None:
+        if self._cos_full is None or self._sin_full is None:
+            self._cos_full, self._sin_full = self.model.layers[0].self_attn.rope.prepare_cos_sin(
+                self.max_cache_len, image_infos=self.image_infos
+            )
+
     def _rope_slice_host(self, position: int) -> tuple[torch.Tensor, torch.Tensor]:
         if self._cos_host is None:
             self._cos_host = self._to_torch_replicated(self._cos_full).to(torch.bfloat16)
@@ -320,6 +342,37 @@ class RecaptionDecodeTracer:
         cos_h = self._cos_host[:, :, position : position + 1, :].contiguous()
         sin_h = self._sin_host[:, :, position : position + 1, :].contiguous()
         return cos_h, sin_h
+
+    def _stage_trace_rope(self, query_pos: int, *, init: bool) -> None:
+        """Refresh persistent RoPE trace buffers (between replays, outside capture)."""
+        self._ensure_cos_sin_full()
+        if self._is_text_only():
+            rope = self.model.layers[0].self_attn.rope
+            cos_slice, sin_slice = rope.slice_cos_sin(self._cos_full, self._sin_full, query_pos)
+            if init:
+                self._cos_tt = cos_slice
+                self._sin_tt = sin_slice
+            else:
+                ttnn.assign(cos_slice, self._cos_tt)
+                ttnn.assign(sin_slice, self._sin_tt)
+                ttnn.deallocate(cos_slice)
+                ttnn.deallocate(sin_slice)
+        else:
+            cos_h, sin_h = self._rope_slice_host(query_pos)
+            if init:
+                self._cos_tt = self._upload_trace_buffer(cos_h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                self._sin_tt = self._upload_trace_buffer(sin_h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            else:
+                self._copy_trace_buffer(cos_h, self._cos_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                self._copy_trace_buffer(sin_h, self._sin_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def _stage_trace_mask(self, query_pos: int, *, init: bool) -> None:
+        """Refresh persistent decode mask trace buffer (1×max_cache_len row, between replays)."""
+        mask_host = self._mask_row_host(query_pos)
+        if init:
+            self._mask_tt = self._upload_trace_buffer(mask_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        else:
+            self._copy_trace_buffer(mask_host, self._mask_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     def _read_logits(self, batch_size: int) -> torch.Tensor:
         vocab_parallel = getattr(self.lm_head, "vocab_parallel", False)
@@ -355,11 +408,8 @@ class RecaptionDecodeTracer:
         self._query_pos = query_pos
         tok = torch.tensor([[token_id]], dtype=torch.int32)
         self._token_ids_tt = self._upload_trace_buffer(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        mask_host = self._mask_row_host(query_pos)
-        self._mask_tt = self._upload_trace_buffer(mask_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        cos_h, sin_h = self._rope_slice_host(query_pos)
-        self._cos_tt = self._upload_trace_buffer(cos_h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        self._sin_tt = self._upload_trace_buffer(sin_h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self._stage_trace_mask(query_pos, init=True)
+        self._stage_trace_rope(query_pos, init=True)
         self._write_pos_host = torch.tensor([query_pos], dtype=torch.int32)
         self._write_pos_tt = self._upload_trace_buffer(
             self._write_pos_host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -425,12 +475,8 @@ class RecaptionDecodeTracer:
         self._query_pos = query_pos
         tok = torch.tensor([[token_id]], dtype=torch.int32)
         self._copy_trace_buffer(tok, self._token_ids_tt, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self._copy_trace_buffer(
-            self._mask_row_host(query_pos), self._mask_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
-        cos_h, sin_h = self._rope_slice_host(query_pos)
-        self._copy_trace_buffer(cos_h, self._cos_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        self._copy_trace_buffer(sin_h, self._sin_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self._stage_trace_mask(query_pos, init=False)
+        self._stage_trace_rope(query_pos, init=False)
         self._write_pos_host[0] = query_pos
         self._copy_trace_buffer(
             self._write_pos_host, self._write_pos_tt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -477,7 +523,7 @@ class RecaptionDecodeTracer:
             token_tt = self._upload_trace_buffer(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             owns_token = True
 
-        text_only = not self.attn_slices
+        text_only = not mask_has_image_spans(self.attn_slices)
         if text_only:
             # Pure causal grow: every prior key is visible → additive zeros.
             mask_kwargs = dict(

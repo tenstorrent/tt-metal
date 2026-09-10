@@ -1105,14 +1105,16 @@
   team: shield
 
 # ── HunyuanImage-3.0 ───────────────────────────────────────────────
+# Job timeout 25 min; pytest --timeout 1380 s leaves headroom. run_ci_pytest.sh
+# forces offline, validates the staged checkpoint, --maxfail=1, and fails on zero tests.
 - name: HunyuanImage-3.0 T2I e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
-    export HF_HUB_OFFLINE=0
     export HY_STEPS=50
     export HY_VERBOSE=1
-    pytest --timeout 1500 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
+    models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh e2e \
+      --timeout 1380 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
   model: hunyuan-image-3.0
   skus:
     bh_quietbox_2:

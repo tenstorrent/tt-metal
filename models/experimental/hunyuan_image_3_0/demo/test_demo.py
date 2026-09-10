@@ -21,8 +21,16 @@ from pathlib import Path
 
 import pytest
 
+from models.experimental.hunyuan_image_3_0.ref.weights import ENV_BASE, HF_REPO_BASE, validate_env_checkpoint_dir
+
 _DEMO = Path(__file__).resolve().parent / "demo.py"
 _ROOT = Path(__file__).resolve().parents[4]  # tt-metal repo root
+
+
+@pytest.fixture(scope="session", autouse=True)
+def require_staged_checkpoint():
+    if os.environ.get(ENV_BASE):
+        validate_env_checkpoint_dir(ENV_BASE, HF_REPO_BASE)
 
 
 @pytest.mark.parametrize("prompt", ["a photo of a cat, studio lighting"], ids=["cat"])
@@ -38,6 +46,10 @@ def test_t2i_demo(prompt, tmp_path):
     # HY_PROMPT_FILE > argv[1] > HY_PROMPT, so with no argv[1] this is what it reads.
     env = {
         **os.environ,
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+        "HY_SKIP_WEIGHT_DOWNLOAD": "1",
         "HY_STEPS": os.environ.get("HY_STEPS", "8"),
         "HY_NUM_LAYERS": os.environ.get("HY_NUM_LAYERS", "32"),
         "HY_GUIDANCE": os.environ.get("HY_GUIDANCE", "5.0"),

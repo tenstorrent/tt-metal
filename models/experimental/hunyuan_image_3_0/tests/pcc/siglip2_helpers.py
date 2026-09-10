@@ -14,7 +14,7 @@ from models.experimental.hunyuan_image_3_0.ref.vision.siglip2 import VIT_CONFIG
 # Default 1 layer for fast device runs; set HY_VIT_NUM_LAYERS=27 for full stack.
 NUM_LAYERS = int(os.environ.get("HY_VIT_NUM_LAYERS", "1"))
 B, S = 1, 64
-PCC_THR = float(os.environ.get("HY_VIT_PCC_THR", "0.99"))
+PCC_THR = 0.99
 SPATIAL_SHAPES_HW = ((8, 8),)
 
 
