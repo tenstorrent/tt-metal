@@ -156,15 +156,12 @@ class DecoderLayer(LightweightModule):
         # The widest grid that divides hidden is 64 cores, but the DRAM-sharded decode
         # matmuls pick their grid from find_grid_k_n (it has to divide both K and N
         # tiles), which lands on 8 for QKV, 32 for gate/up and 24 for down. That
-        # mismatch cost one reshard per matmul: 3 ops and ~4.8 us per layer, 84 ops and
-        # ~134 us across 28 layers.
+        # mismatch cost one reshard per matmul, three per layer, across all 28 layers.
         #
         # Moving the norm is free because a decode norm is one tile tall, so it is
-        # overhead-bound rather than parallelism-bound. Measured on N300, [1,1,32,2048]
-        # width-sharded rms_norm: 9.66 us on 64 cores, 8.95 on 32, 9.23 on 16, 9.40 on
-        # 8 — and the residual add that feeds it is flat too (5.92 / 6.01 / 5.52 / 6.01).
-        # So the norm on the consumer's narrower grid is as fast or faster AND the
-        # reshard goes away.
+        # overhead-bound rather than parallelism-bound: its time is flat across core
+        # counts, and so is the residual add that feeds it. The norm on the consumer's
+        # narrower grid is as fast or faster AND the reshard goes away.
         #
         # NB this changes the norm's reduction grid, so it is NOT bit-exact: the
         # width-wise sum is split across a different number of cores.
@@ -189,12 +186,9 @@ class DecoderLayer(LightweightModule):
                     setattr(self, attr, None)
         # Prefill RMSNorm grid. `ln_num_cores` above takes the LARGEST core count dividing
         # dim_tiles (64 for hidden=2048), which drives block_w to (2048/64)/32 = 1 and
-        # subblock_w to 1 — the same "most cores, thinnest block" shape that cost the
-        # matmuls 34 us each. Swept at the model's shapes
-        # (median of 4 steady launches):
-        #
-        #   m=64   c64 bw=1 13.3 us | c32 bw=2 12.3  <- best | c16 13.3 | c8 15.5 | c4 21.0
-        #   m=128  c64 bw=1 17.5 us | c32 bw=2 16.8  <- best | c16 19.0 | c8 24.5 | c4 36.6
+        # subblock_w to 1 — the same "most cores, thinnest block" shape that the matmul
+        # program configs avoid. 32 cores with block_w=2 is the faster norm at both
+        # prefill buckets the demo uses.
         #
         # The bigger reason for 32 is that it is ALSO the MLP gate/up in0 grid, so the
         # post-attention norm emits gate/up's layout directly and the Reshard between them
@@ -205,20 +199,19 @@ class DecoderLayer(LightweightModule):
         #
         # DEFAULT OFF, and the reason is a loose end rather than a measurement.
         #
-        # The norm itself is BIT-IDENTICAL at the buckets the demo replays — 0 of 131072
-        # elements differ at m=64, 0 of 65536 at m=32 — and only diverges at m>=96
-        # (1118/196608 elements at m=96) where the block change reorders the reduction.
-        # So switching the demo's own bucket to 32 cores should have been transparent.
-        # It is not: the demo audio md5 moves cac10fbd31 -> b2fa912a03, and
-        # QWEN3_TTS_PREFILL_LN_CORES=0 restores cac10fbd31 exactly, so this is the cause.
+        # The norm itself is BIT-IDENTICAL at the buckets the demo replays, and only
+        # diverges at m>=96 where the block change reorders the reduction. So switching
+        # the demo's own bucket to 32 cores should have been transparent. It is not: the
+        # demo audio md5 moves, and QWEN3_TTS_PREFILL_LN_CORES=0 restores it exactly, so
+        # this is the cause.
         #
         # The norm is not where the difference enters. Changing this grid also changes the
         # spec the residual adds write and the spec attention receives, and some consumer
         # downstream takes a different branch on it (attention compares the incoming
         # memory_config against its own specs to decide whether to reshard). Until that is
-        # pinned down and run through the SIM/WER gate, shipping it would be trading
-        # unexplained numerics for -1 op and 0-3 us, which is inside the +-5 us noise of
-        # the window. Not worth it.
+        # pinned down and run through the SIM/WER gate, shipping it would trade
+        # unexplained numerics for one op and a saving inside the window's noise band.
+        # Not worth it.
         #
         # Set QWEN3_TTS_PREFILL_LN_CORES=32 to take the op reduction and the faster norm.
         _pf_ln_env = os.environ.get("QWEN3_TTS_PREFILL_LN_CORES")

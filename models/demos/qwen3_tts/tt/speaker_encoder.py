@@ -109,19 +109,19 @@ class SpeakerEncoder(LightweightModule):
         # device. QWEN3_TTS_SE_DEVICE_ASP=0 falls back to the host conv path.
         self._se_device_asp = os.environ.get("QWEN3_TTS_SE_DEVICE_ASP", "1") != "0"
         # k>1 reflect-pad convs as im2col + matmul, so nothing leaves the device.
-        # Off by default: it is a 5x win *only* when the forward is captured as a
-        # trace (4.9 ms vs 23 ms), and a 7x loss eager (208 ms on a 2-chip mesh)
-        # because it trades 8 transfers for ~310 small ops. See PERF_NOTES 3.4.
+        # Off by default: it is a large win *only* when the forward is captured as a
+        # trace, and a larger loss eager, because it trades 8 transfers for ~310 small
+        # ops. See PERF_NOTES 3.4.
         self._se_device_conv = os.environ.get("QWEN3_TTS_SE_DEVICE_CONV", "0") != "0"
         # How a tap's reflected row order is materialised. "slice" decomposes it into
-        # ascending runs and concatenates them (~3 us/slice); "gather" is one
-        # ttnn.gather (~480 us at mel T=384 — never use on the hot path).
+        # ascending runs and concatenates them; "gather" is one ttnn.gather, which is
+        # orders of magnitude slower — never use it on the hot path.
         # Mel spectrogram on device instead of host torch.stft. Ported from the
         # ign/xtts_modules branch (models/experimental/xtts/tt/xtts_mel.py). ON by
-        # default: it costs ~2.4 s of one-off JIT and ~10 ms warm against the host's
-        # 1.8 ms, which is an accepted trade for a waveform-to-embedding path with no
-        # host STFT in it. QWEN3_TTS_SE_DEVICE_MEL=0 restores the host path.
-        # See compute_mel_spectrogram_device for the full measurements.
+        # default even though it is slower than the host STFT, which is an accepted
+        # trade for a waveform-to-embedding path with no host STFT in it.
+        # QWEN3_TTS_SE_DEVICE_MEL=0 restores the host path.
+        # See compute_mel_spectrogram_device for the rationale.
         self._se_device_mel = os.environ.get("QWEN3_TTS_SE_DEVICE_MEL", "1") != "0"
         # Let the device-mel path replay a captured forward trace, the way the host-mel
         # path already does in ``forward``. ON by default; QWEN3_TTS_SE_MEL_TRACE=0
@@ -132,7 +132,7 @@ class SpeakerEncoder(LightweightModule):
         self._device_mel_cache = {}
         # Option A: one captured forward per mel length, with the host path as the
         # fallback on a miss. Traces are shape-locked and mel length varies with the
-        # reference audio (~1 frame per 10.7 ms), so it is a cache, not a bucket list.
+        # reference audio, so it is a cache, not a bucket list.
         self._fwd_traces = {}
         self._audio_traces = {}  # waveform samples -> captured mel+forward trace
         self._se_auto_trace = os.environ.get("QWEN3_TTS_SE_AUTO_TRACE", "0") != "0"
@@ -148,13 +148,11 @@ class SpeakerEncoder(LightweightModule):
         # HiFi4, not LoFi. The k>1 device-conv path (im2col + matmul) runs through this
         # config, and capture_forward_trace forces device convs on -- so this fidelity
         # decides how far QWEN3_TTS_SE_TRACE=1 moves the speaker embedding away from the
-        # host torch convs. Measured against the host path on the 2048-d embedding:
-        #   LoFi  cosine 0.99924   HiFi4 cosine 0.99979   (3.6x closer)
-        # and it is FREE -- these shapes are not math-bound (384x192x64: 7.66 us LoFi vs
-        # 7.68 us HiFi4 in isolation; 6.9 vs 6.3 ms mean over 5 demo seeds). LoFi also
-        # cost text fidelity at the demo's default seed: seed 42 inserted an article
-        # ("with a bright sun") for WER 4.3 %, where HiFi4 and the untraced host-conv
-        # path are both 0.0 % on all of seeds 42/1/7/123/2024. See PERF_NOTES 3.ac.
+        # host torch convs. HiFi4 lands measurably closer to the host path on the 2048-d
+        # embedding, and it is FREE -- these shapes are not math-bound, so LoFi buys no
+        # time. LoFi also cost text fidelity at the demo's default seed, inserting an
+        # article where HiFi4 and the untraced host-conv path are both clean across every
+        # seed tried. See PERF_NOTES 3.ac.
         #
         # fp32_dest_acc_en is NOT available on top: it halves the DEST budget and the
         # existing SE program configs then violate out_subblock_h * out_subblock_w <= 4.
@@ -264,32 +262,21 @@ class SpeakerEncoder(LightweightModule):
     # elementwise sqrt. Doing it as two matmuls rather than one wide one also avoids
     # slicing a 1026-wide tensor at offset 513, which is not tile-aligned.
     #
-    # Measured on the demo's 4.01 s reference audio, against the host mel:
-    #   framing + reflect pad : bit-exact (relRMS 0.0000%)
-    #   DFT re/im             : 0.10%
-    #   mel, before log       : 0.19%
-    #   mel, after log+clamp  : 1.17%   <- log amplifies; 0.2% of bins sit under the
-    #                                      1e-5 clamp, where log's slope is 1e5
-    # Speaker embedding, which is what actually matters:
-    #   device mel vs host mel, through this encoder : 1.19% relRMS, cos 0.99993
-    #   this encoder vs the fp32 reference, host mel : 2.80% relRMS
-    #   this encoder vs the fp32 reference, dev mel  : 2.91% relRMS
-    # So it costs ~0.1 points on top of the encoder's own 2.8% bf16 noise.
+    # Numerics against the host mel, on the demo's reference audio: framing and reflect
+    # pad are bit-exact, the DFT and pre-log mel stay well under a percent, and the
+    # post-log mel is the worst stage because log amplifies the bins sitting under the
+    # 1e-5 clamp, where its slope is 1e5. Through this encoder that lands the speaker
+    # embedding a fraction of a point away from the host-mel embedding, on top of the
+    # encoder's own bf16 noise against the fp32 reference.
     #
-    # It is ON by default (owner's call: the wall-time cost is acceptable) even
-    # though it is slower than the host mel, warm as well as cold:
-    #   device mel  617.7 ms cold (JIT)   11.3 ms warm
-    #   host mel                            1.8 ms
-    #   waveform -> embedding, warm:  48.4 ms device mel   33.3 ms host mel
-    # A single run pays only the cold number, and only the FIRST ever run pays it in
-    # full: the kernels land in the on-disk cache, after which the speaker-embedding
-    # step goes from ~1.09 s (host mel) to ~1.3-1.5 s, i.e. +0.4 s, and demo wall
-    # time is within noise (37.5 s vs 37.3 s measured back to back).
+    # It is ON by default (owner's call: the wall-time cost is acceptable) even though
+    # it is slower than the host mel, warm as well as cold. A single run pays only the
+    # cold JIT number, and only the FIRST ever run pays it in full: the kernels land in
+    # the on-disk cache, after which demo wall time is within noise of the host path.
     #
-    # Enabling it CHANGES THE DEFAULT AUDIO: the embedding moves by ~1.2% relRMS,
-    # which reseeds sampling, so generated waveforms will not match runs from before
-    # this was switched on. Frame counts and EOS behaviour are unaffected (103 frames
-    # on N300, 107 on N150, EOS both ways).
+    # Enabling it CHANGES THE DEFAULT AUDIO: the embedding moves enough to reseed
+    # sampling, so generated waveforms will not match runs from before this was
+    # switched on. Frame counts and EOS behaviour are unaffected.
     #
     # The reason is arithmetic, not TTNN. torch.stft uses a real FFT, O(n log n); a
     # DFT basis is a dense matmul, O(n^2) — [1024, 513] per frame here, and twice,
@@ -1120,8 +1107,8 @@ class SpeakerEncoder(LightweightModule):
         # Every branch conv is k>1 dilated with reflect pad, so it can only run on
         # the host. That made the device path ping-pong — slice, D2H, conv, H2D,
         # relu, add, D2H, conv, ... — 7 host round-trips and 22 device ops per
-        # block to do ~45 us of device work. Running the cascade entirely on the
-        # host costs one D2H and one H2D and drops all 22 ops.
+        # block to do a trivial amount of device work. Running the cascade entirely
+        # on the host costs one D2H and one H2D and drops all 22 ops.
         _branch_w = [self.pytorch_weights.get(f"{prefix}blocks.{i}.conv.weight") for i in range(scale - 1)]
         if (
             self._se_host_fuse
