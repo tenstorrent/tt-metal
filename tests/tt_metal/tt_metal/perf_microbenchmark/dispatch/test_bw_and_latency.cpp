@@ -327,6 +327,7 @@ int main(int argc, char** argv) {
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)},
             {"NOP_COUNT", std::to_string(nop_count_g)},
             {"WRITE_DRAM", std::to_string(write_dram)},
+            {"PCIE_TRANSFER", std::to_string(source_mem_g == 0)},
         };
         if (!page_size_as_runtime_arg_g) {
             defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));
