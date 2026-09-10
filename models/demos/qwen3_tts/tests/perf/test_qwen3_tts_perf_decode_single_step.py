@@ -36,7 +36,7 @@ frame's non-layer work. A layers-only report is blind to it.
 **These are the blocks, not the whole step.** A real step runs them 28 / 5 / 70 / 15
 times respectively, and carries per-step work these windows exclude (the 15 LM heads,
 15 CP final norms, the Talker codec_head, the accumulated codec embed, and host-side
-D2H/H2D). Use ``../qwen3_tts_perf_report.sh -w decode_frame`` for the whole step.
+D2H/H2D), so they cannot be scaled into a whole-step number.
 
 Optional regression gate on total device kernel time for the whole window::
 

@@ -9,15 +9,14 @@ the test re-executes its own file as a plain script under ``python -m tracy``
 whole command — no separate tracy invocation, no hand-run ``tt-perf-report``.
 
 Why a subprocess at all: the device profiler writes its CSV only when the
-profiled process exits, so a test can never read its own capture. The repo's
-existing multi-window reports work around that with a shell driver
-(``tests/qwen3_tts_perf_report.sh``); these two windows are small enough to do it
-in-process.
+profiled process exits, so a test can never read its own capture. The multi-window
+reports that used to live here worked around that with a shell driver; these two
+windows are small enough to do it in-process.
 
 **The profiled device graph is not redefined here.** Both windows call straight
-into ``tests/test_qwen3_tts_profile_single_layer.py``, which already emits the
-``start`` / ``stop`` signposts, so a report here always describes the same op
-sequence that test profiles — including its ``QWEN3_TTS_BF8_WEIGHTS`` dtype
+into ``qwen3_tts_perf_layers.py``, which owns the layer construction and emits the
+``start`` / ``stop`` signposts, so a report here always describes that one op
+sequence — including its ``QWEN3_TTS_BF8_WEIGHTS`` dtype
 handling. That module's own docstring records what happens when a second copy of
 the layer setup goes stale: it profiled bfloat16 gate/up at 116 us against the
 92 us the model actually ran. Importing is what keeps the two honest.
@@ -45,7 +44,7 @@ except ModuleNotFoundError:  # plain pytest run: the outer driver never signpost
 REPO_ROOT = Path(__file__).resolve().parents[5]
 PERF_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = PERF_DIR / "reports"
-_OPSLIST = REPO_ROOT / "models/demos/qwen3_tts/tests/qwen3_tts_perf_report_opslist.py"
+_OPSLIST = PERF_DIR / "qwen3_tts_perf_report_opslist.py"
 
 # The profiler's DRAM buffer holds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs
 # and DROPS markers past it with no error, leaving a partial CSV. A single layer is
@@ -59,37 +58,30 @@ _BUDGET_ENV = "QWEN3_TTS_PERF_BUDGET_US"
 
 
 # ── the profiled windows ─────────────────────────────────────────────────────
-# Imported, not reimplemented — see the module docstring. The decode window is a
-# pytest test function in that module; its parameters are plain objects, not
-# fixture magic, so calling it directly is exactly the graph pytest would run.
-# It is aliased to a non-``test_`` name so pytest does not collect it here.
-
-
-def _single_layer_module():
-    from models.demos.qwen3_tts.tests import test_qwen3_tts_profile_single_layer as m
-
-    return m
+# Imported, not reimplemented — see the module docstring. ``qwen3_tts_perf_layers``
+# owns every device graph these reports profile.
+from models.demos.qwen3_tts.tests.perf import qwen3_tts_perf_layers as _layers
 
 
 def open_perf_device():
-    """Device opened the way the single-layer profile tests open it (MESH_DEVICE)."""
-    return _single_layer_module()._open_device()
+    """Device opened the way the demo opens it (honours MESH_DEVICE)."""
+    return _layers.open_device()
 
 
 def close_perf_device(device, mesh_shape) -> None:
-    _single_layer_module()._close_device(device, mesh_shape)
+    _layers.close_device(device, mesh_shape)
 
 
 def build_talker_layer(device):
     """One Talker ``DecoderLayer`` with the deployed weight dtype and random weights."""
     from models.demos.qwen3_tts.tt.model_config import Qwen3TTSTalkerConfig
 
-    return _single_layer_module()._make_talker_layer(device, Qwen3TTSTalkerConfig())
+    return _layers.make_talker_layer(device, Qwen3TTSTalkerConfig())
 
 
 def run_prefill_single_layer_window(device, layer, seq_len: int) -> None:
     """One Talker decoder layer, prefill, at a demo TRACE bucket, between signposts."""
-    _single_layer_module()._run_talker_prefill(device, layer, seq_len)
+    _layers.run_talker_prefill(device, layer, seq_len)
 
 
 def run_talker_decode_layer_window(device, layer) -> None:
@@ -100,46 +92,45 @@ def run_talker_decode_layer_window(device, layer) -> None:
     KV cache. The eager fallback in the same module slices the cache to one position
     and is a graph the demo never runs.
     """
-    _single_layer_module().test_talker_layer_decode_traced(device, layer)
+    _layers.run_talker_decode_traced(device, layer)
 
 
 def prefill_buckets() -> tuple[int, ...]:
-    return _single_layer_module().DEMO_TALKER_PREFILL_BUCKETS
+    return _layers.DEMO_TALKER_PREFILL_BUCKETS
 
 
 def profile_window(start: str, stop: str, warmup: bool = True):
     """Name one window's signposts (and skip its compile pass) — see the tests module."""
-    return _single_layer_module().profile_window(start, stop, warmup)
+    return _layers.profile_window(start, stop, warmup)
 
 
 def build_code_predictor(device):
     """Production ``CodePredictor`` with a single layer and random weights.
 
-    Mirrors the ``code_predictor`` fixture in the single-layer profile module and
-    reuses its state-dict builder; the fixture itself cannot be called directly.
+    Reuses ``qwen3_tts_perf_layers.synthetic_cp_sd`` so the weights match the graph
+    the CP windows profile.
     """
     from models.demos.qwen3_tts.tt.code_predictor import CodePredictor
     from models.demos.qwen3_tts.tt.model_config import Qwen3TTSCodePredictorConfig, Qwen3TTSTalkerConfig
 
-    m = _single_layer_module()
     talker_h = Qwen3TTSTalkerConfig().hidden_size
     cfg = Qwen3TTSCodePredictorConfig(num_hidden_layers=1)
     return CodePredictor(
         device=device,
         config=cfg,
         talker_hidden_size=talker_h,
-        state_dict=m._synthetic_cp_sd(cfg, talker_hidden=talker_h, num_layers=1),
+        state_dict=_layers.synthetic_cp_sd(cfg, talker_hidden=talker_h, num_layers=1),
     )
 
 
 def run_cp_prefill_layer_window(device, code_predictor) -> None:
     """One CodePredictor layer at the demo's CP prefill (seq=2), between signposts."""
-    _single_layer_module().test_cp_layer_prefill(device, code_predictor)
+    _layers.run_cp_layer_prefill(device, code_predictor)
 
 
 def run_cp_decode_layer_window(device, code_predictor) -> None:
     """One CodePredictor layer at the demo's CP decode (seq=1), between signposts."""
-    _single_layer_module().test_cp_layer_decode(device, code_predictor)
+    _layers.run_cp_layer_decode(device, code_predictor)
 
 
 # Demo generation defaults (server.py Qwen3TTSConfig): the sampler's cost depends on
