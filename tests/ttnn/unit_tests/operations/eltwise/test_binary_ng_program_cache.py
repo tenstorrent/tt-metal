@@ -726,7 +726,7 @@ def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache
 
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.subtract, ttnn.multiply, ttnn.div])
 def test_scalar_tensor_scalar_value_excluded_from_hash(device, isolate_program_cache, op):
-    """The mirrored scalar reaches the kernel as a runtime arg, so its value must not key
+    """A scalar first operand reaches the kernel as a runtime arg, so its value must not key
     the cache -- only the operand side does."""
     shape = (1, 1, 320, 384)
     torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.5
@@ -747,7 +747,7 @@ def test_scalar_tensor_scalar_value_excluded_from_hash(device, isolate_program_c
 @pytest.mark.parametrize("op", [ttnn.subtract, ttnn.div])
 def test_scalar_side_is_in_hash(device, isolate_program_cache, op):
     """The two operand orders compile different kernels, so they must not share an entry --
-    sharing one would hand back the un-mirrored result on the second call."""
+    sharing one would hand back the operands the wrong way round on the second call."""
     shape = (1, 1, 320, 384)
     torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.5
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)

@@ -120,7 +120,7 @@
     }
 
 // scalar OP tensor. Operands are passed to the primitive swapped, because slot a must hold a
-// tensor, and scalar_is_lhs tells the kernel to mirror them back. MODE is the op's own
+// tensor, and scalar_is_lhs tells the kernel to read them in the caller's order. MODE is the op's own
 // fast_and_approximate_mode policy, spelled at each instantiation rather than baked into two
 // near-identical macros: it is the one thing that differs per op, and the one thing that has
 // drifted from the tensor-first overloads before.
@@ -728,9 +728,10 @@ inline auto invoke_binary_ng_impl(
     TT_FATAL(
         !(output_preallocated && input_a_rm && input_b_rm),
         "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
-    // Only the scalar prim overload takes scalar_is_lhs -- the tensor-tensor one ends in
-    // rtol/atol/equal_nan for isclose instead -- so the two cannot share a call. Dispatching
-    // through one helper keeps the flag from being forgotten on a second call site.
+    // The two prim::binary_ng overloads take different trailing parameters: the tensor-tensor one
+    // ends with isclose's rtol/atol/equal_nan, the scalar one with scalar_is_lhs. No single call
+    // can satisfy both, and while these were two separate call sites the flag was passed on one and
+    // forgotten on the other. This lambda is the only place either overload is invoked.
     auto dispatch = [&](const auto& a, const auto& b) {
         if constexpr (requires { b.dtype(); }) {
             return ttnn::prim::binary_ng(
@@ -767,7 +768,7 @@ inline auto invoke_binary_ng_impl(
     };
 
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
-        // is_layout_or_scalar reports a scalar as row-major, so a mirrored scalar reaches here too.
+        // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
         return dispatch(lhs_eff, rhs_eff);
     }
     // Either one or both are tiles

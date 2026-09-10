@@ -310,7 +310,7 @@ def test_binary_scalar_uint32_large_values(scalar, device):
 def test_scalar_tensor_arithmetic(input_shapes, device, op_name, dtype, layout):
     ttnn_fn, torch_fn = getattr(ttnn, op_name), getattr(torch, op_name)
     # Row-major is covered explicitly: an all-row-major call dispatches on a separate host
-    # path from the tiled one, and a mirrored scalar counts as row-major there.
+    # path from the tiled one, and a scalar counts as row-major there.
     torch.manual_seed(0)
     torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
     # away from zero: div by ~0 is not what this test is about
@@ -358,8 +358,8 @@ def test_scalar_tensor_div_int32_rounding(device, rounding_mode):
 @pytest.mark.parametrize("rounding_mode", (None, "floor", "trunc"))
 def test_scalar_tensor_div_int32_promoted_by_float_scalar(device, rounding_mode):
     """A float scalar promotes an INT32 tensor to FLOAT32 before dividing, which recurses through
-    div's scalar impl. That recursion has to carry the mirror flag: the tensor-first overload pins
-    it to false, so a promoted mirrored scalar would otherwise compute tensor / scalar. Dispatch is
+    div's scalar impl. That recursion has to carry scalar_is_lhs: the tensor-first overload pins
+    it to false, so a promoted scalar numerator would otherwise compute tensor / scalar. Dispatch is
     on the scalar's type, not its value, so 3.5 and an integral-valued 4.0 both promote."""
     torch.manual_seed(0)
     torch_input = torch.randint(-1000, 1000, (1, 1, 320, 384), dtype=torch.int32)
@@ -377,7 +377,7 @@ def test_scalar_tensor_div_int32_promoted_by_float_scalar(device, rounding_mode)
 
 
 def test_scalar_tensor_activations_follow_math_operands(device):
-    """Under a mirrored scalar the caller's operand-b activations must still land on the
+    """With a scalar first operand the caller's operand-b activations must still land on the
     tensor, even though the tensor is physically operand a."""
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
@@ -392,11 +392,11 @@ def test_scalar_tensor_activations_follow_math_operands(device):
 
 def test_scalar_tensor_reflected_sub_operator(device):
     """`s - t` binds to Tensor.__rsub__, which routes to subtract's scalar-first overload, so the
-    operator runs the mirrored SUB rather than BinaryOpType::RSUB.
+    operator runs SUB with swapped operands rather than BinaryOpType::RSUB.
 
     ttnn.rsub stays available as a named op and is asserted equivalent here, which is what makes
     the routing choice safe: the two agree bit-for-bit, while RSUB carries restrictions the
-    mirrored path does not (no SFPU kernel on Quasar, non-bfloat16 output rejected under
+    swapped-operand path does not (no SFPU kernel on Quasar, non-bfloat16 output rejected under
     fast_and_approximate_mode=false)."""
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16)
@@ -430,7 +430,7 @@ def test_scalar_tensor_unsigned(device, op_name, ttnn_dtype, torch_dtype):
 @pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)))
 def test_scalar_tensor_div_float_rounding(device, rounding_mode, ttnn_dtype, torch_dtype):
     """The float rounding-mode branch of div is a separate code path from the int32 one: it
-    divides and then applies ttnn.floor/trunc, forwarding the mirror flag on its own call.
+    divides and then applies ttnn.floor/trunc, forwarding scalar_is_lhs on its own call.
 
     Operand order is checked against torch on the unrounded quotient. The rounding is then
     checked against that same device quotient rather than torch's, because rounding collapses
@@ -451,7 +451,7 @@ def test_scalar_tensor_div_float_rounding(device, rounding_mode, ttnn_dtype, tor
 
 
 def test_scalar_tensor_scalar_side_activations(device):
-    """The mirrored scalar is the mathematical first operand, so input_tensor_a_activations must
+    """The scalar is the mathematical first operand, so input_tensor_a_activations must
     land on the scalar even though the scalar physically occupies operand slot b."""
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
@@ -494,7 +494,7 @@ def test_scalar_tensor_tile_height_sharded(device):
 
 @pytest.mark.parametrize("op_name", ("subtract", "div"))
 def test_scalar_tensor_explicit_memory_config(device, op_name):
-    """memory_config reaches the prim independently of the operand rewrite, so a mirrored scalar
+    """memory_config reaches the prim independently of the operand rewrite, so a scalar first operand
     with a non-default output config exercises a combination the defaulted calls do not."""
     ttnn_fn, torch_fn = getattr(ttnn, op_name), getattr(torch, op_name)
     torch.manual_seed(0)
@@ -551,9 +551,9 @@ def test_scalar_tensor_keyword_form(device, op_name):
 @pytest.mark.parametrize("op_name", ("subtract", "div"))
 def test_scalar_tensor_fpu_and_sfpu_paths(device, op_name, fast_and_approximate_mode):
     """bf16 with fast_and_approximate_mode selects the FPU kernel, a different code path from
-    the SFPU one. subtract runs the mirrored SUB LLK there; div is the case that lowers to a
+    the SFPU one. subtract runs the SUB LLK with swapped operands there; div is the case that lowers to a
     preprocess plus a commutative op (RECIP on the mathematical right operand, then MUL), and
-    that preprocess has to invert along with the caller's activation spans."""
+    that preprocess has to swap along with the caller's per-operand activations."""
     ttnn_fn, torch_fn = getattr(ttnn, op_name), getattr(torch, op_name)
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5

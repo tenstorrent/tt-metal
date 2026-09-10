@@ -274,8 +274,9 @@ Tensor div_scalar_impl(
                 operation_sub_core_grids,
                 "Division output typecast");
         }
-        // Recurse through the impl, not the public ttnn::div: the tensor-first overload pins
-        // scalar_is_lhs to false, which would drop the mirror on the promoted operand.
+        // Recurse through the impl, not the public ttnn::div: the tensor-first overload hard-codes
+        // scalar_is_lhs to false, so a scalar numerator would be lost here and the promoted operands
+        // divided the wrong way round.
         const auto result = div_scalar_impl(
             operation_input,
             value,
@@ -403,7 +404,7 @@ Tensor div_scalar_impl(
         cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
 
-    // ttnn::divide's tensor-scalar overload takes no mirror flag, so go straight to the
+    // ttnn::divide's tensor-scalar overload takes no scalar_is_lhs, so go straight to the
     // primitive here to forward it.
     std::optional<Tensor> divided = ttnn::detail::invoke_binary_ng(
         input,
