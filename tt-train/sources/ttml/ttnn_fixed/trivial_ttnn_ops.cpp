@@ -101,12 +101,8 @@ ttnn::Tensor sample(
     // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
     // parallel ranks) MUST pass their sharded axes explicitly.
 
-    // The fused op stages mask tiles through a circular buffer whose data format is derived from
-    // the logits, so it requires the mask to match the logits dtype. The composite implementation
-    // this replaced accepted any dtype (ttnn::subtract converted on the fly), and the in-tree mask
-    // builders emit BFLOAT16 whatever the logits are -- keep those callers working by converting
-    // here. The typecast is one extra op on a [1 or B, 1, 1, V] tensor per call, so callers on a hot
-    // decode loop should build the mask in the logits dtype and skip it.
+    // The fused op needs mask and logits dtypes to match; the ttnn::subtract it replaced did not,
+    // and existing callers build BFLOAT16 masks regardless of the logits dtype. No-op when equal.
     if (logits_mask.has_value() && logits_mask->dtype() != t.dtype()) {
         logits_mask = ttnn::typecast(logits_mask.value(), t.dtype());
     }
