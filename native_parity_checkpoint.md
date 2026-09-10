@@ -1375,6 +1375,159 @@ Ordered by what it cost. Each is stated so it can be applied to an op nobody her
 Items 1-3 are landed. 4, 5, 7, 8 and 9 belong in `/golden-tests`; 6 in this op's spec and in the
 general rule about shard properties; 10 is a seeded-generation rule with no home yet.
 
+## 4j. Measured against three baselines, and one retraction (2026-09-09/10)
+
+Report page (8 versions, five tabs):
+https://claude.ai/code/artifact/619a6c74-bc2c-40a5-90ad-97aefc60af8f
+
+Four comparisons, all on Blackhole p150b, all per-case `device_kernel_ns` through
+`eval_test_runner.sh`. Every one is a NEW measurement, not a re-reading of the run.
+
+### vs the target, on the target's own tests — 416 cases
+
+All 416 paired, **all 416 faster**. Best 91.55x, median 2.68x, worst 1.04x. The top end is
+almost certainly native running single-core where this op uses the grid — inherited from the
+seed's architecture, not earned. The narrow margins are small row-major and sharded-residual
+shapes at a few microseconds.
+
+*Method note worth keeping:* the pinned upstream ref IS `tt-metal2`'s HEAD, so both sides ran
+byte-identical test files. Pairing needed id normalisation — the two trees' pytest versions
+render parametrize ids differently (`[3072-8192]` vs `[w=3072-h=65536]`, `dtype0` vs
+`torch.bfloat16`). A first attempt lost 127 of 416 to that and, because the curve is sorted
+best-first, the drop was invisible and flattered the median (3.07x vs the true 2.68x).
+
+### vs the target, on production traces — 140 cases
+
+The model-traced corpus (PR #127): 140 distinct rms_norm calls from 22 production models,
+334,159 recorded executions, distilled from the `ttnn_ops_v6` trace DB. **No translation was
+needed** — the op accepts the blocked weight form, native's compute-config object and native's
+`weight` kwarg, so all 140 replay in native's own dialect with only the op swapped.
+
+140/140 pass both sides. **138 faster**, 2 ties (0.991x, 0.994x). Median 1.219x, geomean
+1.506x, execution-weighted 2.157x. The margin narrows with size — <1 MB median 1.475x,
+>100 MB median 1.018x — so more than half the corpus being small is why the weighted figure is
+high. **The corpus contains no bias and no residual anywhere**, so two of the three optional
+operands never appear in real traces.
+
+### golden before/after — the cost of the ten fixes
+
+23,458 cases timed at both `fa3a545553` and `13246e1767`. **Zero pass -> fail.** 310 fail ->
+pass. PCC: 3,672 better, 90 worse (all ~3e-06 at 0.99994, noise).
+
+But **1,324 cases >5% slower**, worst 0.519x, behind an aggregate of 0.9965x. The implementer's
+own 10-cell sample reported "net flat" and was right about the aggregate and blind to the
+distribution. Two causes, and the big one is not the one anyone guessed:
+
+* **1,152 (87%) are `FLOAT32 x w_non_aligned`, one-sided** (1,152 slower, 1 faster). Cause is
+  the mask-format fix: `scaler_dtype = interm_dtype if kernel_partial_w else bfloat16`
+  doubles that tile at fp32, and the reader zero-fills it behind a BLOCKING barrier at boot.
+  Fixed additive cost ~+200-325 ns, so the percentage loss scales inversely with runtime —
+  +325 ns on 2,126 ns is 0.873x, +58 ns on 9,226 ns is 0.994x. The worst shape, `32x17`, is a
+  SINGLE TILE, which rules out any re-blocking explanation. ATTEMPTS priced this at zero
+  ("the only float32 movement is +4 kB of fixed scaler CB") — that parenthetical is the 87%.
+  **Recoverable:** the larger mask is only needed on the accumulate-via-add path (>= 4 width
+  tiles), but the gate is on partial-width; every worst shape is 1-2 tiles wide, on the other
+  path, which the commit itself says is correct at either format.
+* **113 are `BFLOAT8_B x HEIGHT_SHARDED`** — the intermediate promotion, genuinely bimodal
+  (113 slower / 107 faster, median 1.0006), a re-priced L1 solve reshuffling the blocking.
+* The residual 58 are noise (symmetric, median ratio 1.0000).
+
+**Zero core-count changes in the entire run** (0 of 23,458), so no regression is a work-split
+story, and shard orientation is excluded outright.
+
+### vs the seed, on the SEED's own suite — 5,327 cases
+
+The requirement-6 test. Adapter binds either op, asserts the seed LACKS
+`weight`/`bias`/`residual_input_tensor` and the successor HAS all three, records source sha256
+per side, and the joiner refuses if both resolve to the same callable. `gamma_mode` restricted
+to `{no_gamma, gamma}`; bias/residual never in the kwargs dict at all. Both ops run in ONE
+clone (it carries a byte-identical copy of the seed), so one build, one `_ttnn.so`, one device.
+Two replicates in opposite order, min-of-2, agreeing to 0.23% median.
+
+| slice | n | geomean | seed faster >5% |
+|---|---|---|---|
+| all paired | 5327 | **1.188x** | 81 |
+| **weight ABSENT** | 986 | **1.141x** | **2** |
+| interleaved / height / width / block | | 1.078 / 1.186 / 1.240 / 1.285 | |
+
+**Requirement 6 is not satisfied as timing identity.** Core counts match on all 5,327, so the
+work split IS the seed's — but the operand-free path runs ~14% faster, so the code is not. The
+guard test (`test_program_is_structurally_the_seeds`, 72 cells) compares the CB set and kernel
+args, **not kernel source**, and the perf rounds rewrote the kernel. Requirement 6 says "same
+buffers, same code path, same blocking"; buffers and blocking are checked, code path is not.
+
+The deviation is benign in direction — nothing leaked cost INTO the base case — but "equivalent
+to the seed's program" is not what shipped.
+
+### RETRACTED: the 71-cell W=8192 regression
+
+This run also reported 49 cells the seed passed and the successor failed, plus 22 skips, all at
+W=8192, reproduced byte-identically in both replicates. **None of it is real.** Recorded here
+because it cost a day and because the reasoning error is the reusable part.
+
+The failure message carries two numbers: the arena's end, and `L1 buffer allocated at`. The
+second is not a property of the op — it is whatever was still live in that pytest session. It
+takes 6 values on one side and 8 on the other **with zero overlap**, and 68 of the 70 cells
+would fail on BOTH ops at the other's threshold.
+
+Cause: a cell that RAISES leaves pytest holding its traceback, whose frames still reference its
+on-device tensors, in a gc cycle refcounting cannot break. The pinned L1 collides with the next
+cell's CB region — 1,247 consecutive affected cells in this trace. The hook that releases them
+(`eval/golden_tests/conftest.py:217-218`) is real and correct, and **never loaded**: pytest
+auto-loads that conftest only for tests UNDER `eval/golden_tests/`, and the runner injects only
+hang/metrics/axes by `-p`. Force-loaded, **both ops land on exactly 5421/0/21** and residue
+goes from 1,253 of 5,442 cells to zero. Filed as **tt_ops_code_gen#193** with the repro and two
+fix directions; also caught `eval/oom.py` charging 24 of 45 `INFEASIBLE_L1` skips to shard
+geometry when they were residue.
+
+**The reasoning error, which is the point:** I treated reproducibility as intrinsicness. Same
+result across two replicates, both orderings, eight phases — none of that distinguishes a
+property of the op from a property of the environment it was measured in, because the
+environment repeated too. The cheap discriminator I should have reached for first is
+ISOLATION: the cells pass one-per-process. A read-only probe relocating the entire failing set
+(9 of 49 in common) would have settled it in minutes.
+
+Three of this session's conclusions were overturned by looking one level deeper — the skill
+blamed for the mask format (never loaded), the intermediate promotion blamed for making it
+reachable (fp32 byte-identical), and this. All three were the same error.
+
+### The perf rounds: which shapes, and the `attention:` bug
+
+Perf case designation is `extras["achievable_ns"]` + `reference_aiclk_mhz`, NOT the
+`"group": "perf"` label (which the spec says never affects gating, `feature_spec.py:236-241`).
+Selection is a written rule since submodule `0a8a442`: measure every perf case, divide measured
+ns by that case's own achievable, take the largest ratio, **re-rank every round**.
+
+Before that, the prompt made a `# attention:` note the mandatory target. It was never a tag or
+a group — a bare Python COMMENT in one LOOSE_CASES entry, appearing exactly once in the tree,
+parsed by nothing. Where present (sdpa) one shape was mandatory for every round with no
+re-rank; where absent (rms_norm run 893) the fall-through had no procedure, so the agent
+improvised and recorded three times "no `attention:` note, so the focus shape was
+free-selected", landing on the same shape all three rounds. `4d5dbe1` then widened the ranked
+population 13 -> 19.
+
+**It worked.** Run 998's focus was a different shape AND placement each round (width-sharded
+decode -> two different interleaved prefills), 18 of 19 cases ended faster, zero >5%
+regressions, and one of the six cases the widening added was Perf 2's largest prize at 1.49x.
+
+Two caveats. The ranking is dominated by REFERENCE QUALITY, not headroom — ratios span 0.06 to
+0.997, so a case whose target is 12x off can never be picked however much time it wastes
+(issue #175). And the focus stopped being the mover: Perf 2's focus moved 4.1% while the
+round's value landed on two cases it was not targeting; Perf 3's moved 0.3% while ten other
+cells moved 5-15%. The changelog reports this honestly. The honest metric is the worst-ratio
+walk, 0.997 -> 0.908 -> 0.871 -> 0.857.
+
+### What these four measurements add to §4i's list
+
+11. **An aggregate is not evidence about a distribution.** "Net flat over 10 cells" concealed
+    1,324 regressions with a worst case of 0.519x. A perf claim needs the count above and below
+    the threshold, not a mean.
+12. **Reproducibility is not intrinsicness.** Before attributing a failure to an op, run the
+    cell in isolation. It is one command and it would have saved a day here.
+13. **A sorted chart must show what it drops.** 127 of 416 cases silently unpaired, and 23,458
+    bars drawn 1px apart on a 1,000px canvas so every regression fell off the right edge —
+    both flattered the result in the same direction.
+
 ## 5. Playground: the op and its gap
 
 Everything below is `rms_norm`-specific. It is evidence, not requirement.
