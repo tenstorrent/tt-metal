@@ -274,6 +274,10 @@ class MiniMaxH3Transformer3DModel(Module):
         super().__init__()
 
         self.vsa_config = vsa_config
+        # A bypassed config builds the VSA modules (so a VSA student's gates have somewhere to bind)
+        # but runs the dense sequence order and the dense attention; only construction reads
+        # `vsa_config` directly, everything downstream reads this.
+        self.vsa_active = vsa_config is not None and not vsa_config.bypass
         self.precomputed_adaln = precomputed_adaln
         self.cache_padding = cache_padding
         self.hidden_size = hidden_size
@@ -399,7 +403,7 @@ class MiniMaxH3Transformer3DModel(Module):
         Pad slots replicate a valid row of their tile (finite don't-cares; the fine stage masks pad
         key columns by valid count and pad-row outputs are dropped by the unpack gather).
         """
-        assert self.vsa_config is not None, "set_vsa_stage requires the model to be built with vsa_config"
+        assert self.vsa_active, "set_vsa_stage requires the model to be built with an unbypassed vsa_config"
         for block in self.transformer_blocks:
             block.attn.set_vsa_stage(stage)
         self._vsa_geometry = stage.geometry
@@ -522,7 +526,7 @@ class MiniMaxH3Transformer3DModel(Module):
         # needed. The padding must stay at the tail: interior pad rows would be attended to as
         # keys and values by every real row, which is why unaligned modalities are handled by
         # changing the layout of the concat rather than by padding each modality.
-        if self.vsa_config is not None:
+        if self.vsa_active:
             # VSA runs the whole block stack in tile order: gather the assembled rows through the
             # pack map (which also realizes the tile padding -- pad slots replicate valid rows and
             # are don't-cares), then fracture. rope/adaln inputs must already be in tile order.
@@ -596,7 +600,7 @@ class MiniMaxH3Transformer3DModel(Module):
         # 7. Select each modality's rows out of the reassembled global sequence. The reference runs both
         # heads over every row and selects afterwards, which is what this does. Under VSA the heads
         # ran in tile order, so gather back to packed order first (dropping pad rows).
-        if self.vsa_config is not None:
+        if self.vsa_active:
             video_all = self._vsa_gather_rows(video_all, self._vsa_unpack_idx)
             audio_all = self._vsa_gather_rows(audio_all, self._vsa_unpack_idx)
         audio_start = l_len + c_len
