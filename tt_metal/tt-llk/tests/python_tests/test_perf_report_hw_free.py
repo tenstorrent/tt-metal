@@ -974,3 +974,86 @@ def test_wrapper_on_threads_without_phases_is_not_an_overlap():
     events = [(t, "KERNEL", 9, 90, 1100) for t in _THREADS]
     events += [("math", "INIT", 0, 100, 200), ("math", "TILE_LOOP", 1, 210, 1000)]
     assert_zones_dont_overlap(ProfilerData(_zones(*events)))
+
+
+# ── Quasar counters: names, l1_client decode, schema ──────────────────────────
+
+
+def test_quasar_counter_names_come_from_the_quasar_header():
+    from helpers.chip_architecture import ChipArchitecture
+    from helpers.counters import _load_counter_names
+
+    banks = _load_counter_names(ChipArchitecture.QUASAR)
+    assert banks["INSTRN_THREAD"] and banks["FPU"]
+    assert banks["TDMA_UNPACK"] and banks["TDMA_PACK"]
+    # Quasar has no L1 counter bank; slot 3 is the l1_client CSR instead.
+    assert banks["L1"] == {}
+    assert banks["INSTRN_THREAD"][0] == "CFG_INSTRN_AVAILABLE_0"
+
+
+def test_hw_counters_parser_accepts_a_section_attribute():
+    from helpers.counters import _parse_hw_counters
+
+    text = (
+        "constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 2> fpu_counters "
+        "PERF_COUNTER_TABLE = {{{PerfCounterType::FPU_COUNTER, 0}, "
+        "{PerfCounterType::MATH_COUNTER, 257}}};"
+    )
+    assert _parse_hw_counters(text)["FPU"] == {0: "FPU_COUNTER", 257: "MATH_COUNTER"}
+
+
+def test_quasar_l1_client_slot_decodes_to_the_selection_label(monkeypatch):
+    import helpers.counters as counters
+    from helpers.perf.schema import PERF_METRICS_COMMON as mc
+
+    monkeypatch.setitem(counters.COUNTER_BANK_NAMES, 3, "L1_CLIENT")
+    sel = 1 * 8 + 1  # TRISC sub-port 1, SBANK_POP (per SBank event)
+    word = counters.PERF_CFG_VALID_BIT | (sel << counters.PERF_CFG_COUNTER_SHIFT) | 3
+    bank_id, bank, counter_id, name, l1_mux = counters.decode_config_word(word)
+    assert (bank_id, bank, counter_id) == (3, "L1_CLIENT", sel)
+    assert name == mc.quasar_l1_client_label(sel) == "L1_CLIENT_TRISC_SBANK1_SBANK_POP"
+    assert l1_mux is None
+
+
+def test_l1_client_rows_yield_their_own_metric():
+    from helpers.metrics import compute_metrics
+    from helpers.perf.schema import PERF_METRICS_COMMON as mc
+
+    name = mc.quasar_l1_client_label(5 * 8 + 1)  # UNPACK0_IF0_LANE0 SBANK_POP
+    df = pd.DataFrame(
+        [
+            {
+                "zone": "ZONE_1",
+                "bank": "L1_CLIENT",
+                "counter_name": name,
+                "counter_id": 41,
+                "cycles": 200,
+                "count": 50,
+                "l1_mux": None,
+            },
+            {
+                "zone": "ZONE_1",
+                "bank": "INSTRN_THREAD",
+                "counter_name": "THREAD_STALLS_0",
+                "counter_id": 32,
+                "cycles": 200,
+                "count": 20,
+                "l1_mux": None,
+            },
+        ]
+    )
+    (row,) = compute_metrics(df)
+    assert row[mc.l1_client_metric_key(name)] == 25.0
+
+
+def test_quasar_schema_drops_every_l1_client_metric_column():
+    from helpers.perf.schema import PERF_METRICS_COMMON as mc
+    from helpers.perf.schema import metric_column
+    from helpers.perf.wide_schema_quasar import DROPPED_COLUMNS as QSR_DROPPED
+
+    pending = mc.QUASAR_L1_CLIENT_EVENT_NAMES.index("PENDING_REQS_CARRY")
+    for sel in (1 * 8 + 1, 25 * 8 + pending):
+        key = mc.l1_client_metric_key(mc.quasar_l1_client_label(sel))
+        for base in (key, stat_column(key, MEAN), stat_column(key, STD)):
+            assert metric_column("SFPU_ISOLATE", base) in QSR_DROPPED
+    assert metric_column("L1_TO_L1", "l1_client_invalid_0_pct") not in QSR_DROPPED

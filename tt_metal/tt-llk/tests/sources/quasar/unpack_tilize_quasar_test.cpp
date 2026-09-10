@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -34,7 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
         {
             // UNP_DEST and PACK share DEST. Keep them on the producer/consumer
@@ -119,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         std::uint32_t y_stride_external         = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
@@ -216,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (!unpack_to_dest)
     {
         {
-            ZONE_SCOPED("INIT")
+            START_PERF_MEASURE("INIT")
             // Only end-to-end and math-isolate runs use the FPU→PACK
             // dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -232,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             PROFILER_SYNC();
         }
         {
-            ZONE_SCOPED("TILE_LOOP")
+            START_PERF_MEASURE("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
@@ -300,7 +301,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and SrcA/SrcB L1_CONGESTION have no active DEST producer,
         // so they must clear the persisted pack wait mask. UNP_DEST congestion
         // instead uses the unpack→pack chain because both threads share DEST.
@@ -321,7 +322,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

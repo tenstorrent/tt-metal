@@ -218,6 +218,10 @@ class TestConfig:
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
+    # Quasar has no L1 counter bank; one l1_client event (subport*8 + event, -1 = none) rides in its slot.
+    PERF_L1_CLIENT_SEL: ClassVar[int] = int(
+        os.environ.get("LLK_PERF_L1_CLIENT_SEL", "-1")
+    )
     DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
@@ -1708,18 +1712,19 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
-                # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
-                # Quasar is intentionally excluded: it adds a 4th compute thread
-                # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
-                # number of tokens for 3 threads, so enabling perf counters on
-                # Quasar would deadlock the SFPU thread (it would spinwait on a
-                # semaphore that never gets the extra post). A static_assert in
-                # `counters.h` enforces this at compile time as a safety net.
-                if (
-                    TestConfig.ENABLE_PERF_COUNTERS
-                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-                ):
-                    optional_kernel_flags += f" -DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                # The counter build. tt-1xx selects one L1 mux group; Quasar has no L1 bank and
+                # takes one l1_client event instead (the unpack TRISC does the setup BRISC does
+                # elsewhere, see trisc.cpp).
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+                        )
+                    else:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                        )
 
                 coverage_args = (
                     [

@@ -54,7 +54,14 @@ def _compute_single(df: pd.DataFrame) -> dict:
     """Compute derived metrics for one (zone, run) slice via the shared formula module."""
     if df.empty:
         return {}
-    return _mc.compute_metrics(_DfCounterView(df))
+    view = _DfCounterView(df)
+    metrics = _mc.compute_metrics(view)
+    # Quasar's l1_client event (bank L1_CLIENT) is named after the run's selection, so its
+    # metric is computed from the rows rather than from the static formula table.
+    l1_client = df.loc[df["bank"] == "L1_CLIENT", "counter_name"]
+    if not l1_client.empty:
+        metrics.update(_mc.compute_l1_client_metrics(view, l1_client))
+    return metrics
 
 
 def compute_metrics(df: pd.DataFrame) -> list[dict]:

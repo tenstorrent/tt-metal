@@ -38,7 +38,7 @@ Every test source under `tests/sources/*_perf.cpp` is compiled twice from the sa
 | NC (no counters) | defined | undefined | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (barrier only) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`), reported differently per run type: `L1_TO_L1` is the unpack-start to pack-end cross-thread span, the isolates are the measured thread's own zone, and `L1_CONGESTION` yields two columns, `[UNPACK]` and `[PACK]` |
 | WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` **and** `ZONE_SCOPED` | Per-zone HW counter snapshot **and** wall-clock cycles |
 
-`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs the same real three-thread rendezvous with an empty action (so it is not free, and it moves the NC baseline); on Quasar it expands to nothing and `ZONE_SCOPED` records the per-zone wall-clock timestamps. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
+`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs the same real rendezvous with an empty action (so it is not free, and it moves the NC baseline). The rendezvous has three threads on Wormhole and Blackhole and four on Quasar, where the SFPU TRISC takes part too: `sfpu_stub.h` opens the same `INIT` and `TILE_LOOP` zones, so a kernel with no SFPU half still completes it. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
 
 Source-side, this is the pattern:
 
@@ -101,11 +101,11 @@ The barrier is `llk_barrier::rendezvous` in `barrier.h`, on the `PACK_DONE` **ha
 
 Every thread announces by incrementing; the action thread waits for all of them, runs its action, then drains the count back to zero, and that return to zero is the release. Two consequences worth being explicit about. The action thread spins **twice**, once before the action and once draining after it, so on entry that drain runs inside the counter window. And the barrier is not free: ablation showed the exit rendezvous merely existing was worth +11 of the +12 cycles by which the counter build differed from the no-counter build on `MATH_ISOLATE`. What the shared barrier buys is that both builds pay the same cost at zone entry, not that the cost is zero.
 
-The semaphore is used rather than L1 because its release is symmetric, detection is a short `pc_buf` poll, and it puts no traffic on the L1 being measured. Quasar has no spare semaphore and keeps the L1 form in `profiler.h`.
+The semaphore is used rather than L1 because its release is symmetric, detection is a short `pc_buf` poll, and it puts no traffic on the L1 being measured. Quasar has no spare semaphore, so there the same function is an L1 generation barrier over four per-thread slots (`barrier_slots`, set up in `trisc.cpp`); it is still one implementation compiled identically into both builds.
 
 ### Configure-once from BRISC
 
-Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). This:
+Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). Quasar has no BRISC in this harness, so the unpack TRISC calls the same `configure_and_arm()` from `trisc.cpp`, after `device_setup()` and before it clears the other TRISCs out of soft reset; the registers are reached through the NEO local debug window instead of the RISC-V debug block. This:
 
 - Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory, see [Counter inventory single source](#counter-inventory-single-source).
 - Clears every per-zone data area and sync word.
@@ -135,7 +135,7 @@ The LLK test suite uses a two-phase pytest flow: a compile-producer phase that b
 ```bash
 ./setup_testing_env.sh        # installs the SFPI toolchain; run it, do not source it (it calls exit)
 cd tt_metal/tt-llk/tests     # LLK_HOME is defaulted by conftest.py; you do not need to set it
-export CHIP_ARCH=blackhole   # or wormhole; counters are not compiled on quasar
+export CHIP_ARCH=blackhole   # or wormhole or quasar
 
 # Phase 1: build all variants (no HW access)
 pytest --compile-producer --enable-perf-counters -n 8 -x ./python_tests/perf_eltwise_binary.py
@@ -147,6 +147,8 @@ pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_
 Wipe the artefact root (`/tmp/tt-llk-build`, or `$RUNNER_TEMP/tt-llk-build`) when switching between the two builds: the variant hash and the build markers ignore the counter flags, so the ELFs are otherwise reused.
 
 To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-5>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
+
+Quasar has no L1 counter bank. Its bank slot 3 can carry one event of the L1 client CSR instead: `export LLK_PERF_L1_CLIENT_SEL=<subport*8+event>` before the producer phase (default off). Sub-ports are 0-3 TRISC, 4 THCON, 5-24 unpacker reads, 25-36 packer writes; events 1-7 are named in `perf_metrics_common.py`, event 0 is unused and THCON events 1-3 are rejected at compile time because they alias the TRISC port. The counter is clear-on-read and has no reference counter of its own, so it is referenced to the INSTRN bank's cycles, and its metric column is named after the selection (`l1_client_<port>_<event>_pct`, or `_ratio` for the pending-request carry).
 
 
 The `--enable-perf-counters` flag triggers two things:
@@ -191,6 +193,8 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 
 **Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (4 extra) which expose additional NoC rings and miscellaneous L1 ports.
 
+**Quasar** has four TRISCs per NEO and no L1 counter bank: `INSTRN_THREAD` (51 slots, four threads), `FPU` (3), `TDMA_UNPACK` (18) and `TDMA_PACK` (5), listed in `tt_metal/hw/inc/internal/tt-2xx/quasar/hw_counters.h`. `PERF_CNT_ALL` reaches only the INSTRN and FPU banks there, so the TDMA banks are armed and frozen through their own start/stop registers. The SFPU TRISC is a measured thread of its own under the `SFPU_ISOLATE` run type. The L1 client CSR described under How to Run stands in for the L1 bank.
+
 **INSTRN_THREAD bank.** Counters 0–8 and 12–23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each, 21 slots; the XSEARCH sels 9–11 are tied off in RTL and are not in the inventory). Counters 24–26 are per-thread total stall cycles. The stall-reason layout differs:
 
 - WH: the four shared stall reasons (SRCA/B clear/valid) are replicated per thread in HW but only the first slot of each is enumerated, at sels 27/30/33/36; per-thread stall reasons then occupy counters 39–65.
@@ -200,7 +204,7 @@ Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one pe
 
 ### Counter inventory single source
 
-The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h`, as grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..5_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
+The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h` (`tt-2xx/quasar/hw_counters.h` for Quasar), as grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..5_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
 
 - **Device (`counters.h`)** `#include`s `hw_counters.h` (with the `PerfCounterType` enum from `perf_counters.hpp`) and builds `BUILTIN_COUNTER_CONFIG[]` from those arrays at compile time, a `constexpr` concatenation in the fixed bank order the readout expects (INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group).
 
@@ -241,7 +245,7 @@ The 200-word shared config is the authoritative runtime record of which counters
 
 ## Hardware Register Reference
 
-The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR = 0xFFB12000`):
+The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR = 0xFFB12000`). On Quasar the same registers sit in the NEO local window: `counters.h` takes the NEO0 debug-register addresses from `tensix_neo_reg.h` and rebases them onto `LOCAL_REGS_BASE` (0x00800000), so each NEO's TRISCs reach their own block. Quasar has no `PERF_CNT_MUX_CTRL`; the L1 client CSR pair (`L1_CLIENT_GROUP_PERF_CTRL` and the clear-on-read `L1_CLIENT_GROUP_PERF_CNT`) lives in the same window.
 
 | Register | Offset | Description |
 |----------|--------|-------------|
@@ -316,7 +320,7 @@ A metric whose counters this architecture does not expose, or whose counter grou
 - **Never guard `PERF_RUN_TYPE` with `#ifndef`.** It arrives as a `constexpr` in the generated `build.h`, so a preprocessor guard cannot see it, always fires, and silently compiles every run type as the fallback. Identical values and identical `TEXT_SIZE` across run types is the symptom (PR #51918).
 - **`L1_CONGESTION` is not free-running everywhere yet.** `eltwise_binary_sfpu`, `eltwise_unary_sfpu`, `eltwise_unary_typecast`, `sfpu_binop_scalar` and `sfpu_ternary` still run its pack path on the math handshake, so they measure the handshake rather than L1 contention.
 - **`PACK_DONE` is reserved by the barrier.** It is safe only because the count returns to zero each time, so a measured kernel must not use `semaphore::PACK_DONE` for its own handshake.
-- **The host asserts zones do not overlap across threads.** No thread may open `TILE_LOOP` before every thread has closed `INIT`. A failure almost always means a kernel used `ZONE_SCOPED` instead of `START_PERF_MEASURE`, which is what supplies the entry rendezvous. Skipped on Quasar.
+- **The host asserts zones do not overlap across threads.** No thread may open `TILE_LOOP` before every thread has closed `INIT`. A failure almost always means a kernel used `ZONE_SCOPED` instead of `START_PERF_MEASURE`, which is what supplies the entry rendezvous.
 - **Both builds write the same report path.** `perf_data/<module>/<module>.csv` is written by whichever invocation ran last, so move the first report aside before running the second build; there is no cross-build merge in code.
 - **`--logging-level DEBUG` or `TRACE` recompiles the measured kernel** with `-DDEBUG_PRINT_ENABLED`, which perturbs the numbers. Do not use it for a measurement run.
 - **`no zone returned counter data` means the test was never measured.** The counter and metric columns will be absent; a with-counters versus no-counters comparison for that test is meaningless, not zero.
