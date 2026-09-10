@@ -9,7 +9,7 @@
 
 Cycode has flagged the same three MEDIUM advisories against `requirements-reference.txt`'s
 `torch==2.6.0+cpu` on every scan since 2026-08-12, unchanged. They are the last three
-of the 39 findings this file opened with; the other 36, including every CRITICAL and
+of the 40 findings this file opened with; the other 37, including every CRITICAL and
 every HIGH, are closed by removal or by a bump (see *Audit findings* below).
 
 | advisory | affected function | impact | fixed in |
@@ -92,8 +92,9 @@ and its date so a later scan hits a written disposition rather than an open find
 
 `pip-audit` run 2026-08-05; re-worked 2026-08-12 against the Cycode scan on the PR, which
 flagged 38 advisories across 10 pinned packages plus one SAST finding. A 39th arrived on
-2026-08-22 against `hydra-core` and is closed the same way, by a bump. The conclusion depends
-on a distinction the two-environment split already enforces, so it is stated first.
+2026-08-22 against `hydra-core` and a 40th on 2026-09-09 against `lightning`; both are closed
+the same way, by a bump. The conclusion depends on a distinction the two-environment split
+already enforces, so it is stated first.
 
 ## The port adds no runtime dependencies
 
@@ -132,10 +133,10 @@ help. So the pins moved.
 | | advisories | disposition |
 |---|---|---|
 | removed with the package | 1 CRITICAL, 10 HIGH, 6 MODERATE | `gradio`, `onnx` — never imported |
-| fixed by a version bump | 3 CRITICAL, 9 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
+| fixed by a version bump | 3 CRITICAL, 10 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
 | **outstanding** | **3 MODERATE** | `torch` ×3 |
 
-36 of 39 closed, including every CRITICAL and every HIGH. The three that remain are
+37 of 40 closed, including every CRITICAL and every HIGH. The three that remain are
 the `torch` MEDIUMs dispositioned at the top of this document; see *Disposition
 requested* for their functions, their reachability and what a bump would cost.
 
@@ -172,6 +173,16 @@ from `matcha/train.py`, which the reference never runs. The bump is a patch rele
 the same `omegaconf` range, so it costs nothing to take. Checked the same way as the others:
 holding every other pin fixed and moving only `hydra-core`, the regenerated set is bit-exact
 against the committed goldens, 139/139 arrays — the bump is numerically inert.
+
+CVE-2026-58659 against `lightning` (HIGH, `LightningModule.load_from_checkpoint` running an
+`_instantiator` import path from the checkpoint even under `weights_only=True`) arrived on the
+2026-09-09 scan and is closed by 2.3.3 -> 2.6.6, the release that adds the
+`_ALLOWED_INSTANTIATORS` allowlist. `lightning` is on the reference path only because
+`matcha/utils/pylogger.py` imports `rank_zero_only` from `lightning.pytorch`; nothing calls
+`load_from_checkpoint`, so the exposure was already nil. Matcha pins `lightning>=2.0.0`, the
+shim is a logging decorator with no numeric surface, and the bump moves no code the goldens
+exercise — confirm with the *Reproducing* run below before merge, the same check as the
+others.
 
 One pin is held *back* for the same reason. `onnxruntime` has no advisory, but 1.23.2 emits a
 different token sequence from `speech_tokenizer_v1.onnx` than 1.18.0 does; that reroutes the LLM
