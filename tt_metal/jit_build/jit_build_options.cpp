@@ -12,32 +12,6 @@
 
 namespace tt::tt_metal {
 
-namespace {
-
-bool is_supported_tile_shape(uint32_t tile_height, uint32_t tile_width) {
-    if (tile_width != constants::FACE_WIDTH && tile_width != constants::TILE_WIDTH) {
-        return false;
-    }
-    if (tile_width == constants::FACE_WIDTH) {
-        return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8 ||
-               tile_height == constants::FACE_HEIGHT || tile_height == constants::TILE_HEIGHT;
-    }
-    return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8 ||
-           tile_height == constants::FACE_HEIGHT || tile_height == constants::TILE_HEIGHT;
-}
-
-std::optional<Tile> tile_from_unpack_face_geometry(const FaceGeometry& face_geometry) {
-    const uint32_t tile_height =
-        face_geometry.face_r_dim * (face_geometry.num_faces > 2 ? constants::TILE_HEIGHT / constants::FACE_HEIGHT : 1);
-    const uint32_t tile_width = face_geometry.num_faces == 1 ? constants::FACE_WIDTH : constants::TILE_WIDTH;
-    if (!is_supported_tile_shape(tile_height, tile_width)) {
-        return std::nullopt;
-    }
-    return Tile({tile_height, tile_width});
-}
-
-}  // namespace
-
 JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) : build_env(env), hlk_desc(env.get_max_cbs()) {}
 
 void JitBuildOptions::set_name(const std::string& n) {
@@ -105,25 +79,16 @@ void JitBuildOptions::set_cb_data_fmt_tile_and_face_geometry(
     set_cb_dataformat_all_cores(cb_id, data_format);
 
     if (tile.has_value() || unpack_face_geometry.has_value()) {
-        const Tile default_tile;
-        const Tile& requested_tile = tile.value_or(default_tile);
-        const std::optional<Tile> face_geometry_tile =
-            unpack_face_geometry.has_value() ? tile_from_unpack_face_geometry(*unpack_face_geometry) : std::nullopt;
-        const Tile& effective_tile = face_geometry_tile.value_or(requested_tile);
-        const uint32_t num_faces =
-            unpack_face_geometry.has_value() ? unpack_face_geometry->num_faces : requested_tile.get_num_faces();
-        const uint32_t face_r_dim =
-            unpack_face_geometry.has_value() ? unpack_face_geometry->face_r_dim : requested_tile.get_face_shape()[0];
-
+        const ResolvedTileGeometry geom = resolve_tile_geometry(tile, unpack_face_geometry);
         set_cb_tile_dims_all_cores(
             cb_id,
-            num_faces,
-            effective_tile.get_partial_face(),
-            face_r_dim,
-            effective_tile.get_narrow_tile(),
-            effective_tile.get_tile_shape()[0],
-            effective_tile.get_tile_shape()[1]);
-        set_cb_tile_size_all_cores(cb_id, effective_tile.get_tile_size(data_format));
+            geom.num_faces,
+            geom.partial_face,
+            geom.face_r_dim,
+            geom.narrow_tile,
+            geom.tile.get_tile_shape()[0],
+            geom.tile.get_tile_shape()[1]);
+        set_cb_tile_size_all_cores(cb_id, geom.tile.get_tile_size(data_format));
     } else {
         Tile default_tile;
         set_cb_tile_size_all_cores(cb_id, default_tile.get_tile_size(data_format));

@@ -58,6 +58,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/face_geometry.hpp>  // resolve_tile_geometry — the JIT descriptor rule
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -1495,10 +1496,18 @@ static std::map<std::string, std::string> build_kernel_defines(
         uint8_t cb_formats[EMULE_NUM_CBS];
         uint32_t tile_r_dim[EMULE_NUM_CBS];
         uint32_t tile_c_dim[EMULE_NUM_CBS];
+        uint32_t face_r_dim[EMULE_NUM_CBS];
+        uint32_t num_faces[EMULE_NUM_CBS];
+        uint32_t partial_face[EMULE_NUM_CBS];
+        uint32_t narrow_tile[EMULE_NUM_CBS];
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             cb_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
             tile_r_dim[i] = tt::constants::TILE_HEIGHT;
             tile_c_dim[i] = tt::constants::TILE_WIDTH;
+            face_r_dim[i] = tt::constants::FACE_HEIGHT;
+            num_faces[i] = tt::constants::TILE_HW / tt::constants::FACE_HW;
+            partial_face[i] = 0;
+            narrow_tile[i] = 0;
         }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
@@ -1508,15 +1517,18 @@ static std::map<std::string, std::string> build_kernel_defines(
                     "at the arch's NUM_CIRCULAR_BUFFERS.",
                     idx,
                     EMULE_NUM_CBS);
-                // Calculate tile size from the CB's data format.
-                const auto& tile = cb_impl->tile(idx);
-                tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
-                                                   : Tile().get_tile_size(cb_impl->data_format(idx));
+                // Same resolution silicon's JIT descriptor build uses, so the emulated
+                // kernel sees the geometry a real kernel binary would be compiled against.
+                const ResolvedTileGeometry geom =
+                    resolve_tile_geometry(cb_impl->tile(idx), cb_impl->unpack_face_geometry(idx));
+                tile_sizes[idx] = geom.tile.get_tile_size(cb_impl->data_format(idx));
                 cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
-                if (tile.has_value()) {
-                    tile_r_dim[idx] = tile->get_height();
-                    tile_c_dim[idx] = tile->get_width();
-                }
+                tile_r_dim[idx] = geom.tile.get_height();
+                tile_c_dim[idx] = geom.tile.get_width();
+                face_r_dim[idx] = geom.face_r_dim;
+                num_faces[idx] = geom.num_faces;
+                partial_face[idx] = geom.partial_face;
+                narrow_tile[idx] = geom.narrow_tile;
             }
         }
         // A DFB carries the same entry metadata at the same device slot, so it feeds the same
@@ -1538,31 +1550,45 @@ static std::map<std::string, std::string> build_kernel_defines(
             if (dfb_cfg.data_format == tt::DataFormat::Invalid) {
                 continue;
             }
-            tile_sizes[slot] = dfb_cfg.tile.has_value() ? dfb_cfg.tile->get_tile_size(dfb_cfg.data_format)
-                                                        : Tile().get_tile_size(dfb_cfg.data_format);
+            const ResolvedTileGeometry dfb_geom = resolve_tile_geometry(dfb_cfg.tile, dfb_cfg.unpack_face_geometry);
+            tile_sizes[slot] = dfb_geom.tile.get_tile_size(dfb_cfg.data_format);
             cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
-            if (dfb_cfg.tile.has_value()) {
-                tile_r_dim[slot] = dfb_cfg.tile->get_height();
-                tile_c_dim[slot] = dfb_cfg.tile->get_width();
-            }
+            tile_r_dim[slot] = dfb_geom.tile.get_height();
+            tile_c_dim[slot] = dfb_geom.tile.get_width();
+            face_r_dim[slot] = dfb_geom.face_r_dim;
+            num_faces[slot] = dfb_geom.num_faces;
+            partial_face[slot] = dfb_geom.partial_face;
+            narrow_tile[slot] = dfb_geom.narrow_tile;
         }
-        std::ostringstream ts, df, tr, tc;
+        std::ostringstream ts, df, tr, tc, fr, nf, pf, nt;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
                 df << ',';
                 tr << ',';
                 tc << ',';
+                fr << ',';
+                nf << ',';
+                pf << ',';
+                nt << ',';
             }
             ts << tile_sizes[i];
             df << static_cast<uint32_t>(cb_formats[i]);
             tr << tile_r_dim[i];
             tc << tile_c_dim[i];
+            fr << face_r_dim[i];
+            nf << num_faces[i];
+            pf << partial_face[i];
+            nt << narrow_tile[i];
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
         defines["EMULE_CB_DATA_FORMATS"] = df.str();
         defines["EMULE_TILE_R_DIM"] = tr.str();
         defines["EMULE_TILE_C_DIM"] = tc.str();
+        defines["EMULE_TILE_FACE_R_DIM"] = fr.str();
+        defines["EMULE_TILE_NUM_FACES"] = nf.str();
+        defines["EMULE_TILE_PARTIAL_FACE"] = pf.str();
+        defines["EMULE_TILE_NARROW_TILE"] = nt.str();
     }
 
     // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
