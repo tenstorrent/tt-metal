@@ -218,3 +218,31 @@ def test_min_bf16_sfpu_matches_fpu_h_axis_split(device, shape, scalar):
     if scalar == 1.0:
         reference = torch.amin(ttnn.to_torch(tt_input).float()[:, :, : shape[2], :], dim=-2)
         assert torch.equal(reference, sfpu), f"SFPU min mismatch: {(reference - sfpu).abs().max()}"
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["dst_fp32", "dst_16bit"])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 512, 160),  # below the split threshold — un-split SFPU min
+        (1, 1, 4096, 160),  # splits
+        (1, 1, 1050, 160),  # splits, non-aligned H
+    ],
+)
+def test_min_bf16_dest_width_does_not_pick_engine(device, shape, fp32_dest_acc_en):
+    """bf16 min selects rather than accumulates, so DEST width is not a correctness knob and must
+    not decide FPU vs SFPU — only fast_and_approximate_mode does. Values span an exponent range a
+    16-bit fp16 DEST could not hold, so a DEST that was not bfloat16 would saturate to inf here."""
+    torch.manual_seed(0)
+    config = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=fp32_dest_acc_en)
+    torch_input = (torch.rand(shape, dtype=torch.float32) * 2 - 1) * torch.pow(
+        10.0, torch.randint(-30, 31, shape).float()
+    )
+
+    tt_input = ttnn.from_torch(torch_input.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, float("inf"))
+    reference = torch.amin(ttnn.to_torch(tt_input).float()[:, :, : shape[2], :], dim=-2)
+
+    output = ttnn.to_torch(ttnn.min(tt_input, dim=-2, keepdim=False, compute_kernel_config=config)).float()
+    assert torch.isfinite(output).all(), "16-bit DEST lost bfloat16 exponent range"
+    assert torch.equal(reference, output), f"mismatch: {(reference - output).abs().max()}"

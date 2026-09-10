@@ -215,9 +215,9 @@ Tensor reduce(
 
     // bf16 MIN takes the same accurate/fast switch, for a different reason: the FPU has no MIN pool
     // (only MAX gets GMPOOL), so accurate mode is the only real MIN and fast mode means -MAX(-x).
-    // fp32_dest_acc_en is required not for precision but for the H-axis split, whose stage 2 folds
-    // FP32 partials and so needs the 32-bit DEST.
-    const bool use_sfpu_bf16_min = !fast_and_approximate_mode && arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en &&
+    // Unlike fp32 this says nothing about DEST width — MIN selects rather than accumulates — so
+    // fp32_dest_acc_en is deliberately not consulted.
+    const bool use_sfpu_bf16_min = !fast_and_approximate_mode && arch != tt::ARCH::QUASAR &&
                                    input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
                                    reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
     const bool use_sfpu_min = use_sfpu_fp32_min || use_sfpu_bf16_min;
@@ -467,14 +467,19 @@ Tensor reduce(
                                                                                          : use_sfpu_fp32_mean;
             const auto split_math =
                 reduce_math == tt::tt_metal::ReduceOpMath::AVG ? tt::tt_metal::ReduceOpMath::SUM : reduce_math;
-            // Stage 1: tiled H reduce, unit scaler, ROW_MAJOR FP32 partials.
+            // MIN selects rather than accumulates, so bf16 partials lose nothing across the split.
+            // They also keep stage 2 on the Float16_b MIN rule, which needs no 32-bit DEST — that is
+            // what lets fast_and_approximate_mode alone pick the engine.
+            const auto partials_dtype =
+                use_sfpu_bf16_min ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
+            // Stage 1: tiled H reduce, unit scaler, ROW_MAJOR partials.
             const Tensor partials = ttnn::prim::reduce(
                 prepared_input,
                 split_math,
                 tt::tt_metal::ReduceOpDim::H,
                 /*scaler=*/1.0f,
                 output_mem_config,
-                tt::tt_metal::DataType::FLOAT32,
+                partials_dtype,
                 config,
                 sub_core_grids,
                 /*negate=*/false,
