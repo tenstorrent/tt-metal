@@ -46,3 +46,8 @@ def agreement(guided_fn, logits_seq, targets, topk=5):
         t1 += int(top[0] == int(targets[i]))
         t5 += int(int(targets[i]) in top)
     return t1 / n, t5 / n
+
+
+def cpu_targets(guided_fn, cpu_logits_seq):
+    """CPU reference guided argmax per step: [N] (targets for the TT agreement bars)."""
+    return torch.stack([guided_fn(cpu_logits_seq[i]).reshape(-1).argmax() for i in range(cpu_logits_seq.shape[0])])

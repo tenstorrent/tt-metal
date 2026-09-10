@@ -113,6 +113,10 @@ class Music3DiT(nn.Module):
         self.proj_out = nn.Linear(inner, cfg.in_channels, bias=False)
         self.postprocess_conv = nn.Conv1d(cfg.in_channels, cfg.in_channels, 1, bias=False)
 
+    @property
+    def dtype(self):
+        return self.proj_in.weight.dtype
+
     def forward(
         self, hidden_states: torch.Tensor, timestep: torch.Tensor, encoder_hidden_states: torch.Tensor
     ) -> torch.Tensor:

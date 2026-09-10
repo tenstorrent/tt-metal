@@ -80,9 +80,11 @@ def test_teacher_forced_vs_golden(depth, golden_root):
         lp.append(pcc(L, tf["depth_logits"][i]))
         hp.append(pcc(dh, tf["depth_hidden"][i]))
         for j in range(7):
-            top = torch.topk(guided_depth_logits(L[j]).reshape(-1), 5).indices.tolist()
-            t1 += int(top[0] == int(codes[i, j + 1]))
-            t5 += int(int(codes[i, j + 1]) in top)
+            gd = guided_depth_logits(L[j]).reshape(-1)
+            top = torch.topk(gd, 5).indices.tolist()
+            cpu_t = int(guided_depth_logits(tf["depth_logits"][i, j]).reshape(-1).argmax())
+            t1 += int(top[0] == cpu_t)
+            t5 += int(cpu_t in top)
             nd += 1
     dt = time.time() - t0
     r = {

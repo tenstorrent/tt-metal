@@ -74,10 +74,11 @@ def test_teacher_forced_vs_golden(gen, golden_root, clip):
     assert H.shape[0] == N and L.shape == tf["c0_logits"].shape, (H.shape, L.shape, tf["c0_logits"].shape)
     h_pcc = [pcc(H[i], tf["hidden_all"][i]) for i in range(N)]
     l_pcc = [pcc(L[i], tf["c0_logits"][i]) for i in range(N)]
-    top1, top5 = agreement(guided_c0_logits_sliced, L, codes[:, 0])
-    # agreement with the CPU model's own guided argmax (the ceiling: goldens were sampled, so top-1 vs codes is < 1 even for CPU)
-    cpu_arg = torch.stack([guided_c0_logits_sliced(tf["c0_logits"][i]).reshape(-1).argmax() for i in range(N)])
-    tt_arg = torch.stack([guided_c0_logits_sliced(L[i]).reshape(-1).argmax() for i in range(N)])
+    # bars: agreement with the CPU fp32 reference's own guided argmax (the goldens were SAMPLED from flat top-50
+    # distributions, so agreement with the sampled codes is low even for fp32 -- reported as informational)
+    cpu_arg = cpu_targets(guided_c0_logits_sliced, tf["c0_logits"])
+    top1, top5 = agreement(guided_c0_logits_sliced, L, cpu_arg)
+    s1, s5 = agreement(guided_c0_logits_sliced, L, codes[:, 0])
     r = {
         "rows": N,
         "prompt_len": int(g["text_ids"].shape[1]),
@@ -88,7 +89,8 @@ def test_teacher_forced_vs_golden(gen, golden_root, clip):
         "logits_pcc_mean": sum(l_pcc) / N,
         "c0_top1": top1,
         "c0_top5": top5,
-        "argmax_agree_with_cpu": float((cpu_arg == tt_arg).float().mean()),
+        "c0_top1_vs_sampled": s1,
+        "c0_top5_vs_sampled": s5,
         "seconds": dt,
         "ms_per_step": 1000 * dt / N,
         "hidden_pcc_first8": [round(x, 4) for x in h_pcc[:8]],
