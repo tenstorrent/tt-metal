@@ -31,8 +31,8 @@ template <
     bool EN_32BIT_DEST,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false,
-    bool is_int_fpu_en /*unused*/ = false,
-    bool tilize /*unused*/ = false>
+    bool is_int_fpu_en /*maybe_unused*/ = false,
+    bool tilize /*maybe_unused*/ = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -131,5 +131,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
     }
 }
 
-template <BroadcastType src_b_bcast_type /*unused*/ = BroadcastType::NONE, bool unpack_to_dest /*unused*/ = false>
+template <
+    BroadcastType src_b_bcast_type /*maybe_unused*/ = BroadcastType::NONE,
+    bool unpack_to_dest /*maybe_unused*/ = false>
 inline void llk_math_eltwise_unary_datacopy_uninit() {}
