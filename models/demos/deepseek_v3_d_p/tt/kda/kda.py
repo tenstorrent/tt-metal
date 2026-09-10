@@ -263,17 +263,25 @@ class ttKDA:
             )
         else:
             convolution_history = convolution_state
-            new_state = ttnn.empty_like(
-                convolution_state,
-                memory_config=self.convolution_state_memory_config,
-            )
-            ttnn.slice(
+            local_tail = ttnn.slice(
                 qkv_row_major,
                 (0, sequence - (config.conv_kernel_size - 1), 0),
                 (qkv_row_major.shape[0], sequence, channels),
-                memory_config=self.convolution_state_memory_config,
-                output_tensor=new_state,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if isinstance(self.device, ttnn.MeshDevice):
+                new_state = ttnn.mesh_partition(
+                    local_tail,
+                    dim=1,
+                    cluster_axis=self.sequence_parallel_axis,
+                    memory_config=self.convolution_state_memory_config,
+                )
+            else:
+                new_state = ttnn.empty_like(
+                    convolution_state,
+                    memory_config=self.convolution_state_memory_config,
+                )
+                ttnn.slice(local_tail, (0, 0, 0), tuple(local_tail.shape), output_tensor=new_state)
         # The replacement state is BF16 row-major ND DRAM [B, K - 1, Q_local + K_local + V_local],
         # channel-sharded across TP and replicated across SP.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
