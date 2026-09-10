@@ -76,7 +76,7 @@ struct SocketConfig {
     // `send_window` 0 means unset -> cores-in-use; `send_blocking` selects
     // post-and-wait and implies a window of 1. The window caps concurrency; the shape decides
     // whether the thread parks or spins. A window of 1 is NOT the blocking sender -- it gives
-    // the blocking sender's concurrency while still spinning in try_wait() and still skipping 
+    // the blocking sender's concurrency while still spinning in try_wait() and still skipping
     // on an unreturned credit. Keeping them separate is what lets one measurement tell the two
     // causes apart.
     uint32_t send_window = 0;
