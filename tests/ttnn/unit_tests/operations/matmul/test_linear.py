@@ -255,7 +255,7 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -1.0, 1.0),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.6732632, 1.0507009),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.0507009, 1.6732632),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0),
     ],
 )

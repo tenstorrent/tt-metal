@@ -113,6 +113,14 @@ STANDARD_SWEEP_OPS = sorted(
     key=lambda op: op.name,
 )
 
+# Approximate tanh is a 3-segment SFPLUT, and its error clears the default 5% rtol only
+# where the output format's own tolerance is looser than the LUT is coarse. MEASURED on a
+# Wormhole n150: all 24 Bfp8_b/Bfp4_b-output cases pass over eleven runs (unseeded stimuli,
+# so each run is a fresh sample), while all 56 Float16/Float16_b/Float32-output cases fail.
+# So the skip below is keyed on the output format rather than withholding the op outright.
+_APPROX_TANH_TOLERANT_OUTPUTS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+
+
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
 # per-format default in passed_test.
 CUSTOM_TOLERANCES = {
@@ -342,21 +350,6 @@ _UNARY_SWEEP_ARGNAMES = (
 )
 
 
-# Approximate exp overshoots the golden by ~5.7% (peak 6.75%) once its argument passes ~8,
-# which breaches the default 5% rtol. Whether a given combination trips the bar is marginal,
-# so the affected ones are listed exhaustively rather than by predicate: a combination
-# drifting in or out of tolerance then shows up as a change here.
-_APPROX_EXP_ACCURACY_XFAIL = {
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.No),
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.Yes),
-    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-}
-
-# ...and it is a Wormhole limit: Blackhole's exp approximation holds the default 5% rtol,
-# so the xfail above is not applied there.
-_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
-
-
 @pytest.mark.nightly
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
@@ -364,7 +357,6 @@ _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
     ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in UNARY_SWEEP_PARAMS],
 )
 def test_eltwise_unary_sfpu(
-    request,
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
@@ -382,27 +374,18 @@ def test_eltwise_unary_sfpu(
     _skip_coverage_unsupported(mathop)
 
     if (
-        mathop == MathOperation.Exp
+        mathop == MathOperation.Tanh
         and approx_mode == ApproximationMode.Yes
-        and (formats.input_format, formats.output_format, dest_acc)
-        in _APPROX_EXP_ACCURACY_XFAIL
-        and not (
-            _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY
-            and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        )
+        and formats.output_format not in _APPROX_TANH_TOLERANT_OUTPUTS
     ):
-        # Marked dynamically rather than skipped so the case still executes: if the
-        # approximation tightens, this reports XPASS instead of quietly staying green.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Approximate exp exceeds the default 5% rtol above an argument "
-                "of ~8, peaking at 6.75%. See _APPROX_EXP_ACCURACY_XFAIL.",
-                strict=False,
-            )
+        # An approximation path does exist -- a 3-segment SFPLUT in calculate_tanh -- so
+        # this is an accuracy limit, not a missing kernel. Narrowed to the outputs that
+        # actually fail; see _APPROX_TANH_TOLERANT_OUTPUTS for the measurement.
+        pytest.skip(
+            reason="Approximate tanh is a 3-segment LUT whose error exceeds the default "
+            "5% rtol on Float16/Float16_b/Float32 outputs; it needs an approx-mode "
+            "tolerance, which CUSTOM_TOLERANCES cannot express (it is keyed on the op)."
         )
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
 
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own
     # format set: the broad profile runs everything except a Float16 input or
@@ -411,21 +394,6 @@ def test_eltwise_unary_sfpu(
         _skip_bh_unsupported_float_combo(formats, dest_acc)
     else:
         _skip_bh_unless_fp32(formats, dest_acc)
-
-    # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
-    # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
-    if (
-        approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
-        and formats.input_format != DataFormat.Bfp4_b
-        and (
-            formats.input_format == DataFormat.Bfp8_b
-            or formats.output_format == DataFormat.Bfp8_b
-        )
-    ):
-        pytest.skip(
-            reason="Exp-related operations are not supported for bf8_b format in approximation mode."
-        )
 
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 
@@ -928,50 +896,28 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
-# relu_min's integer threshold, which is the last unreached branch of that kernel.
-#
-# The vInt branch of _relu_min_ re-encodes its threshold from two's complement into the
-# sign+magnitude order SFPSWAP compares in -- but only when the threshold is negative:
-#
-#     int scalar = static_cast<int>(threshold);
-#     if (scalar < 0) { scalar = -scalar; scalar = 0x80000000 | (scalar & 0x7FFFFFFF); }
-#
-# Nothing reaches that `if`. The harness's own dispatch hard-coded 5u, and no Compute API
-# entry point passes a negative integer threshold either (relu_tile_int32 passes 0, and
-# relu_min_tile_int32 routes to a different kernel entirely). So the re-encoding shipped
-# untested. Overriding the threshold via SFPU_RELU_MIN_INT_THRESHOLD is what reaches it.
-#
-# Both signs are swept, because the negation is only meaningful against a control: the
-# non-negative thresholds take the straight-through path and must keep agreeing.
-_RELU_MIN_INT_THRESHOLDS = [-1000, -5, -1, 0, 5, 1000]
+_INT32_MAX = 2**31 - 1
+
+# Both signs are swept. Every threshold reaches the vInt branch; what the negative half alone
+# reaches is the overflow-safe compare it is split on, and Wormhole's hand-built threshold
+# encoding. The negative extreme stops short of INT_MIN: CustomStrategy clamps stimuli at
+# info.min + 1, so no input could straddle it.
+_RELU_MIN_INT_THRESHOLDS = [-(_INT32_MAX - 1), -1000, -5, -1, 0, 5, 1000, _INT32_MAX]
 
 
 def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
-    """Values straddling *threshold*, so both sides of the clamp fire.
+    """Values straddling *threshold*, plus both ends of int32.
 
-    Built around the threshold rather than from a fixed span: at -1000 a positive-only
-    spread would sit entirely on the pass-through side and the clamp would never fire,
-    which is the same way the float domain used to be vacuous.
-
-    Negatives are required here -- max(x, -5) only clamps for x < -5 -- so unlike
-    _int_unary_stimuli_spec this cannot stay positive-only. (The positive-only rule over
-    there is about ops that are also read as unsigned, which is a different constraint.)
-
-    Negative inputs and a negative threshold matter independently, which is worth keeping
-    straight. Negative *inputs* alone are harmless: the compare orders operands as
-    sign+magnitude, but for a non-negative threshold that ordering cannot change the
-    outcome, because a negative input loses under either encoding. Only once the *threshold*
-    is negative too does the encoding of the two operands have to actually agree.
-
-    On both arches it currently does not, which is the unsupported path this sweep
-    deliberately drives and why the negative cases below are xfailed -- the mechanism
-    differs per arch and is tabulated at that marker.
-    See https://github.com/tenstorrent/tt-metal/issues/55643.
+    Built around the threshold rather than a fixed span, so the clamp actually fires for a
+    negative threshold. The range ends exercise the compare between far-apart operands.
     """
-    straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
-    # A decade either side, so the comparison is exercised well away from the boundary too.
-    spread = [float(threshold + d) for d in (-1000, -100, -10, 10, 100, 1000)]
-    return StimuliSpec.custom(values=straddle + spread, seed=0)
+    # Straddling the boundary, then a decade either side of it. Offsets that leave the
+    # stimuli range are dropped rather than folded onto its ends, which is what the thresholds
+    # at the extremes would otherwise turn most of them into.
+    offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
+    candidates = [threshold + d for d in offsets] + [-_INT32_MAX, _INT32_MAX]
+    values = sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX})
+    return StimuliSpec.custom(values=[float(v) for v in values], seed=0)
 
 
 @parametrize(
@@ -980,76 +926,20 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_relu_min_int_threshold(
-    request,
     threshold: int,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
     """relu_min on Int32 against both signs of threshold.
 
-    The negative cases are the point: they are the only inputs that reach the
-    sign+magnitude re-encoding in _relu_min_'s vInt branch. Exact integer golden, so a
-    mis-encoded threshold shows up as a wrong clamp value rather than a tolerance miss.
+    The negative half is the point, and the golden is an exact integer max, so a wrong
+    threshold shows up as a wrong clamp value rather than a tolerance miss.
 
-    The non-negative cases are the control and pass: they take the straight-through path
-    where sign+magnitude and two's complement coincide.
+    Int32 stimuli are two's complement, which is how ttnn feeds the device -- see
+    use_int32_twos_complement in test_sfpu_reduce.py. Under this file's sign-magnitude
+    default a kernel that reads Dst in the other encoding would pass instead.
     """
-    # ReluMin is hardcoded here rather than parametrized, so the guard takes it directly.
-    _skip_coverage_unsupported(MathOperation.ReluMin)
-
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
-
-    # First execution of this branch, and it does not work. Measured on n300 at
-    # thresholds -1, -5 and -1000, against stimuli straddling each:
-    #
-    #   as shipped      the threshold wins every lane, including against inputs that are
-    #                   larger than it, and is stored as the raw re-encoding: threshold -5
-    #                   returns 0x80000005 (-2147483643) rather than -5, and -1000 returns
-    #                   0x800003E8. The magnitude is right, the representation is not.
-    #   re-encode       the opposite failure -- a plain two's-complement negative threshold
-    #     removed       never wins, so every input passes through unclamped.
-    #
-    # So it is not a matter of deleting the conversion: neither representation makes SFPSWAP
-    # and the INT32_2S_COMP store agree for a negative threshold, and settling it needs the
-    # ISA semantics for that pair rather than a guess. Recorded as a non-strict xfail rather
-    # than skipped so the case still *executes* and reports XPASS the moment it is fixed.
-    #
-    # Tracked as tt-metal issue #55643. Drop this marker as part of fixing the kernel.
-    #
-    # Nothing ships on this path: no Compute API entry point passes a negative integer
-    # threshold (relu_tile_int32 passes 0, relu_min_tile_int32 routes to relu_clamp_int), and
-    # the harness itself hard-coded 5u until this test parametrized it.
-    #
-    # Both arches fail, for different reasons, and both return the *sign+magnitude* encoding
-    # of the threshold instead of its two's-complement value:
-    #
-    #   Wormhole   raw TTI. The vInt branch hand-re-encodes the threshold to sign+magnitude
-    #              for SFPSWAP, correctly, but loads the input with
-    #              InstrModLoadStore::INT32_2S_COMP, which loads raw -- so the compare comes
-    #              out against a two's-complement input. Threshold -5 returns 0x80000005.
-    #   Blackhole  plain sfpi, and no instruction mode to get wrong -- but _relu_min_impl_
-    #              reads DEST as a bare sfpi::dst_reg[0], with no .mode<DataLayout::I32>()
-    #              to request the converting layout. Dst holds int32 as sign+magnitude (see
-    #              _int_unary_stimuli_spec, which stays positive-only for exactly this
-    #              reason), so a negative threshold does not survive the round trip.
-    #              Threshold -1000 returns 0x800003E8, measured in CI on bh_p150b.
-    #
-    # Non-strict, so the case still executes and reports XPASS per arch as each is fixed.
-    if threshold < 0 and TestConfig.CHIP_ARCH in (
-        ChipArchitecture.WORMHOLE,
-        ChipArchitecture.BLACKHOLE,
-    ):
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="relu_min's vInt branch returns the sign+magnitude encoding of a "
-                "negative threshold instead of its value: Wormhole 0x80000005 for -5 "
-                "(wrong SFPLOAD instruction mode), Blackhole 0x800003E8 for -1000 (no "
-                "converting sfpi DataLayout on the DEST access). Unreached before this "
-                "test; no shipping op passes a negative integer threshold. "
-                "https://github.com/tenstorrent/tt-metal/issues/55643",
-                strict=False,
-            )
-        )
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -1061,6 +951,7 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
         input_dimensions,
         spec_A=_relu_min_int_stimuli_spec(threshold),
         relu_min_int_threshold=threshold,
+        twos_complement=True,
     )
 
 
@@ -1075,8 +966,6 @@ _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 # Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
 # zero. 2**30 keeps a large right shift working on a non-zero operand.
 _SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
-
-_INT32_MAX = 2**31 - 1
 
 
 def _shift_stimulus_values(mathop, shift_amount):
@@ -1172,6 +1061,22 @@ ISINF_ISNAN_MATHOPS = [
 ]
 
 
+# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path delivers both
+# NaN and -inf to the LREG as +inf, and which predicates that breaks follows from it rather
+# than being a blanket property of the pipeline: is_nan reads 0 where the golden says 1,
+# is_neg_inf reads 0 where it says 1, and is_inf reads 1 where it says 0. The other two
+# survive precisely because +inf is what arrives -- is_pos_inf is untouched, and is_finite
+# agrees by luck of the mapping, since isfinite(+inf) and isfinite(NaN) are both 0.
+#
+# Skipping the whole op list here withheld those two as well; they are swept now, so a
+# regression in the +inf path is caught on a bf16 input instead of only on Float32.
+_ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
+    MathOperation.Isinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+]
+
+
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
         # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
@@ -1202,14 +1107,17 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) doesn't preserve
-    # -inf/nan, mangling is_neg/is_nan; skip — covered by the other input cases.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
+    # +inf, which only the three predicates below can see; the rest are swept here.
+    # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
+        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
     ):
         pytest.skip(
-            reason="bf16->fp32 dest unpack does not preserve -inf/nan special values"
+            reason="bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
+            "predicate cannot be evaluated on this pipeline"
         )
 
     eltwise_unary_sfpu(
@@ -1311,6 +1219,7 @@ def eltwise_unary_sfpu(
     custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    twos_complement=False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1396,6 +1305,7 @@ def eltwise_unary_sfpu(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)

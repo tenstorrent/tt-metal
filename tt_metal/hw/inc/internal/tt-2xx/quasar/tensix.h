@@ -671,11 +671,7 @@ static constexpr unsigned int R63 = 63;
 
 typedef enum { UNP0 = 1, UNP1 = 2, PCK0 = 4 } cnt_id_t;
 
-#ifdef CPU_JAWBRIDGE
-#define TENSIX_MAX_KERNEL_LOOP_COUNT 128u
-#else
 #define TENSIX_MAX_KERNEL_LOOP_COUNT 65535u
-#endif
 
 /////////////
 // Convenience and type defines

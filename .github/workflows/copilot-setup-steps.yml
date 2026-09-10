@@ -1,7 +1,8 @@
 name: "Copilot Setup Steps"
 
 # Environment for the GitHub Copilot cloud agent, so it can make a change and
-# verify that it compiles. Authoring guidance lives in AGENTS.md, not here.
+# verify that it compiles. Authoring guidance lives in
+# .github/instructions/copilot-cloud.instructions.md.
 #
 # Deliberately NO `container:`. The agent's runtime stages a git-proxy binary on
 # the host and then resolves it against the container-remapped RUNNER_TEMP

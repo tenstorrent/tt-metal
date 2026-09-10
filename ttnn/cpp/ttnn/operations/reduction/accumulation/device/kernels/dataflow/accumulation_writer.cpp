@@ -20,11 +20,11 @@ void kernel_main() {
     // This is the offset of all dimensions above the accumulation axis (HtWt for last two axes)
     uint32_t high_rank_offset = get_arg(args::high_rank_offset);
 
-    const uint32_t flip = get_arg(args::flip);
+    const bool flip = get_arg(args::flip) == 1;
 
     const auto output_addrg = TensorAccessor(tensor::output);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_out_obj(dfb::out);
 
     const uint32_t ublock_size_bytes = dfb_out_obj.get_tile_size();

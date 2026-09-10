@@ -26,7 +26,10 @@
  *
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(); }
+inline void llk_pack_wait_fp32_dest_acc() {
+    SAN_HOOK(unsupported());
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+}
 
 /**
  * Configure the packer hardware for the given output operand.
@@ -210,6 +213,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  * @param relu_config Relu mode/threshold configuration.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    SAN_HOOK(unsupported());
     _llk_pack_relu_config_(relu_config);
 }
 

@@ -72,7 +72,7 @@ declare -a TEST_SCENARIOS=(
     "no_runtime_analysis:--no-runtime-analysis"
     "enable_sum_profiling:--enable-sum-profiling"
     "profile_dispatch_cores:--profile-dispatch-cores"
-    "profiler_capture_perf_counters:--profiler-capture-perf-counters=all"
+    "profiler_capture_perf_counters:--profiler-capture-perf-counters=all --perf-counter-multipass"
 )
 
 # Save current process_ops_logs.py

@@ -17,6 +17,7 @@
  *************************************************************************/
 
 inline void llk_unpack_untilize_init(std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = 1;
 
@@ -25,6 +26,7 @@ inline void llk_unpack_untilize_init(std::uint32_t operand) {
 }
 
 inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     WAYPOINT("UPUW");
     _llk_unpack_untilize_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
@@ -33,6 +35,7 @@ inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::u
 
 template <bool first_pass = true>
 inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_tile_cols) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
@@ -40,6 +43,7 @@ inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_
 }
 
 inline void llk_unpack_untilize(std::uint32_t operand, std::uint32_t block_c_tiles) {
+    SAN_HOOK(unsupported());
     WAYPOINT("UPUW");
     llk_unpack_untilize_pass<true>(operand, block_c_tiles);
     llk_unpack_untilize_pass<false>(operand, block_c_tiles);
