@@ -39,9 +39,9 @@ checkpoint at revision `0e9e39f249a16976918f6564b8830bc894c89659`, or set
 offline. Compiled kernels are cached beneath `TT_METAL_CACHE`.
 
 The plugin changes are in [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116).
-Until that dependency merges, select `yieldthought/llama31-qb2-serving` in the
-workflow's plugin-ref input, or export `VLLM_TT_PLUGIN_REF` to that branch for
-the CI commands linked below.
+Until that dependency merges, both scheduled and manual workflow runs and the
+registry command default to `yieldthought/llama31-qb2-serving`. The workflow's
+plugin-ref input or `VLLM_TT_PLUGIN_REF` can select another branch or tag.
 
 ```bash
 export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
@@ -90,11 +90,17 @@ latency. The central accuracy target is the research baseline of 80.47%, with
 7% relative tolerance. This small fixed subset is a regression check, not a
 full IFEval evaluation.
 
-On the validated QB2 source build, these commands completed in 6 minutes 33 seconds:
+A prior QB2 source-build run of the decoder checks and serving benchmark completed
+in 6 minutes 33 seconds:
 83.47% mean IFEval accuracy, 131.24 decode tokens/s/user, and identical text across
 both passes. The server's Python dependencies were already installed; the
 scorer environment and model kernel cache were fresh. These are measurements of
 this fixed workload, not guarantees for other request lengths or concurrency.
+
+The weekly command now selects the whole model test directory, including the
+device token-history wrap test and host regressions for generation readback and
+hardware admission. The expanded command needs a fresh QB2 run; the prior timing
+does not measure those added checks.
 
 The scorer runs in a separate environment to preserve the serving dependency
 set. `tests/report.py` converts its saved summary into the standard tt-metal

@@ -835,7 +835,9 @@ class LlamaGenerator:
         steady_before = self.stats.copy()
         deactivated = set()
         decode_start = time.perf_counter()
-        deferred_readback = not (next_input is not None or compatibility or stop_on_eos or readback_each_token)
+        deferred_readback = self.record_token_history and not (
+            next_input is not None or compatibility or stop_on_eos or readback_each_token
+        )
         for step in range(1, max_new_tokens):
             if all(finished):
                 break

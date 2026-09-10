@@ -253,9 +253,10 @@ run its block from the checkout with the required hardware and model weights.
 
 For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
 and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
-branch or tag; it defaults to `main`. A selection with no matching tests fails
-before the build starts. The Saturday schedule becomes active after the workflow
-is merged to the default branch.
+branch or tag. It temporarily defaults to `yieldthought/llama31-qb2-serving`
+for both manual and scheduled runs, until [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116)
+merges. A selection with no matching tests fails before the build starts. The
+Saturday schedule becomes active after the workflow is merged to the default branch.
 
 To add a model:
 

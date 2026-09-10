@@ -13,14 +13,15 @@
     export LLAMA_MODEL_PATH
     LLAMA_MODEL_PATH=$(python -c 'from models.demos.llama31_8b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
 
-    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-main}" \
+    # Switch back to main once vllm-tt-plugin#116 has merged.
+    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-yieldthought/llama31-qb2-serving}" \
         https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
     unset VLLM_TT_PLUGIN_REF
     pushd "$work/vllm-tt-plugin"
     source docs/install-vllm-tt.sh
     popd
 
-    python -m pytest "$model_dir/tests/test_adapter.py" "$model_dir/tests/test_decoder.py" \
+    python -m pytest "$model_dir/tests" \
         --timeout 180 --junitxml "$results/decoder.xml"
 
     # Keep the pinned scorer's dependencies separate from the serving runtime.

@@ -27,6 +27,24 @@ PROJECTION_GEOMETRY = {
 }
 
 
+def validate_qb2_mesh(mesh_device):
+    """Reject unqualified hardware before checkpoint conversion or device allocation."""
+    arch = mesh_device.arch()
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = mesh_device.get_num_devices()
+    mesh_shape = tuple(mesh_device.shape)
+    if (
+        arch != ttnn.device.Arch.BLACKHOLE
+        or cluster_type != ttnn.cluster.ClusterType.P300_X2
+        or num_devices != 4
+        or mesh_shape != (1, 4)
+    ):
+        raise ValueError(
+            "Requires a Blackhole P300_X2 QB2 with four devices in a (1, 4) mesh; "
+            f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
+        )
+
+
 @dataclass(frozen=True)
 class DecodeWorkspace:
     batch: int
@@ -48,6 +66,8 @@ class LlamaDecoder(LightweightModule):
         and reserve 16 KiB L1_SMALL for native collective semaphores. Call
         prepare_decode before warmup; share its workspace between stacked layers.
         """
+        validate_qb2_mesh(mesh_device)
+
         import torch
         from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
@@ -59,8 +79,8 @@ class LlamaDecoder(LightweightModule):
             hf_config.head_dim,
             hf_config.max_position_embeddings,
         )
-        if dims != (4096, 14336, 32, 8, 128, 131072) or tuple(mesh_device.shape) != (1, 4):
-            raise ValueError(f"Requires exact Llama-3.1-8B and the four-device QB2 mesh: {dims}")
+        if dims != (4096, 14336, 32, 8, 128, 131072):
+            raise ValueError(f"Requires exact Llama-3.1-8B dimensions: {dims}")
         if (
             hf_config.attention_bias
             or hf_config.mlp_bias

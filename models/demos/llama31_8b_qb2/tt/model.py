@@ -18,7 +18,7 @@ import ttnn
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 from models.common.modules.tt_ccl import TT_CCL
-from models.demos.llama31_8b_qb2.tt.decoder import LlamaDecoder
+from models.demos.llama31_8b_qb2.tt.decoder import LlamaDecoder, validate_qb2_mesh
 from models.demos.llama31_8b_qb2.tt.precision import load_precision_config
 
 MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
@@ -61,8 +61,9 @@ class LlamaModel:
         *,
         max_batch_size=1,
     ):
-        if tuple(mesh_device.shape) != (1, 4) or not 1 <= max_batch_size <= 32:
-            raise ValueError("Requires the reserved TP4 mesh and 1..32 fixed batch slots")
+        validate_qb2_mesh(mesh_device)
+        if not 1 <= max_batch_size <= 32:
+            raise ValueError("Requires 1..32 fixed batch slots")
         self.precision_policy = load_precision_config()
         p = self.precision_policy
         self.supported_context = p["runtime"]["supported_context"]
