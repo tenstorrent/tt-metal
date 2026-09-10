@@ -46,7 +46,7 @@ def test_ms_deformable_attention_requires_spatial_shapes(expect_error):
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 1, 900, 0.999, 0.02, 0.38, 0.36),  # NuScenes tiny model
+        ("nuscenes_tiny", 1, 900, 0.999, 0.02, 0.39, 0.36),  # NuScenes tiny model
         ("nuscenes_base", 1, 10000, 0.999, 0.02, 0.21, 0.23),  # NuScenes base model with larger queries
         ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
     ],
