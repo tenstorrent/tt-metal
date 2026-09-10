@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <compare>
 #include <cstdint>
 
@@ -21,8 +20,6 @@ inline constexpr std::uint16_t kCodegenRecipeAbi = 2;
 inline constexpr std::uint16_t kKeySchemaVersion = 2;
 
 enum class Domain : std::uint8_t { DenseMatmul = 0, DenseLinear = 1, DenseAddmm = 2 };
-// Enumerator values are stable selector ABI. emit_cpp.py explicitly reorders
-// canonically reviewed lock entries into this POD's defaulted runtime order.
 enum class DataType : std::uint8_t { BFloat16 = 0, BFloat8B = 1, Float32 = 2, BFloat4B = 3 };
 enum class Layout : std::uint8_t { RowMajor = 0, Tile = 1 };
 enum class MemoryLayout : std::uint8_t { Interleaved = 0 };
@@ -37,9 +34,6 @@ enum class ThrottleLevel : std::uint8_t {
     Throttle4 = 4,
     Throttle5 = 5,
 };
-
-using Sha256 = std::array<std::uint8_t, 32>;
-using RegistryEntryId = Sha256;
 
 struct TensorDescriptor {
     BufferType buffer_type{};
@@ -87,7 +81,6 @@ struct KeyDescriptor {
     std::uint64_t padded_n{};
     bool run_batched{};
     std::uint16_t schema_version{};
-    Sha256 topology_sha256{};
     bool transpose_a{};
     bool transpose_b{};
     bool untilize_out{};
@@ -119,13 +112,6 @@ struct TableMetadata {
     // Nonzero only when exact evidence explicitly authorizes eligibility-
     // proven linear/addmm aliases to the dense matmul kernel key.
     std::uint16_t matmul_kernel_equivalence_schema_version{};
-    // Zero keeps the table fail-closed until promotion supplies independently
-    // measured expected build and runtime-capability identities.
-    std::uint16_t compatibility_schema_version{};
-    Sha256 content_sha256{};
-    Sha256 semantic_source_sha256{};
-    Sha256 build_identity_sha256{};
-    Sha256 runtime_capability_sha256{};
 };
 
 }  // namespace ttnn::operations::matmul::registry::compact

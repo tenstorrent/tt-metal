@@ -67,7 +67,6 @@ struct ProgramConfigCandidate {
 };
 
 struct ProgramConfigExactEntry {
-    RegistryEntryId entry_id{};
     KeyDescriptor key{};
     ProgramConfigDescriptor program_config{};
     ComputeKernelDescriptor compute_kernel_config{};
@@ -132,7 +131,6 @@ constexpr bool entries_permit_math_approx_normalization(
 // grids: distinct 11x10, 12x10, and 13x10 winners remain distinct exact keys.
 constexpr KeyDescriptor direct_bank_key(KeyDescriptor key) noexcept {
     key.board_capability_class = 0;
-    key.topology_sha256 = {};
     return key;
 }
 

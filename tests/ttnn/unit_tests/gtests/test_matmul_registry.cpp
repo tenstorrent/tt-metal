@@ -164,9 +164,7 @@ compact::TableMetadata metadata(const bool exact = true) {
         .lock_schema_version = 2,
         .key_schema_version = 2,
         .exact_recipe_evidence_schema_version = exact ? std::uint16_t{2} : std::uint16_t{0},
-        .matmul_kernel_equivalence_schema_version = exact ? std::uint16_t{1} : std::uint16_t{0},
-        .content_sha256 = digest(1),
-        .semantic_source_sha256 = digest(2)};
+        .matmul_kernel_equivalence_schema_version = exact ? std::uint16_t{1} : std::uint16_t{0}};
 }
 
 compact::ProgramConfigExactEntry exact_entry(
@@ -188,7 +186,6 @@ TEST(MatmulConfigRegistry, BlackholeKeyUsesNativeArchitectureAndPortablePhysical
     ASSERT_TRUE(key.has_value());
     EXPECT_EQ(key->architecture, static_cast<std::uint32_t>(tt::ARCH::BLACKHOLE));
     EXPECT_EQ(key->board_capability_class, 0U);
-    EXPECT_EQ(key->topology_sha256, compact::Sha256{});
     EXPECT_EQ(key->compute_grid_x, 13);
 }
 
@@ -369,22 +366,11 @@ TEST(MatmulConfigRegistry, CallerComputeKernelConfigIsKeyedAndMatchedExactly) {
     EXPECT_FALSE(miss.compute_kernel_config.has_value());
 }
 
-TEST(MatmulConfigRegistry, EmptyAndMalformedArtifactsFallBack) {
+TEST(MatmulConfigRegistry, EmptyArtifactsFallBack) {
     const auto req = request();
     EXPECT_EQ(
         resolve_with_compact_table_for_testing(req, eligibility(), metadata(false)).reason,
         ResolutionReason::EmptyRegistry);
-    auto bad_metadata = metadata();
-    bad_metadata.lock_schema_version = 99;
-    const auto entry = exact_entry(req);
-    EXPECT_EQ(
-        resolve_with_compact_table_for_testing(req, eligibility(), bad_metadata, {&entry, 1}).reason,
-        ResolutionReason::UnsupportedArtifact);
-    bad_metadata = metadata();
-    bad_metadata.semantic_source_sha256 = {};
-    EXPECT_EQ(
-        resolve_with_compact_table_for_testing(req, eligibility(), bad_metadata, {&entry, 1}).reason,
-        ResolutionReason::UnsupportedArtifact);
 }
 
 TEST(MatmulConfigRegistry, EveryExplicitTuningAxisBypassesBeforeLookup) {

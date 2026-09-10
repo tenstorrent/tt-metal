@@ -5,6 +5,5 @@
 #include <span>
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_exact.hpp"
 namespace ttnn::operations::matmul::registry::generated {
-const compact::TableMetadata& metadata() noexcept;
 std::span<const compact::ProgramConfigExactEntry> program_config_exact_entries() noexcept;
 }  // namespace ttnn::operations::matmul::registry::generated

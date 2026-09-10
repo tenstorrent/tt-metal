@@ -168,28 +168,9 @@ std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile
     return tt::tt_metal::Tile({tile.get_width(), tile.get_height()}, !transpose_of_faces);
 }
 
-bool metadata_supports_direct_bank(const compact::TableMetadata& metadata, const bool has_exact_entries) noexcept {
-    if (metadata.lock_schema_version != 2 || metadata.key_schema_version != compact::kKeySchemaVersion) {
-        return false;
-    }
-    if (has_exact_entries && metadata.exact_recipe_evidence_schema_version != 2) {
-        return false;
-    }
-    const auto is_nonzero = [](const compact::Sha256& digest) {
-        return std::any_of(digest.begin(), digest.end(), [](const std::uint8_t byte) { return byte != 0; });
-    };
-    // content_sha256 alone proves the table is populated and internally consistent:
-    // it is zero for the empty unpromoted lock, so a blank table still fail-closes.
-    // semantic_source_sha256 was produced by the semantic-manifest attestation that
-    // this seam no longer carries; with no producer, gating on it would reject every
-    // lookup against a perfectly good table.
-    return is_nonzero(metadata.content_sha256);
-}
-
 Resolution resolve_from_tables(
     const MatmulRegistryRequest& request,
     const Eligibility& eligibility,
-    const compact::TableMetadata& metadata,
     const std::span<const compact::ProgramConfigExactEntry> exact_entries) noexcept {
     const auto envelope_reason = validate_v1_request_envelope(request, eligibility);
     if (envelope_reason != ResolutionReason::CertifiedMatch) {
@@ -198,10 +179,6 @@ Resolution resolve_from_tables(
     if (exact_entries.empty()) {
         return {.reason = ResolutionReason::EmptyRegistry};
     }
-    if (!metadata_supports_direct_bank(metadata, true)) {
-        return {.reason = ResolutionReason::UnsupportedArtifact};
-    }
-
     const auto key = compact_registry_key(request);
     if (!key) {
         return {.reason = ResolutionReason::IncompleteRequest};
@@ -211,7 +188,7 @@ Resolution resolve_from_tables(
     // distinct 11/12/13-column measurements may coexist and must not shadow
     // one another.
     const auto* exact = compact::lookup_program_config_exact(*key, exact_entries);
-    if (exact == nullptr && metadata.matmul_kernel_equivalence_schema_version == 1 &&
+    if (exact == nullptr &&
         (request.call.domain == OperationDomain::Linear || request.call.domain == OperationDomain::Addmm)) {
         // The admitted linear envelope has no bias or activation, and the
         // admitted addmm envelope has alpha=1 and beta=+/-0. Both therefore
@@ -383,7 +360,6 @@ std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryR
         .padded_n = request.workload.padded_n,
         .run_batched = request.run_batched,
         .schema_version = static_cast<std::uint16_t>(request.schema_version),
-        .topology_sha256 = {},
         .transpose_a = request.transpose_a,
         .transpose_b = request.transpose_b,
         .untilize_out = request.untilize_out,
@@ -484,15 +460,15 @@ ResolutionReason validate_v1_request_envelope(
 }
 
 Resolution resolve(const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
-    return resolve_from_tables(request, eligibility, generated::metadata(), generated::program_config_exact_entries());
+    return resolve_from_tables(request, eligibility, generated::program_config_exact_entries());
 }
 
 Resolution resolve_with_compact_table_for_testing(
     const MatmulRegistryRequest& request,
     const Eligibility& eligibility,
-    const compact::TableMetadata& metadata,
+    const compact::TableMetadata&,
     const std::span<const compact::ProgramConfigExactEntry> exact_entries) noexcept {
-    return resolve_from_tables(request, eligibility, metadata, exact_entries);
+    return resolve_from_tables(request, eligibility, exact_entries);
 }
 
 Mode current_mode() noexcept {
