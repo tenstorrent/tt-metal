@@ -1238,8 +1238,9 @@
 
 # Four pipeline ranks share one galaxy (SP=8, TP=1 per rank). Probe its physical columns before
 # launching: the TT_VISIBLE_DEVICES mapping differs between galaxies. This checks the entire
-# 56,320-token golden KV window over 36 layers with traced execution; it is a correctness gate.
-- name: "Mistral-Small-4-119B PP4 prefill KV accuracy 55k@5k, SC1"
+# 56,320-token golden KV window over 36 layers with traced execution, and gates the whole-sequence
+# throughput the same run measures.
+- name: "Mistral-Small-4-119B PP4 prefill KV accuracy + throughput 55k@5k, SC1"
   fabric_profile: torus_xy
   cmd: |
     set -euo pipefail
@@ -1248,6 +1249,17 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # Throughput too: one run gates both. The gate reads the deepest probe in the runner-side perf
+    # JSON (@55k), which is device-side and taken during the measured request, so the KV readback
+    # sits outside it.
+    #
+    # Centred so both measured galaxies pass: run 34491555152 read 23,689 tok/s @55k and
+    # bh-glx-120-b03u02 reads 32,466 on the same code, a 37% spread. A band on either sample at
+    # MiniMax's +/-15% would fail the other box for being the wrong speed, so this spans them with
+    # ~4% headroom each side and catches a >20% move. Re-cut it tighter once several runs on one
+    # pool establish the real spread.
+    export PREFILL_EXPECTED_TPS=28000
+    export PREFILL_PERF_MARGIN=0.20
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
   test_type: mistral4_pp4_kv_pcc
   test_tags: [mistral4, runner, kv_cache]
