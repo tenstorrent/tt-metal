@@ -166,6 +166,17 @@ class MiniMaxH3VSAGeometry:
             ct, ch, cw = v // (hh * wh), (v // wh) % hh, v % wh
             if kind == "canonical":
                 keys.append((1, v))
+            elif kind.startswith("bstride"):
+                # Blocked stride "bstrideR.S": the stream is S equal segments of slots, interleaved in runs
+                # of R consecutive slots (segment 0 run 0, segment 1 run 0, ..., segment 0 run 1, ...). Runs
+                # keep spatially adjacent blocks adjacent (multi-block visits), while a streaming window
+                # then carries work for rows from S different regions, i.e. for several cores at once.
+                # Measured on the real 15 s shard: identity 19.5 ms, bstride4.16 17.7 ms (the leader/consumer
+                # convoy, VSA_STREAM_DESIGN.md 11).
+                r_len, n_seg = (int(x) for x in kind[len("bstride") :].split("."))
+                seg_len = (n + n_seg - 1) // n_seg
+                seg, off = slot // seg_len, slot % seg_len
+                keys.append((1, (off // r_len) * n_seg * r_len + seg * r_len + (off % r_len)))
             elif kind == "zorder":
                 m = 0
                 for i in range(10):

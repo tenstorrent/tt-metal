@@ -10,17 +10,20 @@ are deterministic, and the 15 s / 768p generation runs 1.69x faster end to end.
 
 | 15 s / 768p, 4x8 Galaxy (TP=4, SP=8), sparsity 0.9 | dense | VSA |
 |---|---|---|
-| end-to-end t2va, 50 steps, warm, real weights | 325.9 s | 193.2 s (1.69x) |
-| of which denoise (49 steps) | 294.4 s (6.01 s/step) | 160.7 s (3.28 s/step) |
-| one transformer block period, isolated (Tracy device wall) | 78.4 ms | 64.3 ms |
-| attention op inside the block | 51.4 ms (ring SDPA) | 21.5 ms (`vsa_sdpa`) |
+| end-to-end t2va, 50 steps, warm, real weights | 325.9 s | 181.4 s (1.80x; 193.2 at the 09-09 checkpoint) |
+| of which denoise | 294.4 s (6.01 s/step) | 151.3 s (3.03 s/step; 160.7 s at the checkpoint) |
+| one transformer block period, isolated (Tracy device wall) | 78.4 ms | 59.2 ms (64.3 at the 09-09 checkpoint) |
+| attention op inside the block | 51.4 ms (ring SDPA) | 16.7 ms (`vsa_sdpa`; 21.5 at the checkpoint) |
 | attention oracle vs the reference implementation (4 gate/placement configs) | | PCC 99.51-99.58 % |
 | `vsa_sdpa` vs fp32 reference, 1024-block rows | | PCC 0.99969, every row at the bf16 floor |
 | repeated launches / trace replay | bit-exact | bit-exact |
 
 The isolated block gap (15 %) understates the end-to-end gap (1.8x on the denoise) because the dense
 block power-throttles under sustained load (median AICLK 975 MHz vs 1268 MHz for VSA); details in
-`VSA_STREAM_DESIGN.md` section 8. Always compare dense vs VSA end to end.
+`VSA_STREAM_DESIGN.md` section 8. Always compare dense vs VSA end to end. The kernel lever pass of
+2026-09-09 (section 10, running log in `VSA_LEVERS_LOG.md`) took `vsa_sdpa` from 23.0 to 19.6 ms on the
+real device-5 shard standalone and the denoise step from 3.28 to 3.03 s (measured 2026-09-10 with
+`tests/.../test_vsa_e2e_perf_minimax_h3.py`).
 
 ## Turning it on
 
@@ -37,7 +40,7 @@ pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh, weights_dir=weigh
 `placement` (tile-to-shard placement, default `interleaved`), `streaming` (the streaming leader/worker
 kernel, default) vs the v1 per-row gather kernel, `padded_pooling` (per-shard padded coarse gathers,
 default on), `distributed` (opt-in experimental window kernel, slower), `stream_order`
-(experimental). The block/attention/pipeline tests read `VSA_PLACEMENT`, `VSA_KERNEL=v1`,
+(default `identity`; `bstride4.16` see `VSA_STREAM_DESIGN.md` section 11). The block/attention/pipeline tests read `VSA_PLACEMENT`, `VSA_KERNEL=v1`,
 `VSA_PADDED_POOLING`, `VSA_DIST` for the same knobs.
 
 ## Code map
@@ -92,5 +95,7 @@ Galaxy (`SAFE=1 models/tt_dit/models/transformers/minimax_h3/scripts/run_h3_test
 - `vsa_sdpa` is 21 ms of the 64 ms block; the two K/V all-gathers before it (8 ms) run alone and could
   overlap the coarse stage (largest remaining block-level lever). The coarse stage's nine transposes
   (3 ms) can be folded into the pooling layout. The remaining 25 ms are dense-identical CCL matmuls.
-- The distributed-window kernel and `stream_order` are experimental and slower; kept behind flags.
+- The distributed-window kernel is experimental and slower (behind a flag). The KV stream order default is
+  `identity`; `bstride4.16` (interleaved spatial segments) is 9.5 % faster standalone but hangs the full
+  pipeline until the leader/worker progress race is fixed (design doc section 11).
 - fp32 DEST accumulation was measured and rejected (22-43 % slower on the dense kernel, does not fit L1).

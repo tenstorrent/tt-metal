@@ -46,7 +46,7 @@ set -o pipefail
 # pytest's own stdout/stderr pass through unchanged.
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+DISPATCH_TIMEOUT="${SAFE_DISPATCH_TIMEOUT:-5}"  # seconds; override for builds that legitimately run long kernels
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"
