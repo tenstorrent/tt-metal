@@ -3,11 +3,11 @@
 
 """Tracy harness for a single BEVFormer encoder layer.
 
-Same shape as ``test_bevformer_encoder_perf``, one layer instead of six: PCC
-gate, warmup, then signposted iterations so the report covers already-compiled,
-already-dispatched programs. The reference points and the camera projection are
-built once outside the measured region — the encoder does the same, so what is
-measured here is the per-layer cost the encoder repeats.
+Same shape as ``test_bevformer_encoder_perf``, one layer instead of six: a PCC
+gate that doubles as the warmup, then signposted iterations so the report covers
+already-compiled, already-dispatched programs. The reference points and the
+camera projection are built once outside the measured region — the encoder does
+the same, so what is measured here is the per-layer cost the encoder repeats.
 
 No trace capture. ``build_rebatch_plan`` still calls ``ttnn.to_torch`` on
 ``bev_mask`` and the host result decides ``max_len`` / tensor shapes for the
@@ -28,7 +28,6 @@ from models.experimental.bevformer.config.encoder_config import get_preset_confi
 from models.experimental.bevformer.tests.layer_common import build_layer_fixture
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 
-PERF_WARMUP_ITERS = 1
 DEVICE_PERF_ITERS = 1
 
 
@@ -67,6 +66,8 @@ def test_bevformer_layer_perf(
     def op_fn():
         return fixture.tt_model(**fixture.tt_inputs)
 
+    # Doubles as the warmup: this call compiles the kernels and fills the program
+    # cache, so the signposted iterations already run at steady state.
     tt_output = op_fn()
     tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
     passed, message = check_with_pcc(ref_output, tt_output_torch, expected_pcc)
@@ -74,13 +75,10 @@ def test_bevformer_layer_perf(
     logger.info(f"PCC gate: {message}")
     ttnn.deallocate(tt_output)
 
-    for _ in range(PERF_WARMUP_ITERS):
-        out = op_fn()
-        ttnn.synchronize_device(device)
-        ttnn.deallocate(out)
-
     ttnn.synchronize_device(device)
     outputs = []
+    # Drains and resets the device profiler buffers so the signposted region starts
+    # from empty; the PCC call's markers would otherwise eat into the same budget.
     ttnn.ReadDeviceProfiler(device)
     signpost("start")
     for _ in range(DEVICE_PERF_ITERS):
