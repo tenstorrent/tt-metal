@@ -58,7 +58,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
-#if ISCLOSE_OP
+#ifdef ISCLOSE_OP
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
 #else
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
@@ -97,7 +97,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

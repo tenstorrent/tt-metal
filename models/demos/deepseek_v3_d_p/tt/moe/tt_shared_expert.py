@@ -499,7 +499,6 @@ class TtSharedExpert(LightweightModule):
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
         # ===== Inlined shared expert FFN — 2D sub-device matmuls =====
-        TILE = 32
         # The grid these matmuls may use: the sub-device's when the expert is overlapped with the MoE
         # dispatch, the whole device's otherwise. Deriving it also drops a hardcoded 11x9 that was a
         # row short of Blackhole's 11x10 whenever there was no sub-device to be confined to.
@@ -509,14 +508,14 @@ class TtSharedExpert(LightweightModule):
             else self.mesh_device.compute_with_storage_grid_size()
         )
 
-        m_tiles = x.padded_shape[-2] // TILE
+        m_tiles = x.padded_shape[-2] // ttnn.TILE_SIZE
         gate_program_config, up_program_config, down_program_config = get_program_configs(
             grid,
             m_tiles,
-            self.gate_proj.padded_shape[-2] // TILE,
-            self.gate_proj.padded_shape[-1] // TILE,
-            self.down_proj.padded_shape[-2] // TILE,
-            self.down_proj.padded_shape[-1] // TILE,
+            self.gate_proj.padded_shape[-2] // ttnn.TILE_SIZE,
+            self.gate_proj.padded_shape[-1] // ttnn.TILE_SIZE,
+            self.down_proj.padded_shape[-2] // ttnn.TILE_SIZE,
+            self.down_proj.padded_shape[-1] // ttnn.TILE_SIZE,
             # SiTU-GLU is binary over (gate, up), so it cannot ride along as the gate matmul's fused
             # unary; the gate accumulator has to come out raw and be combined below.
             fuse_silu=self.activation == ACTIVATION_SILU,
