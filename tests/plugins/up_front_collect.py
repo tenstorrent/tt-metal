@@ -262,9 +262,18 @@ def _reference_op_patches():
         except Exception:
             return real_sdpa(query, key, value, *a, **k)
 
+    def _fast_manual_seed(seed):
+        # torch.manual_seed also seeds the cuda/mtia/xpu backends, and each of those
+        # _lazy_call records a full Python stack (traceback.format_stack) for an
+        # initialization that never happens on a box without those devices — ~1.2ms
+        # per call, ~3 calls per test body. Seed only the CPU generator: identical
+        # behavior for host RNG, none of the stack capture.
+        return torch.random.default_generator.manual_seed(int(seed))
+
     patches = [
         _AttrPatch(torch, "randn", lambda _orig: _fast_randn),
         _AttrPatch(torch, "rand", lambda _orig: _fast_randn),
+        _AttrPatch(torch, "manual_seed", lambda _orig: _fast_manual_seed),
         _AttrPatch(F, "conv2d", lambda _orig: _fast_conv2d),
         _AttrPatch(F, "conv3d", lambda _orig: _fast_conv3d),
         _AttrPatch(F, "layer_norm", lambda _orig: _fast_norm),
