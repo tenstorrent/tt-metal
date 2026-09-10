@@ -819,8 +819,9 @@
 
 
 # MiniMax-M3 full-model chunked-prefill throughput gate (PCC skipped).
-# Five iterations with LOGURU_LEVEL=ERROR and TT_METAL_SHM_TRACKING_DISABLED=1 measured a
-# whole-sequence median of 8977.1 tok/s. Target: 8980 +/- 15%, accepting 7633-10327 tok/s.
+# CI run 34492835936 / job 102927415837 measured a whole-sequence median of 10675.4 tok/s with
+# five iterations, LOGURU_LEVEL=ERROR, and TT_METAL_SHM_TRACKING_DISABLED=1. Target: 10675.4 +/- 15%,
+# accepting 9074.1-12276.7 tok/s.
 - name: "(MiniMax-M3-428B) chunked prefill perf longbook 55k@5k"
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -836,7 +837,7 @@
     export PREFILL_TPS_ITERS=5
     export PREFILL_SKIP_PCC=1
     export PREFILL_REQUIRE_HIGH_POWER=1
-    export PREFILL_EXPECTED_TPS=8980
+    export PREFILL_EXPECTED_TPS=10675.4
     export PREFILL_PERF_MARGIN=0.15
     mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
