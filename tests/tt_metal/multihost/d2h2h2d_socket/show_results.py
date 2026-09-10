@@ -152,8 +152,7 @@ def load(paths):
                 key = (per_msg if per_msg else 0, cores if cores else 0)
                 prev = data[key].get(stage)
                 if prev and (prev["bw"], prev["lat"]) != (bw, lat):
-                    problems.append(f"{where}: repeat run at {key[0]} B / {key[1]} cores, "
-                                    f"showing the last one")
+                    problems.append(f"{where}: repeat run at {key[0]} B / {key[1]} cores, " f"showing the last one")
                 data[key][stage] = {"bw": bw, "lat": lat}
     return data, problems, stale_window
 
