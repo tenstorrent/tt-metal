@@ -101,7 +101,7 @@ inline uint32_t row_set_size(
         return 0;
     }
     const uint32_t full_blocks_before_boundary = boundary_width_index - (row * num_blocks_first_stage);
-    (return full_blocks_before_boundary * block_w) + last_block_w;
+    return (full_blocks_before_boundary * block_w) + last_block_w;
 }
 
 // Weight of the b-th block in this core's Welford combine, by its true logical width.
