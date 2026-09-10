@@ -17,6 +17,9 @@
 #endif
 
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -65,7 +68,18 @@ TracySink::TracySink(Service& service) : service_(service), srcloc_table_(kSrclo
     anchor_tracy_ = tracy::Profiler::GetTime();
 #endif
     base_ = probe();
-    handle_ = service_.add_consumer("tracy", [this](const Batch& b, uint64_t capture) { on_batch(b, capture); });
+    handle_ = service_.add_consumer(
+        "tracy",
+        [this](const Batch& b, uint64_t capture) { on_batch(b, capture); },
+        ConsumerHooks{
+            .on_attach =
+                [this](const CaptureContext& ctx) {
+                    clocks_.clear();
+                    for (const auto& d : ctx.devices) {
+                        clocks_.push_back(d.clock);
+                    }
+                },
+            .clock_sink = [this](const ClockSample& cs) { plot_clock(cs.dev, cs.kind, cs.ts); }});
 }
 
 TracySink::~TracySink() {
@@ -317,6 +331,48 @@ void TracySink::push_marker(
     }
 #endif
     TracyTTPushMarkerLockfree(ctx, marker);
+#endif
+}
+
+const char* TracySink::plot_name(uint32_t chip, bool linked) {
+    auto& m = linked ? plot_linked_ : plot_local_;
+    auto it = m.find(chip);
+    if (it == m.end()) {
+        it = m.emplace(chip, fmt::format("d2d {} ns chip{}", linked ? "linked" : "local", chip)).first;
+    }
+    return it->second.c_str();
+}
+
+// A PP_CLOCK sample's correction, plotted at the sample's device time on the chip's timeline. The device tick is
+// mapped to the same steady-clock ns a zone at that tick would use, then through to_timeline onto Tracy's timeline
+// (PlotDataAt carries the time on the wire -- plain PlotData/TracyPlot would stamp decode-time and pile every point
+// at one instant). LOCAL samples feed the local-only plot, LINK samples the linked plot.
+void TracySink::plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks) {
+#if defined(TRACY_ENABLE)
+    if (dev >= clocks_.size()) {
+        return;
+    }
+    const DeviceClock& clk = clocks_[dev];
+    if (clk.frequency_ghz <= 0.0) {
+        return;
+    }
+    const uint32_t chip = clk.chip_id;
+    const double hz = clk.frequency_ghz * 1e9;
+    const int64_t base_ns =
+        clk.anchor_host_ns +
+        static_cast<int64_t>(
+            static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(clk.anchor_ticks)) * 1e9 /
+            hz);
+    const int64_t tsc = to_timeline(base_ns);
+    if (kind == PP_CLOCK_LOCAL_REFCLK) {
+        tracy::Profiler::PlotDataAt(plot_name(chip, false), SyncCorrections::lookup_local_ns(chip, device_ticks), tsc);
+    } else if (kind == PP_CLOCK_LINK_REFCLK) {
+        tracy::Profiler::PlotDataAt(plot_name(chip, true), SyncCorrections::lookup_ns(chip, device_ticks), tsc);
+    }
+#else
+    (void)dev;
+    (void)kind;
+    (void)device_ticks;
 #endif
 }
 

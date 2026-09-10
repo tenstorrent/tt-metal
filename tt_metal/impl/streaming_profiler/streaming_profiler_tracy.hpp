@@ -80,6 +80,11 @@ private:
         int64_t timestamp_ns,
         uint32_t runtime_id,
         std::span<const uint64_t> values);
+    // Device<->device sync plots: at each PP_CLOCK sample, plot the correction (ns) at the sample's device time
+    // on a per-chip line. LOCAL samples (3 us) feed the local-only plot, LINK samples (1 ms) the linked plot; the
+    // gap between the two curves on a non-root chip is the cross-chip error the linked sync removes.
+    void plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks);
+    const char* plot_name(uint32_t chip, bool linked);
 
     Service& service_;
     ConsumerHandle handle_ = 0;
@@ -95,6 +100,8 @@ private:
     std::vector<SrclocEntry> srcloc_table_;  // open addressing, power-of-two size, at most half full
     size_t srcloc_count_ = 0;
     std::unordered_map<std::string, const void*> srclocs_;
+    std::vector<DeviceClock> clocks_;  // per device index, for mapping a clock sample's device time to the timeline
+    std::unordered_map<uint32_t, std::string> plot_local_, plot_linked_;  // persistent per-chip plot names for Tracy
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

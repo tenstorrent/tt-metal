@@ -34,6 +34,10 @@ public:
     static void publish(uint32_t chip_id, std::vector<SyncSegment> segments);
     static void clear(uint32_t chip_id);
     static int64_t lookup_ns(uint32_t chip_id, uint64_t ticks) noexcept;
+    // A parallel LOCAL-only series (each chip's own-anchor + local-AICLK term, no cross-chip link). Used only
+    // for the Tracy/CSV local-vs-linked plots; Record::host_time uses the linked series above.
+    static void publish_local(uint32_t chip_id, std::vector<SyncSegment> segments);
+    static int64_t lookup_local_ns(uint32_t chip_id, uint64_t ticks) noexcept;
     // How many segments a chip currently has published (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
 };

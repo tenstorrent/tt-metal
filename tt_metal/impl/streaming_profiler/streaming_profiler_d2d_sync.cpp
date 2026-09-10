@@ -278,8 +278,14 @@ void D2dSyncConsumer::publish_all(bool final) {
             return (R - fd.refclk_at_anchor) * fd.period_ns;
         };
         const auto base_rel = [&](double T) -> double { return (T - A_d) * 1e9 / hz_d; };
-        std::vector<SyncSegment> segs;
+        // The LOCAL-only correction (this chip's own-anchor + local-AICLK term, no cross-chip link), for the
+        // local-vs-linked plots. It is the on_root=false branch of corrected_rel.
+        const auto local_rel = [&](const LocalClockFit::Accum& b, double T) -> double {
+            return (b.refclk_of_wall(T) - fd.refclk_at_anchor) * fd.period_ns;
+        };
+        std::vector<SyncSegment> segs, local_segs;
         segs.reserve(st.fit.buckets.size());
+        local_segs.reserve(st.fit.buckets.size());
         for (const auto& [key, b] : st.fit.buckets) {
             if (b.n < 2 || b.slope() <= 0.0) {
                 continue;
@@ -298,9 +304,19 @@ void D2dSyncConsumer::publish_all(bool final) {
                 .tick_hi = static_cast<uint64_t>(T_hi),
                 .delta_ns_lo = d_lo,
                 .slope_ns_per_tick = (d_hi - d_lo) / (T_hi - T_lo)});
+            const double l_lo = local_rel(b, T_lo) - base_rel(T_lo);
+            const double l_hi = local_rel(b, T_hi) - base_rel(T_hi);
+            local_segs.push_back(SyncSegment{
+                .tick_lo = static_cast<uint64_t>(T_lo),
+                .tick_hi = static_cast<uint64_t>(T_hi),
+                .delta_ns_lo = l_lo,
+                .slope_ns_per_tick = (l_hi - l_lo) / (T_hi - T_lo)});
         }
         if (!segs.empty()) {
             SyncCorrections::publish(ctx_.devices[dev].chip_id, std::move(segs));
+        }
+        if (!local_segs.empty()) {
+            SyncCorrections::publish_local(ctx_.devices[dev].chip_id, std::move(local_segs));
         }
     }
     (void) final;

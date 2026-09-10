@@ -19,10 +19,15 @@ std::array<Slot, SyncCorrections::kMaxChips>& slots() {
     static std::array<Slot, SyncCorrections::kMaxChips> s;
     return s;
 }
+std::array<Slot, SyncCorrections::kMaxChips>& local_slots() {
+    static std::array<Slot, SyncCorrections::kMaxChips> s;
+    return s;
+}
+int64_t lookup_in(std::array<Slot, SyncCorrections::kMaxChips>& sl, uint32_t chip_id, uint64_t ticks) noexcept;
 }  // namespace
 
 void SyncCorrections::publish(uint32_t chip_id, std::vector<SyncSegment> segments) {
-    if (chip_id >= kMaxChips) {
+    if (chip_id >= SyncCorrections::kMaxChips) {
         return;
     }
     std::sort(segments.begin(), segments.end(), [](const SyncSegment& a, const SyncSegment& b) {
@@ -38,7 +43,7 @@ void SyncCorrections::clear(uint32_t chip_id) {
 }
 
 size_t SyncCorrections::published(uint32_t chip_id) noexcept {
-    if (chip_id >= kMaxChips) {
+    if (chip_id >= SyncCorrections::kMaxChips) {
         return 0;
     }
     const auto p = slots()[chip_id].load(std::memory_order_acquire);
@@ -46,10 +51,29 @@ size_t SyncCorrections::published(uint32_t chip_id) noexcept {
 }
 
 int64_t SyncCorrections::lookup_ns(uint32_t chip_id, uint64_t ticks) noexcept {
-    if (chip_id >= kMaxChips) {
+    return lookup_in(slots(), chip_id, ticks);
+}
+
+int64_t SyncCorrections::lookup_local_ns(uint32_t chip_id, uint64_t ticks) noexcept {
+    return lookup_in(local_slots(), chip_id, ticks);
+}
+
+void SyncCorrections::publish_local(uint32_t chip_id, std::vector<SyncSegment> segments) {
+    if (chip_id >= SyncCorrections::kMaxChips) {
+        return;
+    }
+    std::sort(segments.begin(), segments.end(), [](const SyncSegment& x, const SyncSegment& y) {
+        return x.tick_lo < y.tick_lo;
+    });
+    local_slots()[chip_id].store(std::make_shared<const Series>(std::move(segments)), std::memory_order_release);
+}
+
+namespace {
+int64_t lookup_in(std::array<Slot, SyncCorrections::kMaxChips>& sl, uint32_t chip_id, uint64_t ticks) noexcept {
+    if (chip_id >= SyncCorrections::kMaxChips) {
         return 0;
     }
-    const auto p = slots()[chip_id].load(std::memory_order_acquire);
+    const auto p = sl[chip_id].load(std::memory_order_acquire);
     if (!p || p->empty()) {
         return 0;
     }
@@ -64,11 +88,12 @@ int64_t SyncCorrections::lookup_ns(uint32_t chip_id, uint64_t ticks) noexcept {
     uint64_t t = ticks;
     if (t > seg.tick_hi) {
         // Past the fitted range (a live sink slightly ahead of the fit, or a gap): extend the line, then hold.
-        t = seg.tick_hi + std::min<uint64_t>(t - seg.tick_hi, kHoldTicks);
+        t = seg.tick_hi + std::min<uint64_t>(t - seg.tick_hi, SyncCorrections::kHoldTicks);
     }
     const double d = seg.delta_ns_lo + seg.slope_ns_per_tick * static_cast<double>(t - seg.tick_lo);
     return static_cast<int64_t>(d);
 }
+}  // namespace
 
 }  // namespace tt::tt_metal::streaming_profiler
 
