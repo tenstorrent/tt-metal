@@ -80,10 +80,10 @@
 #define _GNU_SOURCE
 #endif
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
-#include <cstdarg>
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
@@ -292,23 +292,38 @@ struct tenstorrent_configure_tlb {
 // invocation, or its environment is broken.  Report where and die with
 // EXIT_SETUP_ERROR.  DIE appends strerror(errno) for the usual failed-
 // syscall case; DIEX is for a failure that is not a syscall's.
-[[noreturn]] __attribute__((format(printf, 4, 5))) static void die_at(
-    const char* file, int line, int err, const char* fmt, ...) {
-    va_list ap;
 
+template <typename... Args>
+static void fprint_fmt(FILE* out, const char* fmt, Args... args) {
+    if constexpr (sizeof...(args) == 0) {
+        fputs(fmt, out);
+    } else {
+        fprintf(out, fmt, args...);
+    }
+}
+
+template <typename... Args>
+static void snprint_fmt(char* buf, size_t size, const char* fmt, Args... args) {
+    if constexpr (sizeof...(args) == 0) {
+        snprintf(buf, size, "%s", fmt);
+    } else {
+        snprintf(buf, size, fmt, args...);
+    }
+}
+
+template <typename... Args>
+[[noreturn]] static void die_at(const char* file, int line, int err, const char* fmt, Args... args) {
     fflush(stdout);
     fprintf(stderr, "%s:%d: ", file, line);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
+    fprint_fmt(stderr, fmt, args...);
     if (err) {
         fprintf(stderr, ": %s", strerror(err));
     }
     fprintf(stderr, "\n");
     exit(EXIT_SETUP_ERROR);
 }
-#define DIE(...) die_at(__FILE__, __LINE__, errno, __VA_ARGS__)
-#define DIEX(...) die_at(__FILE__, __LINE__, 0, __VA_ARGS__)
+#define DIE(...) (void)sizeof(printf(__VA_ARGS__)), die_at(__FILE__, __LINE__, errno, __VA_ARGS__)
+#define DIEX(...) (void)sizeof(printf(__VA_ARGS__)), die_at(__FILE__, __LINE__, 0, __VA_ARGS__)
 
 // A device named on the command line: a path, or a bare ordinal as
 // shorthand, so "-d 0" means "-d /dev/tenstorrent/0".
@@ -454,6 +469,42 @@ static void noc_window_close(struct noc_window* win) {
     }
 }
 
+// Scope guards for the two things a subcommand opens.
+//
+// The C shape of this file was one label per function that closed both and
+// returned, reached by goto from each failure. Closing in a destructor says
+// the same thing in a way no later edit can get wrong: a path added in the
+// middle of a 300-line function cannot leave the device open or the TLB
+// allocated, because it does not have to remember to.
+//
+// Declare the chip guard before the window guard. Destruction runs in reverse
+// order, so the window closes first and then the chip, which is what the
+// labels did -- and the driver wants the TLB freed while the fd is still
+// open.
+struct ChipGuard {
+    struct chip* c;
+
+    explicit ChipGuard(struct chip* chip) : c(chip) {}
+    ~ChipGuard() { chip_close(c); }
+
+    ChipGuard(const ChipGuard&) = delete;
+    ChipGuard& operator=(const ChipGuard&) = delete;
+    ChipGuard(ChipGuard&&) = delete;
+    ChipGuard& operator=(ChipGuard&&) = delete;
+};
+
+struct NocWindowGuard {
+    struct noc_window* w;
+
+    explicit NocWindowGuard(struct noc_window* win) : w(win) {}
+    ~NocWindowGuard() { noc_window_close(w); }
+
+    NocWindowGuard(const NocWindowGuard&) = delete;
+    NocWindowGuard& operator=(const NocWindowGuard&) = delete;
+    NocWindowGuard(NocWindowGuard&&) = delete;
+    NocWindowGuard& operator=(NocWindowGuard&&) = delete;
+};
+
 // Points the window at (x, y, addr); dies if the TLB cannot be programmed.
 static void noc_window_aim(struct noc_window* win, unsigned x, unsigned y, uint64_t addr) {
     struct tenstorrent_configure_tlb cfg;
@@ -486,16 +537,14 @@ static void noc_write32(struct noc_window* win, unsigned x, unsigned y, uint64_t
 }
 
 // Emit the final [PASS] or [FAIL] line of a verdict-last subcommand.
-__attribute__((format(printf, 2, 3))) static void verdict(int pass, const char* fmt, ...) {
-    va_list ap;
-
+template <typename... Args>
+static void verdict_impl(int pass, const char* fmt, Args... args) {
     printf("%s ", pass ? "[PASS]" : "[FAIL]");
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
+    fprint_fmt(stdout, fmt, args...);
     printf("\n");
     fflush(stdout);
 }
+#define verdict(pass, ...) (void)sizeof(printf(__VA_ARGS__)), verdict_impl((pass), __VA_ARGS__)
 
 // ============================================================================
 // scratch: dump the ARC scratch register banks
@@ -1276,16 +1325,21 @@ static void decode_blackhole_value(unsigned tag, uint32_t v, char* buf, size_t b
         case 77:  // TAG_NOP_ON_DURATION
             snprintf(buf, bufsz, "%u ms", v);
             break;
-        case 78:  // TAG_FW_CAPABILITIES_0
-        case 79:  // TAG_FW_ACTIVE_CONFIG_0
+        case 78:    // TAG_FW_CAPABILITIES_0
+        case 79: {  // TAG_FW_ACTIVE_CONFIG_0
             // Feature bitfield; only bit 0 (kernel NOP throttler) is assigned.
-            snprintf(
-                buf,
-                bufsz,
-                "kernel-NOP-throttler %s%s",
-                tag == 78 ? (v & 1 ? "supported" : "not supported") : (v & 1 ? "enabled" : "disabled"),
-                (v & ~1u) ? ", other bits set" : "");
+            // Capabilities says whether the feature exists, active config
+            // whether it is switched on.
+            const char* bit0;
+
+            if (tag == 78) {
+                bit0 = (v & 1) ? "supported" : "not supported";
+            } else {
+                bit0 = (v & 1) ? "enabled" : "disabled";
+            }
+            snprintf(buf, bufsz, "kernel-NOP-throttler %s%s", bit0, (v & ~1u) ? ", other bits set" : "");
             break;
+        }
         default: snprintf(buf, bufsz, "%u", v); break;
     }
 }
@@ -1333,11 +1387,12 @@ static void decode_wormhole_value(unsigned tag, uint32_t v, char* buf, size_t bu
             size_t used = 0;
 
             for (unsigned channel = 0; channel < 6; ++channel) {
+                // Indexed by the two status bits, so index 2 is the value the
+                // firmware never emits.
+                static const char* const states[4] = {
+                    "not trained", "trained", "2 (firmware emits no such value)", "training failed"};
                 unsigned status = (v >> (2 * channel)) & 0x3;
-                const char* state = status == 0   ? "not trained"
-                                    : status == 1 ? "trained"
-                                    : status == 3 ? "training failed"
-                                                  : "2 (firmware emits no such value)";
+                const char* state = states[status];
                 int n = snprintf(buf + used, bufsz - used, "%sch%u %s", channel == 0 ? "" : ", ", channel, state);
 
                 if (n < 0 || (size_t)n >= bufsz - used) {
@@ -1406,7 +1461,6 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
     const char* device_path = "/dev/tenstorrent/0";
     int device_path_set = 0;
     int raw_only = 0;
-    int rc = EXIT_SETUP_ERROR;
     int r;
     int opt;
     struct chip chip;
@@ -1459,9 +1513,11 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
     }
 
     chip_open(&chip, device_path);
+    ChipGuard chip_guard(&chip);
     arch = chip.is_blackhole ? &blackhole_telemetry : &wormhole_telemetry;
 
     noc_window_open(&win, chip.fd);
+    NocWindowGuard win_guard(&win);
 
     // Pointer, header, and directory reads are structural.
     if (noc_read32_checked(
@@ -1472,8 +1528,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "the telemetry table pointer register",
             0,
             &table_ptr_raw) == READ_ALL_ONES) {
-        rc = EXIT_CHIP_SILENT;
-        goto cleanup;
+        return EXIT_CHIP_SILENT;
     }
 
     if (noc_read32_checked(
@@ -1484,8 +1539,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "the telemetry data pointer register",
             0,
             &data_ptr_raw) == READ_ALL_ONES) {
-        rc = EXIT_CHIP_SILENT;
-        goto cleanup;
+        return EXIT_CHIP_SILENT;
     }
 
     // Zero pointers mean firmware has not published telemetry.
@@ -1496,8 +1550,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "data pointer 0x%08x\n",
             table_ptr_raw,
             data_ptr_raw);
-        rc = EXIT_BAD_TELEMETRY;
-        goto cleanup;
+        return EXIT_BAD_TELEMETRY;
     }
 
     if (!arch->is_blackhole && (table_ptr_raw < 0x10000000u || table_ptr_raw > 0x1007FFFFu ||
@@ -1508,8 +1561,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "expected ARC-local CSM addresses in 0x10000000..0x1007ffff\n",
             table_ptr_raw,
             data_ptr_raw);
-        rc = EXIT_BAD_TELEMETRY;
-        goto cleanup;
+        return EXIT_BAD_TELEMETRY;
     }
 
     table_base = (uint64_t)table_ptr_raw | arch->pointer_fixup;
@@ -1523,8 +1575,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "the telemetry version word",
             0,
             &version) == READ_ALL_ONES) {
-        rc = EXIT_CHIP_SILENT;
-        goto cleanup;
+        return EXIT_CHIP_SILENT;
     }
 
     if (noc_read32_checked(
@@ -1535,14 +1586,12 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "the telemetry entry_count word",
             0,
             &entry_count) == READ_ALL_ONES) {
-        rc = EXIT_CHIP_SILENT;
-        goto cleanup;
+        return EXIT_CHIP_SILENT;
     }
 
     if (version == 0) {
         fprintf(stderr, "Error: telemetry format version is zero\n");
-        rc = EXIT_BAD_TELEMETRY;
-        goto cleanup;
+        return EXIT_BAD_TELEMETRY;
     }
 
     if (entry_count == 0 || entry_count > MAX_ENTRY_COUNT) {
@@ -1552,8 +1601,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "this does not look like a telemetry table\n",
             entry_count,
             (unsigned long long)table_base);
-        rc = EXIT_BAD_TELEMETRY;
-        goto cleanup;
+        return EXIT_BAD_TELEMETRY;
     }
 
     if (!arch->is_blackhole && table_base + TELEMETRY_DIRECTORY_OFFSET + (uint64_t)entry_count * 4 > WH_CSM_NOC_END) {
@@ -1563,8 +1611,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
             "end of ARC CSM\n",
             entry_count,
             (unsigned long long)table_base);
-        rc = EXIT_BAD_TELEMETRY;
-        goto cleanup;
+        return EXIT_BAD_TELEMETRY;
     }
 
     printf("Device:         %s\n", device_path);
@@ -1605,8 +1652,7 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
 
         snprintf(what, sizeof(what), "telemetry directory entry %u", i);
         if (noc_read32_checked(&win, chip.arc_x, chip.arc_y, addr, what, 0, &entry) == READ_ALL_ONES) {
-            rc = EXIT_CHIP_SILENT;
-            goto cleanup;
+            return EXIT_CHIP_SILENT;
         }
 
         tag = entry & 0xFFFF;
@@ -1701,10 +1747,15 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
 
             r = noc_read32_checked(&win, chip.arc_x, chip.arc_y, addr, what, 1, &value);
             if (r == READ_ALL_ONES) {
-                const char* note = tag_encoding_is_firmware_dependent(arch, tag) ? UNDECODABLE_NOTE
-                                   : tag_all_ones_is_documented(arch, tag)
-                                       ? "n/a (fan control disabled)"
-                                       : "all ones (chip answered, value not meaningful)";
+                const char* note;
+
+                if (tag_encoding_is_firmware_dependent(arch, tag)) {
+                    note = UNDECODABLE_NOTE;
+                } else if (tag_all_ones_is_documented(arch, tag)) {
+                    note = "n/a (fan control disabled)";
+                } else {
+                    note = "all ones (chip answered, value not meaningful)";
+                }
 
                 if (raw_only) {
                     printf("%3u  %-28s  0x%08x\n", tag, name, ALL_ONES);
@@ -1773,18 +1824,12 @@ static int telemetry_main(int argc, char* argv[], const char* prog) {
                 stderr,
                 "Error: the chip stopped answering during the dump; "
                 "values above may include garbage\n");
-            rc = EXIT_CHIP_SILENT;
-            goto cleanup;
+            return EXIT_CHIP_SILENT;
         }
     }
 
     fflush(stdout);
-    rc = EXIT_OK;
-
-cleanup:
-    noc_window_close(&win);
-    chip_close(&chip);
-    return rc;
+    return EXIT_OK;
 }
 
 // ============================================================================
@@ -2516,35 +2561,35 @@ static int reset_one(struct reset_dev* d) {
     int rc;
 
     reset_open(d);
+    ChipGuard chip_guard(&d->chip);
 
     rc = reset_step(d, TENSTORRENT_RESET_DEVICE_RESET_PCIE_LINK, "SBR (RESET_PCIE_LINK)");
     if (rc != 0) {
-        goto out;
+        return rc;
     }
     if (d->sbr_only) {
         rc = reset_read_post_code(d);
         if (rc == 0) {
             rc = reset_health_checks(d);
         }
-        goto out;
+        return rc;
     }
 
     rc = reset_step(d, TENSTORRENT_RESET_DEVICE_ASIC_RESET, "ASIC_RESET");
     if (rc != 0) {
-        goto out;
+        return rc;
     }
 
     // Allow reset to land before polling and ARC to boot before POST_RESET.
     reset_sleep_ms(RESET_SETTLE_MS);
     if (reset_wait_marker(d) != 0) {
-        rc = EXIT_CHIP_SILENT;
-        goto out;
+        return EXIT_CHIP_SILENT;
     }
     reset_sleep_ms(RESET_SETTLE_MS);
 
     rc = reset_post_reset(d);
     if (rc != 0) {
-        goto out;
+        return rc;
     }
 
     rc = reset_read_post_code(d);
@@ -2552,8 +2597,6 @@ static int reset_one(struct reset_dev* d) {
         rc = reset_health_checks(d);
     }
 
-out:
-    chip_close(&d->chip);
     return rc;
 }
 
@@ -3058,9 +3101,7 @@ static void nuke_print_victim(const char* action, pid_t pid) {
         n = read(fd, cmdline, sizeof(cmdline) - 1);
         close(fd);
     }
-    if (n < 0) {
-        n = 0;
-    }
+    n = std::max<ssize_t>(n, 0);
     cmdline[n] = '\0';
     for (ssize_t i = 0; i < n; i++) {
         if (cmdline[i] == '\0') {
@@ -3233,18 +3274,17 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
 // Stable "key: value" lines, with host-side facts available even when
 // chip-side telemetry is not.
 
-__attribute__((format(printf, 2, 3))) static void info_line(const char* key, const char* fmt, ...) {
+template <typename... Args>
+static void info_line_impl(const char* key, const char* fmt, Args... args) {
     char keycol[32];
-    va_list ap;
 
     snprintf(keycol, sizeof(keycol), "%s:", key);
     printf("%-16s ", keycol);
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
+    fprint_fmt(stdout, fmt, args...);
     printf("\n");
     fflush(stdout);
 }
+#define info_line(key, ...) (void)sizeof(printf(__VA_ARGS__)), info_line_impl((key), __VA_ARGS__)
 
 // Maps a sysfs *_link_speed string ("16.0 GT/s PCIe"; older kernels drop
 // the suffix) to a PCIe generation.  0 if the string is not a defined rate.
@@ -3609,7 +3649,6 @@ static int info_main(int argc, char* argv[], const char* prog) {
     char pcidir[80];
     char value[128];
     uint32_t v;
-    int rc;
     int r;
     int opt;
 
@@ -3641,6 +3680,7 @@ static int info_main(int argc, char* argv[], const char* prog) {
 
     // GET_DEVICE_INFO and sysfs supply the host-side facts.
     chip_open(&chip, device_path);
+    ChipGuard chip_guard(&chip);
     format_bdf(bdf, sizeof(bdf), &chip.info);
     snprintf(pcidir, sizeof(pcidir), "/sys/bus/pci/devices/%s", bdf);
 
@@ -3680,6 +3720,7 @@ static int info_main(int argc, char* argv[], const char* prog) {
 
     arch = chip.is_blackhole ? &blackhole_telemetry : &wormhole_telemetry;
     noc_window_open(&win, chip.fd);
+    NocWindowGuard win_guard(&win);
     info_walk_telemetry(&win, &chip, arch, &telem);
 
     if (telem.status != EXIT_OK) {
@@ -3700,8 +3741,7 @@ static int info_main(int argc, char* argv[], const char* prog) {
         for (const auto* chip_key : chip_keys) {
             info_line(chip_key, "unavailable");
         }
-        rc = telem.status;
-        goto out;
+        return telem.status;
     }
     info_line("telemetry", "ok");
 
@@ -3760,16 +3800,10 @@ static int info_main(int argc, char* argv[], const char* prog) {
     // but the exit status should still say it is not answering.
     if (noc_read32(&win, chip.arc_x, chip.arc_y, telem.table_base + TELEMETRY_VERSION_OFFSET) == ALL_ONES) {
         info_line("liveness", "chip stopped answering during the dump");
-        rc = EXIT_CHIP_SILENT;
-        goto out;
+        return EXIT_CHIP_SILENT;
     }
 
-    rc = EXIT_OK;
-
-out:
-    noc_window_close(&win);
-    chip_close(&chip);
-    return rc;
+    return EXIT_OK;
 }
 
 // ============================================================================
@@ -4248,7 +4282,13 @@ static int discover_main(int argc, char* argv[], const char* prog) {
     }
     fflush(stdout);
 
-    return any_hung ? EXIT_CHIP_SILENT : any_sick ? EXIT_FW_SICK : EXIT_OK;
+    if (any_hung) {
+        return EXIT_CHIP_SILENT;
+    }
+    if (any_sick) {
+        return EXIT_FW_SICK;
+    }
+    return EXIT_OK;
 }
 
 // ============================================================================
@@ -4620,7 +4660,7 @@ struct noc_sanity_result {
     unsigned passed, mismatched, silent, skipped, total;
     int bijection_bad;
     char summary[128];
-    char first[192];
+    char first[512];
 };
 
 // Failures are reported as they are found rather than collected and printed at
@@ -4629,14 +4669,11 @@ struct noc_sanity_result {
 // cap; the verdict line still carries the true count.
 #define NOC_MAX_REPORTED_FAILURES 20
 
-__attribute__((format(printf, 3, 4))) static void noc_report_failure(
-    struct noc_sanity_result* res, unsigned* reported, const char* fmt, ...) {
-    va_list ap;
-    char line[192];
+template <typename... Args>
+static void noc_report_failure_impl(struct noc_sanity_result* res, unsigned* reported, const char* fmt, Args... args) {
+    char line[512];
 
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
+    snprint_fmt(line, sizeof(line), fmt, args...);
 
     if (res->first[0] == '\0') {
         snprintf(res->first, sizeof(res->first), "%s", line);
@@ -4653,6 +4690,8 @@ __attribute__((format(printf, 3, 4))) static void noc_report_failure(
     printf("  %s\n", line);
     fflush(stdout);
 }
+#define noc_report_failure(res, reported, ...) \
+    (void)sizeof(printf(__VA_ARGS__)), noc_report_failure_impl((res), (reported), __VA_ARGS__)
 
 static int noc_is_skipped(const struct noc_sanity_opts* opts, unsigned x, unsigned y) {
     for (unsigned i = 0; i < opts->skip_count; i++) {
@@ -4761,30 +4800,19 @@ static int noc_check_bijection(
     return (duplicates || unreached) ? -1 : 0;
 }
 
-// Sweeps the grid.  Returns EXIT_OK, EXIT_TEST_FAILED if a node answered
-// wrongly, EXIT_TEST_NO_ANSWER if a node did not answer at all, or
-// EXIT_SETUP_ERROR if every node was skipped and nothing was checked.
-static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts, struct noc_sanity_result* res) {
-    // Stack-local, not file-static: reset --all sweeps every chip on its own
-    // thread, and file statics would have them scribbling over each other.
-    struct node_result results[MAX_GRID_Y][MAX_GRID_X];
-    const struct noc_arch* arch = chip->is_blackhole ? &noc_arch_bh : &noc_arch_wh;
-    struct noc_window win;
-    unsigned reported = 0;
-    size_t used = 0;
-    int rc;
-
-    memset(res, 0, sizeof(*res));
-    res->total = arch->grid_x * arch->grid_y;
-
-    for (unsigned y = 0; y < arch->grid_y; y++) {
-        for (unsigned x = 0; x < arch->grid_x; x++) {
-            results[y][x].status = RESULT_UNVISITED;
-        }
-    }
-
-    noc_window_open(&win, chip->fd);
-
+// One pass over the grid, node by node.
+//
+// Split out of noc_sanity_run so that stopping early is a return rather
+// than a jump out of two nested loops. The caller runs the summary and the
+// bijection check either way, which is what that jump was arranging: a
+// partial sweep still has to report what it found.
+static void noc_sweep_grid(
+    const struct noc_arch* arch,
+    const struct noc_sanity_opts* opts,
+    struct noc_window* win,
+    struct node_result results[MAX_GRID_Y][MAX_GRID_X],
+    struct noc_sanity_result* res,
+    unsigned* reported) {
     for (unsigned y = 0; y < arch->grid_y; y++) {
         for (unsigned x = 0; x < arch->grid_x; x++) {
             struct node_result* r = &results[y][x];
@@ -4810,20 +4838,20 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
             // the test, so a node that answers NOC_NODE_ID but nothing
             // else is still classified silent rather than misconfigured.
             silent_reg = nullptr;
-            r->node_id = noc_read32(&win, x, y, base + arch->node_id_offset);
+            r->node_id = noc_read32(win, x, y, base + arch->node_id_offset);
             if (r->node_id == ALL_ONES) {
                 silent_reg = "NOC_NODE_ID";
             }
 
             if (!silent_reg) {
-                r->endpoint_id = noc_read32(&win, x, y, base + arch->endpoint_id_offset);
+                r->endpoint_id = noc_read32(win, x, y, base + arch->endpoint_id_offset);
                 if (r->endpoint_id == ALL_ONES) {
                     silent_reg = "NOC_ENDPOINT_ID";
                 }
             }
 
             if (!silent_reg) {
-                r->id_logical = noc_read32(&win, x, y, base + arch->id_logical_offset);
+                r->id_logical = noc_read32(win, x, y, base + arch->id_logical_offset);
                 if (r->id_logical == ALL_ONES) {
                     silent_reg = "NOC_ID_LOGICAL";
                 }
@@ -4833,11 +4861,11 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
                 r->status = RESULT_NO_ANSWER;
                 res->silent++;
                 noc_report_failure(
-                    res, &reported, "(%u, %u) %s: no answer, %s read all ones", x, y, tile_type_name(tile), silent_reg);
+                    res, reported, "(%u, %u) %s: no answer, %s read all ones", x, y, tile_type_name(tile), silent_reg);
                 if (!opts->keep_going) {
                     printf("  stopping here; -k walks the rest anyway\n");
                     fflush(stdout);
-                    goto summary;
+                    return;
                 }
                 continue;
             }
@@ -4886,7 +4914,7 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
                 res->mismatched++;
                 noc_report_failure(
                     res,
-                    &reported,
+                    reported,
                     "(%u, %u) %s: %s\n"
                     "    NOC_NODE_ID     0x%08x -> (%u, %u), grid %ux%u, dim_order %u\n"
                     "    NOC_ENDPOINT_ID 0x%08x -> type 0x%x (expected %s), noc %u\n"
@@ -4915,7 +4943,7 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
                 if (opts->stop_first) {
                     printf("  stopping here; --stop-first was given\n");
                     fflush(stdout);
-                    goto summary;
+                    return;
                 }
                 continue;
             }
@@ -4924,8 +4952,33 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
             res->passed++;
         }
     }
+}
 
-summary:
+// Sweeps the grid.  Returns EXIT_OK, EXIT_TEST_FAILED if a node answered
+// wrongly, EXIT_TEST_NO_ANSWER if a node did not answer at all, or
+// EXIT_SETUP_ERROR if every node was skipped and nothing was checked.
+static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts, struct noc_sanity_result* res) {
+    // Stack-local, not file-static: reset --all sweeps every chip on its own
+    // thread, and file statics would have them scribbling over each other.
+    struct node_result results[MAX_GRID_Y][MAX_GRID_X];
+    const struct noc_arch* arch = chip->is_blackhole ? &noc_arch_bh : &noc_arch_wh;
+    struct noc_window win;
+    unsigned reported = 0;
+    size_t used = 0;
+    int rc;
+
+    memset(res, 0, sizeof(*res));
+    res->total = arch->grid_x * arch->grid_y;
+
+    for (unsigned y = 0; y < arch->grid_y; y++) {
+        for (unsigned x = 0; x < arch->grid_x; x++) {
+            results[y][x].status = RESULT_UNVISITED;
+        }
+    }
+
+    noc_window_open(&win, chip->fd);
+
+    noc_sweep_grid(arch, opts, &win, results, res, &reported);
     noc_window_close(&win);
 
     // On Wormhole the addressed coordinate is the raw one, so the bijection is
@@ -5270,9 +5323,7 @@ static void dma_loopback_write(
         volatile uint32_t* dst;
         const uint32_t* src32;
 
-        if (chunk > size) {
-            chunk = size;
-        }
+        chunk = std::min(chunk, size);
         noc_window_aim(win, x, y, addr);
         dst = (volatile uint32_t*)(win->mmio + offset);
         src32 = (const uint32_t*)src_bytes;
@@ -5341,14 +5392,16 @@ static int dma_loopback_run(struct chip* chip, const char* prefix, size_t* trans
     return mismatch;
 }
 
-static int reset_health_checks(struct reset_dev* d) {
+// The checks themselves.  Split out from reset_health_checks so that a failing
+// check can simply return: the caller is what guarantees the device is put
+// back in idle either way, which is the job the goto used to do.
+static int reset_run_checks(struct reset_dev* d) {
     // Default options: stop at a node that does not answer, walk past one that
     // answers wrongly, skip nothing.
     struct noc_sanity_opts opts;
     struct noc_sanity_result res;
     char prefix[24];
     size_t transfer_size;
-    int rc = EXIT_OK;
 
     memset(&opts, 0, sizeof(opts));
     if (noc_sanity_run(&d->chip, &opts, &res) != EXIT_OK) {
@@ -5357,8 +5410,7 @@ static int reset_health_checks(struct reset_dev* d) {
             printf("%s: first failure: %s\n", d->bdf, res.first);
         }
         fflush(stdout);
-        rc = EXIT_RESET_FAILED;
-        goto idle;
+        return EXIT_RESET_FAILED;
     }
     printf("%s: NOC sanity ok, all %u nodes\n", d->bdf, res.total);
     fflush(stdout);
@@ -5367,8 +5419,7 @@ static int reset_health_checks(struct reset_dev* d) {
     if (dma_loopback_run(&d->chip, prefix, &transfer_size) != 0) {
         printf("%s: DMA loopback data mismatch\n", d->bdf);
         fflush(stdout);
-        rc = EXIT_RESET_FAILED;
-        goto idle;
+        return EXIT_RESET_FAILED;
     }
     if (transfer_size >= (1ULL << 20)) {
         printf("%s: DMA loopback ok, %zu MiB transferred\n", d->bdf, transfer_size >> 20);
@@ -5377,7 +5428,14 @@ static int reset_health_checks(struct reset_dev* d) {
     }
     fflush(stdout);
 
-idle:
+    return EXIT_OK;
+}
+
+static int reset_health_checks(struct reset_dev* d) {
+    int rc = reset_run_checks(d);
+
+    // Unconditional: a chip left out of idle after a failed check is worse
+    // than the failure that got us here.
     if (reset_request_idle(d) != EXIT_OK) {
         rc = EXIT_RESET_FAILED;
     }
