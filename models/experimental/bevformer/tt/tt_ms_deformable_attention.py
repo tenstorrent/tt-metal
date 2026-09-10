@@ -149,9 +149,9 @@ class TTMSDeformableAttention:
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
                 Should include: value_proj, sampling_offsets, attention_weights, output_proj
             spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
-                module: the sampling-offset normalizer is built from it here and forward
-                takes no shapes of its own. Features at a different resolution require a
-                new instance.
+                module: it is folded into the sampling-offset Linear here and forward takes
+                no shapes of its own. Features at a different resolution require a new
+                instance.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -185,26 +185,52 @@ class TTMSDeformableAttention:
         self.params = params
         self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
-        self._offset_normalizer = self._build_offset_normalizer(self.spatial_shapes)
+        self.sampling_offsets_weight, self.sampling_offsets_bias = self._fold_offset_normalizer(self.spatial_shapes)
 
         self.head_dim = self.embed_dims // self.num_heads
 
-    def _build_offset_normalizer(self, spatial_shapes):
-        """Build the offset normalizer from pyramid spatial shapes."""
-        if not isinstance(spatial_shapes, torch.Tensor):
-            spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
-        spatial_shapes_tt = ttnn.from_torch(
-            spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    def _fold_offset_normalizer(self, spatial_shapes):
+        """Pre-scale the ``sampling_offsets`` Linear so its output is already normalized.
+
+        The normalizer is ``[W, H]`` per level, fixed by the feature-pyramid config, so
+        dividing the Linear's output by it is a static per-output-channel scale that folds
+        into the parameters exactly: ``s * (Wx + b) == (Wx + b) / normalizer``. Folding it
+        removes a broadcast divide whose operands tile-pad an extent-2 axis to 32.
+
+        The Linear emits ``num_heads * num_levels * num_points * 2`` channels ordered
+        (head, level, point, xy) with xy innermost, which is what makes the scale
+        expressible as a single row. ``preprocess_linear_weight`` stores the weight
+        transposed as ``(in, out)`` and the bias as ``(1, out)``, so one ``(1, out)`` row
+        broadcasts over both.
+
+        Returns:
+            The folded ``(weight, bias)``. Both are ``None`` when params carry no
+            ``sampling_offsets``; ``bias`` alone is ``None`` for a bias-free Linear.
+        """
+        sampling_offsets = getattr(self.params, "sampling_offsets", None)
+        if sampling_offsets is None:
+            return None, None
+
+        weight = sampling_offsets.weight
+        out_features = weight.shape[-1]
+        expected = self.num_heads * self.num_levels * self.num_points * 2
+        # Asserted against the weight's real width: a config/checkpoint mismatch would
+        # otherwise scale the wrong channels silently.
+        assert out_features == expected, f"sampling_offsets width {out_features} != {expected}"
+
+        scale = torch.ones(self.num_heads, self.num_levels, self.num_points, 2, dtype=torch.float32)
+        for level, (h, w) in enumerate(spatial_shapes.tolist()):
+            scale[:, level, :, 0] = 1.0 / float(w)
+            scale[:, level, :, 1] = 1.0 / float(h)
+        scale_tt = ttnn.from_torch(
+            scale.reshape(1, out_features), device=self.device, dtype=weight.dtype, layout=ttnn.TILE_LAYOUT
         )
 
-        # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-        offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
-
-        # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
-        # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
-        offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
-        offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
-        return offset_normalizer
+        bias = getattr(sampling_offsets, "bias", None)
+        folded_weight = ttnn.mul(weight, scale_tt)
+        folded_bias = ttnn.mul(bias, scale_tt) if bias is not None else None
+        ttnn.deallocate(scale_tt)
+        return folded_weight, folded_bias
 
     def forward(
         self,
@@ -284,9 +310,8 @@ class TTMSDeformableAttention:
 
         # Generate sampling offsets
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = ttnn.linear(
-            query, self.params.sampling_offsets.weight, bias=self.params.sampling_offsets.bias
-        )
+        # The Linear carries the offset normalizer, so its output is already normalized.
+        sampling_offsets = ttnn.linear(query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
@@ -312,8 +337,6 @@ class TTMSDeformableAttention:
 
         # Handle different reference point formats
         if reference_points.shape[-1] == 2:
-            sampling_offsets = ttnn.div(sampling_offsets, self._offset_normalizer)
-
             # reference_points: [bs, num_queries, D, 2] -> [bs, num_queries, 1, 1, 1, D, 2]
             reference_points_expanded = ttnn.unsqueeze(reference_points, 2)  # Add head dimension
             reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 3)  # Add level dimension
